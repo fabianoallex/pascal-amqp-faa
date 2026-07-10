@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{2F49F7B2-4B42-42A6-99BE-05AB16C283EE}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="tests\Unit\AMQP.UnitTests.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="tests\Integration\AMQP.IntegrationTests.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="AMQP_UnitTests">
+        <MSBuild Projects="tests\Unit\AMQP.UnitTests.dproj"/>
+    </Target>
+    <Target Name="AMQP_UnitTests:Clean">
+        <MSBuild Projects="tests\Unit\AMQP.UnitTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="AMQP_UnitTests:Make">
+        <MSBuild Projects="tests\Unit\AMQP.UnitTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="AMQP_IntegrationTests">
+        <MSBuild Projects="tests\Integration\AMQP.IntegrationTests.dproj"/>
+    </Target>
+    <Target Name="AMQP_IntegrationTests:Clean">
+        <MSBuild Projects="tests\Integration\AMQP.IntegrationTests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="AMQP_IntegrationTests:Make">
+        <MSBuild Projects="tests\Integration\AMQP.IntegrationTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

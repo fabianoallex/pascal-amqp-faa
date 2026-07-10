@@ -54,7 +54,7 @@ Mesmo padrão dos projetos irmãos (`delphi-amqp-faa`, `delphi-api-infra-faa`): 
 ## Roadmap
 
 1. ~~Porte do núcleo + validação FPC/Win64 com smoke test (broker real).~~ **Concluído.**
-2. Validação Delphi via IDE (CE não tem CLI) — pendente de rodada manual.
+2. ~~Validação Delphi via IDE (CE não tem CLI).~~ **Concluído** — `SmokeTest.exe` (Win32\Debug) rodou os 7 passos com PASS.
 3. TLS multiplataforma via OpenSSL (FCL `opensslsockets`/handler próprio) para Linux.
-4. Porte dos testes unitários (DUnitX → FPCUnit) da lib original.
+4. Porte dos testes unitários e de integração da lib original. Fase Delphi/DUnitX **concluída** — `tests\Unit\AMQP.UnitTests.dproj` (80/80, 0 leaks) e `tests\Integration\AMQP.IntegrationTests.dproj` (24/24, 0 leaks, contra o RabbitMQ do `docker/docker-compose.yml`; TLS incluso). Nos testes de integração os callbacks anônimos (`OnBasicReturn`/`OnConfirm`/`OnReconnect`/`Consume`) viraram métodos nomeados na fixture, já que a lib usa `procedure ... of object` (regra do FPC). `AMQP.groupproj` na raiz abre os dois projetos juntos no IDE. Falta portar os runners para FPCUnit e rodar no FPC.
 5. Validação em Linux (socket/threads já são portáveis; falta rodar).
