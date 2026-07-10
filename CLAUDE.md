@@ -32,6 +32,8 @@ Gotchas de FPC já encontrados no porte:
 - `PWideChar(string)` não existe (string é Ansi) → campos que vão para APIs wide são `UnicodeString` (ver `AMQP.Transport.Tls.FTargetName`).
 - `Format('%x')` com `LongInt` negativo imprime 16 dígitos → passar `Cardinal(valor)`.
 - Fontes em UTF-8 **com BOM**: Delphi exige o BOM para ler UTF-8; o FPC com BOM trata literais como UTF-8 corretamente. Manter o BOM ao criar units novas.
+- FPC 3.2.2 trava com **erro interno** (`Internal error 2015071704` / `200510032`) em duas combinações específicas envolvendo `TValue`: (1) encadear `.Put(...)` de `TAMQPFieldTable` terminando num `TValue.From<T>(literal)` inline — separar em chamadas `.Put()` distintas resolve; (2) `Tabela['chave'].AsString` / `.AsExtended` / `.AsObject` encadeado direto no indexador — atribuir o resultado do indexador a uma variável `TValue` local antes de chamar o accessor resolve (`.AsBoolean`/`.AsInteger`/`.AsInt64` encadeados direto não têm esse problema). Achado portando `tests\Unit\fpc\AMQP.WireTests.pas`.
+- Apps console FPC puro (fora do Lazarus/LCL) têm `DefaultSystemCodePage` diferente de UTF-8 por padrão — strings acentuadas literais (mesmo com o `.pas` em UTF-8 com BOM) saem transcodificadas errado ao passar por `AmqpUtf8Encode`. Chamar `SetMultiByteConversionCodePage(CP_UTF8)` no início do `program` resolve (ver `tests\Unit\fpc\AMQPUnitTestsFpc.lpr`).
 
 ## Peças novas em relação à lib original
 
@@ -56,5 +58,8 @@ Mesmo padrão dos projetos irmãos (`delphi-amqp-faa`, `delphi-api-infra-faa`): 
 1. ~~Porte do núcleo + validação FPC/Win64 com smoke test (broker real).~~ **Concluído.**
 2. ~~Validação Delphi via IDE (CE não tem CLI).~~ **Concluído** — `SmokeTest.exe` (Win32\Debug) rodou os 7 passos com PASS.
 3. TLS multiplataforma via OpenSSL (FCL `opensslsockets`/handler próprio) para Linux.
-4. Porte dos testes unitários e de integração da lib original. Fase Delphi/DUnitX **concluída** — `tests\Unit\AMQP.UnitTests.dproj` (80/80, 0 leaks) e `tests\Integration\AMQP.IntegrationTests.dproj` (24/24, 0 leaks, contra o RabbitMQ do `docker/docker-compose.yml`; TLS incluso). Nos testes de integração os callbacks anônimos (`OnBasicReturn`/`OnConfirm`/`OnReconnect`/`Consume`) viraram métodos nomeados na fixture, já que a lib usa `procedure ... of object` (regra do FPC). `AMQP.groupproj` na raiz abre os dois projetos juntos no IDE. Falta portar os runners para FPCUnit e rodar no FPC.
+4. Porte dos testes unitários e de integração da lib original.
+   - Fase Delphi/DUnitX **concluída** — `tests\Unit\AMQP.UnitTests.dproj` (80/80, 0 leaks) e `tests\Integration\AMQP.IntegrationTests.dproj` (24/24, 0 leaks, contra o RabbitMQ do `docker/docker-compose.yml`; TLS incluso). Nos testes de integração os callbacks anônimos (`OnBasicReturn`/`OnConfirm`/`OnReconnect`/`Consume`) viraram métodos nomeados na fixture, já que a lib usa `procedure ... of object` (regra do FPC). `AMQP.groupproj` na raiz abre os dois projetos juntos no IDE.
+   - Fase FPC/FPCUnit dos **unitários concluída** — `tests\Unit\fpc\AMQPUnitTestsFpc.lpi` (mesma cobertura do `AMQP.UnitTests.dproj`, reescrita para a API do FPCUnit — `AssertEquals`/`AssertTrue` com mensagem primeiro, `AssertException(Classe, MetodoDeObjeto)` no lugar de `Assert.WillRaise`), 80/80, validado por `fpc` e `lazbuild` direto (sem precisar do IDE). Ver gotchas de FPCUnit/`TValue` acima.
+   - Falta portar os testes de integração para FPCUnit (mesmos gotchas + precisa do broker).
 5. Validação em Linux (socket/threads já são portáveis; falta rodar).
