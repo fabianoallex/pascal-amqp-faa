@@ -46,6 +46,11 @@ function AmqpAtomicInc(var ATarget: Integer): Integer;
 function AmqpAtomicDec(var ATarget: Integer): Integer;
 /// Leitura atomica de um Integer compartilhado.
 function AmqpAtomicGet(var ATarget: Integer): Integer;
+/// Troca o valor atomicamente; devolve o valor ANTIGO.
+function AmqpAtomicSet(var ATarget: Integer; AValue: Integer): Integer;
+/// Troca por ANew somente se o valor atual for AComparand; devolve o valor
+/// ANTIGO (compare-and-swap classico, para loops de CAS).
+function AmqpAtomicCompareExchange(var ATarget: Integer; ANew, AComparand: Integer): Integer;
 /// Leitura/escrita atomica de 64 bits (ticks de heartbeat).
 function AmqpAtomicRead64(var ATarget: UInt64): UInt64;
 procedure AmqpAtomicWrite64(var ATarget: UInt64; AValue: UInt64);
@@ -160,6 +165,24 @@ begin
   Result := InterlockedCompareExchange(ATarget, 0, 0);
   {$ELSE}
   Result := AtomicCmpExchange(ATarget, 0, 0);
+  {$ENDIF}
+end;
+
+function AmqpAtomicSet(var ATarget: Integer; AValue: Integer): Integer;
+begin
+  {$IFDEF FPC}
+  Result := InterLockedExchange(ATarget, AValue);
+  {$ELSE}
+  Result := AtomicExchange(ATarget, AValue);
+  {$ENDIF}
+end;
+
+function AmqpAtomicCompareExchange(var ATarget: Integer; ANew, AComparand: Integer): Integer;
+begin
+  {$IFDEF FPC}
+  Result := InterlockedCompareExchange(ATarget, ANew, AComparand);
+  {$ELSE}
+  Result := AtomicCmpExchange(ATarget, ANew, AComparand);
   {$ENDIF}
 end;
 
