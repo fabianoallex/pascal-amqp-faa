@@ -1,0 +1,10 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: delphi-amqp-faa-rabbitmq
+    ports:
+      - "5672:5672"   # protocolo AMQP (o que o Delphi vai usar)
+      - "15672:15672" # painel de administracao web (http://localhost:15672 - guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest

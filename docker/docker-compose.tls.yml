@@ -1,0 +1,21 @@
+# Override que ADICIONA TLS (5671) ao serviço do docker-compose.yml, sem alterá-lo.
+#
+# 1) Gere os certificados self-signed (a partir da pasta docker/). O `chmod 644`
+#    na chave é ESSENCIAL: o openssl gera a chave como 600/root e o RabbitMQ roda
+#    como uid 999 — sem o chmod o broker aborta com "keyfile ... cannot be read".
+#      New-Item -ItemType Directory -Force certs | Out-Null
+#      docker run --rm -v "${PWD}/certs:/certs" alpine/openssl req -x509 -newkey rsa:2048 -nodes -keyout /certs/server.key -out /certs/server.crt -days 365 -subj "/CN=localhost"
+#      docker run --rm -v "${PWD}/certs:/certs" alpine chmod 644 /certs/server.key
+#
+# 2) Suba combinando os dois arquivos:
+#      docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# Certs são de dev/descartáveis — não commite ./certs/.
+
+services:
+  rabbitmq:
+    ports:
+      - "5671:5671"   # AMQP sobre TLS (amqps)
+    volumes:
+      - ./certs:/etc/rabbitmq/certs:ro
+      - ./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro

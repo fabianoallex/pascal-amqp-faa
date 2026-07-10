@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Package Version="5">
+    <PathDelim Value="\"/>
+    <Name Value="pascal_amqp_faa"/>
+    <Type Value="RunTime"/>
+    <Author Value="Fabiano Arndt"/>
+    <CompilerOptions>
+      <Version Value="11"/>
+      <PathDelim Value="\"/>
+      <SearchPaths>
+        <IncludeFiles Value="..\src"/>
+        <OtherUnitFiles Value="..\src"/>
+        <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+      </SearchPaths>
+    </CompilerOptions>
+    <Description Value="Cliente AMQP 0-9-1 (RabbitMQ) para FPC/Lazarus e Delphi, escrito do zero. Publish/consume com ack manual, publisher confirms, heartbeat, reconexao automatica com recuperacao de topologia e TLS (SChannel, Windows)."/>
+    <License Value="MIT"/>
+    <Version Minor="1"/>
+    <Files Count="14">
+      <Item1>
+        <Filename Value="..\src\amqp.inc"/>
+        <Type Value="Include"/>
+      </Item1>
+      <Item2>
+        <Filename Value="..\src\AMQP.Protocol.pas"/>
+        <UnitName Value="AMQP.Protocol"/>
+      </Item2>
+      <Item3>
+        <Filename Value="..\src\AMQP.Wire.pas"/>
+        <UnitName Value="AMQP.Wire"/>
+      </Item3>
+      <Item4>
+        <Filename Value="..\src\AMQP.Frame.pas"/>
+        <UnitName Value="AMQP.Frame"/>
+      </Item4>
+      <Item5>
+        <Filename Value="..\src\AMQP.Method.pas"/>
+        <UnitName Value="AMQP.Method"/>
+      </Item5>
+      <Item6>
+        <Filename Value="..\src\AMQP.Connection.Methods.pas"/>
+        <UnitName Value="AMQP.Connection.Methods"/>
+      </Item6>
+      <Item7>
+        <Filename Value="..\src\AMQP.Channel.Methods.pas"/>
+        <UnitName Value="AMQP.Channel.Methods"/>
+      </Item7>
+      <Item8>
+        <Filename Value="..\src\AMQP.Exchange.Methods.pas"/>
+        <UnitName Value="AMQP.Exchange.Methods"/>
+      </Item8>
+      <Item9>
+        <Filename Value="..\src\AMQP.Queue.Methods.pas"/>
+        <UnitName Value="AMQP.Queue.Methods"/>
+      </Item9>
+      <Item10>
+        <Filename Value="..\src\AMQP.Basic.Methods.pas"/>
+        <UnitName Value="AMQP.Basic.Methods"/>
+      </Item10>
+      <Item11>
+        <Filename Value="..\src\AMQP.Threading.pas"/>
+        <UnitName Value="AMQP.Threading"/>
+      </Item11>
+      <Item12>
+        <Filename Value="..\src\AMQP.Transport.pas"/>
+        <UnitName Value="AMQP.Transport"/>
+      </Item12>
+      <Item13>
+        <Filename Value="..\src\AMQP.Transport.Tls.pas"/>
+        <UnitName Value="AMQP.Transport.Tls"/>
+      </Item13>
+      <Item14>
+        <Filename Value="..\src\AMQP.Connection.pas"/>
+        <UnitName Value="AMQP.Connection"/>
+      </Item14>
+    </Files>
+    <RequiredPkgs Count="1">
+      <Item1>
+        <PackageName Value="FCL"/>
+      </Item1>
+    </RequiredPkgs>
+    <UsageOptions>
+      <UnitPath Value="$(PkgOutDir)"/>
+    </UsageOptions>
+    <PublishOptions>
+      <Version Value="2"/>
+      <UseFileFilters Value="True"/>
+    </PublishOptions>
+  </Package>
+</CONFIG>

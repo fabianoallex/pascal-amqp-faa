@@ -1,0 +1,24 @@
+# saidas de compilacao
+build/
+lib/
+backup/
+*.exe
+*.o
+*.ppu
+*.rsj
+*.compiled
+*.dcu
+Win32/
+Win64/
+
+# certificados do broker de dev (gerar localmente; ver docker/certs/README.md)
+docker/certs/*.crt
+docker/certs/*.key
+
+# arquivos de sessao/IDE
+*.lps
+*.local
+*.identcache
+*.stat
+__history/
+__recovery/
