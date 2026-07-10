@@ -9,6 +9,18 @@
         <Projects Include="tests\Integration\AMQP.IntegrationTests.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="samples\AutorizadorSim\AutorizadorSim.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="samples\Retaguarda\Retaguarda.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="samples\AutorizadorSimVcl\AutorizadorSimVcl.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="samples\RetaguardaVcl\RetaguardaVcl.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -35,14 +47,50 @@
     <Target Name="AMQP_IntegrationTests:Make">
         <MSBuild Projects="tests\Integration\AMQP.IntegrationTests.dproj" Targets="Make"/>
     </Target>
+    <Target Name="AutorizadorSim">
+        <MSBuild Projects="samples\AutorizadorSim\AutorizadorSim.dproj"/>
+    </Target>
+    <Target Name="AutorizadorSim:Clean">
+        <MSBuild Projects="samples\AutorizadorSim\AutorizadorSim.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="AutorizadorSim:Make">
+        <MSBuild Projects="samples\AutorizadorSim\AutorizadorSim.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Retaguarda">
+        <MSBuild Projects="samples\Retaguarda\Retaguarda.dproj"/>
+    </Target>
+    <Target Name="Retaguarda:Clean">
+        <MSBuild Projects="samples\Retaguarda\Retaguarda.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Retaguarda:Make">
+        <MSBuild Projects="samples\Retaguarda\Retaguarda.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="AutorizadorSimVcl">
+        <MSBuild Projects="samples\AutorizadorSimVcl\AutorizadorSimVcl.dproj"/>
+    </Target>
+    <Target Name="AutorizadorSimVcl:Clean">
+        <MSBuild Projects="samples\AutorizadorSimVcl\AutorizadorSimVcl.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="AutorizadorSimVcl:Make">
+        <MSBuild Projects="samples\AutorizadorSimVcl\AutorizadorSimVcl.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="RetaguardaVcl">
+        <MSBuild Projects="samples\RetaguardaVcl\RetaguardaVcl.dproj"/>
+    </Target>
+    <Target Name="RetaguardaVcl:Clean">
+        <MSBuild Projects="samples\RetaguardaVcl\RetaguardaVcl.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="RetaguardaVcl:Make">
+        <MSBuild Projects="samples\RetaguardaVcl\RetaguardaVcl.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests"/>
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean"/>
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make"/>
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

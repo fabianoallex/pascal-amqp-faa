@@ -11,6 +11,10 @@ backup/
 Win32/
 Win64/
 
+# recurso .res gerado pelo IDE (icone padrao) - regeneravel, alguns saem com
+# centenas de KB em apps VCL/LCL; SmokeTest.res ja versionado fica como esta
+*.res
+
 # certificados do broker de dev (gerar localmente; ver docker/certs/README.md)
 docker/certs/*.crt
 docker/certs/*.key
