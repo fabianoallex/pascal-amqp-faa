@@ -32,6 +32,9 @@
         <PackageName Value="pascal_amqp_faa"/>
       </Item>
       <Item>
+        <PackageName Value="FPCUnitTestRunner"/>
+      </Item>
+      <Item>
         <PackageName Value="FCL"/>
       </Item>
     </RequiredPackages>
