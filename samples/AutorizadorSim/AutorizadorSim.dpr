@@ -16,6 +16,11 @@
 {$ENDIF}
 
 uses
+  {$IFDEF FPC}
+    {$IFDEF UNIX}
+  cthreads,
+    {$ENDIF}
+  {$ENDIF}
   SysUtils,
   AMQP.Connection,
   AMQP.Queue.Methods;

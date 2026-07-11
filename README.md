@@ -19,7 +19,7 @@ Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a
 |---|---|
 | FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suíte FPCUnit (80 unitários + 24 integração) e os 4 samples passam contra RabbitMQ real |
 | Delphi (testado na base 12 / Athens) | Mesma codebase; suíte DUnitX (80 unitários + 24 integração) e os 4 samples validados via IDE (Community Edition não compila por linha de comando) |
-| FPC em Linux | Deve funcionar (socket via `ssockets`, sem dependência de Windows fora do TLS) — ainda não validado |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test, suíte FPCUnit (80 unitários + 22 integração, TLS de fora) e os samples console (`AutorizadorSim`/`Retaguarda`) passam contra RabbitMQ real. ARM e samples VCL/LCL ainda não validados |
 
 Decisões do porte (ver `CLAUDE.md` para detalhes):
 
@@ -145,7 +145,7 @@ O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (á
 ## Roadmap
 
 - TLS multiplataforma (OpenSSL via FCL) para Linux.
-- Validação em Linux (x86_64/ARM).
+- Validação em Linux — x86_64 feito (ver tabela de compatibilidade); falta ARM e os samples VCL/LCL.
 - mTLS/client-cert (Windows: exige `crypt32`).
 
 ## Licença

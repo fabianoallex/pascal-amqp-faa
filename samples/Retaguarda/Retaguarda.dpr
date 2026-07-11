@@ -27,6 +27,11 @@
 {$ENDIF}
 
 uses
+  {$IFDEF FPC}
+    {$IFDEF UNIX}
+  cthreads,
+    {$ENDIF}
+  {$ENDIF}
   SysUtils,
   SyncObjs,
   Classes,
@@ -145,7 +150,7 @@ var
 begin
   LState := TRetaguardaState.Create;
   try
-    LParams := TAMQPConnectionParams.LocalhostTls;
+    LParams := TAMQPConnectionParams.Localhost;
     LConn := TAMQPConnection.Create(LParams);
     try
       LConn.Open;
