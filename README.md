@@ -17,8 +17,8 @@ Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a
 
 | Compilador | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila e passa o smoke test contra RabbitMQ real |
-| Delphi (testado na base 12 / Athens) | Mesma codebase; requer namespaces `System;Winapi` no projeto (padrão do IDE) |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suíte FPCUnit (80 unitários + 24 integração) e os 4 samples passam contra RabbitMQ real |
+| Delphi (testado na base 12 / Athens) | Mesma codebase; suíte DUnitX (80 unitários + 24 integração) e os 4 samples validados via IDE (Community Edition não compila por linha de comando) |
 | FPC em Linux | Deve funcionar (socket via `ssockets`, sem dependência de Windows fora do TLS) — ainda não validado |
 
 Decisões do porte (ver `CLAUDE.md` para detalhes):
@@ -124,10 +124,27 @@ SmokeTest.exe
 
 Exercita handshake, topologia, confirms, `Basic.Get`, consume concorrente com ack e reconexão automática com recovery. Sai com código 0 em sucesso.
 
+## Samples
+
+Fluxo de exemplo (PDV → autorizador → retaguarda), cada par compilando do mesmo fonte nos dois compiladores:
+
+- **`samples/AutorizadorSim`** / **`samples/Retaguarda`** (console) — o autorizador publica N retornos simulados de NFe; a retaguarda consome concorrentemente, com ack manual e um comando de status.
+- **`samples/AutorizadorSimVcl`** / **`samples/RetaguardaVcl`** (GUI — VCL no Delphi, LCL no Lazarus, a partir do mesmo `.pas`/`.dfm`/`.lfm`) — mesma ideia com tela: conexão editável, publish sob demanda, e no `RetaguardaVcl` um modo de confirmação manual (aprovar/rejeitar nota pela lista) além do automático.
+
+Suba o broker (`docker compose -f docker/docker-compose.yml up -d`) e abra o `.dproj`/`.lpi` correspondente — ou `AMQP.groupproj`/`AMQP.lpg` pra abrir todos juntos.
+
+## Testes
+
+- **Delphi (DUnitX)**: abra `AMQP.groupproj` no RAD Studio.
+- **FPC/Lazarus (FPCUnit)**: abra `AMQP.lpg` (Project Group — requer o pacote opcional `LazProjectGroups` instalado na IDE) ou cada `.lpi` individualmente.
+
+Em ambos: `AMQP.UnitTests` / `AMQPUnitTestsFpc` (80 testes, não precisa de broker — encode/decode de frames, métodos, content header, negociação de tune) e `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` (24 testes, precisa do RabbitMQ no ar: `docker compose -f docker/docker-compose.yml up -d`, TLS incluso via `docker-compose.tls.yml`).
+
+O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console.
+
 ## Roadmap
 
 - TLS multiplataforma (OpenSSL via FCL) para Linux.
-- Porte da suíte de testes unitários (FPCUnit) da lib original.
 - Validação em Linux (x86_64/ARM).
 - mTLS/client-cert (Windows: exige `crypt32`).
 
