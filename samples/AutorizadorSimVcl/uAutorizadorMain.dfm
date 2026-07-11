@@ -191,7 +191,7 @@ object frmAutorizador: TfrmAutorizador
     end
   end
   object btnLimparLog: TButton
-    Left = 392
+    Left = 390
     Top = 280
     Width = 100
     Height = 23
@@ -203,7 +203,7 @@ object frmAutorizador: TfrmAutorizador
   object mmoLog: TMemo
     Left = 8
     Top = 308
-    Width = 484
+    Width = 482
     Height = 134
     Anchors = [akLeft, akTop, akRight, akBottom]
     ReadOnly = True
