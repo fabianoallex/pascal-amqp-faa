@@ -19,6 +19,11 @@ program SmokeTest;
 {$ENDIF}
 
 uses
+  {$IFDEF FPC}
+    {$IFDEF UNIX}
+  cthreads,
+    {$ENDIF}
+  {$ENDIF}
   SysUtils,
   Classes,
   SyncObjs,

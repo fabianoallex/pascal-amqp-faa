@@ -10,6 +10,10 @@
     .\AMQPIntegrationTestsFpc.exe --all --format=plain
   GUI (janela com arvore de testes + barra verde/vermelha), sem parametros:
     .\AMQPIntegrationTestsFpc.exe
+  Fora do Windows roda sempre em modo console (sem LCL/widgetset), com ou
+  sem parametros. AMQP.TlsIntegrationTests fica de fora fora do Windows: TLS
+  (EAMQPTls incluso) so existe sob AMQP_WINDOWS (ver AMQP.Transport.Tls.pas) -
+  OpenSSL para Linux ainda esta no roadmap.
 
   Ver CLAUDE.md para os workarounds de erros internos do FPC 3.2.2 e o
   TInterlocked que nao existe no FPC (usar AmqpAtomic* de AMQP.Threading). }
@@ -17,13 +21,20 @@
 {$mode delphi}{$H+}
 
 uses
-  Interfaces, Forms,
-  Classes, consoletestrunner, testregistry, GuiTestRunner,
+  {$IFDEF UNIX}
+  cthreads,
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  Interfaces, Forms, GuiTestRunner,
+  {$ENDIF}
+  Classes, consoletestrunner, testregistry,
   AMQP.HandshakeIntegrationTests,
   AMQP.ChannelIntegrationTests,
   AMQP.ConsumeIntegrationTests,
   AMQP.ReconnectIntegrationTests,
+  {$IFDEF MSWINDOWS}
   AMQP.TlsIntegrationTests,
+  {$ENDIF}
   AMQP.ReviewRegressionTests;
 
 var
@@ -34,7 +45,15 @@ begin
   // errado. Ver CLAUDE.md.
   SetMultiByteConversionCodePage(CP_UTF8);
 
-  if ParamCount > 0 then
+  {$IFDEF MSWINDOWS}
+  if ParamCount = 0 then
+  begin
+    Application.Initialize;
+    Application.CreateForm(TGUITestRunner, TestRunner);
+    Application.Run;
+  end
+  else
+  {$ENDIF}
   begin
     DefaultFormat := fPlain;
     DefaultRunAllTests := True;
@@ -46,11 +65,5 @@ begin
     finally
       ConsoleApp.Free;
     end;
-  end
-  else
-  begin
-    Application.Initialize;
-    Application.CreateForm(TGUITestRunner, TestRunner);
-    Application.Run;
   end;
 end.

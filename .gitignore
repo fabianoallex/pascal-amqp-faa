@@ -10,6 +10,7 @@ backup/
 *.dcu
 Win32/
 Win64/
+linux/
 
 # recurso .res gerado pelo IDE (icone padrao) - regeneravel, alguns saem com
 # centenas de KB em apps VCL/LCL; SmokeTest.res ja versionado fica como esta
