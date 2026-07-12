@@ -6,8 +6,12 @@
   (ver o cabeçalho de docker/docker-compose.tls.yml para gerar os certs).
 
   Se o broker TLS NÃO estiver no ar, o Setup não consegue conectar e os testes
-  são ignorados (saem sem asserção — o runner roda com FailsOnNoAsserts=False),
-  para não quebrar a suíte quando só o broker plain (5672) está up. }
+  saem via Assert.Pass com a mensagem 'IGNORADO: ...' — o DUnitX desta versão
+  não tem skip em runtime (o resultado Ignored só existe pro atributo estático
+  [Ignore]), então eles ainda CONTAM como Passed no sumário, mas o log de
+  console mostra 'Success. : IGNORADO: ...' em cada um, deixando explícito que
+  não conectaram. Isso evita quebrar a suíte quando só o broker plain (5672)
+  está up. }
 
 interface
 
@@ -30,6 +34,7 @@ type
     FCount: Integer;      // mensagens processadas (atômico)
     FCurrent: Integer;    // callbacks rodando agora (atômico)
     FPeak: Integer;       // pico de concorrência observado (atômico)
+    function TlsIndisponivel: Boolean;
     function DeclareTempQueue: string;
     function GetWithRetry(const AQueue: string): TAMQPGetResult;
     function BuildBigBody(ASize: Integer): string;
@@ -70,6 +75,17 @@ procedure TAMQPTlsIntegrationTests.TearDown;
 begin
   FChan.Free;
   FConn.Free;
+end;
+
+// True = sem broker TLS (ou build sem backend). Assert.Pass marca o teste com
+// a mensagem 'IGNORADO: ...' (visível no log de console como 'Success. : ...');
+// ainda conta como Passed — o DUnitX não tem Ignored de runtime. O Exit no
+// chamador é defensivo, caso Assert.Pass não interrompa.
+function TAMQPTlsIntegrationTests.TlsIndisponivel: Boolean;
+begin
+  Result := not FAvailable;
+  if Result then
+    Assert.Pass('IGNORADO: broker TLS (5671) indisponível ou build sem backend TLS');
 end;
 
 function TAMQPTlsIntegrationTests.DeclareTempQueue: string;
@@ -154,8 +170,8 @@ var
   LQueue: string;
   LResult: TAMQPGetResult;
 begin
-  if not FAvailable then
-    Exit; // broker TLS indisponível: teste ignorado
+  if TlsIndisponivel then
+    Exit;
 
   LQueue := DeclareTempQueue;
   FChan.PublishText('', LQueue, 'olá sobre TLS');
@@ -175,8 +191,8 @@ var
   LQueue, LBody: string;
   LResult: TAMQPGetResult;
 begin
-  if not FAvailable then
-    Exit; // broker TLS indisponível: teste ignorado
+  if TlsIndisponivel then
+    Exit;
 
   LQueue := DeclareTempQueue;
   LBody := BuildBigBody(BODY_SIZE);
@@ -196,8 +212,8 @@ var
   LQueue: string;
   I: Integer;
 begin
-  if not FAvailable then
-    Exit; // broker TLS indisponível: teste ignorado
+  if TlsIndisponivel then
+    Exit;
 
   // Publishers + consumer na MESMA conexão TLS: estressa o leitor decifrando
   // enquanto os escritores cifram (FLock/FSendLock do stream TLS).
@@ -223,8 +239,8 @@ procedure TAMQPTlsIntegrationTests.Tls_ContraPortaPlain_LevantaEAMQPTls;
 var
   LParams: TAMQPConnectionParams;
 begin
-  if not FAvailable then
-    Exit; // garante que HÁ broker no ar (senão a falha seria de socket, não de TLS)
+  if TlsIndisponivel then
+    Exit; // também garante que HÁ broker no ar (senão a falha seria de socket, não de TLS)
 
   // Handshake TLS contra a porta plain (5672): o broker responde com o header
   // AMQP e fecha — deve virar EAMQPTls rápido, sem travar a suíte.
@@ -251,8 +267,8 @@ procedure TAMQPTlsIntegrationTests.Tls_VerifyPeerTrue_RejeitaCertSelfSigned;
 var
   LParams: TAMQPConnectionParams;
 begin
-  if not FAvailable then
-    Exit; // sem broker TLS não dá para provar a validação: teste ignorado
+  if TlsIndisponivel then
+    Exit; // sem broker TLS não dá para provar a validação
 
   // Mesmo broker (cert self-signed), mas AGORA exigindo validação da cadeia +
   // hostname: o handshake TLS deve FALHAR (prova que TlsVerifyPeer=True valida).
