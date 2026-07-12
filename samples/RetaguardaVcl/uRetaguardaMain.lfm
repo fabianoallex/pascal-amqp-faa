@@ -95,7 +95,7 @@ object frmRetaguarda: TfrmRetaguarda
       Top = 9
       Width = 75
       TabOrder = 1
-      Text = '5671'
+      Text = '5672'
     end
     object edtVHost: TEdit
       Left = 112
@@ -129,8 +129,6 @@ object frmRetaguarda: TfrmRetaguarda
       Top = 85
       Width = 136
       Caption = 'Usar TLS (amqps)'
-      Checked = True
-      State = cbChecked
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
