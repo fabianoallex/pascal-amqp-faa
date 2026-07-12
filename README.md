@@ -10,7 +10,7 @@ Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a
 - `Basic.Return` (publish `mandatory` não roteável), `Connection.Blocked/Unblocked` (resource alarm do broker).
 - **Heartbeat** em thread dedicada (detecção de conexão morta + envio quando ocioso).
 - **Reconexão automática** (opt-in) com recuperação de topologia (exchanges, filas, binds, qos, confirm mode e consumers) e, opcionalmente, reenvio de publishes não confirmados (`RepublishUnconfirmedOnReconnect`).
-- **TLS (amqps)** via SChannel nativo — somente Windows por enquanto (FPC e Delphi); OpenSSL para Linux está no roadmap.
+- **TLS (amqps)** com dois backends, mesma API: **SChannel** nativo no Windows (automático, sem dependências) e **OpenSSL** em qualquer plataforma (opt-in via `-dAMQP_OPENSSL`) — ver a seção [TLS (amqps)](#tls-amqps).
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (extensão RabbitMQ), `Basic.Get`, `Qos`.
 
 ## Compatibilidade
@@ -19,7 +19,7 @@ Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a
 |---|---|
 | FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suíte FPCUnit (80 unitários + 24 integração) e os 4 samples passam contra RabbitMQ real |
 | Delphi (testado na base 12 / Athens) | Mesma codebase; suíte DUnitX (80 unitários + 24 integração) e os 4 samples validados via IDE (Community Edition não compila por linha de comando) |
-| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test, suíte FPCUnit (80 unitários + 22 integração, TLS de fora) e os samples console (`AutorizadorSim`/`Retaguarda`) passam contra RabbitMQ real. ARM e samples VCL/LCL ainda não validados |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 24 integração, TLS incluso via OpenSSL) e os samples console (`AutorizadorSim`/`Retaguarda`) passam contra RabbitMQ real. ARM e samples VCL/LCL ainda não validados |
 
 Decisões do porte (ver `CLAUDE.md` para detalhes):
 
@@ -112,6 +112,57 @@ fpc -Fusrc -Fisrc seu_programa.pas
 
 **Delphi**: adicione `src\` ao search path do projeto (unit scope names `System;Winapi`, que é o padrão). Exemplo pronto em `samples\SmokeTest\SmokeTest.dproj`.
 
+## TLS (amqps)
+
+Dois backends atrás da **mesma API** — o código da aplicação não muda, só o build:
+
+| Backend | Plataformas | Como habilitar | Dependência em runtime |
+|---|---|---|---|
+| **SChannel** (`AMQP.Transport.Tls`) | Windows (FPC e Delphi) | Nenhum passo — automático | Nenhuma (`secur32.dll` do próprio Windows) |
+| **OpenSSL** (`AMQP.Transport.OpenSSL`) | Qualquer uma (validado em Linux x86_64) | Diretiva `AMQP_OPENSSL` (opt-in) | `libssl`/`libcrypto` **3.x** ou **1.1.1** instaladas |
+
+### Usando
+
+```pascal
+var
+  Params: TAMQPConnectionParams;
+begin
+  Params := TAMQPConnectionParams.Localhost;
+  Params.Port := 5671;
+  Params.UseTls := True;
+  Params.TlsVerifyPeer := True; // padrão: valida cadeia + hostname
+  Params.TlsServerName := '';   // '' => usa Host (SNI / nome validado)
+  Conn := TAMQPConnection.Create(Params);
+```
+
+Para broker de dev com certificado self-signed, `TAMQPConnectionParams.LocalhostTls` já vem pronto (porta 5671, `TlsVerifyPeer=False`).
+
+### Habilitando o backend OpenSSL (`AMQP_OPENSSL`)
+
+A diretiva é **opt-in** de propósito: SChannel é garantido existir no Windows, mas OpenSSL depende de `libssl` presente na máquina — então nunca é ligado automaticamente. Com a diretiva definida, o OpenSSL é usado em **qualquer** plataforma (inclusive no Windows, no lugar do SChannel). Sem ela, nada muda em relação ao comportamento atual: fora do Windows, `UseTls` levanta exceção explicando como habilitar.
+
+- **FPC por linha de comando**: acrescente `-dAMQP_OPENSSL`:
+
+  ```
+  fpc -dAMQP_OPENSSL -Fusrc -Fisrc seu_programa.pas
+  ```
+
+- **Lazarus (IDE)**: a lib compila via pacote, então a diretiva vai **no pacote, não no projeto** (defines do projeto não recompilam as units do pacote): `Package → Open Package File → packages/pascal_amqp_faa.lpk → Options → Compiler Options → Custom Options` → adicione `-dAMQP_OPENSSL` e recompile. Vale para qualquer projeto que dependa do pacote (samples GUI, runners de teste).
+- **Delphi (IDE)**: `Project → Options → Building → Delphi Compiler → Conditional defines` → adicione `AMQP_OPENSSL`. *(Pendente de validação em alvo Linux: a Community Edition não tem esse target — o mesmo fonte é o validado pelo FPC/Linux.)*
+
+As bibliotecas são carregadas **dinamicamente na primeira conexão TLS** (`dlopen`/`LoadLibrary` + lista de nomes: `libssl.so.3` → `libssl.so.1.1` → `libssl.so` no Linux; `libssl-3-x64.dll` etc. no Windows). O executável não ganha dependência de link: se a `libssl` não estiver instalada, o erro só acontece ao chamar `Open` com `UseTls=True` — com mensagem dizendo quais nomes foram tentados.
+
+Escopo (igual nos dois backends): autenticação de servidor com TLS 1.2+; validação via trust store do sistema; sem mTLS/client-cert e sem renegociação iniciada pelo servidor.
+
+### Broker de dev com TLS
+
+O overlay `docker/docker-compose.tls.yml` adiciona o listener 5671 ao broker do compose principal — o cabeçalho do arquivo tem o passo a passo para gerar o certificado self-signed (incluindo o `chmod 644` na chave, que é obrigatório):
+
+```
+cd docker
+docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+```
+
 ## Smoke test (integração)
 
 Suba o RabbitMQ (`docker compose -f docker/docker-compose.yml up -d`) e:
@@ -123,6 +174,14 @@ SmokeTest.exe
 ```
 
 Exercita handshake, topologia, confirms, `Basic.Get`, consume concorrente com ack e reconexão automática com recovery. Sai com código 0 em sucesso.
+
+Com o argumento `--tls`, roda os mesmos passos sobre TLS (precisa do broker com o overlay `docker-compose.tls.yml`, ver seção TLS acima):
+
+```
+SmokeTest.exe --tls
+```
+
+No Windows isso usa SChannel; para exercitar o backend OpenSSL, compile com `-dAMQP_OPENSSL` (no Linux, é a única opção de TLS).
 
 ## Samples
 
@@ -138,15 +197,15 @@ Suba o broker (`docker compose -f docker/docker-compose.yml up -d`) e abra o `.d
 - **Delphi (DUnitX)**: abra `AMQP.groupproj` no RAD Studio.
 - **FPC/Lazarus (FPCUnit)**: abra `AMQP.lpg` (Project Group — requer o pacote opcional `LazProjectGroups` instalado na IDE) ou cada `.lpi` individualmente.
 
-Em ambos: `AMQP.UnitTests` / `AMQPUnitTestsFpc` (80 testes, não precisa de broker — encode/decode de frames, métodos, content header, negociação de tune) e `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` (24 testes, precisa do RabbitMQ no ar: `docker compose -f docker/docker-compose.yml up -d`, TLS incluso via `docker-compose.tls.yml`).
+Em ambos: `AMQP.UnitTests` / `AMQPUnitTestsFpc` (80 testes, não precisa de broker — encode/decode de frames, métodos, content header, negociação de tune) e `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` (24 testes, precisa do RabbitMQ no ar: `docker compose -f docker/docker-compose.yml up -d`, TLS incluso via `docker-compose.tls.yml`). Os 2 testes de TLS se auto-ignoram (contam como passados, sem asserção) se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. Para saber se conectaram de verdade, olhe o tempo no relatório: ~0,5s cada quando reais, ~0,001s quando ignorados.
 
-O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console.
+O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console. Rodando pela IDE do Lazarus, o chaveamento é em `Run → Run Parameters → Command line parameters` — os `.lpi` vêm com `--all --format=plain` salvo (modo console); limpe o campo para o F9 abrir a GUI. No modo console via F9 a janela fecha ao terminar: ou marque *Use launching application* com `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, ou rode o executável direto num terminal.
 
 ## Roadmap
 
-- TLS multiplataforma (OpenSSL via FCL) para Linux.
-- Validação em Linux — x86_64 feito (ver tabela de compatibilidade); falta ARM e os samples VCL/LCL.
-- mTLS/client-cert (Windows: exige `crypt32`).
+- Validação em Linux — x86_64 feito, TLS/OpenSSL incluso (ver tabela de compatibilidade); falta ARM e os samples VCL/LCL.
+- Validação do backend OpenSSL compilado pelo Delphi em Linux (a Community Edition não tem o target; o mesmo fonte é validado pelo FPC/Linux).
+- mTLS/client-cert.
 
 ## Licença
 
