@@ -16,6 +16,15 @@ linux/
 # centenas de KB em apps VCL/LCL; SmokeTest.res ja versionado fica como esta
 *.res
 
+# binarios ELF (sem extensao) gerados por lazbuild em Linux no proprio diretorio
+samples/AutorizadorSim/AutorizadorSim
+samples/AutorizadorSimVcl/AutorizadorSimVcl
+samples/Retaguarda/Retaguarda
+samples/RetaguardaVcl/RetaguardaVcl
+samples/SmokeTest/SmokeTest
+tests/Unit/fpc/AMQPUnitTestsFpc
+tests/Integration/fpc/AMQPIntegrationTestsFpc
+
 # certificados do broker de dev (gerar localmente; ver docker/certs/README.md)
 docker/certs/*.crt
 docker/certs/*.key

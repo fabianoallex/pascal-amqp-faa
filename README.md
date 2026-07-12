@@ -19,7 +19,7 @@ Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a
 |---|---|
 | FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suíte FPCUnit (80 unitários + 27 integração) e os 4 samples passam contra RabbitMQ real |
 | Delphi (testado na base 12 / Athens) | Mesma codebase; suíte DUnitX (80 unitários + 27 integração) e os 4 samples validados via IDE (Community Edition não compila por linha de comando) |
-| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 27 integração, TLS incluso via OpenSSL) e os samples console (`AutorizadorSim`/`Retaguarda`) passam contra RabbitMQ real. Samples VCL/LCL ainda não validados |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 27 integração, TLS incluso via OpenSSL) e os 4 samples (console e GUI/LCL-GTK2) passam contra RabbitMQ real |
 | FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Mesma cobertura do x86_64: smoke test plain e `--tls` (OpenSSL aarch64) e suíte FPCUnit 80 + 27 passam contra RabbitMQ real |
 
 Decisões do porte (ver `CLAUDE.md` para detalhes):
@@ -206,7 +206,7 @@ O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (á
 
 ## Roadmap
 
-- Validação em Linux — x86_64 e ARM64 feitos, TLS/OpenSSL incluso (ver tabela de compatibilidade); faltam os samples VCL/LCL.
+- ~~Validação em Linux~~ — concluída: x86_64 e ARM64, TLS/OpenSSL incluso, samples GUI validados em LCL/GTK2 (ver tabela de compatibilidade).
 - Validação do backend OpenSSL compilado pelo Delphi em Linux (a Community Edition não tem o target; o mesmo fonte é validado pelo FPC/Linux).
 - mTLS/client-cert.
 

@@ -42,7 +42,14 @@
 interface
 
 uses
-  Windows, Messages, SysUtils, Classes,
+  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
+  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  {$IFDEF FPC}
+  LCLIntf, LCLType, LMessages,
+  {$ELSE}
+  Windows, Messages,
+  {$ENDIF}
+  SysUtils, Classes,
   SyncObjs, Generics.Collections,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ComCtrls,
   AMQP.Connection, AMQP.Transport, AMQP.Queue.Methods;
@@ -130,6 +137,12 @@ implementation
   {$R *.lfm}
 {$ELSE}
   {$R *.dfm}
+{$ENDIF}
+
+{$IFDEF FPC}
+const
+  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
 type

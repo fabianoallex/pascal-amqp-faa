@@ -12,6 +12,9 @@
 
 uses
   {$IFDEF FPC}
+    {$IFDEF UNIX}
+  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+    {$ENDIF}
   Interfaces,
   {$ENDIF}
   Forms,
