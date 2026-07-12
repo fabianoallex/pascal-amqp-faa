@@ -93,7 +93,7 @@ end;
 procedure TAMQPConsumeIntegrationTests.HandleDeliveryConcurrent(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery);
 var
-  LCur, LOldPeak: Integer;
+  LCur, LOldPeak, LWaited: Integer;
 begin
   LCur := TInterlocked.Increment(FCurrent);
   // atualiza o pico de concorrência (CAS)
@@ -103,7 +103,17 @@ begin
       Break;
   until TInterlocked.CompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
-  TThread.Sleep(80); // segura o callback pra dar chance de sobreposição
+  // Segura o callback até OBSERVAR outro rodando junto (ou timeout): prova a
+  // sobreposição sem depender de janela de timing (um sleep fixo flakeia
+  // quando os workers do pool demoram a subir sob carga). Se o pico >= 2 já
+  // foi registrado, a prova está feita e ninguém mais precisa esperar.
+  LWaited := 0;
+  while (TInterlocked.CompareExchange(FCurrent, 0, 0) < 2) and
+        (TInterlocked.CompareExchange(FPeak, 0, 0) < 2) and (LWaited < 2000) do
+  begin
+    TThread.Sleep(10);
+    Inc(LWaited, 10);
+  end;
 
   FReceived.Add(ADelivery.BodyAsText);
   AChannel.Ack(ADelivery.DeliveryTag);
@@ -148,7 +158,9 @@ begin
   FChan.Qos(N);
   FChan.Consume(LQueue, HandleDeliveryConcurrent);
 
-  WaitCount(N, 15000);
+  // Timeout > N × timeout do callback: execução serializada de verdade chega
+  // ao fim e falha na asserção de pico (a mensagem certa), não na contagem.
+  WaitCount(N, 30000);
 
   LList := FReceived.LockList;
   try

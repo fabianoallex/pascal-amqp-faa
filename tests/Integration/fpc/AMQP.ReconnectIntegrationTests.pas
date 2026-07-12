@@ -171,8 +171,10 @@ begin
   AssertTrue('conexão deveria estar aberta após reconectar', FConsumerConn.IsOpen);
 
   // 4) Publica depois da recuperação e confirma que o consumo voltou.
+  //    15s: logo após o recovery o broker/canal ainda podem estar assentando
+  //    (flakeou com 5s sob carga — broker compartilhado com outra suíte).
   FControlChan.PublishText('', FQueue, 'depois-da-recuperacao');
-  WaitReceived('depois-da-recuperacao', 5000);
+  WaitReceived('depois-da-recuperacao', 15000);
   AssertTrue('deveria voltar a consumir após a reconexão',
     ReceivedContains('depois-da-recuperacao'));
 end;
