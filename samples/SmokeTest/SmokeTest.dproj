@@ -5,7 +5,7 @@
         <FrameworkType>None</FrameworkType>
         <MainSource>SmokeTest.dpr</MainSource>
         <Base>True</Base>
-        <Config Condition="'$(Config)'==''">OpenSSL</Config>
+        <Config Condition="'$(Config)'==''">Debug</Config>
         <Platform Condition="'$(Platform)'==''">Win32</Platform>
         <TargetedPlatforms>693267</TargetedPlatforms>
         <AppType>Console</AppType>
