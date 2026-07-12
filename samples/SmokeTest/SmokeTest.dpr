@@ -36,6 +36,7 @@ uses
   AMQP.Basic.Methods,
   AMQP.Exchange.Methods,
   AMQP.Queue.Methods,
+  AMQP.Transport,
   AMQP.Connection;
 
 const
@@ -200,6 +201,8 @@ begin
       WriteLn('[1] conexao + handshake');
       LConn.Open;
       Check(LConn.IsOpen, 'conexao aberta');
+      if SmokeParams.UseTls then
+        WriteLn('  tls: ', AmqpTlsBackendInfo); // motor carregado de fato
 
       WriteLn('[2] canal + topologia');
       LChan := LConn.CreateChannel;

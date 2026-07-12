@@ -45,7 +45,7 @@ uses
   Windows, Messages, SysUtils, Classes,
   SyncObjs, Generics.Collections,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ComCtrls,
-  AMQP.Connection, AMQP.Queue.Methods;
+  AMQP.Connection, AMQP.Transport, AMQP.Queue.Methods;
 
 type
   TPendingApproval = class
@@ -164,6 +164,9 @@ end;
 procedure TfrmRetaguarda.FormCreate(Sender: TObject);
 begin
   Randomize;
+  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
+  // qual motor um executável usa.
+  Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   FItems := TDictionary<string, TListItem>.Create;
   FPending := TDictionary<string, TPendingApproval>.Create;
   FPendingLock := TCriticalSection.Create;
@@ -311,7 +314,12 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    lblStatus.Caption := 'Conectado';
+    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
+    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    if chkUseTls.Checked then
+      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+    else
+      lblStatus.Caption := 'Conectado (sem TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else

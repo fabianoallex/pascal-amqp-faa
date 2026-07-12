@@ -60,6 +60,18 @@ type
     procedure Close;
   end;
 
+/// Backend TLS deste build (decidido em compilacao): 'OpenSSL', 'SChannel'
+/// ou 'nenhum'. Util para exibir em UI/log qual motor um build usa.
+function AmqpTlsBackendName: string;
+
+/// Como AmqpTlsBackendName, mas com o detalhe de runtime quando o backend ja
+/// carregou — o OpenSSL publica versao e biblioteca na 1ª conexao TLS (ex.:
+/// 'OpenSSL 3.5.2 ... (libssl-3.dll)'). Antes disso, devolve so o nome.
+function AmqpTlsBackendInfo: string;
+
+/// Uso interno dos backends TLS: publica o detalhe de AmqpTlsBackendInfo.
+procedure AmqpSetTlsBackendDetail(const ADetail: string);
+
 implementation
 
 {$IFDEF FPC}
@@ -69,6 +81,36 @@ uses
 const
   AMQP_SHUT_RDWR = 2;
 {$ENDIF}
+
+var
+  // Escrito uma vez pelo backend ao carregar (antes de qualquer leitura util:
+  // so ha detalhe DEPOIS de uma conexao TLS abrir).
+  GTlsBackendDetail: string = '';
+
+function AmqpTlsBackendName: string;
+begin
+  {$IFDEF AMQP_OPENSSL}
+  Result := 'OpenSSL';
+  {$ELSE}
+    {$IFDEF AMQP_WINDOWS}
+  Result := 'SChannel';
+    {$ELSE}
+  Result := 'nenhum';
+    {$ENDIF}
+  {$ENDIF}
+end;
+
+function AmqpTlsBackendInfo: string;
+begin
+  Result := GTlsBackendDetail;
+  if Result = '' then
+    Result := AmqpTlsBackendName;
+end;
+
+procedure AmqpSetTlsBackendDetail(const ADetail: string);
+begin
+  GTlsBackendDetail := ADetail;
+end;
 
 constructor TAMQPTcpSocket.Create;
 begin

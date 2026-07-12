@@ -202,6 +202,9 @@ var
   p_ERR_error_string_n: procedure(AErr: TSslULong; ABuf: PAnsiChar;
     ALen: NativeUInt); cdecl;
   p_ERR_clear_error: procedure; cdecl;
+  // Opcional (só para diagnóstico via AmqpTlsBackendInfo); OpenSSL_version(0)
+  // = OPENSSL_VERSION, a string completa 'OpenSSL x.y.z data'.
+  p_OpenSSL_version: function(AType: Integer): PAnsiChar; cdecl;
 
   // Carregamento único por processo (as libs nunca são descarregadas).
   GLibLock: TCriticalSection;
@@ -325,6 +328,8 @@ begin
       p_ERR_get_error := SslMustGet(LCrypto, 'ERR_get_error', LCryptoName);
       p_ERR_error_string_n := SslMustGet(LCrypto, 'ERR_error_string_n', LCryptoName);
       p_ERR_clear_error := SslMustGet(LCrypto, 'ERR_clear_error', LCryptoName);
+      // Opcional: falta do símbolo não é erro (fica só o nome do backend).
+      p_OpenSSL_version := SslGetProc(LCrypto, 'OpenSSL_version');
     except
       // Instalação com símbolo faltando: descarrega pra não acumular uma
       // referência de load a cada nova tentativa de conexão.
@@ -335,6 +340,15 @@ begin
 
     GLibCrypto := LCrypto;
     GLibSsl := LSsl;
+
+    // Publica o que carregou de fato (versão + soname/DLL) pro chamador poder
+    // exibir/logar via AmqpTlsBackendInfo.
+    if Assigned(p_OpenSSL_version) then
+      AmqpSetTlsBackendDetail(Format('%s (%s)',
+        [string(AnsiString(p_OpenSSL_version(0))), LSslName]))
+    else
+      AmqpSetTlsBackendDetail(Format('OpenSSL (%s)', [LSslName]));
+
     GLibLoaded := True;
   finally
     GLibLock.Leave;

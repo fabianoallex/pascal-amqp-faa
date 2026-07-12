@@ -15,7 +15,7 @@ interface
 uses
   Windows, Messages, SysUtils, Classes,
   Graphics, Controls, Forms, Dialogs, StdCtrls,
-  AMQP.Connection, AMQP.Queue.Methods;
+  AMQP.Connection, AMQP.Transport, AMQP.Queue.Methods;
 
 type
   TfrmAutorizador = class(TForm)
@@ -71,6 +71,9 @@ implementation
 procedure TfrmAutorizador.FormCreate(Sender: TObject);
 begin
   Randomize;
+  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
+  // qual motor um executável usa.
+  Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   SetConectado(False);
 end;
 
@@ -136,7 +139,12 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    lblStatus.Caption := 'Conectado';
+    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
+    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    if chkUseTls.Checked then
+      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+    else
+      lblStatus.Caption := 'Conectado (sem TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
