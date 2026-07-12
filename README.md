@@ -1,6 +1,6 @@
 # pascal-amqp-faa
 
-Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a partir de uma única codebase. Porte multiplataforma da [delphi-amqp-faa](../delphi-amqp-faa) (mesmo autor, MIT), que era exclusiva de Delphi/Windows.
+Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a partir de uma única codebase. Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa) (mesmo autor, MIT), que era exclusiva de Delphi/Windows.
 
 ## Recursos
 
