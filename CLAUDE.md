@@ -68,6 +68,8 @@ Gotchas de FPC já encontrados no porte:
 
 Mesmo padrão dos projetos irmãos (`delphi-amqp-faa`, `delphi-api-infra-faa`): licença MIT com copyright de Fabiano Arndt, commits em português, sem pushes/commits automáticos sem confirmação explícita do usuário.
 
+O README tem duas versões: `README.md` (português, **canônico**) e `README.en.md` (inglês, com identificadores/comentários dos exemplos traduzidos). **Toda mudança no README.md deve ser replicada no README.en.md** na mesma sessão.
+
 ## Roadmap
 
 1. ~~Porte do núcleo + validação FPC/Win64 com smoke test (broker real).~~ **Concluído.**
