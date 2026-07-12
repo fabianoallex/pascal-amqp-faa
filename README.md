@@ -17,9 +17,9 @@ Cliente **AMQP 0-9-1** (RabbitMQ) para **Free Pascal / Lazarus** e **Delphi**, a
 
 | Compilador | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suíte FPCUnit (80 unitários + 24 integração) e os 4 samples passam contra RabbitMQ real |
-| Delphi (testado na base 12 / Athens) | Mesma codebase; suíte DUnitX (80 unitários + 24 integração) e os 4 samples validados via IDE (Community Edition não compila por linha de comando) |
-| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 24 integração, TLS incluso via OpenSSL) e os samples console (`AutorizadorSim`/`Retaguarda`) passam contra RabbitMQ real. ARM e samples VCL/LCL ainda não validados |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suíte FPCUnit (80 unitários + 27 integração) e os 4 samples passam contra RabbitMQ real |
+| Delphi (testado na base 12 / Athens) | Mesma codebase; suíte DUnitX (80 unitários + 27 integração) e os 4 samples validados via IDE (Community Edition não compila por linha de comando) |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 27 integração, TLS incluso via OpenSSL) e os samples console (`AutorizadorSim`/`Retaguarda`) passam contra RabbitMQ real. ARM e samples VCL/LCL ainda não validados |
 
 Decisões do porte (ver `CLAUDE.md` para detalhes):
 
@@ -147,7 +147,7 @@ A diretiva é **opt-in** de propósito: SChannel é garantido existir no Windows
   fpc -dAMQP_OPENSSL -Fusrc -Fisrc seu_programa.pas
   ```
 
-- **Lazarus (IDE)**: a lib compila via pacote, então a diretiva vai **no pacote, não no projeto** (defines do projeto não recompilam as units do pacote): `Package → Open Package File → packages/pascal_amqp_faa.lpk → Options → Compiler Options → Custom Options` → adicione `-dAMQP_OPENSSL` e recompile. Vale para qualquer projeto que dependa do pacote (samples GUI, runners de teste).
+- **Lazarus**: o `SmokeTest.lpi` e os dois runners FPCUnit já vêm com um **build mode `openssl`** — selecione no dropdown de build modes da IDE, ou por linha de comando: `lazbuild -B --build-mode=openssl samples\SmokeTest\SmokeTest.lpi`. Para outros projetos, lembre que a lib compila via pacote e defines do projeto **não** recompilam as units do pacote — a diretiva precisa chegar lá por `Project Options → Compiler Options → Additions and Overrides` (Custom Option `-dAMQP_OPENSSL`, que vale para os pacotes do projeto) ou direto no `packages/pascal_amqp_faa.lpk` (`Options → Custom Options`, valendo então para todo projeto que use o pacote).
 - **Delphi (IDE)**: `Project → Options → Building → Delphi Compiler → Conditional defines` → adicione `AMQP_OPENSSL`. *(Pendente de validação em alvo Linux: a Community Edition não tem esse target — o mesmo fonte é o validado pelo FPC/Linux.)*
 
 As bibliotecas são carregadas **dinamicamente na primeira conexão TLS** (`dlopen`/`LoadLibrary` + lista de nomes: `libssl.so.3` → `libssl.so.1.1` → `libssl.so` no Linux; `libssl-3-x64.dll` etc. no Windows). O executável não ganha dependência de link: se a `libssl` não estiver instalada, o erro só acontece ao chamar `Open` com `UseTls=True` — com mensagem dizendo quais nomes foram tentados.
@@ -183,7 +183,7 @@ Com o argumento `--tls`, roda os mesmos passos sobre TLS (precisa do broker com 
 SmokeTest.exe --tls
 ```
 
-No Windows isso usa SChannel; para exercitar o backend OpenSSL, compile com `-dAMQP_OPENSSL` (no Linux, é a única opção de TLS).
+No Windows isso usa SChannel; para exercitar o backend OpenSSL, compile com `-dAMQP_OPENSSL` — o `SmokeTest.lpi` traz o build mode `openssl` pronto pra isso (no Linux, OpenSSL é a única opção de TLS).
 
 ## Samples
 
