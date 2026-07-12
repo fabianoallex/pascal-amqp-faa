@@ -11,9 +11,11 @@
   GUI (janela com arvore de testes + barra verde/vermelha), sem parametros:
     .\AMQPIntegrationTestsFpc.exe
   Fora do Windows roda sempre em modo console (sem LCL/widgetset), com ou
-  sem parametros. AMQP.TlsIntegrationTests fica de fora fora do Windows: TLS
-  (EAMQPTls incluso) so existe sob AMQP_WINDOWS (ver AMQP.Transport.Tls.pas) -
-  OpenSSL para Linux ainda esta no roadmap.
+  sem parametros. AMQP.TlsIntegrationTests entra em toda plataforma: no
+  Windows usa SChannel; nas demais so conecta de fato se o runner for
+  compilado com -dAMQP_OPENSSL (AMQP.Transport.OpenSSL) - sem a diretiva o
+  Open falha e os testes TLS se auto-ignoram, como quando o broker TLS esta
+  fora do ar.
 
   Ver CLAUDE.md para os workarounds de erros internos do FPC 3.2.2 e o
   TInterlocked que nao existe no FPC (usar AmqpAtomic* de AMQP.Threading). }
@@ -32,9 +34,7 @@ uses
   AMQP.ChannelIntegrationTests,
   AMQP.ConsumeIntegrationTests,
   AMQP.ReconnectIntegrationTests,
-  {$IFDEF MSWINDOWS}
   AMQP.TlsIntegrationTests,
-  {$ENDIF}
   AMQP.ReviewRegressionTests;
 
 var

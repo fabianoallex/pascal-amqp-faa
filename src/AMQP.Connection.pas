@@ -391,7 +391,7 @@ type
   private
     FParams: TAMQPConnectionParams;
     FSocket: TAMQPTcpSocket;
-    FStream: TStream; // TAMQPSocketStream (plain) ou TAMQPSchannelStream (TLS)
+    FStream: TStream; // TAMQPSocketStream (plain) ou TAMQPSchannelStream/TAMQPOpenSslStream (TLS)
     FIsOpen: Boolean;
     FNegotiated: TAMQPConnectionTune;
     FNextChannel: Word;
@@ -481,8 +481,14 @@ implementation
 
 uses
   AMQP.Channel.Methods
-  {$IFDEF AMQP_WINDOWS}
+  // TLS: OpenSSL (opt-in via AMQP_OPENSSL, qualquer plataforma) tem precedência
+  // sobre SChannel (automático no Windows). Ver EstablishConnection.
+  {$IFDEF AMQP_OPENSSL}
+  , AMQP.Transport.OpenSSL
+  {$ELSE}
+    {$IFDEF AMQP_WINDOWS}
   , AMQP.Transport.Tls
+    {$ENDIF}
   {$ENDIF}
   ;
 
@@ -1009,7 +1015,7 @@ begin
   FStream := LPlain;
   if FParams.UseTls then
   begin
-    {$IFDEF AMQP_WINDOWS}
+    {$IF Defined(AMQP_OPENSSL) or Defined(AMQP_WINDOWS)}
     // O stream TLS envolve o plain e faz o handshake TLS no construtor. Ele passa
     // a ser dono do plain: se o Create falhar, seu destrutor (auto-chamado)
     // libera o plain — por isso zeramos FStream antes, para o
@@ -1019,13 +1025,19 @@ begin
     if LTarget = '' then
       LTarget := FParams.Host;
     FStream := nil;
-    FStream := TAMQPSchannelStream.Create(LPlain, LTarget, FParams.TlsVerifyPeer);
+    {$IFDEF AMQP_OPENSSL}
+    // OpenSSL (opt-in): mesmo contrato do SChannel; vence quando definido,
+    // inclusive no Windows.
+    FStream := TAMQPOpenSslStream.Create(LPlain, LTarget, FParams.TlsVerifyPeer);
     {$ELSE}
-    // TLS multiplataforma (OpenSSL) é roadmap; hoje só SChannel/Windows.
+    FStream := TAMQPSchannelStream.Create(LPlain, LTarget, FParams.TlsVerifyPeer);
+    {$ENDIF}
+    {$ELSE}
+    // Sem AMQP_OPENSSL e fora do Windows não há backend TLS neste build.
     LTarget := ''; // evita warning de variável não usada
     CloseSocketStream;
     raise EAMQPConnection.Create(
-      'TLS ainda não suportado nesta plataforma (disponível apenas no Windows/SChannel)');
+      'TLS não suportado neste build/plataforma (Windows usa SChannel; nas demais, compile com AMQP_OPENSSL)');
     {$ENDIF}
   end;
 

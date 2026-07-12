@@ -9,7 +9,11 @@ program SmokeTest;
   Exercita: conexao + handshake, canal, declare de exchange/fila/bind, publisher
   confirms (publish + WaitForConfirm), BasicGet, Consume com ack manual (callback
   despachado no thread pool), Cancel e teardown limpo. Sai com exit code 0 se
-  tudo passou; 1 se algo falhou. }
+  tudo passou; 1 se algo falhou.
+
+  Com o argumento --tls, roda os mesmos passos sobre TLS (localhost:5671 do
+  docker-compose.tls.yml, cert self-signed): SChannel no Windows, OpenSSL se
+  compilado com -dAMQP_OPENSSL. }
 
 {$IFDEF FPC}
   {$MODE DELPHI}
@@ -108,6 +112,17 @@ begin
   Result := FAllReceived.WaitFor(ATimeoutMs) = wrSignaled;
 end;
 
+// Parâmetros do teste: com --tls na linha de comando, roda TUDO sobre TLS
+// (localhost:5671, cert self-signed do docker-compose.tls.yml; no build é
+// SChannel no Windows ou OpenSSL com -dAMQP_OPENSSL). Sem argumento, plain 5672.
+function SmokeParams: TAMQPConnectionParams;
+begin
+  if (ParamCount > 0) and SameText(ParamStr(1), '--tls') then
+    Result := TAMQPConnectionParams.LocalhostTls
+  else
+    Result := TAMQPConnectionParams.Localhost;
+end;
+
 procedure Check(ACondition: Boolean; const AWhat: string);
 begin
   if ACondition then
@@ -127,7 +142,7 @@ var
   LBind: TAMQPQueueBind;
   LSeqNo: UInt64;
 begin
-  LParams := TAMQPConnectionParams.Localhost;
+  LParams := SmokeParams;
   LParams.AutoReconnect := True;
   LParams.ReconnectDelayMs := 500;
   LSmoke := TSmoke.Create(1);
@@ -179,7 +194,7 @@ var
 begin
   ExitCode := 1;
   LSmoke := nil;
-  LConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  LConn := TAMQPConnection.Create(SmokeParams);
   try
     try
       WriteLn('[1] conexao + handshake');

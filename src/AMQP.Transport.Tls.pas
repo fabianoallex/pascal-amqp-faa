@@ -30,11 +30,10 @@ interface
 uses
   SysUtils,
   Classes,
-  Windows;
+  Windows,
+  AMQP.Transport; // EAMQPTls (comum aos transportes TLS)
 
 type
-  EAMQPTls = class(Exception);
-
   { Handles/structs SSPI usados como campos da classe (layout binário exato da
     API Win32). O restante da superfície SSPI (funções, SecBuffer, SCHANNEL_CRED,
     constantes) fica na implementation, pois só é usado dentro dos métodos. }

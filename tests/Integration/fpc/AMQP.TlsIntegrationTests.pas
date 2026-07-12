@@ -7,7 +7,10 @@
 
   Se o broker TLS NÃO estiver no ar, o Setup não consegue conectar e os testes
   saem sem asserção (ignorados), para não quebrar a suíte quando só o broker
-  plain (5672) está up. }
+  plain (5672) está up. O mesmo caminho cobre builds sem backend TLS (fora do
+  Windows sem -dAMQP_OPENSSL): o Open levanta EAMQPConnection e os testes se
+  auto-ignoram. Para rodá-los de verdade fora do Windows, compile o runner com
+  -dAMQP_OPENSSL (precisa de libssl/libcrypto instaladas). }
 
 {$mode delphi}{$H+}
 
@@ -16,7 +19,7 @@ interface
 uses
   fpcunit, testregistry, SysUtils, Classes,
   AMQP.Connection,
-  AMQP.Transport.Tls,
+  AMQP.Transport, // EAMQPTls (vale pra SChannel e OpenSSL)
   AMQP.Queue.Methods;
 
 type

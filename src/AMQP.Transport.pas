@@ -33,6 +33,13 @@ uses
 type
   EAMQPTransport = class(Exception);
 
+  { Erros da camada TLS (handshake, cifra, validação de cert). Declarada aqui —
+    e não nas units de transporte TLS — para existir em TODA plataforma/build:
+    AMQP.Transport.Tls só compila sob AMQP_WINDOWS e AMQP.Transport.OpenSSL só
+    sob AMQP_OPENSSL, mas testes e chamadores precisam capturar EAMQPTls sem
+    depender dessas diretivas. }
+  EAMQPTls = class(Exception);
+
   TAMQPTcpSocket = class
   private
     {$IFDEF FPC}
@@ -105,10 +112,21 @@ function TAMQPTcpSocket.Send(const Buffer; ACount: Integer): Integer;
 begin
   if FSock = nil then
     raise EAMQPTransport.Create('socket nao conectado');
-  {$IFDEF FPC}
-  Result := FSock.Write(Buffer, ACount);
+  {$IF Defined(FPC) and Defined(UNIX) and Declared(MSG_NOSIGNAL)}
+  // MSG_NOSIGNAL: send() num socket ja encerrado devolve erro (EPIPE) em vez
+  // de matar o processo com SIGPIPE. Essencial pro TLS: o destrutor do stream
+  // manda close_notify best-effort mesmo quando o socket ja foi derrubado
+  // (teardown/reconexao) — no Windows isso e' so um erro de send engolido;
+  // no Linux, sem esta flag, era SIGPIPE fatal (visto no smoke test --tls).
+  // Vale pra qualquer Unix cuja unit sockets declare a flag (Linux, BSDs);
+  // no Darwin (sem MSG_NOSIGNAL) fica o caminho comum, sujeito a SIGPIPE.
+  Result := fpsend(FSock.Handle, @Buffer, ACount, MSG_NOSIGNAL);
   {$ELSE}
+    {$IFDEF FPC}
+  Result := FSock.Write(Buffer, ACount);
+    {$ELSE}
   Result := FSock.Send(Buffer, ACount);
+    {$ENDIF}
   {$ENDIF}
 end;
 

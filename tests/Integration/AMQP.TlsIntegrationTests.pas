@@ -16,7 +16,7 @@ uses
   System.SysUtils,
   System.Classes,
   AMQP.Connection,
-  AMQP.Transport.Tls,
+  AMQP.Transport, // EAMQPTls
   AMQP.Queue.Methods;
 
 type
