@@ -1,4 +1,4 @@
-program SmokeTest;
+﻿program SmokeTest;
 
 { Smoke test da pascal-amqp-faa contra um RabbitMQ real (docker/docker-compose.yml).
 
