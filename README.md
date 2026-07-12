@@ -68,6 +68,144 @@ end;
 
 No FPC em **Linux**, adicione `cthreads` como primeira unit do programa. Para strings não-ASCII no FPC fora do Lazarus, configure `SetMultiByteConversionCodePage(CP_UTF8)` (aplicações Lazarus já usam UTF-8 por padrão).
 
+> O `TAMQPConnection` é dono das threads internas (leitura + heartbeat). Libere os canais antes da conexão (ou deixe o `Free` da conexão cuidar deles).
+
+## Uso em detalhe
+
+### Declarar fila / exchange / binding
+
+```pascal
+// Fila durável nomeada:
+Chan.DeclareQueue(TAMQPQueueDeclare.Create('nfe.respostas', True));
+
+// Exchange topic + binding:
+var
+  LBind: TAMQPQueueBind;
+begin
+  Chan.DeclareExchange(TAMQPExchangeDeclare.Create('nfe', AMQP_EXCHANGE_TYPE_TOPIC));
+  LBind := Default(TAMQPQueueBind);
+  LBind.QueueName := 'nfe.respostas';
+  LBind.ExchangeName := 'nfe';
+  LBind.RoutingKey := 'resposta.#';
+  Chan.BindQueue(LBind);
+end;
+```
+
+### Publicar com propriedades
+
+```pascal
+uses AMQP.Wire, AMQP.Basic.Methods;
+
+var
+  LProps: TAMQPBasicProperties;
+begin
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('application/json');
+  LProps.SetPersistent;                       // delivery-mode 2
+  LProps.SetCorrelationId('NFe3524...9012');
+  LProps.SetMessageId('req-42');
+  Chan.Publish('', 'nfe.respostas',
+    AmqpUtf8Encode('{"status":"autorizada"}'), LProps);
+end;
+```
+
+O exchange vazio (`''`) roteia pela *routing key* = nome da fila (default exchange). Sem confirm mode, publicar é fire-and-forget e `Publish` retorna 0. `AmqpUtf8Encode` (unit `AMQP.Wire`) é o substituto portável de `TEncoding.UTF8.GetBytes`.
+
+### Consumir uma mensagem (pull)
+
+```pascal
+var
+  LMsg: TAMQPGetResult;
+begin
+  LMsg := Chan.BasicGet('nfe.respostas', True {no-ack});
+  if LMsg.Found then
+    WriteLn(LMsg.BodyAsText);
+end;
+```
+
+Para consumo contínuo (push, concorrente, com ack manual), veja o `Consume` do [Uso rápido](#uso-rápido) — e a seção de [concorrência e ordenação](#concorrência-e-ordenação-de-mensagens) abaixo.
+
+### Publisher confirms em detalhe
+
+`ConfirmSelect` coloca o canal em modo confirm: a partir daí cada `Publish` recebe um *seq-no* (1, 2, 3, ...) e o broker o confirma (`ack`) ou rejeita (`nack`). Dá para tratar de forma assíncrona com `OnConfirm` e/ou bloquear até a confirmação com `WaitForConfirm` (um publish) ou `WaitForConfirms` (todos os pendentes):
+
+```pascal
+type
+  TMeuPublicador = class
+    procedure QuandoConfirmar(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
+  end;
+
+procedure TMeuPublicador.QuandoConfirmar(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
+begin
+  if not AAck then
+    Log(Format('publish %d foi NACK-ado pelo broker', [ASeqNo]));
+end;
+
+// ...
+Chan.ConfirmSelect;
+Chan.OnConfirm := Publicador.QuandoConfirmar; // assíncrono, numa thread do pool
+
+// Síncrono: bloqueia até o broker confirmar este publish.
+LSeq := Chan.Publish('', 'nfe.respostas', LBody, LProps);
+if Chan.WaitForConfirm(LSeq, 5000) then
+  WriteLn('confirmado')
+else
+  WriteLn('não confirmado (nack, queda de conexão ou timeout)');
+
+// Ou publique em lote e espere todos de uma vez:
+Chan.Publish('', 'nfe.respostas', LBody1, LProps);
+Chan.Publish('', 'nfe.respostas', LBody2, LProps);
+if not Chan.WaitForConfirms(5000) then
+  WriteLn('algum publish não foi confirmado');
+```
+
+Se a conexão cair antes da confirmação, o publish pendente é reportado como **não confirmado** (`WaitForConfirm` retorna `False`); `OnConfirm` dispara apenas para confirmações reais do broker. Após uma reconexão os seq-nos seguem **monotônicos** (não reiniciam).
+
+**Reenvio automático (opt-in)**: com `RepublishUnconfirmedOnReconnect := True` nos parâmetros da conexão (junto de `AutoReconnect`), os publishes que ficaram sem confirmação numa queda são **re-publicados automaticamente na reconexão**, com seq-nos novos (observáveis via `OnConfirm`). É *at-least-once* — pode haver duplicatas quando o broker recebeu a mensagem mas o `ack` se perdeu na queda; os seq-nos originais seguem reportando "não confirmado". Custo: guarda o corpo de cada publish pendente até a confirmação.
+
+### `Basic.Return` (publish `mandatory` não roteável)
+
+Para saber se um publish `mandatory` não foi roteado a nenhuma fila, trate `OnBasicReturn` (dispara numa thread do pool, como o callback de consumer):
+
+```pascal
+procedure TMeuPublicador.QuandoNaoRotear(AChannel: TAMQPChannel;
+  const AReturned: TAMQPReturnedMessage);
+begin
+  Log(Format('mensagem não roteada: %s (%d) exchange=%s rk=%s',
+    [AReturned.ReplyText, AReturned.ReplyCode, AReturned.Exchange, AReturned.RoutingKey]));
+end;
+
+// ...
+Chan.OnBasicReturn := Publicador.QuandoNaoRotear;
+Chan.Publish('nfe', 'resposta.inexistente', LBody, LProps, True {mandatory});
+```
+
+### Reconexão automática
+
+```pascal
+LParams := TAMQPConnectionParams.Localhost;
+LParams.AutoReconnect := True;
+LParams.ReconnectDelayMs := 2000;   // backoff entre tentativas
+LParams.MaxReconnectAttempts := 0;  // 0 = infinitas
+
+Conn := TAMQPConnection.Create(LParams);
+Conn.OnReconnect := MeuApp.QuandoReconectar; // dispara após reconectar E restaurar a topologia
+Conn.Open;
+```
+
+Na queda, a lib reconecta e **restaura a topologia** declarada naquele canal (filas, exchanges, bindings, Qos, confirm mode) e **re-registra os consumers** — o seu callback volta a receber mensagens sem intervenção. Como *delivery-tags* reiniciam a cada sessão, mensagens não confirmadas são reentregues: projete os handlers para serem **idempotentes** (at-least-once). Em testes/sincronização, espere o `OnReconnect` (que dispara após o recovery completo), não `IsOpen` (fica `True` antes do replay da topologia).
+
+### O callback de consumer precisa sempre terminar sozinho
+
+`Close`/`Destroy` do canal esperam (sem timeout, de propósito) os callbacks em voo terminarem antes de liberar o objeto — I/O demorado é ok, mas um callback que bloqueia indefinidamente esperando interação do usuário ou um evento que só outra thread da aplicação sinaliza trava esse fechamento; se o `Free` roda na thread principal de uma app VCL/LCL, a UI congela junto (deadlock). Se o fluxo depende de aprovação humana, prefira **não bloquear**: guarde o *delivery-tag* e o conteúdo numa estrutura própria, retorne, e confirme depois (`Ack`/`Nack` podem ser chamados de qualquer thread). Se optar por bloquear num `TEvent`, o encerramento precisa acordar **todas** as esperas e também cobrir entregas que cheguem *durante* a desconexão — um nack+requeue pode ser reentregue imediatamente ao mesmo consumer até o `Cancel` completar (`samples/RetaguardaVcl` mostra o padrão com flag de encerramento).
+
+## Arquitetura (resumo)
+
+- **Uma thread de leitura** é a única que lê o socket após o handshake; ela demultiplexa frames por canal e **despacha callbacks de consumer para o thread pool** (`AmqpPool`, de `AMQP.Threading`) — nunca roda código do usuário nem bloqueia.
+- Todas as **escritas** são serializadas por um lock; os frames de uma mensagem (método + header + corpo) saem juntos.
+- **RPC** (declare/bind/get/consume/close) é feito por evento: envia e aguarda a thread de leitura entregar a resposta.
+- **Heartbeat** e **reconexão** rodam em threads próprias com espera interrompível (`TEvent`).
+
 ## Concorrência e ordenação de mensagens
 
 Cada entrega é despachada pro **thread pool** (`AmqpPool`, ver `AMQP.Threading`) como um item de trabalho independente — não existe uma fila única por canal/consumer sendo drenada em ordem. É uma escolha de design deliberada, diferente do padrão comum em outras linguagens:
@@ -188,9 +326,9 @@ No Windows isso usa SChannel; para exercitar o backend OpenSSL, compile com `-dA
 
 ## Samples
 
-Fluxo de exemplo (PDV → autorizador → retaguarda), cada par compilando do mesmo fonte nos dois compiladores:
+O fluxo que motivou a lib: o autorizador publica a resposta da NFe numa fila; a **retaguarda** consome essa fila e responde ao polling de **vários PDVs simultâneos**. O consumo com thread pool + ack manual atende isso diretamente — cada resposta é processada em paralelo, correlacionada pela chave da NFe (`CorrelationId` ou um header), e só é confirmada após o processamento. Os samples implementam esse fluxo (PDV → autorizador → retaguarda), cada par compilando do mesmo fonte nos dois compiladores:
 
-- **`samples/AutorizadorSim`** / **`samples/Retaguarda`** (console) — o autorizador publica N retornos simulados de NFe; a retaguarda consome concorrentemente, com ack manual e um comando de status.
+- **`samples/AutorizadorSim`** / **`samples/Retaguarda`** (console) — o autorizador publica N retornos simulados de NFe; a retaguarda consome concorrentemente, com ack manual e um comando de status. Rode a `Retaguarda` e depois o `AutorizadorSim`: as linhas `[worker N] iniciando...` de notas diferentes aparecem intercaladas, confirmando o processamento em paralelo.
 - **`samples/AutorizadorSimVcl`** / **`samples/RetaguardaVcl`** (GUI — VCL no Delphi, LCL no Lazarus, a partir do mesmo `.pas`/`.dfm`/`.lfm`) — mesma ideia com tela: conexão editável, publish sob demanda, e no `RetaguardaVcl` um modo de confirmação manual (aprovar/rejeitar nota pela lista) além do automático.
 
 Suba o broker (`docker compose -f docker/docker-compose.yml up -d`) e abra o `.dproj`/`.lpi` correspondente — ou `AMQP.groupproj`/`AMQP.lpg` pra abrir todos juntos.
@@ -203,6 +341,32 @@ Suba o broker (`docker compose -f docker/docker-compose.yml up -d`) e abra o `.d
 Em ambos: `AMQP.UnitTests` / `AMQPUnitTestsFpc` (80 testes, não precisa de broker — encode/decode de frames, métodos, content header, negociação de tune) e `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` (27 testes, precisa do RabbitMQ no ar: `docker compose -f docker/docker-compose.yml up -d`, TLS incluso via `docker-compose.tls.yml`). Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como Passed, mas o log de console mostra `Success. : IGNORADO: broker TLS (5671) indisponível...` em cada um — se os 5 aparecem sem essa mensagem, conectaram de fato.
 
 O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console. Rodando pela IDE do Lazarus, o chaveamento é em `Run → Run Parameters → Command line parameters` — os `.lpi` vêm com `--all --format=plain` salvo (modo console); limpe o campo para o F9 abrir a GUI. No modo console via F9 a janela fecha ao terminar: ou marque *Use launching application* com `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, ou rode o executável direto num terminal.
+
+## Limitações conhecidas
+
+- Transações (`tx.*`) **não implementadas — por decisão de design**, não por dificuldade técnica (o protocolo `tx.*` é trivial). Uma transação AMQP é *stateful e por canal* ("tudo que publiquei/dei ack desde o último commit"), o que casa mal com o modelo *concurrency-first* desta lib: várias threads publicando no mesmo canal cairiam todas na mesma transação, sem escopo por-thread. Além disso, `tx.*` é síncrono e lento, e a própria RabbitMQ recomenda **publisher confirms** no lugar — que já estão implementados (`ConfirmSelect`). Se surgir necessidade real de lote atômico, o subconjunto tratável é `Tx.Select/Commit/Rollback` para uso serial em canal dedicado.
+- Publisher confirms + reconexão: os publishes não confirmados antes da queda são reportados como **não confirmados**; o reenvio na reconexão é **opt-in** (`RepublishUnconfirmedOnReconnect`, at-least-once) — sem ele, reenvie na sua camada se precisar de garantia ponta a ponta. Ver [Publisher confirms em detalhe](#publisher-confirms-em-detalhe).
+- **Recuperação de topologia com filas de nome gerado pelo servidor** — ver a seção abaixo.
+- TLS: autenticação de servidor apenas — sem mTLS/client-cert, sem escolha manual de versão/cipher suite (ver [TLS (amqps)](#tls-amqps)).
+
+### Recuperação de filas com nome gerado pelo servidor
+
+Ao declarar `QueueName = ''`, o servidor **gera** o nome (`amq.gen-XXXX`). A recuperação de topologia na reconexão **assume filas nomeadas**: ela guarda os payloads de `declare`/`bind`/`consume` já serializados e os re-executa. Como o redeclare com nome vazio gera um nome **novo** e os `bind`/`consume` gravados carregam o nome **antigo**, o replay quebra (`basic.consume` na fila inexistente → `404` → o servidor fecha o canal).
+
+**Workaround (recomendado):** se você precisa de fila temporária **e** de reconexão, **gere o nome no cliente** em vez de usar `''`:
+
+```pascal
+var
+  LGuid: TGUID;
+begin
+  CreateGUID(LGuid);
+  LDecl.QueueName := 'reply-' + GUIDToString(LGuid);
+  LDecl.Exclusive := True;   // some quando a conexão fecha
+  LDecl.AutoDelete := True;
+end;
+```
+
+Assim a fila é temporária com nome **estável e conhecido**, e a recuperação funciona como a de qualquer fila nomeada. Para RPC request/reply, prefira o **Direct Reply-to** (`amq.rabbitmq.reply-to`) — um nome-mágico fixo, sem declarar fila por requisição, que também não sofre desse problema. (Para quem for forkar e precisar de server-named real na recuperação, o caminho detalhado está documentado no README da [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa#recupera%C3%A7%C3%A3o-de-filas-com-nome-gerado-pelo-servidor) — o design é o mesmo.)
 
 ## Roadmap
 
