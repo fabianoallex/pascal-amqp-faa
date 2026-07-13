@@ -83,6 +83,7 @@ type
     lblPrefetch: TLabel;
     edtPrefetch: TEdit;
     chkManual: TCheckBox;
+    chkDedicado: TCheckBox;
     gbAprovacao: TGroupBox;
     btnAceitar: TButton;
     btnRejeitar: TButton;
@@ -351,6 +352,7 @@ begin
   edtQueue.Enabled := not AConectado;
   edtPrefetch.Enabled := not AConectado;
   chkManual.Enabled := not AConectado;
+  chkDedicado.Enabled := not AConectado;
   btnAceitar.Enabled := AConectado;
   btnRejeitar.Enabled := AConectado;
 end;
@@ -538,7 +540,7 @@ begin
     FConn := TAMQPConnection.Create(LParams);
     FConn.Open;
 
-    FChannel := FConn.CreateChannel;
+    FChannel := FConn.CreateChannel(chkDedicado.Checked);
     FChannel.DeclareQueue(TAMQPQueueDeclare.Create(LQueue, True));
     FChannel.Qos(LPrefetch);
     FManualMode := chkManual.Checked;
@@ -551,6 +553,8 @@ begin
       [LParams.Host, LParams.Port, LParams.VirtualHost, LQueue, LPrefetch]);
     if FManualMode then
       LMsg := LMsg + ' Confirmação manual ativada.';
+    if chkDedicado.Checked then
+      LMsg := LMsg + ' Thread dedicada (sem concorrência, ordem preservada).';
     Log(LMsg);
 
     SetConectado(True);

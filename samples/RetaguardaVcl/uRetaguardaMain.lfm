@@ -198,6 +198,14 @@ object frmRetaguarda: TfrmRetaguarda
       Caption = 'Confirmação manual (aceitar/rejeitar cada nota)'
       TabOrder = 2
     end
+    object chkDedicado: TCheckBox
+      Left = 400
+      Height = 24
+      Top = 54
+      Width = 250
+      Caption = 'Thread dedicada (ordem garantida)'
+      TabOrder = 3
+    end
   end
   object gbAprovacao: TGroupBox
     Left = 10

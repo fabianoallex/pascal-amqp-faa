@@ -29,12 +29,14 @@ type
     // métodos anônimos; TInterlocked não existe no FPC -> AmqpAtomic*.
     procedure HandleDeliverySimple(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleDeliveryConcurrent(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure HandleDeliveryDedicated(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
   published
     procedure ConsomeUmaMensagem_CorpoCorreto;
     procedure ConsomeTodas_ComAck_E_Concorrencia;
+    procedure CanalDedicado_ProcessaSequencialEEmOrdem;
   end;
 
 implementation
@@ -118,6 +120,30 @@ begin
   AmqpAtomicInc(FCount);
 end;
 
+procedure TAMQPConsumeIntegrationTests.HandleDeliveryDedicated(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery);
+var
+  LCur, LOldPeak: Integer;
+begin
+  LCur := AmqpAtomicInc(FCurrent);
+  // mesma atualização de pico do teste de concorrência; aqui esperamos que
+  // nunca passe de 1 (worker dedicado é sequencial).
+  repeat
+    LOldPeak := FPeak;
+    if LCur <= LOldPeak then
+      Break;
+  until AmqpAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
+
+  // Dá tempo de sobra para outro worker do pool global sobrepor, se o
+  // despacho estivesse indo para lá em vez do worker dedicado do canal.
+  TThread.Sleep(30);
+
+  FReceived.Add(ADelivery.BodyAsText);
+  AChannel.Ack(ADelivery.DeliveryTag);
+  AmqpAtomicDec(FCurrent);
+  AmqpAtomicInc(FCount);
+end;
+
 procedure TAMQPConsumeIntegrationTests.ConsomeUmaMensagem_CorpoCorreto;
 var
   LQueue: string;
@@ -167,6 +193,40 @@ begin
   end;
   AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
     AmqpAtomicGet(FPeak) > 1);
+end;
+
+procedure TAMQPConsumeIntegrationTests.CanalDedicado_ProcessaSequencialEEmOrdem;
+const
+  N = 8;
+var
+  LQueue: string;
+  I: Integer;
+  LList: TList<string>;
+begin
+  // Substitui o canal do SetUp por um com worker dedicado (CreateChannel(True)).
+  FChan.Free;
+  FChan := FConn.CreateChannel(True);
+
+  LQueue := DeclareTempQueue;
+  for I := 1 to N do
+    FChan.PublishText('', LQueue, Format('msg-%d', [I]));
+
+  FChan.Qos(N);
+  FChan.Consume(LQueue, HandleDeliveryDedicated);
+
+  WaitCount(N, 30000);
+
+  LList := FReceived.LockList;
+  try
+    AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
+    for I := 1 to N do
+      AssertEquals('worker dedicado deveria preservar a ordem de entrega',
+        Format('msg-%d', [I]), LList[I - 1]);
+  finally
+    FReceived.UnlockList;
+  end;
+  AssertEquals('worker dedicado nunca deveria rodar 2 callbacks ao mesmo tempo (pico deveria ser 1)',
+    1, AmqpAtomicGet(FPeak));
 end;
 
 initialization

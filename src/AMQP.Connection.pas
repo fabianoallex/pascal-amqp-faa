@@ -223,6 +223,9 @@ type
     FConsumerCounter: Integer;
     FOnBasicReturn: TAMQPBasicReturnCallback;
     FInFlight: Integer; // callbacks em execução no pool (atômico)
+    // Pool privado (1 worker) quando o canal usa thread dedicada; nil => usa
+    // o AmqpPool global (comportamento padrão). Ver CreateChannel.
+    FDispatchPool: TAMQPThreadPool;
     // --- publisher confirms ---
     // FConfirmMon é lock + variável de condição (TAMQPMonitor) que protege
     // FUnconfirmed/FNacked/FPublishSeqNo/FConfirmBase e acorda WaitForConfirm(s).
@@ -266,6 +269,10 @@ type
     procedure SignalMessage(const AMessage: TAMQPGetResult);
     procedure SignalError(const AMessage: string);
     procedure CompleteContent;
+    /// Enfileira um work item no pool dedicado do canal (se houver) ou no
+    /// AmqpPool global. Não chamar de "Dispatch": colidiria com o
+    /// TObject.Dispatch usado no mecanismo de message dispatch.
+    procedure DispatchToPool(AItem: TAMQPWorkItem);
     /// Despacha uma entrega para o callback do consumer, no thread pool.
     procedure DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
       const AProps: TAMQPBasicProperties; const ABody: TBytes);
@@ -454,7 +461,10 @@ type
     /// Conecta o socket e executa o handshake. Levanta EAMQPConnection em falha.
     procedure Open;
     /// Abre um novo canal (já aberto). O chamador é dono e deve liberá-lo.
-    function CreateChannel: TAMQPChannel;
+    /// ADedicatedConsumerThread: se True, as entregas/returns/confirms deste
+    /// canal são despachados para uma única thread própria do canal (ordem
+    /// garantida, nunca concorrente) em vez do pool global compartilhado.
+    function CreateChannel(ADedicatedConsumerThread: Boolean = False): TAMQPChannel;
     /// Envia Connection.Close, aguarda Close-Ok e fecha o socket.
     procedure Close(AReplyCode: Word = 200; const AReplyText: string = 'Goodbye');
     /// Fecha o socket abruptamente para simular queda de rede (uso em testes).
@@ -1379,7 +1389,7 @@ begin
   end;
 end;
 
-function TAMQPConnection.CreateChannel: TAMQPChannel;
+function TAMQPConnection.CreateChannel(ADedicatedConsumerThread: Boolean): TAMQPChannel;
 var
   LChan: TAMQPChannel;
 begin
@@ -1397,6 +1407,8 @@ begin
     Inc(FNextChannel);
     LChan := TAMQPChannel.Create(Self, FNextChannel);
     try
+      if ADedicatedConsumerThread then
+        LChan.FDispatchPool := TAMQPThreadPool.Create(1);
       FChannels.Add(LChan.ChannelId, LChan);
     except
       LChan.Free;
@@ -1475,6 +1487,7 @@ begin
     except
     end;
   DrainInFlight; // garante que nenhum callback ainda usa este canal
+  FDispatchPool.Free; // nil-safe; se atribuído, já não há mais itens em voo
   FRecovery.Free;
   FRecoveryLock.Free;
   FUnconfirmed.Free;
@@ -2108,6 +2121,14 @@ begin
   end;
 end;
 
+procedure TAMQPChannel.DispatchToPool(AItem: TAMQPWorkItem);
+begin
+  if Assigned(FDispatchPool) then
+    FDispatchPool.Queue(AItem)
+  else
+    AmqpPool.Queue(AItem);
+end;
+
 procedure TAMQPChannel.DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
   const AProps: TAMQPBasicProperties; const ABody: TBytes);
 var
@@ -2141,7 +2162,7 @@ begin
 
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
   AmqpAtomicInc(FInFlight);
-  AmqpPool.Queue(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery));
+  DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery));
 end;
 
 procedure TAMQPChannel.DispatchReturn(const AReturn: TAMQPBasicReturn;
@@ -2171,7 +2192,7 @@ begin
 
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
   AmqpAtomicInc(FInFlight);
-  AmqpPool.Queue(TAMQPReturnWork.Create(Self, LCallback, LReturned));
+  DispatchToPool(TAMQPReturnWork.Create(Self, LCallback, LReturned));
 end;
 
 procedure TAMQPChannel.DispatchConfirm(ASeqNo: UInt64; AAck: Boolean);
@@ -2183,7 +2204,7 @@ begin
     Exit;
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
   AmqpAtomicInc(FInFlight);
-  AmqpPool.Queue(TAMQPConfirmWork.Create(Self, LCallback, ASeqNo, AAck));
+  DispatchToPool(TAMQPConfirmWork.Create(Self, LCallback, ASeqNo, AAck));
 end;
 
 function TAMQPChannel.ResolveConfirms(ATag: UInt64;
