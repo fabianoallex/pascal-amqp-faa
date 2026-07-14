@@ -23,6 +23,7 @@ samples/AutorizadorSimVcl/AutorizadorSimVcl
 samples/Retaguarda/Retaguarda
 samples/RetaguardaVcl/RetaguardaVcl
 samples/PublicadorConfiavelVcl/PublicadorConfiavelVcl
+samples/ConsultaStatusVcl/ConsultaStatusVcl
 samples/SmokeTest/SmokeTest
 tests/Unit/fpc/AMQPUnitTestsFpc
 tests/Integration/fpc/AMQPIntegrationTestsFpc
