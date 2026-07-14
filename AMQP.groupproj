@@ -27,6 +27,9 @@
         <Projects Include="samples\ConsultaStatusVcl\ConsultaStatusVcl.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="samples\RetryDlqVcl\RetryDlqVcl.dproj">
+            <Dependencies/>
+        </Projects>
         <Projects Include="samples\SmokeTest\SmokeTest.dproj">
             <Dependencies/>
         </Projects>
@@ -110,6 +113,15 @@
     <Target Name="ConsultaStatusVcl:Make">
         <MSBuild Projects="samples\ConsultaStatusVcl\ConsultaStatusVcl.dproj" Targets="Make"/>
     </Target>
+    <Target Name="RetryDlqVcl">
+        <MSBuild Projects="samples\RetryDlqVcl\RetryDlqVcl.dproj"/>
+    </Target>
+    <Target Name="RetryDlqVcl:Clean">
+        <MSBuild Projects="samples\RetryDlqVcl\RetryDlqVcl.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="RetryDlqVcl:Make">
+        <MSBuild Projects="samples\RetryDlqVcl\RetryDlqVcl.dproj" Targets="Make"/>
+    </Target>
     <Target Name="SmokeTest">
         <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj"/>
     </Target>
@@ -120,13 +132,13 @@
         <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
-        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;SmokeTest"/>
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;SmokeTest"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;SmokeTest:Clean"/>
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;SmokeTest:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;SmokeTest:Make"/>
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;SmokeTest:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

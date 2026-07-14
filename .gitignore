@@ -24,6 +24,7 @@ samples/Retaguarda/Retaguarda
 samples/RetaguardaVcl/RetaguardaVcl
 samples/PublicadorConfiavelVcl/PublicadorConfiavelVcl
 samples/ConsultaStatusVcl/ConsultaStatusVcl
+samples/RetryDlqVcl/RetryDlqVcl
 samples/SmokeTest/SmokeTest
 tests/Unit/fpc/AMQPUnitTestsFpc
 tests/Integration/fpc/AMQPIntegrationTestsFpc

@@ -1,0 +1,330 @@
+object frmRetry: TfrmRetry
+  Left = 0
+  Height = 800
+  Top = 0
+  Width = 875
+  Caption = 'Retry + DLQ (dead-letter)'
+  ClientHeight = 800
+  ClientWidth = 875
+  Color = clBtnFace
+  DesignTimePPI = 120
+  Font.Color = clWindowText
+  Font.Height = -15
+  Font.Name = 'Segoe UI'
+  Position = poScreenCenter
+  LCLVersion = '4.4.0.0'
+  OnClose = FormClose
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  object gbConexao: TGroupBox
+    Left = 10
+    Height = 212
+    Top = 10
+    Width = 855
+    Caption = ' Conexão '
+    ClientHeight = 187
+    ClientWidth = 851
+    ParentBackground = False
+    TabOrder = 0
+    object lblHost: TLabel
+      Left = 20
+      Height = 20
+      Top = 18
+      Width = 34
+      Caption = 'Host:'
+    end
+    object lblPort: TLabel
+      Left = 338
+      Height = 20
+      Top = 18
+      Width = 37
+      Caption = 'Porta:'
+    end
+    object lblVHost: TLabel
+      Left = 20
+      Height = 20
+      Top = 54
+      Width = 43
+      Caption = 'VHost:'
+    end
+    object lblUser: TLabel
+      Left = 338
+      Height = 20
+      Top = 54
+      Width = 53
+      Caption = 'Usuário:'
+    end
+    object lblPassword: TLabel
+      Left = 20
+      Height = 20
+      Top = 91
+      Width = 43
+      Caption = 'Senha:'
+    end
+    object lblStatus: TLabel
+      Left = 175
+      Height = 20
+      Top = 156
+      Width = 98
+      Caption = 'Desconectado'
+      Font.Color = clRed
+      Font.Height = -15
+      Font.Name = 'Segoe UI'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object edtHost: TEdit
+      Left = 112
+      Height = 28
+      Top = 13
+      Width = 188
+      TabOrder = 0
+      Text = 'localhost'
+    end
+    object edtPort: TEdit
+      Left = 400
+      Height = 28
+      Top = 13
+      Width = 75
+      TabOrder = 1
+      Text = '5672'
+    end
+    object edtVHost: TEdit
+      Left = 112
+      Height = 28
+      Top = 49
+      Width = 188
+      TabOrder = 2
+      Text = '/'
+    end
+    object edtUser: TEdit
+      Left = 412
+      Height = 28
+      Top = 49
+      Width = 162
+      TabOrder = 3
+      Text = 'guest'
+    end
+    object edtPassword: TEdit
+      Left = 112
+      Height = 28
+      Top = 85
+      Width = 188
+      EchoMode = emPassword
+      PasswordChar = '*'
+      TabOrder = 4
+      Text = 'guest'
+    end
+    object chkUseTls: TCheckBox
+      Left = 338
+      Height = 24
+      Top = 89
+      Width = 136
+      Caption = 'Usar TLS (amqps)'
+      TabOrder = 5
+      OnClick = chkUseTlsClick
+    end
+    object chkTlsVerifyPeer: TCheckBox
+      Left = 338
+      Height = 24
+      Top = 118
+      Width = 212
+      Caption = 'Validar certificado do broker'
+      Checked = True
+      State = cbChecked
+      TabOrder = 6
+    end
+    object btnConectar: TButton
+      Left = 20
+      Height = 31
+      Top = 150
+      Width = 138
+      Caption = 'Conectar'
+      TabOrder = 7
+      OnClick = btnConectarClick
+    end
+  end
+  object gbTopologia: TGroupBox
+    Left = 10
+    Height = 150
+    Top = 232
+    Width = 419
+    Caption = ' Topologia (recriada ao conectar) '
+    ClientHeight = 125
+    ClientWidth = 415
+    ParentBackground = False
+    TabOrder = 1
+    object lblFila: TLabel
+      Left = 20
+      Height = 20
+      Top = 18
+      Width = 62
+      Caption = 'Fila base:'
+    end
+    object lblBackoff: TLabel
+      Left = 20
+      Height = 20
+      Top = 54
+      Width = 84
+      Caption = 'Backoff (ms):'
+    end
+    object lblMax: TLabel
+      Left = 212
+      Height = 20
+      Top = 54
+      Width = 98
+      Caption = 'Máx tentativas:'
+    end
+    object edtFila: TEdit
+      Left = 112
+      Height = 28
+      Top = 13
+      Width = 200
+      TabOrder = 0
+      Text = 'notas-processo'
+    end
+    object edtBackoff: TEdit
+      Left = 120
+      Height = 28
+      Top = 49
+      Width = 75
+      TabOrder = 1
+      Text = '4000'
+    end
+    object edtMax: TEdit
+      Left = 320
+      Height = 28
+      Top = 49
+      Width = 50
+      TabOrder = 2
+      Text = '3'
+    end
+  end
+  object gbProcesso: TGroupBox
+    Left = 439
+    Height = 150
+    Top = 232
+    Width = 426
+    Caption = ' Processamento simulado '
+    ClientHeight = 125
+    ClientWidth = 422
+    ParentBackground = False
+    TabOrder = 2
+    object lblFalhar: TLabel
+      Left = 15
+      Height = 20
+      Top = 18
+      Width = 110
+      Caption = 'Falhar primeiras:'
+    end
+    object lblQtd: TLabel
+      Left = 238
+      Height = 20
+      Top = 18
+      Width = 30
+      Caption = 'Qtd:'
+    end
+    object lblContadores: TLabel
+      Left = 15
+      Height = 20
+      Top = 98
+      Width = 188
+      Caption = 'Publicadas: 0'
+    end
+    object edtFalhar: TEdit
+      Left = 138
+      Height = 28
+      Top = 13
+      Width = 50
+      TabOrder = 0
+      Text = '2'
+    end
+    object edtQtd: TEdit
+      Left = 278
+      Height = 28
+      Top = 13
+      Width = 50
+      TabOrder = 1
+      Text = '3'
+    end
+    object btnPublicar: TButton
+      Left = 15
+      Height = 31
+      Top = 55
+      Width = 150
+      Caption = 'Publicar notas'
+      Enabled = False
+      TabOrder = 2
+      OnClick = btnPublicarClick
+    end
+    object btnConsumir: TButton
+      Left = 175
+      Height = 31
+      Top = 55
+      Width = 162
+      Caption = 'Iniciar consumo'
+      Enabled = False
+      TabOrder = 3
+      OnClick = btnConsumirClick
+    end
+  end
+  object lvNotas: TListView
+    Left = 10
+    Height = 210
+    Top = 393
+    Width = 855
+    Anchors = [akTop, akLeft, akRight]
+    Columns = <
+      item
+        Caption = 'Chave'
+        Width = 212
+      end
+      item
+        Caption = 'Tentativa'
+        Width = 88
+      end
+      item
+        Caption = 'Status'
+        Width = 338
+      end
+      item
+        Caption = 'Atualizada'
+        Width = 112
+      end>
+    GridLines = True
+    ReadOnly = True
+    RowSelect = True
+    TabOrder = 3
+    ViewStyle = vsReport
+  end
+  object btnLimparLista: TButton
+    Left = 600
+    Height = 29
+    Top = 610
+    Width = 125
+    Anchors = [akTop, akRight]
+    Caption = 'Limpar lista'
+    TabOrder = 4
+    OnClick = btnLimparListaClick
+  end
+  object btnLimparLog: TButton
+    Left = 738
+    Height = 29
+    Top = 610
+    Width = 125
+    Anchors = [akTop, akRight]
+    Caption = 'Limpar log'
+    TabOrder = 5
+    OnClick = btnLimparLogClick
+  end
+  object mmoLog: TMemo
+    Left = 10
+    Height = 145
+    Top = 645
+    Width = 855
+    Anchors = [akTop, akLeft, akRight, akBottom]
+    ReadOnly = True
+    ScrollBars = ssVertical
+    TabOrder = 6
+  end
+end
