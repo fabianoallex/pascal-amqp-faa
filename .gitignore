@@ -4,6 +4,7 @@ lib/
 backup/
 *.exe
 *.o
+*.a
 *.ppu
 *.rsj
 *.compiled
@@ -21,6 +22,7 @@ samples/AutorizadorSim/AutorizadorSim
 samples/AutorizadorSimVcl/AutorizadorSimVcl
 samples/Retaguarda/Retaguarda
 samples/RetaguardaVcl/RetaguardaVcl
+samples/PublicadorConfiavelVcl/PublicadorConfiavelVcl
 samples/SmokeTest/SmokeTest
 tests/Unit/fpc/AMQPUnitTestsFpc
 tests/Integration/fpc/AMQPIntegrationTestsFpc
