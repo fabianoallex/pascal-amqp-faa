@@ -21,6 +21,9 @@
         <Projects Include="samples\RetaguardaVcl\RetaguardaVcl.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="samples\PublicadorConfiavelVcl\PublicadorConfiavelVcl.dproj">
+            <Dependencies/>
+        </Projects>
         <Projects Include="samples\SmokeTest\SmokeTest.dproj">
             <Dependencies/>
         </Projects>
@@ -86,6 +89,15 @@
     <Target Name="RetaguardaVcl:Make">
         <MSBuild Projects="samples\RetaguardaVcl\RetaguardaVcl.dproj" Targets="Make"/>
     </Target>
+    <Target Name="PublicadorConfiavelVcl">
+        <MSBuild Projects="samples\PublicadorConfiavelVcl\PublicadorConfiavelVcl.dproj"/>
+    </Target>
+    <Target Name="PublicadorConfiavelVcl:Clean">
+        <MSBuild Projects="samples\PublicadorConfiavelVcl\PublicadorConfiavelVcl.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="PublicadorConfiavelVcl:Make">
+        <MSBuild Projects="samples\PublicadorConfiavelVcl\PublicadorConfiavelVcl.dproj" Targets="Make"/>
+    </Target>
     <Target Name="SmokeTest">
         <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj"/>
     </Target>
@@ -96,13 +108,13 @@
         <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj" Targets="Make"/>
     </Target>
     <Target Name="Build">
-        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;SmokeTest"/>
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;SmokeTest"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;SmokeTest:Clean"/>
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;SmokeTest:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;SmokeTest:Make"/>
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;SmokeTest:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>
