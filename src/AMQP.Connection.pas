@@ -257,6 +257,10 @@ type
     procedure RemoveBindRecovery(const AQueue, AExchange, ARoutingKey: string);
     /// Idem para bindings exchange->exchange (ver UnbindExchange).
     procedure RemoveExchangeBindRecovery(const ADestination, ASource, ARoutingKey: string);
+    /// Remove da topologia gravada os queue.declare da fila AQueue (chamado por
+    /// DeleteQueue), para uma reconexão não recriar a fila apagada. Decodifica o
+    /// cabeçalho de cada payload gravado — independe de flags/Arguments do declare.
+    procedure RemoveQueueDeclareRecovery(const AQueue: string);
     /// Remove do recovery toda ação cujo payload coincida com um dos candidatos.
     procedure RemoveRecoveryMatching(const ACandidates: array of TBytes);
     /// Reabre o canal e replaya a topologia gravada (chamado na reconexão).
@@ -316,6 +320,11 @@ type
     /// Desfaz um binding exchange->exchange e remove o bind equivalente da
     /// topologia de recovery (mesma reconciliação de UnbindQueue).
     procedure UnbindExchange(const AUnbind: TAMQPExchangeBinding);
+    /// Apaga uma fila (queue.delete). Devolve o nº de mensagens descartadas
+    /// (0 com NoWait). No RabbitMQ, apagar fila inexistente é um no-op que
+    /// devolve 0 — dá pra usar para recriar topologia do zero. Também remove
+    /// os declares desta fila da topologia gravada para reconexão.
+    function DeleteQueue(const ADelete: TAMQPQueueDelete): Cardinal;
 
     /// Coloca o canal em modo publisher confirms (confirm.select). A partir daí
     /// cada Publish recebe um seq-no e o broker o confirma via Basic.Ack/Nack —
@@ -1780,6 +1789,61 @@ procedure TAMQPChannel.UnbindQueue(const AUnbind: TAMQPQueueUnbind);
 begin
   CallRpc(BuildQueueUnbind(AUnbind)); // Unbind-Ok (sem args, descartado)
   RemoveBindRecovery(AUnbind.QueueName, AUnbind.ExchangeName, AUnbind.RoutingKey);
+end;
+
+procedure TAMQPChannel.RemoveQueueDeclareRecovery(const AQueue: string);
+var
+  I: Integer;
+  LReader: TAMQPReader;
+  LId: TAMQPMethodId;
+  LMatch: Boolean;
+begin
+  FRecoveryLock.Enter;
+  try
+    for I := FRecovery.Count - 1 downto 0 do
+    begin
+      LMatch := False;
+      LReader := TAMQPReader.Create(FRecovery[I].Payload);
+      try
+        LId := ReadMethodHeader(LReader);
+        if LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE) then
+        begin
+          LReader.ReadShortUInt; // reserved-1 (ticket)
+          LMatch := LReader.ReadShortStr = AQueue;
+        end;
+      finally
+        LReader.Free;
+      end;
+      if LMatch then
+        FRecovery.Delete(I);
+    end;
+  finally
+    FRecoveryLock.Leave;
+  end;
+end;
+
+function TAMQPChannel.DeleteQueue(const ADelete: TAMQPQueueDelete): Cardinal;
+var
+  LPayload: TBytes;
+  LReader: TAMQPReader;
+begin
+  LPayload := BuildQueueDelete(ADelete);
+  if ADelete.NoWait then
+  begin
+    FConnection.SendMethod(FChannelId, LPayload);
+    Result := 0;
+  end
+  else
+  begin
+    LReader := TAMQPReader.Create(CallRpc(LPayload));
+    try
+      ReadMethodHeader(LReader);
+      Result := DecodeQueueDeleteOk(LReader);
+    finally
+      LReader.Free;
+    end;
+  end;
+  RemoveQueueDeclareRecovery(ADelete.QueueName);
 end;
 
 procedure TAMQPChannel.BindExchange(const ABind: TAMQPExchangeBinding);

@@ -51,6 +51,7 @@ type
     [Test] procedure TabelaVazia_TemComprimentoZero;
     [Test] procedure Decode_Boolean;
     [Test] procedure Decode_LongStr;
+    [Test] procedure Decode_ArrayDeTabelas_EstiloXDeath;
     [Test] procedure PropriedadesDeCliente_Tipicas;
   end;
 
@@ -513,6 +514,91 @@ begin
       Assert.AreEqual('hi', T['v'].AsString);
     finally
       T.Free;
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+// Monta na mao o wire de {'x-death': [tabela {queue,reason,count}]} — o
+// formato que o broker envia em mensagens dead-lettered. O writer nao emite
+// arrays 'A' (sao decode-only nesta lib), entao o wrapper do array e' escrito
+// cru: 'A' + u32(tamanho) + elementos ('F' + tabela).
+procedure TAMQPFieldTableTests.Decode_ArrayDeTabelas_EstiloXDeath;
+var
+  W: TAMQPWriter;
+  R: TAMQPReader;
+  LInner, LOut, LTab: TAMQPFieldTable;
+  LInnerBytes, LArrPayload, LBody, LOuterBytes: TBytes;
+  LVal, LEntrada, LCampo: TValue;
+begin
+  LInner := TAMQPFieldTable.Create;
+  W := TAMQPWriter.Create;
+  try
+    LInner.Put('queue', 'fila-trab');
+    LInner.Put('reason', 'rejected');
+    LInner.Put('count', Int64(2));
+    W.WriteFieldTable(LInner);
+    LInnerBytes := W.ToBytes;
+  finally
+    W.Free;
+    LInner.Free;
+  end;
+
+  W := TAMQPWriter.Create;
+  try
+    W.WriteOctet(Ord('F')); // um elemento: field-table
+    W.WriteRaw(LInnerBytes);
+    LArrPayload := W.ToBytes;
+  finally
+    W.Free;
+  end;
+
+  W := TAMQPWriter.Create;
+  try
+    W.WriteShortStr('x-death');
+    W.WriteOctet(Ord('A'));
+    W.WriteLongUInt(Cardinal(Length(LArrPayload)));
+    W.WriteRaw(LArrPayload);
+    LBody := W.ToBytes;
+  finally
+    W.Free;
+  end;
+
+  W := TAMQPWriter.Create;
+  try
+    W.WriteLongUInt(Cardinal(Length(LBody)));
+    W.WriteRaw(LBody);
+    LOuterBytes := W.ToBytes;
+  finally
+    W.Free;
+  end;
+
+  R := TAMQPReader.Create(LOuterBytes);
+  try
+    LOut := R.ReadFieldTable;
+    try
+      Assert.IsTrue(LOut.TryGetValue('x-death', LVal), 'deve ter x-death');
+      Assert.IsTrue(LVal.IsArray, 'valor deve ser array');
+      Assert.AreEqual(1, LVal.GetArrayLength, 'um elemento');
+      // AmqpUnwrapValue: no Delphi o Make ja colapsa TValue-em-TValue (e'
+      // no-op aqui), mas no FPC o GetArrayElement devolve o elemento
+      // re-embrulhado num TValue tkRecord — o unwrap uniformiza os dois.
+      LEntrada := AmqpUnwrapValue(LVal.GetArrayElement(0));
+      Assert.IsTrue(LEntrada.IsObject, 'elemento deve ser objeto');
+      Assert.IsTrue(LEntrada.AsObject is TAMQPFieldTable, 'elemento deve ser tabela');
+      LTab := TAMQPFieldTable(LEntrada.AsObject);
+      Assert.IsTrue(LTab.TryGetValue('queue', LCampo), 'tabela deve ter queue');
+      Assert.AreEqual('fila-trab', LCampo.AsString, 'queue');
+      Assert.IsTrue(LTab.TryGetValue('reason', LCampo), 'tabela deve ter reason');
+      Assert.AreEqual('rejected', LCampo.AsString, 'reason');
+      Assert.IsTrue(LTab.TryGetValue('count', LCampo), 'tabela deve ter count');
+      Assert.AreEqual(Int64(2), LCampo.AsInt64, 'count');
+    finally
+      // Tambem exercita o destrutor: a tabela aninhada DENTRO do array deve
+      // ser liberada (fazia leak no FPC antes do AmqpUnwrapValue no Destroy;
+      // a suite DUnitX roda com deteccao de leaks e valida o lado Delphi).
+      LOut.Free;
     end;
   finally
     R.Free;

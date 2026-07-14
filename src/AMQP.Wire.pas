@@ -35,6 +35,15 @@ uses
 function AmqpUtf8Encode(const AValue: string): TBytes;
 function AmqpUtf8Decode(const ABytes: TBytes): string;
 
+{ Desembrulha TValue-dentro-de-TValue. GetArrayElement sobre um array 'A'
+  (TArray<TValue>) devolve, no FPC 3.2, o elemento RE-EMBRULHADO num TValue de
+  Kind=tkRecord contendo o TValue interno — IsObject/IsArray/As* falham no
+  embrulho. (O TValue.Make do Delphi colapsa TValue-em-TValue; o do FPC nao.)
+  Use apos todo GetArrayElement de um array de field-values — ex.: as entradas
+  do header x-death de mensagens dead-lettered. Idempotente: num TValue ja
+  "plano" (ou no Delphi) devolve o valor como veio. }
+function AmqpUnwrapValue(const AValue: TValue): TValue;
+
 type
   EAMQPWire = class(Exception);
 
@@ -181,6 +190,17 @@ begin
     Result := Result * 10;
 end;
 
+function AmqpUnwrapValue(const AValue: TValue): TValue;
+type
+  PLocalValue = ^TValue;
+begin
+  Result := AValue;
+  // Loop por segurança (aninhamento múltiplo é teórico); no Delphi nunca
+  // entra — o TValue.Make de lá já colapsa TValue-em-TValue.
+  while (Result.Kind = tkRecord) and (Result.TypeInfo = TypeInfo(TValue)) do
+    Result := PLocalValue(Result.GetReferenceToRawData)^;
+end;
+
 { TAMQPFieldTable }
 
 destructor TAMQPFieldTable.Destroy;
@@ -202,8 +222,11 @@ destructor TAMQPFieldTable.Destroy;
     // nao existe no TValue do FPC 3.2.)
     else if AValue.IsArray and (AValue.TypeInfo = TypeInfo(TArray<TValue>)) then
     begin
+      // AmqpUnwrapValue: no FPC, GetArrayElement devolve o elemento
+      // re-embrulhado (tkRecord) e o IsObject do embrulho daria False —
+      // as tabelas aninhadas vazariam.
       for I := 0 to AValue.GetArrayLength - 1 do
-        FreeValue(AValue.GetArrayElement(I));
+        FreeValue(AmqpUnwrapValue(AValue.GetArrayElement(I)));
     end;
   end;
 
