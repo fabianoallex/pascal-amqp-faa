@@ -31,13 +31,19 @@ uses
   ;
 
 type
+  /// Erro de socket plain (conectar, enviar, receber) fora do TLS —
+  /// tipicamente host/porta inalcançável ou conexão derrubada pelo peer.
   EAMQPTransport = class(Exception);
 
   { Erros da camada TLS (handshake, cifra, validação de cert). Declarada aqui —
     e não nas units de transporte TLS — para existir em TODA plataforma/build:
     AMQP.Transport.Tls só compila sob AMQP_WINDOWS e AMQP.Transport.OpenSSL só
     sob AMQP_OPENSSL, mas testes e chamadores precisam capturar EAMQPTls sem
-    depender dessas diretivas. }
+    depender dessas diretivas. Também é a exceção levantada por UseTls quando
+    nenhum backend TLS foi compilado (fora do Windows, sem -dAMQP_OPENSSL) —
+    a mensagem explica como habilitar. Nos backends reais: falha de
+    handshake, cert rejeitado (TlsVerifyPeer=True) ou libssl/libcrypto não
+    encontrada em runtime. }
   EAMQPTls = class(Exception);
 
   TAMQPTcpSocket = class

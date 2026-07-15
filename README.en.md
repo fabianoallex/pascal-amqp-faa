@@ -208,6 +208,26 @@ The channel's `Close`/`Destroy` wait (without timeout, on purpose) for in-flight
 - **RPC** (declare/bind/get/consume/close) is event-based: send and wait for the read thread to deliver the response.
 - **Heartbeat** and **reconnection** run on their own threads with interruptible waits (`TEvent`).
 
+## Errors and exceptions
+
+All descend directly from `Exception` (no common base class). `EAMQPConnection`/`EAMQPChannel` (`AMQP.Connection`) are the ones an application normally handles; the other four belong to internal layers and in practice usually only surface during `Open` (wrapped or not).
+
+| Exception | Raised when |
+|---|---|
+| `EAMQPConnection` | Handshake/`Open` failure (broker refusal, response on an unexpected channel); `Publish`/`CreateChannel` called with the connection closed or mid-reconnect. |
+| `EAMQPChannel` | A channel RPC (declare/bind/get/consume/close) got `Channel.Close` from the broker, timed out, or was called with the channel already closed; API misuse (e.g. `WaitForConfirm` outside confirm mode). |
+| `EAMQPTransport` | Plain socket error (unreachable host/port, dropped connection) outside the TLS handshake. |
+| `EAMQPTls` | TLS handshake failure, rejected certificate (`TlsVerifyPeer=True`), `UseTls=True` with no TLS backend compiled, or `libssl`/`libcrypto` not found at runtime. See [TLS (amqps)](#tls-amqps). |
+| `EAMQPFrame` | Malformed frame, or the connection closed mid-frame — usually a symptom of a dropped connection, not an application bug. |
+| `EAMQPWire` | Encode/decode outside protocol limits (shortstr > 255 bytes, unsupported `TValue` kind in a `TAMQPFieldTable`) — generally points to an application error building `Arguments`/`Headers`. |
+
+Practical notes:
+
+- **`Open`** is where you most expect to catch a synchronous exception: `EAMQPConnection`, and — if `UseTls=True` — `EAMQPTransport`/`EAMQPTls`.
+- **Channel calls** (`DeclareQueue`, `BindQueue`, `Publish`, `Consume`, etc.) can raise `EAMQPChannel` synchronously when the broker refuses the request or the channel already dropped.
+- **After a successful `Open`, a connection drop does not turn into an exception on the application thread** — it is reported through the `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` callbacks (see [Automatic reconnection](#automatic-reconnection)); without `AutoReconnect`, the next RPC call on that channel fails with `EAMQPChannel` ("canal fechado").
+- **A publisher-confirm failure is not an exception** — it's `WaitForConfirm`/`WaitForConfirms` returning `False`, or `AAck=False` in `OnConfirm` (see [Publisher confirms in detail](#publisher-confirms-in-detail)).
+
 ## Concurrency and message ordering
 
 Each delivery is dispatched to the **thread pool** (`AmqpPool`, see `AMQP.Threading`) as an independent work item — there is no single per-channel/consumer queue being drained in order. It is a deliberate design choice, different from the common pattern in other languages:

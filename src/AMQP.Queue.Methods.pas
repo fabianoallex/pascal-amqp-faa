@@ -14,13 +14,13 @@ uses
 
 type
   TAMQPQueueDeclare = record
-    QueueName: string;   // '' => o servidor gera um nome
-    Passive: Boolean;
-    Durable: Boolean;
-    Exclusive: Boolean;
-    AutoDelete: Boolean;
-    NoWait: Boolean;
-    Arguments: TAMQPFieldTable; // pode ser nil
+    QueueName: string;   // '' => o servidor gera um nome (ver limitação de recovery no README)
+    Passive: Boolean;    // True => só verifica se a fila existe (erro 404 se não); não declara nem altera nada
+    Durable: Boolean;    // sobrevive a um restart do broker (a mensagem em si ainda depende de DeliveryMode=2)
+    Exclusive: Boolean;  // só esta conexão pode usá-la; some quando a conexão fecha
+    AutoDelete: Boolean; // apagada quando o último consumer se desconecta (nunca, se nunca teve consumer)
+    NoWait: Boolean;     // não aguarda Declare-Ok do broker (fire-and-forget; erros só aparecem como Channel.Close)
+    Arguments: TAMQPFieldTable; // pode ser nil; ex. x-dead-letter-exchange, x-message-ttl, x-max-priority
     /// Fila durável, não exclusiva, não auto-delete.
     class function Create(const AName: string;
       ADurable: Boolean = True): TAMQPQueueDeclare; static;
@@ -32,6 +32,10 @@ type
     ConsumerCount: Cardinal;
   end;
 
+  { Liga QueueName ao ExchangeName: mensagens roteadas pelo exchange casando
+    RoutingKey passam a ser entregues na fila. O significado de RoutingKey
+    depende do tipo do exchange: rota exata em 'direct', ignorada em
+    'fanout', padrão com '*'/'#' em 'topic'. }
   TAMQPQueueBind = record
     QueueName: string;
     ExchangeName: string;
@@ -51,8 +55,8 @@ type
 
   TAMQPQueueDelete = record
     QueueName: string;
-    IfUnused: Boolean;
-    IfEmpty: Boolean;
+    IfUnused: Boolean; // True => aborta (erro) se a fila tiver algum consumer
+    IfEmpty: Boolean;  // True => aborta (erro) se a fila tiver mensagens
     NoWait: Boolean;
   end;
 

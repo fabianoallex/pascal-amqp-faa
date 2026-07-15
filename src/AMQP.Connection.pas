@@ -50,7 +50,15 @@ uses
   AMQP.Basic.Methods;
 
 type
+  /// Erro ao nível da conexão: handshake, Open/Close, ou uso indevido
+  /// (publish/CreateChannel com a conexão fechada ou reconectando). Uma
+  /// EAMQPConnection não fecha o canal nem a conexão sozinha — quem decide
+  /// o que fazer (retry, desistir) é o chamador.
   EAMQPConnection = class(Exception);
+  /// Erro ao nível do canal: RPC (declare/bind/get/consume/close) que
+  /// recebeu Channel.Close do broker, deu timeout, ou foi chamado com o
+  /// canal já fechado — ou uso indevido (WaitForConfirm fora de confirm
+  /// mode). Ver também EAMQPConnection (erros da conexão como um todo).
   EAMQPChannel = class(Exception);
 
   { Adapta um TAMQPTcpSocket como TStream, para os frames trafegarem por

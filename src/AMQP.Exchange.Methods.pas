@@ -21,12 +21,12 @@ const
 type
   TAMQPExchangeDeclare = record
     ExchangeName: string;
-    ExchangeType: string;
-    Passive: Boolean;
-    Durable: Boolean;
-    AutoDelete: Boolean;
-    Internal: Boolean;
-    NoWait: Boolean;
+    ExchangeType: string; // AMQP_EXCHANGE_TYPE_DIRECT/FANOUT/TOPIC/HEADERS (ou tipo custom instalado no broker)
+    Passive: Boolean;     // True => só verifica se o exchange existe (erro 404 se não); não declara nem altera nada
+    Durable: Boolean;     // sobrevive a um restart do broker
+    AutoDelete: Boolean;  // apagado quando o último bind é removido (nunca, se nunca teve bind)
+    Internal: Boolean;    // True => só recebe de outros exchanges (bind exchange->exchange); publish direto é recusado
+    NoWait: Boolean;      // não aguarda Declare-Ok do broker (fire-and-forget; erros só aparecem como Channel.Close)
     Arguments: TAMQPFieldTable; // pode ser nil (tabela vazia)
     /// Declaração padrão: exchange durável, não passiva, tipo 'direct'.
     class function Create(const AName: string;

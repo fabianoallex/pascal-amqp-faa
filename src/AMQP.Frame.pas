@@ -23,6 +23,9 @@ uses
   AMQP.Protocol;
 
 type
+  /// Erro ao ler/montar um frame AMQP no nível de byte (fim de stream
+  /// inesperado, frame-end ausente/errado). Normalmente indica conexão
+  /// derrubada no meio de um frame, não um bug de aplicação.
   EAMQPFrame = class(Exception);
 
   TAMQPFrame = record

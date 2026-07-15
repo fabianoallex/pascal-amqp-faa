@@ -33,20 +33,20 @@ type
 
   TAMQPBasicProperties = record
     Flags: TAMQPBasicProps;      // quais propriedades estão presentes
-    ContentType: string;
-    ContentEncoding: string;
+    ContentType: string;         // ex. 'application/json'; livre, não validado pelo broker
+    ContentEncoding: string;     // ex. 'gzip'; livre, não validado pelo broker
     Headers: TAMQPFieldTable;    // dono: chamador (liberar se presente)
     DeliveryMode: Byte;          // 1 = transiente, 2 = persistente
-    Priority: Byte;
-    CorrelationId: string;
-    ReplyTo: string;
-    Expiration: string;
-    MessageId: string;
-    Timestamp: UInt64;
-    MsgType: string;             // a propriedade 'type'
-    UserId: string;
-    AppId: string;
-    ClusterId: string;
+    Priority: Byte;              // 0-9; só tem efeito se a fila foi declarada com x-max-priority
+    CorrelationId: string;       // correlaciona request/reply (RPC); ecoada pelo servidor na resposta
+    ReplyTo: string;             // fila (ou 'amq.rabbitmq.reply-to') para onde enviar a resposta
+    Expiration: string;          // TTL da mensagem em ms, como STRING decimal (ex. '5000'); não é número
+    MessageId: string;           // id de aplicação; a lib não gera nem valida, é opaco pro broker
+    Timestamp: UInt64;           // epoch em segundos (não ms); opaco pro broker, informativo
+    MsgType: string;             // a propriedade 'type'; livre, uso da aplicação
+    UserId: string;              // se setado, o broker valida contra o usuário autenticado da conexão
+    AppId: string;               // livre, uso da aplicação
+    ClusterId: string;           // reservado pelo protocolo; sem uso prático no RabbitMQ
 
     procedure SetContentType(const AValue: string);
     procedure SetContentEncoding(const AValue: string);

@@ -45,6 +45,11 @@ function AmqpUtf8Decode(const ABytes: TBytes): string;
 function AmqpUnwrapValue(const AValue: TValue): TValue;
 
 type
+  /// Erro de encode/decode no nível do wire AMQP (shortstr/field-table fora
+  /// dos limites do protocolo, tipo de TValue não suportado num field-table,
+  /// leitura além do fim do buffer). Quase sempre aponta payload malformado
+  /// vindo do broker, ou um TValue de tipo não suportado passado pela
+  /// aplicação em TAMQPFieldTable.Put.
   EAMQPWire = class(Exception);
 
   { Alias para arrays de field-value ('A'). Alem de documentar, contorna o
