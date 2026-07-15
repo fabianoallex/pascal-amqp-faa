@@ -153,7 +153,7 @@ object frmEventos: TfrmEventos
     object lblExchange: TLabel
       Left = 16
       Top = 28
-      Width = 94
+      Width = 91
       Height = 15
       Caption = 'Exchange (topic):'
     end
@@ -167,7 +167,7 @@ object frmEventos: TfrmEventos
     object lblMensagem: TLabel
       Left = 16
       Top = 86
-      Width = 60
+      Width = 62
       Height = 15
       Caption = 'Mensagem:'
     end
