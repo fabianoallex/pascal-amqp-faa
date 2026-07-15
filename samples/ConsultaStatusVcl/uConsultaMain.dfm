@@ -260,6 +260,14 @@ object frmConsulta: TfrmConsulta
       TabOrder = 3
       OnClick = btnConsultarClick
     end
+    object chkDirectReplyTo: TCheckBox
+      Left = 150
+      Top = 88
+      Width = 185
+      Height = 17
+      Caption = 'Usar Direct Reply-to'
+      TabOrder = 4
+    end
   end
   object lvConsultas: TListView
     Left = 8

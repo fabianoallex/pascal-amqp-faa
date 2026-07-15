@@ -8,9 +8,9 @@
     simula a busca (Sleep aleatório até a demora máxima configurada) e publica
     a resposta na fila indicada pelo ReplyTo do pedido, ecoando o
     CorrelationId. Ack manual só depois de responder.
-  - Cliente: declara uma fila de RESPOSTAS própria (exclusiva + auto-delete,
-    consumida com ack automático) e, a cada consulta, publica o pedido com
-    ReplyTo = essa fila, CorrelationId = GUID novo e Expiration = timeout (o
+  - Cliente: consome uma fila de RESPOSTAS (ack automático) e, a cada consulta,
+    publica o pedido com ReplyTo = essa fila, CorrelationId = GUID novo e
+    Expiration = timeout (o
     broker descarta pedidos que envelhecerem na fila além do timeout — não
     faz sentido o servidor responder a quem já desistiu). A resposta resolve
     a linha correspondente na lista pelo CorrelationId, com o tempo de ida e
@@ -23,12 +23,24 @@
   Consultar sem servidor ativo também é didático: o pedido fica na fila de
   pedidos até o TTL (Expiration) estourar, e o cliente reporta timeout.
 
-  A fila de respostas tem nome FIXO por instância ('consulta-resp-' + GUID)
-  em vez de nome gerado pelo broker (declare com nome ''): o replay de
-  topologia da reconexão automática reenvia o declare gravado — com nome ''
-  o broker geraria um nome NOVO e o consumer gravado apontaria para o antigo.
-  Com nome fixo, o par declare+consume sobrevive à reconexão. (Exclusiva +
-  auto-delete: o broker a remove quando a conexão morre.)
+  O checkbox "Usar Direct Reply-to" alterna o mecanismo de resposta do cliente
+  — os dois padrões clássicos de RPC, lado a lado:
+
+  - Desmarcado (fila nomeada): declara uma fila de respostas exclusiva +
+    auto-delete com nome FIXO por instância ('consulta-resp-' + GUID), em vez
+    de nome gerado pelo broker (declare com nome ''). O replay de topologia da
+    reconexão reenvia o declare gravado; com nome '' o broker geraria um nome
+    NOVO e o consumer gravado apontaria para o antigo, quebrando o replay. Com
+    nome fixo, o par declare+consume sobrevive à reconexão.
+
+  - Marcado (Direct Reply-to, 'amq.rabbitmq.reply-to'): a pseudo-fila mágica do
+    RabbitMQ — não se declara NADA. O cliente só consome dela em no-ack antes
+    de publicar; o broker roteia a resposta de volta por um caminho rápido, sem
+    fila real. É o padrão que o README recomenda para RPC (menos topologia,
+    também imune ao problema de recovery pelo nome estável). Restrições do
+    broker: consumir e publicar o pedido no MESMO canal, e em no-ack. O lado
+    servidor é IDÊNTICO nos dois modos — publica no default exchange com routing
+    key = o ReplyTo que recebeu (que o broker reescreve para um nome opaco).
 
   Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
   callbacks como métodos nomeados ('of object', regra do FPC) e atualizações
@@ -48,7 +60,7 @@ uses
   {$ELSE}
   Windows, Messages,
   {$ENDIF}
-  SysUtils, Classes,
+  SysUtils, Classes, StrUtils,
   Generics.Collections,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ComCtrls, ExtCtrls,
   AMQP.Wire, AMQP.Threading, AMQP.Connection, AMQP.Transport,
@@ -95,6 +107,7 @@ type
     lblTimeout: TLabel;
     edtTimeout: TEdit;
     btnConsultar: TButton;
+    chkDirectReplyTo: TCheckBox;
     lvConsultas: TListView;
     btnLimparLista: TButton;
     btnLimparLog: TButton;
@@ -117,7 +130,8 @@ type
     FCanalServidor: TAMQPChannel;
     FCanalCliente: TAMQPChannel;
     FFilaPedidos: string;   // capturada ao conectar (o cliente publica nela)
-    FFilaRespostas: string; // exclusiva desta instância ('consulta-resp-...')
+    FFilaRespostas: string; // fila de respostas do cliente (ver FModoDireto)
+    FModoDireto: Boolean;   // True = Direct Reply-to; False = fila nomeada
     FTagServidor: string;   // consumer-tag do servidor ('' = servidor parado)
     FDelayMaxMs: Integer;   // demora máxima simulada do servidor
     FAtendidas: Integer;
@@ -415,6 +429,7 @@ begin
   chkUseTls.Enabled := not AConectado;
   chkTlsVerifyPeer.Enabled := (not AConectado) and chkUseTls.Checked;
   edtFilaPedidos.Enabled := not AConectado;
+  chkDirectReplyTo.Enabled := not AConectado; // mecanismo escolhido ao conectar
   btnServidor.Enabled := AConectado;
   btnConsultar.Enabled := AConectado;
 end;
@@ -753,22 +768,42 @@ begin
     FCanalServidor.DeclareQueue(TAMQPQueueDeclare.Create(FFilaPedidos, True));
     FCanalServidor.Qos(16);
 
-    // Canal do cliente: fila de respostas exclusiva desta instância, com nome
-    // fixo (ver comentário no topo — nome gerado pelo broker não sobrevive ao
-    // replay do recovery). Ack automático: resposta perdida = timeout, o
-    // cliente não reprocessa.
-    FFilaRespostas := 'consulta-resp-' + Copy(NovoGuid, 2, 8);
+    // Canal do cliente: dois mecanismos de resposta, escolhidos no checkbox.
+    // Em ambos o consume é NoAck (resposta perdida = timeout, o cliente não
+    // reprocessa) e o publish do pedido sai NESTE mesmo canal.
+    FModoDireto := chkDirectReplyTo.Checked;
     FCanalCliente := FConn.CreateChannel;
-    LDeclare := TAMQPQueueDeclare.Create(FFilaRespostas, False);
-    LDeclare.Exclusive := True;
-    LDeclare.AutoDelete := True;
-    FCanalCliente.DeclareQueue(LDeclare);
-    FCanalCliente.Consume(FFilaRespostas, OnResposta, True); // NoAck=True
+    if FModoDireto then
+    begin
+      // Direct Reply-to (amq.rabbitmq.reply-to): pseudo-fila de nome fixo do
+      // broker — NÃO se declara. Basta consumir dela em no-ack ANTES de
+      // publicar; o broker reescreve o ReplyTo do pedido para um nome opaco e
+      // roteia a resposta de volta por um caminho rápido, sem fila real. O
+      // servidor não muda: publica no default exchange com routing key = o
+      // ReplyTo que recebeu. É o padrão que o README recomenda para RPC.
+      // Restrições (RabbitMQ): consumir e publicar o pedido no MESMO canal
+      // (garantido aqui — os dois usam FCanalCliente) e em no-ack. Sobrevive
+      // ao recovery pelo nome estável, sem gerenciar fila por instância.
+      FFilaRespostas := 'amq.rabbitmq.reply-to';
+      FCanalCliente.Consume(FFilaRespostas, OnResposta, True); // NoAck obrigatório
+    end
+    else
+    begin
+      // Fila nomeada exclusiva desta instância, com nome FIXO (não '' gerado
+      // pelo broker — esse não sobrevive ao replay do recovery: o redeclare
+      // geraria um nome novo e o consumer gravado apontaria para o antigo).
+      // Exclusiva + auto-delete: o broker a remove quando a conexão morre.
+      FFilaRespostas := 'consulta-resp-' + Copy(NovoGuid, 2, 8);
+      LDeclare := TAMQPQueueDeclare.Create(FFilaRespostas, False);
+      LDeclare.Exclusive := True;
+      LDeclare.AutoDelete := True;
+      FCanalCliente.DeclareQueue(LDeclare);
+      FCanalCliente.Consume(FFilaRespostas, OnResposta, True); // NoAck=True
+    end;
 
-    Log(Format('Conectado a %s:%d%s. Pedidos em "%s"; respostas desta ' +
-      'instância em "%s".',
+    Log(Format('Conectado a %s:%d%s. Pedidos em "%s"; respostas via %s ("%s").',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FFilaPedidos,
-       FFilaRespostas]));
+       IfThen(FModoDireto, 'Direct Reply-to', 'fila nomeada'), FFilaRespostas]));
     Log('Dica: rode duas instâncias — servidor numa, cliente na outra. ' +
       'Consultar sem servidor ativo termina em timeout (e o pedido expira ' +
       'na fila junto).');
