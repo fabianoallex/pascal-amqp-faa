@@ -396,11 +396,12 @@ end;
 procedure TfrmPrioridade.btnBurstClick(Sender: TObject);
 var
   I, LPrio: Integer;
-  LCorpo: string;
+  LCorpo, LMapa: string;
 begin
   if not Assigned(FChannel) then
     Exit;
   try
+    LMapa := '';
     for I := Low(cLotePrioridades) to High(cLotePrioridades) do
     begin
       LPrio := cLotePrioridades[I];
@@ -408,10 +409,16 @@ begin
       // embaralhada, provando que quem manda é a prioridade.
       LCorpo := Format('pub#%d', [I + 1]);
       PublicarUma(LPrio, LCorpo);
+      // Registra a composição no log (pub#N=prioridade) para conferência
+      // posterior só pelo texto do log, sem depender da lista.
+      if LMapa <> '' then
+        LMapa := LMapa + ' ';
+      LMapa := LMapa + Format('%s=p%d', [LCorpo, LPrio]);
     end;
-    Log(Format('Lote publicado: %d mensagens com prioridades misturadas. ' +
-      'Inicie o consumidor lento e observe a saída em ordem decrescente de ' +
-      'prioridade.', [Length(cLotePrioridades)]));
+    Log(Format('Lote publicado (%d msgs, pub#N=prioridade): %s',
+      [Length(cLotePrioridades), LMapa]));
+    Log('Inicie o consumidor lento e observe a saída em ordem decrescente de ' +
+      'prioridade.');
   except
     on E: Exception do
       Log('Erro ao publicar o lote: ' + E.Message);
@@ -453,6 +460,10 @@ begin
   LItem.SubItems.Add(FormatDateTime('hh:nn:ss.zzz', Now));
   if LAtBottom then
     LItem.MakeVisible(False);
+  // Log da ordem de SAÍDA: assim o texto do log já mostra a drenagem por
+  // prioridade (saída #N: prioridade P — corpo), sem depender da lista.
+  Log(Format('Consumida (saída #%d): prioridade %d — %s',
+    [FSaidaSeq, APrioridade, ACorpo]));
 end;
 
 procedure TfrmPrioridade.btnConsumidorClick(Sender: TObject);
