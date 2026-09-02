@@ -21,6 +21,18 @@
         <Filename Value="..\src\AMQP.Server.Auth.pas"/>
         <UnitName Value="AMQP.Server.Auth"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\AMQP.Server.FrameIO.pas"/>
+        <UnitName Value="AMQP.Server.FrameIO"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\AMQP.Server.Connection.pas"/>
+        <UnitName Value="AMQP.Server.Connection"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\AMQP.Server.Broker.pas"/>
+        <UnitName Value="AMQP.Server.Broker"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>

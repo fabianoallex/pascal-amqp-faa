@@ -48,8 +48,10 @@ type
 
   TAMQPTcpSocket = class
   private
+    FPeerAddress: string;
     {$IFDEF FPC}
-    FSock: TInetSocket;
+    FSock: TInetSocket;    // caminho cliente (Connect)
+    FRawFd: LongInt;       // caminho aceito (>= 0); -1 quando usa FSock
     FShutdown: Boolean;
     {$ELSE}
     FSock: TSocket;
@@ -58,11 +60,13 @@ type
     constructor Create;
     {$IFDEF FPC}
     /// Envolve um descritor JÁ conectado (vindo de TAMQPTcpListener.Accept).
-    constructor CreateFromAccepted(AHandle: LongInt);
+    constructor CreateFromAccepted(AHandle: LongInt; const APeerAddr: string = '');
     {$ELSE}
-    constructor CreateFromAccepted(ASock: TSocket);
+    constructor CreateFromAccepted(ASock: TSocket; const APeerAddr: string = '');
     {$ENDIF}
     destructor Destroy; override;
+    /// 'ip:porta' do outro lado quando o socket veio de um Accept; '' senão.
+    property PeerAddress: string read FPeerAddress;
     /// Resolve o host e conecta (bloqueante). Levanta excecao em falha.
     procedure Connect(const AHost: string; APort: Word);
     /// Devolve os bytes lidos; 0 (ou negativo) = conexao encerrada.
@@ -175,22 +179,27 @@ end;
 constructor TAMQPTcpSocket.Create;
 begin
   inherited Create;
-  {$IFNDEF FPC}
+  {$IFDEF FPC}
+  FRawFd := -1;
+  {$ELSE}
   FSock := TSocket.Create(TSocketType.TCP);
   {$ENDIF}
 end;
 
 {$IFDEF FPC}
-constructor TAMQPTcpSocket.CreateFromAccepted(AHandle: LongInt);
+constructor TAMQPTcpSocket.CreateFromAccepted(AHandle: LongInt; const APeerAddr: string);
 begin
   inherited Create;
-  // Constrói a partir do descritor já conectado (inherited TSocketStream.Create).
-  FSock := TInetSocket.Create(AHandle);
+  FPeerAddress := APeerAddr;
+  // Descritor cru: controlamos recv/send/close diretamente. (TInetSocket.Create
+  // sobre um handle não roteia o Read por onde o shutdown/close desbloqueia.)
+  FRawFd := AHandle;
 end;
 {$ELSE}
-constructor TAMQPTcpSocket.CreateFromAccepted(ASock: TSocket);
+constructor TAMQPTcpSocket.CreateFromAccepted(ASock: TSocket; const APeerAddr: string);
 begin
   inherited Create;
+  FPeerAddress := APeerAddr;
   FSock := ASock;
 end;
 {$ENDIF}
@@ -201,6 +210,13 @@ begin
     Close;
   except
   end;
+  {$IFDEF FPC}
+  if FRawFd >= 0 then
+  begin
+    CloseSocket(FRawFd); // no-op se Close já fechou no Windows
+    FRawFd := -1;
+  end;
+  {$ENDIF}
   FSock.Free;
   inherited;
 end;
@@ -216,48 +232,81 @@ end;
 
 function TAMQPTcpSocket.Receive(var Buffer; ACount: Integer): Integer;
 begin
+  {$IFDEF FPC}
+  if FRawFd >= 0 then
+    Exit(fprecv(FRawFd, @Buffer, ACount, 0));
   if FSock = nil then
     Exit(0);
-  {$IFDEF FPC}
   Result := FSock.Read(Buffer, ACount);
   {$ELSE}
+  if FSock = nil then
+    Exit(0);
   Result := FSock.Receive(Buffer, ACount);
   {$ENDIF}
 end;
 
 function TAMQPTcpSocket.Send(const Buffer; ACount: Integer): Integer;
+{$IFDEF FPC}
+var
+  LFd: LongInt;
+begin
+  if FRawFd >= 0 then
+    LFd := FRawFd
+  else if FSock <> nil then
+    LFd := FSock.Handle
+  else
+    raise EAMQPTransport.Create('socket nao conectado');
+  {$IF Defined(UNIX) and Declared(MSG_NOSIGNAL)}
+  // MSG_NOSIGNAL: send() num socket ja encerrado devolve erro (EPIPE) em vez
+  // de matar o processo com SIGPIPE (ver smoke test --tls no Linux).
+  Result := fpsend(LFd, @Buffer, ACount, MSG_NOSIGNAL);
+  {$ELSE}
+  Result := fpsend(LFd, @Buffer, ACount, 0);
+  {$ENDIF}
+end;
+{$ELSE}
 begin
   if FSock = nil then
     raise EAMQPTransport.Create('socket nao conectado');
-  {$IF Defined(FPC) and Defined(UNIX) and Declared(MSG_NOSIGNAL)}
-  // MSG_NOSIGNAL: send() num socket ja encerrado devolve erro (EPIPE) em vez
-  // de matar o processo com SIGPIPE. Essencial pro TLS: o destrutor do stream
-  // manda close_notify best-effort mesmo quando o socket ja foi derrubado
-  // (teardown/reconexao) — no Windows isso e' so um erro de send engolido;
-  // no Linux, sem esta flag, era SIGPIPE fatal (visto no smoke test --tls).
-  // Vale pra qualquer Unix cuja unit sockets declare a flag (Linux, BSDs);
-  // no Darwin (sem MSG_NOSIGNAL) fica o caminho comum, sujeito a SIGPIPE.
-  Result := fpsend(FSock.Handle, @Buffer, ACount, MSG_NOSIGNAL);
-  {$ELSE}
-    {$IFDEF FPC}
-  Result := FSock.Write(Buffer, ACount);
-    {$ELSE}
   Result := FSock.Send(Buffer, ACount);
-    {$ENDIF}
-  {$ENDIF}
 end;
+{$ENDIF}
 
 procedure TAMQPTcpSocket.Close;
 begin
+  {$IFDEF FPC}
+  if FRawFd >= 0 then
+  begin
+    // Socket aceito: no Windows só o closesocket() desbloqueia um recv()
+    // pendente (shutdown num socket destes NÃO desbloqueia — medido). No Unix
+    // shutdown() basta e evita a corrida de reuso de FD; o handle fecha no
+    // destrutor.
+    {$IFDEF UNIX}
+    if not FShutdown then
+    begin
+      FShutdown := True;
+      fpshutdown(FRawFd, AMQP_SHUT_RDWR);
+    end;
+    {$ELSE}
+    if not FShutdown then
+    begin
+      FShutdown := True;
+      CloseSocket(FRawFd);
+      FRawFd := -1; // destrutor não re-fecha
+    end;
+    {$ENDIF}
+    Exit;
+  end;
   if FSock = nil then
     Exit;
-  {$IFDEF FPC}
   if not FShutdown then
   begin
     FShutdown := True;
     fpshutdown(FSock.Handle, AMQP_SHUT_RDWR);
   end;
   {$ELSE}
+  if FSock = nil then
+    Exit;
   if TSocketState.Connected in FSock.State then
     FSock.Close;
   {$ENDIF}
@@ -356,11 +405,13 @@ begin
   LFd := fpAccept(FListenFd, @LClient, @LLen);
   if LFd < 0 then
     Exit; // listener fechado / interrompido
-  Result := TAMQPTcpSocket.CreateFromAccepted(LFd);
+  Result := TAMQPTcpSocket.CreateFromAccepted(LFd,
+    NetAddrToStr(LClient.sin_addr) + ':' + IntToStr(ntohs(LClient.sin_port)));
 end;
 {$ELSE}
 var
   LSock: TSocket;
+  LPeer: string;
 begin
   Result := nil;
   if FClosing or (FListen = nil) then
@@ -372,7 +423,13 @@ begin
   end;
   if LSock = nil then
     Exit;
-  Result := TAMQPTcpSocket.CreateFromAccepted(LSock);
+  LPeer := '';
+  try
+    LPeer := LSock.RemoteEndpoint.Address.Address + ':' +
+      IntToStr(LSock.RemoteEndpoint.Port);
+  except
+  end;
+  Result := TAMQPTcpSocket.CreateFromAccepted(LSock, LPeer);
 end;
 {$ENDIF}
 

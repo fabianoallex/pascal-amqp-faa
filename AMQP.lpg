@@ -17,6 +17,11 @@
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
+      <Target FileName="tests\Server\fpc\AMQPServerTestsFpc.lpi">
+        <BuildModes>
+          <Mode Name="Default"/>
+        </BuildModes>
+      </Target>
       <Target FileName="samples\AutorizadorSim\AutorizadorSim.lpi">
         <BuildModes>
           <Mode Name="Default"/>

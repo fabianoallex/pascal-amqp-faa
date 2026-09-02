@@ -29,6 +29,10 @@ samples/EventosTopicVcl/EventosTopicVcl
 samples/SmokeTest/SmokeTest
 tests/Unit/fpc/AMQPUnitTestsFpc
 tests/Integration/fpc/AMQPIntegrationTestsFpc
+tests/Server/fpc/AMQPServerTestsFpc
+
+# cache de package-links do lazbuild (especifico da maquina)
+/packagefiles.xml
 
 # certificados do broker de dev (gerar localmente; ver docker/certs/README.md)
 docker/certs/*.crt
