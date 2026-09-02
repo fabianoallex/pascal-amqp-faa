@@ -63,6 +63,23 @@ procedure DecodeExchangeBindOk(const AReader: TAMQPReader);
 function BuildExchangeUnbind(const AUnbind: TAMQPExchangeBinding): TBytes;
 procedure DecodeExchangeUnbindOk(const AReader: TAMQPReader);
 
+// --- Lado servidor (sub-módulo broker) -----------------------------------
+// Decode dos métodos cliente->servidor e build dos *-Ok. Nos records
+// decodificados o campo Arguments é sempre uma tabela nova (mesmo vazia) e
+// pertence ao chamador (deve liberá-la).
+
+function DecodeExchangeDeclare(const AReader: TAMQPReader): TAMQPExchangeDeclare;
+function BuildExchangeDeclareOk: TBytes;
+
+function DecodeExchangeDelete(const AReader: TAMQPReader): TAMQPExchangeDelete;
+function BuildExchangeDeleteOk: TBytes;
+
+function DecodeExchangeBind(const AReader: TAMQPReader): TAMQPExchangeBinding;
+function BuildExchangeBindOk: TBytes;
+
+function DecodeExchangeUnbind(const AReader: TAMQPReader): TAMQPExchangeBinding;
+function BuildExchangeUnbindOk: TBytes;
+
 implementation
 
 { TAMQPExchangeDeclare }
@@ -162,6 +179,87 @@ end;
 procedure DecodeExchangeUnbindOk(const AReader: TAMQPReader);
 begin
   // sem argumentos
+end;
+
+{ Lado servidor }
+
+function EmptyMethod(AMethodId: Word): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_EXCHANGE, AMethodId);
+  try
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeExchangeDeclare(const AReader: TAMQPReader): TAMQPExchangeDeclare;
+begin
+  Result := Default(TAMQPExchangeDeclare);
+  AReader.ReadShortUInt; // reserved-1 (ticket)
+  Result.ExchangeName := AReader.ReadShortStr;
+  Result.ExchangeType := AReader.ReadShortStr;
+  Result.Passive := AReader.ReadBit;
+  Result.Durable := AReader.ReadBit;
+  Result.AutoDelete := AReader.ReadBit;
+  Result.Internal := AReader.ReadBit;
+  Result.NoWait := AReader.ReadBit;
+  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+end;
+
+function BuildExchangeDeclareOk: TBytes;
+begin
+  Result := EmptyMethod(AMQP_EXCHANGE_DECLARE_OK);
+end;
+
+function DecodeExchangeDelete(const AReader: TAMQPReader): TAMQPExchangeDelete;
+begin
+  Result := Default(TAMQPExchangeDelete);
+  AReader.ReadShortUInt; // reserved-1
+  Result.ExchangeName := AReader.ReadShortStr;
+  Result.IfUnused := AReader.ReadBit;
+  Result.NoWait := AReader.ReadBit;
+end;
+
+function BuildExchangeDeleteOk: TBytes;
+begin
+  Result := EmptyMethod(AMQP_EXCHANGE_DELETE_OK);
+end;
+
+// bind e unbind: mesmo layout (reserved-1, destination, source, routing-key,
+// no-wait, arguments).
+function DecodeExchangeBindLike(const AReader: TAMQPReader): TAMQPExchangeBinding;
+begin
+  Result := Default(TAMQPExchangeBinding);
+  AReader.ReadShortUInt; // reserved-1
+  Result.Destination := AReader.ReadShortStr;
+  Result.Source := AReader.ReadShortStr;
+  Result.RoutingKey := AReader.ReadShortStr;
+  Result.NoWait := AReader.ReadBit;
+  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+end;
+
+function DecodeExchangeBind(const AReader: TAMQPReader): TAMQPExchangeBinding;
+begin
+  Result := DecodeExchangeBindLike(AReader);
+end;
+
+function BuildExchangeBindOk: TBytes;
+begin
+  Result := EmptyMethod(AMQP_EXCHANGE_BIND_OK);
+end;
+
+function DecodeExchangeUnbind(const AReader: TAMQPReader): TAMQPExchangeBinding;
+begin
+  Result := DecodeExchangeBindLike(AReader);
+end;
+
+function BuildExchangeUnbindOk: TBytes;
+begin
+  // peculiaridade da spec estendida RabbitMQ: unbind-ok é 51, não 41.
+  Result := EmptyMethod(AMQP_EXCHANGE_UNBIND_OK);
 end;
 
 end.

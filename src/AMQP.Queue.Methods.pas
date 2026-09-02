@@ -60,6 +60,12 @@ type
     NoWait: Boolean;
   end;
 
+  { Argumentos de Queue.Purge (cliente -> servidor). }
+  TAMQPQueuePurge = record
+    QueueName: string;
+    NoWait: Boolean;
+  end;
+
 function BuildQueueDeclare(const ADeclare: TAMQPQueueDeclare): TBytes;
 function DecodeQueueDeclareOk(const AReader: TAMQPReader): TAMQPQueueDeclareOk;
 
@@ -74,6 +80,29 @@ function DecodeQueuePurgeOk(const AReader: TAMQPReader): Cardinal; // message-co
 
 function BuildQueueDelete(const ADelete: TAMQPQueueDelete): TBytes;
 function DecodeQueueDeleteOk(const AReader: TAMQPReader): Cardinal; // message-count
+
+// --- Lado servidor (sub-módulo broker) -----------------------------------
+// Decode dos métodos cliente->servidor e build dos *-Ok. Nos records
+// decodificados o campo Arguments é sempre uma tabela nova (mesmo vazia) e
+// pertence ao chamador (deve liberá-la).
+
+function DecodeQueueDeclare(const AReader: TAMQPReader): TAMQPQueueDeclare;
+/// Queue.Declare-Ok (11): nome da fila (o gerado, se o cliente mandou '') +
+/// contagens atuais.
+function BuildQueueDeclareOk(const AQueueName: string;
+  AMessageCount, AConsumerCount: Cardinal): TBytes;
+
+function DecodeQueueBind(const AReader: TAMQPReader): TAMQPQueueBind;
+function BuildQueueBindOk: TBytes;
+
+function DecodeQueueUnbind(const AReader: TAMQPReader): TAMQPQueueUnbind;
+function BuildQueueUnbindOk: TBytes;
+
+function DecodeQueuePurge(const AReader: TAMQPReader): TAMQPQueuePurge;
+function BuildQueuePurgeOk(AMessageCount: Cardinal): TBytes;
+
+function DecodeQueueDelete(const AReader: TAMQPReader): TAMQPQueueDelete;
+function BuildQueueDeleteOk(AMessageCount: Cardinal): TBytes;
 
 implementation
 
@@ -199,6 +228,122 @@ end;
 function DecodeQueueDeleteOk(const AReader: TAMQPReader): Cardinal;
 begin
   Result := AReader.ReadLongUInt; // message-count
+end;
+
+{ Lado servidor }
+
+function EmptyMethod(AMethodId: Word): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_QUEUE, AMethodId);
+  try
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function CountMethod(AMethodId: Word; ACount: Cardinal): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_QUEUE, AMethodId);
+  try
+    W.WriteLongUInt(ACount);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeQueueDeclare(const AReader: TAMQPReader): TAMQPQueueDeclare;
+begin
+  Result := Default(TAMQPQueueDeclare);
+  AReader.ReadShortUInt; // reserved-1
+  Result.QueueName := AReader.ReadShortStr;
+  Result.Passive := AReader.ReadBit;
+  Result.Durable := AReader.ReadBit;
+  Result.Exclusive := AReader.ReadBit;
+  Result.AutoDelete := AReader.ReadBit;
+  Result.NoWait := AReader.ReadBit;
+  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+end;
+
+function BuildQueueDeclareOk(const AQueueName: string;
+  AMessageCount, AConsumerCount: Cardinal): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK);
+  try
+    W.WriteShortStr(AQueueName);
+    W.WriteLongUInt(AMessageCount);
+    W.WriteLongUInt(AConsumerCount);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeQueueBind(const AReader: TAMQPReader): TAMQPQueueBind;
+begin
+  Result := Default(TAMQPQueueBind);
+  AReader.ReadShortUInt; // reserved-1
+  Result.QueueName := AReader.ReadShortStr;
+  Result.ExchangeName := AReader.ReadShortStr;
+  Result.RoutingKey := AReader.ReadShortStr;
+  Result.NoWait := AReader.ReadBit;
+  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+end;
+
+function BuildQueueBindOk: TBytes;
+begin
+  Result := EmptyMethod(AMQP_QUEUE_BIND_OK);
+end;
+
+function DecodeQueueUnbind(const AReader: TAMQPReader): TAMQPQueueUnbind;
+begin
+  Result := Default(TAMQPQueueUnbind);
+  AReader.ReadShortUInt; // reserved-1
+  Result.QueueName := AReader.ReadShortStr;
+  Result.ExchangeName := AReader.ReadShortStr;
+  Result.RoutingKey := AReader.ReadShortStr;
+  // queue.unbind não tem no-wait
+  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+end;
+
+function BuildQueueUnbindOk: TBytes;
+begin
+  Result := EmptyMethod(AMQP_QUEUE_UNBIND_OK);
+end;
+
+function DecodeQueuePurge(const AReader: TAMQPReader): TAMQPQueuePurge;
+begin
+  Result := Default(TAMQPQueuePurge);
+  AReader.ReadShortUInt; // reserved-1
+  Result.QueueName := AReader.ReadShortStr;
+  Result.NoWait := AReader.ReadBit;
+end;
+
+function BuildQueuePurgeOk(AMessageCount: Cardinal): TBytes;
+begin
+  Result := CountMethod(AMQP_QUEUE_PURGE_OK, AMessageCount);
+end;
+
+function DecodeQueueDelete(const AReader: TAMQPReader): TAMQPQueueDelete;
+begin
+  Result := Default(TAMQPQueueDelete);
+  AReader.ReadShortUInt; // reserved-1
+  Result.QueueName := AReader.ReadShortStr;
+  Result.IfUnused := AReader.ReadBit;
+  Result.IfEmpty := AReader.ReadBit;
+  Result.NoWait := AReader.ReadBit;
+end;
+
+function BuildQueueDeleteOk(AMessageCount: Cardinal): TBytes;
+begin
+  Result := CountMethod(AMQP_QUEUE_DELETE_OK, AMessageCount);
 end;
 
 end.

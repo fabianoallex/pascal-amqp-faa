@@ -170,6 +170,78 @@ function BuildContentHeader(ABodySize: UInt64;
 /// Se as propriedades incluírem Headers, o chamador é dono dessa tabela.
 function DecodeContentHeader(const AReader: TAMQPReader): TAMQPContentHeader;
 
+// =========================================================================
+//  Lado servidor (sub-módulo broker) — decode dos métodos cliente->servidor
+//  e build dos métodos servidor->cliente. DecodeBasicAck/DecodeBasicNack e
+//  BuildBasicAck/BuildBasicNack acima já servem aos dois sentidos (o cliente
+//  usa-os para consumo; o broker, para publisher confirms).
+//  Nos records decodificados com campo Arguments/Headers a tabela é nova e
+//  pertence ao chamador (deve liberá-la).
+// =========================================================================
+
+type
+  { Basic.Qos (cliente -> servidor). }
+  TAMQPBasicQosArgs = record
+    PrefetchSize: Cardinal;
+    PrefetchCount: Word;
+    Global: Boolean;
+  end;
+
+  { Basic.Publish (cliente -> servidor) — o cabeçalho de método; o conteúdo
+    (content header + body) vem nos frames seguintes. }
+  TAMQPBasicPublish = record
+    Exchange: string;
+    RoutingKey: string;
+    Mandatory: Boolean;
+    Immediate: Boolean;
+  end;
+
+  { Basic.Get (cliente -> servidor). }
+  TAMQPBasicGet = record
+    Queue: string;
+    NoAck: Boolean;
+  end;
+
+  { Basic.Cancel (cliente -> servidor) — com o no-wait, ao contrário do
+    DecodeBasicCancel legado (usado no consumer-cancel-notify servidor->cliente,
+    que só quer o consumer-tag). }
+  TAMQPBasicCancelArgs = record
+    ConsumerTag: string;
+    NoWait: Boolean;
+  end;
+
+  { Basic.Reject (cliente -> servidor) — rejeita UMA entrega (sem 'multiple',
+    ao contrário do Nack). }
+  TAMQPBasicReject = record
+    DeliveryTag: UInt64;
+    Requeue: Boolean;
+  end;
+
+function DecodeBasicQos(const AReader: TAMQPReader): TAMQPBasicQosArgs;
+function BuildBasicQosOk: TBytes;
+
+function DecodeBasicPublish(const AReader: TAMQPReader): TAMQPBasicPublish;
+
+function DecodeBasicConsume(const AReader: TAMQPReader): TAMQPBasicConsume;
+function BuildBasicConsumeOk(const AConsumerTag: string): TBytes;
+
+function DecodeBasicCancelArgs(const AReader: TAMQPReader): TAMQPBasicCancelArgs;
+function BuildBasicCancelOk(const AConsumerTag: string): TBytes;
+
+function DecodeBasicGet(const AReader: TAMQPReader): TAMQPBasicGet;
+function BuildBasicGetOk(const AGetOk: TAMQPBasicGetOk): TBytes;
+function BuildBasicGetEmpty: TBytes;
+
+function BuildBasicDeliver(const ADeliver: TAMQPBasicDeliver): TBytes;
+function BuildBasicReturn(const AReturn: TAMQPBasicReturn): TBytes;
+
+function DecodeBasicReject(const AReader: TAMQPReader): TAMQPBasicReject;
+function BuildBasicReject(ADeliveryTag: UInt64; ARequeue: Boolean = True): TBytes;
+
+/// Confirm.Select (classe 85, cliente -> servidor) — devolve o no-wait.
+function DecodeConfirmSelect(const AReader: TAMQPReader): Boolean;
+function BuildConfirmSelectOk: TBytes;
+
 implementation
 
 // Bit da property-flags para uma propriedade: a primeira (Ord=0) é o bit 15.
@@ -558,6 +630,190 @@ begin
     Result.Properties.SetAppId(AReader.ReadShortStr);
   if (LFlags and PropBit(bpClusterId)) <> 0 then
     Result.Properties.SetClusterId(AReader.ReadShortStr);
+end;
+
+{ ===================================================================== }
+{  Lado servidor                                                        }
+{ ===================================================================== }
+
+function DecodeBasicQos(const AReader: TAMQPReader): TAMQPBasicQosArgs;
+begin
+  Result.PrefetchSize := AReader.ReadLongUInt;
+  Result.PrefetchCount := AReader.ReadShortUInt;
+  Result.Global := AReader.ReadBit;
+end;
+
+function BuildBasicQosOk: TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_QOS_OK);
+  try
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeBasicPublish(const AReader: TAMQPReader): TAMQPBasicPublish;
+begin
+  AReader.ReadShortUInt; // reserved-1 (ticket)
+  Result.Exchange := AReader.ReadShortStr;
+  Result.RoutingKey := AReader.ReadShortStr;
+  Result.Mandatory := AReader.ReadBit;
+  Result.Immediate := AReader.ReadBit;
+end;
+
+function DecodeBasicConsume(const AReader: TAMQPReader): TAMQPBasicConsume;
+begin
+  Result := Default(TAMQPBasicConsume);
+  AReader.ReadShortUInt; // reserved-1
+  Result.Queue := AReader.ReadShortStr;
+  Result.ConsumerTag := AReader.ReadShortStr;
+  Result.NoLocal := AReader.ReadBit;
+  Result.NoAck := AReader.ReadBit;
+  Result.Exclusive := AReader.ReadBit;
+  Result.NoWait := AReader.ReadBit;
+  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+end;
+
+function BuildBasicConsumeOk(const AConsumerTag: string): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME_OK);
+  try
+    W.WriteShortStr(AConsumerTag);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeBasicCancelArgs(const AReader: TAMQPReader): TAMQPBasicCancelArgs;
+begin
+  Result.ConsumerTag := AReader.ReadShortStr;
+  Result.NoWait := AReader.ReadBit;
+end;
+
+function BuildBasicCancelOk(const AConsumerTag: string): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_CANCEL_OK);
+  try
+    W.WriteShortStr(AConsumerTag);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeBasicGet(const AReader: TAMQPReader): TAMQPBasicGet;
+begin
+  AReader.ReadShortUInt; // reserved-1
+  Result.Queue := AReader.ReadShortStr;
+  Result.NoAck := AReader.ReadBit;
+end;
+
+function BuildBasicGetOk(const AGetOk: TAMQPBasicGetOk): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_GET_OK);
+  try
+    W.WriteLongLongUInt(AGetOk.DeliveryTag);
+    W.WriteBit(AGetOk.Redelivered);
+    W.WriteShortStr(AGetOk.Exchange);
+    W.WriteShortStr(AGetOk.RoutingKey);
+    W.WriteLongUInt(AGetOk.MessageCount);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function BuildBasicGetEmpty: TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_GET_EMPTY);
+  try
+    W.WriteShortStr(''); // reserved-1 (cluster-id) — obsoleto
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function BuildBasicDeliver(const ADeliver: TAMQPBasicDeliver): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_DELIVER);
+  try
+    W.WriteShortStr(ADeliver.ConsumerTag);
+    W.WriteLongLongUInt(ADeliver.DeliveryTag);
+    W.WriteBit(ADeliver.Redelivered);
+    W.WriteShortStr(ADeliver.Exchange);
+    W.WriteShortStr(ADeliver.RoutingKey);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function BuildBasicReturn(const AReturn: TAMQPBasicReturn): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN);
+  try
+    W.WriteShortUInt(AReturn.ReplyCode);
+    W.WriteShortStr(AReturn.ReplyText);
+    W.WriteShortStr(AReturn.Exchange);
+    W.WriteShortStr(AReturn.RoutingKey);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeBasicReject(const AReader: TAMQPReader): TAMQPBasicReject;
+begin
+  Result.DeliveryTag := AReader.ReadLongLongUInt;
+  Result.Requeue := AReader.ReadBit;
+end;
+
+function BuildBasicReject(ADeliveryTag: UInt64; ARequeue: Boolean): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_REJECT);
+  try
+    W.WriteLongLongUInt(ADeliveryTag);
+    W.WriteBit(ARequeue);
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+function DecodeConfirmSelect(const AReader: TAMQPReader): Boolean;
+begin
+  Result := AReader.ReadBit; // no-wait
+end;
+
+function BuildConfirmSelectOk: TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := BeginMethod(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT_OK);
+  try
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
 end;
 
 end.
