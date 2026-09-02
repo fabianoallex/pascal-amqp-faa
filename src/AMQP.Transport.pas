@@ -381,7 +381,8 @@ end;
 begin
   if FListen = nil then
     FListen := TSocket.Create(TSocketType.TCP);
-  FListen.Listen(ABindAddr, '', '', APort, ABacklog);
+  // System.Net.Socket: Listen(Address, Service, Port, QueueSize).
+  FListen.Listen(ABindAddr, '', APort, ABacklog);
   FPort := APort;
   try
     if APort = 0 then
