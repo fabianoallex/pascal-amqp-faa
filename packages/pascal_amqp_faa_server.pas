@@ -8,8 +8,8 @@ unit pascal_amqp_faa_server;
 interface
 
 uses
-  AMQP.Server.Auth, AMQP.Server.FrameIO, AMQP.Server.Connection, 
-  AMQP.Server.Broker;
+  AMQP.Server.Auth, AMQP.Server.Types, AMQP.Server.Channel, 
+  AMQP.Server.FrameIO, AMQP.Server.Connection, AMQP.Server.Broker;
 
 implementation
 

@@ -1471,6 +1471,11 @@ begin
       Close;
     except
     end;
+  // Sempre desregistra: Close (que também desregistra) não roda quando o canal
+  // já estava fechado — caso típico, o servidor ter mandado Channel.Close por
+  // erro de canal. Sem isto o dicionário da conexão fica com um ponteiro
+  // pendurado e o destrutor dela estoura. Remover chave ausente é no-op.
+  FConnection.UnregisterChannel(FChannelId);
   DrainInFlight; // garante que nenhum callback ainda usa este canal
   FDispatchPool.Free; // nil-safe; se atribuído, já não há mais itens em voo
   FRecovery.Free;

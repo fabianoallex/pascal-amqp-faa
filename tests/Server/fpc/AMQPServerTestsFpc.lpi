@@ -50,6 +50,10 @@
         <Filename Value="AMQP.ServerSkeletonTests.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
+      <Unit>
+        <Filename Value="AMQP.ServerHandshakeTests.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
     </Units>
   </ProjectOptions>
   <CompilerOptions>

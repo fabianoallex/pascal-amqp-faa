@@ -1,8 +1,9 @@
 ﻿unit AMQP.ServerSkeletonTests;
 
 { Testes do esqueleto do broker (WS6): virtual-hosts, TAMQPFrameWriter,
-  TAMQPTcpListener e o ciclo accept/registro/reap do TAMQPServer. Sem
-  handshake AMQP ainda — os "clientes" aqui são sockets crus. }
+  TAMQPTcpListener e o ciclo accept/registro/reap do TAMQPServer. Os "clientes"
+  aqui são sockets crus: só o protocol-header e frames soltos, sem handshake.
+  A FSM de handshake é exercitada em AMQP.ServerHandshakeTests (WS4). }
 
 {$mode delphi}{$H+}
 
@@ -15,6 +16,7 @@ uses
   AMQP.Threading,
   AMQP.Transport,
   AMQP.Server.FrameIO,
+  AMQP.Server.Types,
   AMQP.Server.Broker;
 
 type
@@ -552,6 +554,11 @@ begin
     try
       Strm := TAMQPSocketStream.Create(C);
       try
+        // Desde o WS4 o broker manda Connection.Start assim que o
+        // protocol-header e' aceito: drena esse frame antes.
+        Reply := TAMQPFrame.ReadFrom(Strm, 131072);
+        AssertTrue('primeiro frame e Connection.Start', Reply.IsMethod);
+
         HB := TAMQPFrame.Heartbeat;
         HB.WriteTo(Strm);
         Reply := TAMQPFrame.ReadFrom(Strm, 4096);

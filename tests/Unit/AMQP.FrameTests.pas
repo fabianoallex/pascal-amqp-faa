@@ -177,7 +177,7 @@ begin
       begin
         TAMQPFrame.ReadFrom(LStream);
       end,
-      EAMQPFrame);
+      EAMQPFrameEOF); // subclasse: fim de stream, nao frame malformado
   finally
     LStream.Free;
   end;

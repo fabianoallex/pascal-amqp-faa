@@ -9,7 +9,7 @@
       <PathDelim Value="\"/>
       <SearchPaths>
         <IncludeFiles Value="..\src"/>
-        <OtherUnitFiles Value="..\src"/>
+        <OtherUnitFiles Value="..\src\server"/>
         <UnitOutputDirectory Value="lib\srv-$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
     </CompilerOptions>
@@ -18,19 +18,27 @@
     <Version Minor="1"/>
     <Files>
       <Item>
-        <Filename Value="..\src\AMQP.Server.Auth.pas"/>
+        <Filename Value="..\src\server\AMQP.Server.Auth.pas"/>
         <UnitName Value="AMQP.Server.Auth"/>
       </Item>
       <Item>
-        <Filename Value="..\src\AMQP.Server.FrameIO.pas"/>
+        <Filename Value="..\src\server\AMQP.Server.Types.pas"/>
+        <UnitName Value="AMQP.Server.Types"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.Channel.pas"/>
+        <UnitName Value="AMQP.Server.Channel"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.FrameIO.pas"/>
         <UnitName Value="AMQP.Server.FrameIO"/>
       </Item>
       <Item>
-        <Filename Value="..\src\AMQP.Server.Connection.pas"/>
+        <Filename Value="..\src\server\AMQP.Server.Connection.pas"/>
         <UnitName Value="AMQP.Server.Connection"/>
       </Item>
       <Item>
-        <Filename Value="..\src\AMQP.Server.Broker.pas"/>
+        <Filename Value="..\src\server\AMQP.Server.Broker.pas"/>
         <UnitName Value="AMQP.Server.Broker"/>
       </Item>
     </Files>

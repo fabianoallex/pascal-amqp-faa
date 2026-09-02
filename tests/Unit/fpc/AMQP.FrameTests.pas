@@ -174,7 +174,9 @@ begin
   // cabecalho diz size=10 mas o stream acaba antes
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 10, 1, 2, 3]);
   try
-    AssertException(EAMQPFrame, DoReadStreamTruncado);
+    // EAMQPFrameEOF (subclasse de EAMQPFrame): fim de stream, nao frame
+    // malformado. O AssertException do FPCUnit exige a classe exata.
+    AssertException(EAMQPFrameEOF, DoReadStreamTruncado);
   finally
     FTruncStream.Free;
   end;

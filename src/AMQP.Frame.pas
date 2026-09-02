@@ -28,6 +28,13 @@ type
   /// derrubada no meio de um frame, não um bug de aplicação.
   EAMQPFrame = class(Exception);
 
+  { Subclasse de EAMQPFrame levantada quando o stream ACABA no meio (ou antes)
+    de um frame — o caso normal de "peer desconectou". Existe para o broker
+    distinguir isso de um frame malformado: fim de stream é encerramento
+    silencioso, frame malformado é FRAME_ERROR (501) com Connection.Close.
+    Quem só quer "falhou ao ler frame" continua capturando EAMQPFrame. }
+  EAMQPFrameEOF = class(EAMQPFrame);
+
   TAMQPFrame = record
     FrameType: Byte;
     Channel: Word;
@@ -69,7 +76,7 @@ begin
   begin
     LRead := AStream.Read(ABuffer[LTotal], ACount - LTotal);
     if LRead <= 0 then
-      raise EAMQPFrame.Create('fim de stream ao ler frame (conexao fechada?)');
+      raise EAMQPFrameEOF.Create('fim de stream ao ler frame (conexao fechada?)');
     Inc(LTotal, LRead);
   end;
 end;

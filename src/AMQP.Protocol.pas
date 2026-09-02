@@ -119,6 +119,30 @@ const
   AMQP_CONFIRM_SELECT    = 10;
   AMQP_CONFIRM_SELECT_OK = 11;
 
+  // --- Reply codes (spec 0-9-1, secao "constants") ------------------------
+  // Sao os codigos que vao no reply-code de Connection.Close / Channel.Close.
+  // A spec classifica cada um como "channel error" (fecha so o canal) ou
+  // "connection error" (fecha a conexao inteira) — anotado ao lado.
+  AMQP_REPLY_SUCCESS       = 200; // resposta normal (Close a pedido do peer)
+  AMQP_CONTENT_TOO_LARGE   = 311; // canal
+  AMQP_NO_ROUTE            = 312; // canal
+  AMQP_NO_CONSUMERS        = 313; // canal
+  AMQP_CONNECTION_FORCED   = 320; // conexao (operador derrubou)
+  AMQP_INVALID_PATH        = 402; // conexao (vhost/path invalido)
+  AMQP_ACCESS_REFUSED      = 403; // canal (tambem usado no 403 de auth)
+  AMQP_NOT_FOUND           = 404; // canal
+  AMQP_RESOURCE_LOCKED     = 405; // canal
+  AMQP_PRECONDITION_FAILED = 406; // canal
+  AMQP_FRAME_ERROR         = 501; // conexao (frame malformado/dessincronizado)
+  AMQP_SYNTAX_ERROR        = 502; // conexao
+  AMQP_COMMAND_INVALID     = 503; // conexao (metodo invalido neste estado)
+  AMQP_CHANNEL_ERROR       = 504; // conexao (canal inexistente/ja aberto)
+  AMQP_UNEXPECTED_FRAME    = 505; // conexao (content fora de sequencia)
+  AMQP_RESOURCE_ERROR      = 506; // conexao
+  AMQP_NOT_ALLOWED         = 530; // conexao (vhost negado, tune fora da faixa)
+  AMQP_NOT_IMPLEMENTED     = 540; // conexao/canal (metodo nao implementado)
+  AMQP_INTERNAL_ERROR      = 541; // conexao
+
 implementation
 
 end.

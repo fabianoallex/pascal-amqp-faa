@@ -16,7 +16,8 @@ uses
   Interfaces, Forms, GuiTestRunner,
   {$ENDIF}
   Classes, consoletestrunner, testregistry,
-  AMQP.ServerSkeletonTests;
+  AMQP.ServerSkeletonTests,
+  AMQP.ServerHandshakeTests;
 
 var
   ConsoleApp: TTestRunner;

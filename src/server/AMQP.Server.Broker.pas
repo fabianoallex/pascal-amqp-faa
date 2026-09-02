@@ -3,12 +3,13 @@
 {$I amqp.inc}
 
 { O broker: ciclo de vida do listener, loop de accept e registro de conexões
-  (sub-módulo server, WS6 skeleton).
+  (sub-módulo server).
 
-  WS6 entrega o esqueleto: Start liga o listener e uma thread de accept que
-  cria uma TAMQPServerConnection por conexão; Stop derruba tudo sem leak.
-  A FSM de handshake, o dispatch de métodos, a engine de roteamento e os
-  heartbeats entram nos workstreams seguintes (WS4/WS5/WS7).
+  Start liga o listener e uma thread de accept que cria uma
+  TAMQPServerConnection por conexão, entregando a cada uma a config corrente
+  (autenticador, autorizador, vhosts e os limites do Tune); Stop derruba tudo
+  sem leak. A FSM de handshake e o mapa de canais vivem na conexão (WS4); a
+  engine de roteamento (WS5/Fase 2) e os heartbeats (WS7) vêm depois.
 
   Uso:
     B := TAMQPServer.Create;
@@ -31,26 +32,14 @@ uses
   AMQP.Threading,
   AMQP.Transport,
   AMQP.Server.Auth,
+  AMQP.Server.Types,
   AMQP.Server.Connection;
 
-type
-  { Conjunto de virtual-hosts que o broker aceita no Connection.Open.
-    Fase 1: só a existência importa (sem isolamento de recursos, sem
-    permissões — ver desvios no CLAUDE.md). Default: só a raiz "/".
-    Thread-safe. }
-  TAMQPVirtualHostRegistry = class
-  private
-    FLock: TCriticalSection;
-    FNames: TStringList; // CaseSensitive, Sorted, Duplicates ignorados
-  public
-    constructor Create;
-    destructor Destroy; override;
-    procedure Add(const AName: string);
-    procedure Remove(const AName: string);
-    function Contains(const AName: string): Boolean;
-    function ToArray: TArray<string>;
-  end;
+// TAMQPVirtualHostRegistry mudou-se para AMQP.Server.Types no WS4 (a FSM de
+// handshake precisa consultá-lo, e ela não pode usar esta unit — que a usa).
+// Quem mexe em vhosts precisa listar AMQP.Server.Types no próprio uses.
 
+type
   TAMQPServer = class;
 
   TAMQPAcceptThread = class(TThread)
@@ -75,9 +64,13 @@ type
     FBindAddress: string;
     FPort: Word;
     FBacklog: Integer;
+    FChannelMax: Word;
+    FFrameMax: Cardinal;
+    FHeartbeat: Word;
     FRunning: Boolean;
     FStopping: Boolean;
     FTotalAccepted: Integer; // atômico
+    function ConnConfig: TAMQPServerConnConfig;
     procedure AcceptLoop;
     procedure HandleConnClosed(AConn: TAMQPServerConnection);
     procedure ReapDead;
@@ -90,6 +83,9 @@ type
 
     /// Nº de conexões vivas neste momento.
     function ConnectionCount: Integer;
+    /// Snapshot das conexões vivas. Os objetos podem ser reapados logo em
+    /// seguida — use só para inspeção imediata (log, testes, métricas).
+    function Connections: TArray<TAMQPServerConnection>;
     /// Total de conexões aceitas desde o Start (inclui as já fechadas).
     property TotalAccepted: Integer read FTotalAccepted;
 
@@ -99,6 +95,12 @@ type
     property Backlog: Integer read FBacklog write FBacklog;
     property Running: Boolean read FRunning;
 
+    // --- limites propostos no Connection.Tune (0 = sem limite). Só antes do
+    //     Start; cada conexão recebe uma cópia ao ser aceita.
+    property ChannelMax: Word read FChannelMax write FChannelMax;
+    property FrameMax: Cardinal read FFrameMax write FFrameMax;
+    property Heartbeat: Word read FHeartbeat write FHeartbeat;
+
     /// Default: TAMQPStaticAuthenticator com guest/guest. Só antes do Start.
     property Authenticator: IAMQPAuthenticator read FAuth write FAuth;
     property Authorizer: IAMQPAuthorizer read FAuthorizer write FAuthorizer;
@@ -106,75 +108,6 @@ type
   end;
 
 implementation
-
-{ TAMQPVirtualHostRegistry }
-
-constructor TAMQPVirtualHostRegistry.Create;
-begin
-  inherited Create;
-  FLock := TCriticalSection.Create;
-  FNames := TStringList.Create;
-  FNames.CaseSensitive := True;
-  FNames.Sorted := True;
-  FNames.Duplicates := dupIgnore;
-  FNames.Add('/');
-end;
-
-destructor TAMQPVirtualHostRegistry.Destroy;
-begin
-  FNames.Free;
-  FLock.Free;
-  inherited;
-end;
-
-procedure TAMQPVirtualHostRegistry.Add(const AName: string);
-begin
-  FLock.Enter;
-  try
-    FNames.Add(AName);
-  finally
-    FLock.Leave;
-  end;
-end;
-
-procedure TAMQPVirtualHostRegistry.Remove(const AName: string);
-var
-  I: Integer;
-begin
-  FLock.Enter;
-  try
-    I := FNames.IndexOf(AName);
-    if I >= 0 then
-      FNames.Delete(I);
-  finally
-    FLock.Leave;
-  end;
-end;
-
-function TAMQPVirtualHostRegistry.Contains(const AName: string): Boolean;
-begin
-  FLock.Enter;
-  try
-    Result := FNames.IndexOf(AName) >= 0;
-  finally
-    FLock.Leave;
-  end;
-end;
-
-function TAMQPVirtualHostRegistry.ToArray: TArray<string>;
-var
-  I: Integer;
-begin
-  Result := nil;
-  FLock.Enter;
-  try
-    SetLength(Result, FNames.Count);
-    for I := 0 to FNames.Count - 1 do
-      Result[I] := FNames[I];
-  finally
-    FLock.Leave;
-  end;
-end;
 
 { TAMQPAcceptThread }
 
@@ -203,6 +136,21 @@ begin
   FBindAddress := '0.0.0.0';
   FPort := 5672;
   FBacklog := 64;
+  FChannelMax := AMQP_SERVER_DEFAULT_CHANNEL_MAX;
+  FFrameMax := AMQP_SERVER_DEFAULT_FRAME_MAX;
+  FHeartbeat := AMQP_SERVER_DEFAULT_HEARTBEAT;
+end;
+
+function TAMQPServer.ConnConfig: TAMQPServerConnConfig;
+begin
+  Result := TAMQPServerConnConfig.Defaults;
+  Result.Auth := FAuth;
+  Result.Authorizer := FAuthorizer;
+  Result.VHosts := FVHosts;
+  Result.ChannelMax := FChannelMax;
+  Result.FrameMax := FFrameMax;
+  Result.Heartbeat := FHeartbeat;
+  Result.Tls := False; // WS3 liga isto quando o listener for TLS
 end;
 
 destructor TAMQPServer.Destroy;
@@ -304,7 +252,8 @@ begin
 
     ReapDead; // aproveita para limpar conexões já mortas
 
-    LConn := TAMQPServerConnection.Create(LSock); // conexão vira dona do socket
+    // A conexão vira dona do socket e recebe uma cópia da config do broker.
+    LConn := TAMQPServerConnection.Create(LSock, ConnConfig);
     LConn.OnClosed := HandleConnClosed;
     FLock.Enter;
     try
@@ -355,6 +304,21 @@ begin
   FLock.Enter;
   try
     Result := FActive.Count;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TAMQPServer.Connections: TArray<TAMQPServerConnection>;
+var
+  I: Integer;
+begin
+  Result := nil;
+  FLock.Enter;
+  try
+    SetLength(Result, FActive.Count);
+    for I := 0 to FActive.Count - 1 do
+      Result[I] := FActive[I];
   finally
     FLock.Leave;
   end;
