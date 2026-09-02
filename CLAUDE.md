@@ -80,7 +80,12 @@ Avaliada em 2026-09-02 e iniciada: a "outra ponta" — uma lib para **criar um b
 
 **Modelo por workstream:** WS0/WS1/WS2/WS6/WS7/WS8 (scaffolding, codec, listener, broker skeleton, heartbeat, testes) são mecânicos → Sonnet. WS3 (TLS server), WS4 (handshake FSM), WS5 (regra de interleave de conteúdo) têm correção sutil de protocolo → Opus.
 
-**Progresso:** WS0 concluído (commit `Broker WS0`) — `CLAUDE.md`, `TAMQPSocketStream` promovido para `AMQP.Transport`, `AMQP.Server.Auth` (PLAIN, `TAMQPStaticAuthenticator` default guest/guest), `pascal_amqp_faa_server.lpk`. Regressão do cliente revalidada contra o broker real: SmokeTest plain e `--tls` PASS (Default e build `openssl`), integração FPC 28/28, unitária FPC 81/81. **Próximo: WS1** (codec bidirecional, classe Connection primeiro).
+**Progresso:**
+- **WS0** concluído (commit `Broker WS0`) — `CLAUDE.md`, `TAMQPSocketStream` promovido para `AMQP.Transport`, `AMQP.Server.Auth` (PLAIN, `TAMQPStaticAuthenticator` default guest/guest), `pascal_amqp_faa_server.lpk`.
+- **WS1** concluído (commits `Broker WS1`) — codec bidirecional in-place nas units `AMQP.*.Methods`: `Build` dos métodos servidor→cliente (`BuildStart`/`Tune`/`OpenOk`/`Deliver`/`Return`/`GetOk`/`GetEmpty`/`*DeclareOk`/…) e `Decode` dos cliente→servidor (`DecodeStartOk`/`DecodeOpen`/`DecodeBasicPublish`/`DecodeBasicConsume`/`DecodeQueueDeclare`/…). `DecodeBasicAck/Nack` + `BuildBasicAck/Nack` já eram bidirecionais. Records novos: `TAMQPConnectionStartOk`, `TAMQPConnectionOpen`, `TAMQPQueuePurge`, `TAMQPBasicQosArgs/Publish/Get/CancelArgs/Reject`. SASL response lida como `TBytes` crus (PLAIN tem `#0`). Testes `TConnectionServerCodecTests` (11) + `TServerCodecTests` (25) nas duas suítes, cruzando Build do cliente ↔ Decode do servidor.
+- Revalidação do cliente contra broker real: SmokeTest plain e `--tls` PASS (Default e `openssl`), integração FPC 28/28, unitária FPC **117/117**.
+
+**Próximo: WS2** (listener `TAMQPTcpListener` em `AMQP.Transport` — bind/listen/accept dual-compiler).
 
 **Build/teste do server:** `fpc -Fusrc -Fisrc -FEbuild -FUbuild src\AMQP.Server.Broker.pas` compila o server inteiro; pacote `lazbuild packages\pascal_amqp_faa_server.lpk`. Group projects próprios: `AMQP.Server.groupproj` (Delphi) / `AMQP.Server.lpg` (Lazarus). Suíte em `tests\Server\` (DUnitX) e `tests\Server\fpc\` (FPCUnit); a fixture sobe o broker in-process em porta efêmera e aponta o `TAMQPConnection` do cliente nele. Certs de TLS: reusar `docker\certs`.
 
