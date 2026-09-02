@@ -56,6 +56,12 @@ type
     {$ENDIF}
   public
     constructor Create;
+    {$IFDEF FPC}
+    /// Envolve um descritor JÁ conectado (vindo de TAMQPTcpListener.Accept).
+    constructor CreateFromAccepted(AHandle: LongInt);
+    {$ELSE}
+    constructor CreateFromAccepted(ASock: TSocket);
+    {$ENDIF}
     destructor Destroy; override;
     /// Resolve o host e conecta (bloqueante). Levanta excecao em falha.
     procedure Connect(const AHost: string; APort: Word);
@@ -64,6 +70,40 @@ type
     function Send(const Buffer; ACount: Integer): Integer;
     /// Encerra a conexao, desbloqueando um Receive pendente em outra thread.
     procedure Close;
+  end;
+
+  { Socket de escuta TCP (lado servidor do sub-módulo broker). Mesma superfície
+    nos dois compiladores:
+    - FPC: sockets crus (fpsocket/fpbind/fplisten/fpaccept) — evita o modelo de
+      callback do ssockets.TInetServer.
+    - Delphi: System.Net.Socket (TSocket.Listen/Accept).
+
+    Contrato:
+    - Listen liga e começa a escutar; levanta EAMQPTransport em falha.
+    - Accept bloqueia até uma conexão chegar e devolve um TAMQPTcpSocket novo
+      (dono do descritor aceito), ou nil se o listener foi fechado por outra
+      thread (shutdown do broker).
+    - Close pode ser chamado de OUTRA thread para desbloquear um Accept
+      pendente; pode ser chamado mais de uma vez.
+    - Port devolve a porta efetiva (útil ao ligar na porta 0 nos testes). }
+  TAMQPTcpListener = class
+  private
+    FClosing: Boolean;
+    FPort: Word;
+    {$IFDEF FPC}
+    FListenFd: LongInt;
+    {$ELSE}
+    FListen: TSocket;
+    {$ENDIF}
+  public
+    constructor Create;
+    destructor Destroy; override;
+    /// ABindAddr: '' ou '0.0.0.0' => todas as interfaces. APort 0 => o SO
+    /// escolhe (ver Port depois de Listen).
+    procedure Listen(const ABindAddr: string; APort: Word; ABacklog: Integer = 64);
+    function Accept: TAMQPTcpSocket;
+    procedure Close;
+    property Port: Word read FPort;
   end;
 
   { Adapta um TAMQPTcpSocket como TStream, para os frames trafegarem por
@@ -140,6 +180,21 @@ begin
   {$ENDIF}
 end;
 
+{$IFDEF FPC}
+constructor TAMQPTcpSocket.CreateFromAccepted(AHandle: LongInt);
+begin
+  inherited Create;
+  // Constrói a partir do descritor já conectado (inherited TSocketStream.Create).
+  FSock := TInetSocket.Create(AHandle);
+end;
+{$ELSE}
+constructor TAMQPTcpSocket.CreateFromAccepted(ASock: TSocket);
+begin
+  inherited Create;
+  FSock := ASock;
+end;
+{$ENDIF}
+
 destructor TAMQPTcpSocket.Destroy;
 begin
   try
@@ -205,6 +260,145 @@ begin
   {$ELSE}
   if TSocketState.Connected in FSock.State then
     FSock.Close;
+  {$ENDIF}
+end;
+
+{ TAMQPTcpListener }
+
+constructor TAMQPTcpListener.Create;
+begin
+  inherited Create;
+  {$IFDEF FPC}
+  FListenFd := -1;
+  {$ENDIF}
+end;
+
+destructor TAMQPTcpListener.Destroy;
+begin
+  try
+    Close;
+  except
+  end;
+  {$IFDEF FPC}
+  if FListenFd >= 0 then
+  begin
+    CloseSocket(FListenFd);
+    FListenFd := -1;
+  end;
+  {$ELSE}
+  FListen.Free;
+  {$ENDIF}
+  inherited;
+end;
+
+procedure TAMQPTcpListener.Listen(const ABindAddr: string; APort: Word;
+  ABacklog: Integer);
+{$IFDEF FPC}
+var
+  LAddr: TInetSockAddr;
+  LLen: {$IF Declared(TSockLen)}TSockLen{$ELSE}LongInt{$ENDIF};
+  LOpt: LongInt;
+begin
+  FListenFd := fpSocket(AF_INET, SOCK_STREAM, 0);
+  if FListenFd < 0 then
+    raise EAMQPTransport.CreateFmt('fpSocket falhou (%d)', [SocketError]);
+
+  LOpt := 1;
+  fpSetSockOpt(FListenFd, SOL_SOCKET, SO_REUSEADDR, @LOpt, SizeOf(LOpt));
+
+  FillChar(LAddr, SizeOf(LAddr), 0);
+  LAddr.sin_family := AF_INET;
+  LAddr.sin_port := htons(APort);
+  if (ABindAddr = '') or (ABindAddr = '0.0.0.0') then
+    LAddr.sin_addr.s_addr := 0 // INADDR_ANY
+  else
+    LAddr.sin_addr := StrToNetAddr(ABindAddr); // já em ordem de rede
+
+  if fpBind(FListenFd, @LAddr, SizeOf(LAddr)) <> 0 then
+    raise EAMQPTransport.CreateFmt('bind em %s:%d falhou (%d)',
+      [ABindAddr, APort, SocketError]);
+
+  if fpListen(FListenFd, ABacklog) <> 0 then
+    raise EAMQPTransport.CreateFmt('listen falhou (%d)', [SocketError]);
+
+  // Porta efetiva (relevante quando APort = 0).
+  LLen := SizeOf(LAddr);
+  if fpGetSockName(FListenFd, @LAddr, @LLen) = 0 then
+    FPort := ntohs(LAddr.sin_port)
+  else
+    FPort := APort;
+end;
+{$ELSE}
+begin
+  if FListen = nil then
+    FListen := TSocket.Create(TSocketType.TCP);
+  FListen.Listen(ABindAddr, '', '', APort, ABacklog);
+  FPort := APort;
+  try
+    if APort = 0 then
+      FPort := Word(FListen.LocalPort);
+  except
+  end;
+end;
+{$ENDIF}
+
+function TAMQPTcpListener.Accept: TAMQPTcpSocket;
+{$IFDEF FPC}
+var
+  LClient: TInetSockAddr;
+  LLen: {$IF Declared(TSockLen)}TSockLen{$ELSE}LongInt{$ENDIF};
+  LFd: LongInt;
+begin
+  Result := nil;
+  if FClosing or (FListenFd < 0) then
+    Exit;
+  LLen := SizeOf(LClient);
+  LFd := fpAccept(FListenFd, @LClient, @LLen);
+  if LFd < 0 then
+    Exit; // listener fechado / interrompido
+  Result := TAMQPTcpSocket.CreateFromAccepted(LFd);
+end;
+{$ELSE}
+var
+  LSock: TSocket;
+begin
+  Result := nil;
+  if FClosing or (FListen = nil) then
+    Exit;
+  try
+    LSock := FListen.Accept;
+  except
+    Exit; // listener fechado por outra thread
+  end;
+  if LSock = nil then
+    Exit;
+  Result := TAMQPTcpSocket.CreateFromAccepted(LSock);
+end;
+{$ENDIF}
+
+procedure TAMQPTcpListener.Close;
+begin
+  if FClosing then
+    Exit;
+  FClosing := True;
+  {$IFDEF FPC}
+    {$IFDEF UNIX}
+  // No Linux/BSD, shutdown() num socket de escuta desbloqueia o accept()
+  // pendente; o descritor só é fechado no destrutor (evita corrida de FD).
+  if FListenFd >= 0 then
+    fpShutdown(FListenFd, AMQP_SHUT_RDWR);
+    {$ELSE}
+  // No Windows, é o closesocket() que desbloqueia um accept() pendente
+  // (shutdown num listen socket devolve WSAEINVAL).
+  if FListenFd >= 0 then
+  begin
+    CloseSocket(FListenFd);
+    FListenFd := -1;
+  end;
+    {$ENDIF}
+  {$ELSE}
+  if FListen <> nil then
+    FListen.Close;
   {$ENDIF}
 end;
 
