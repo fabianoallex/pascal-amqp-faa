@@ -66,6 +66,20 @@ type
     procedure Close;
   end;
 
+  { Adapta um TAMQPTcpSocket como TStream, para os frames trafegarem por
+    TAMQPFrame.ReadFrom/WriteTo. Nao e' dono do socket. Compartilhado pelo
+    cliente (AMQP.Connection) e pelo broker (AMQP.Server.*); os backends TLS
+    (AMQP.Transport.Tls/.OpenSSL) envolvem uma instancia destas. }
+  TAMQPSocketStream = class(TStream)
+  private
+    FSocket: TAMQPTcpSocket;
+  public
+    constructor Create(ASocket: TAMQPTcpSocket);
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+  end;
+
 /// Backend TLS deste build (decidido em compilacao): 'OpenSSL', 'SChannel'
 /// ou 'nenhum'. Util para exibir em UI/log qual motor um build usa.
 function AmqpTlsBackendName: string;
@@ -192,6 +206,29 @@ begin
   if TSocketState.Connected in FSock.State then
     FSock.Close;
   {$ENDIF}
+end;
+
+{ TAMQPSocketStream }
+
+constructor TAMQPSocketStream.Create(ASocket: TAMQPTcpSocket);
+begin
+  inherited Create;
+  FSocket := ASocket;
+end;
+
+function TAMQPSocketStream.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := FSocket.Receive(Buffer, Count);
+end;
+
+function TAMQPSocketStream.Write(const Buffer; Count: Longint): Longint;
+begin
+  Result := FSocket.Send(Buffer, Count);
+end;
+
+function TAMQPSocketStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+begin
+  raise EAMQPTransport.Create('TAMQPSocketStream nao suporta Seek');
 end;
 
 end.

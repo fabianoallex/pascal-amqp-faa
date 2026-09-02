@@ -58,6 +58,30 @@ Gotchas de FPC já encontrados no porte:
   - `AMQP.Transport.Tls`: SChannel, compila nos dois compiladores mas **só no Windows** (`AMQP_WINDOWS`, automático).
   - `AMQP.Transport.OpenSSL`: OpenSSL, qualquer plataforma, **opt-in** via `-dAMQP_OPENSSL` (tem precedência sobre SChannel se ambos definidos). Bindings próprios (~26 símbolos com assinatura idêntica em 1.1.1 e 3.x), carregados dinamicamente na 1ª conexão TLS com lista de sonames (`libssl.so.3` → `.1.1`; DLLs `libssl-3-x64` etc. no Windows). O engine SSL trabalha sobre **par de BIOs de memória** (nunca `SSL_set_fd`): preserva o desbloqueio da thread de leitura via close do socket E permite proteger o objeto `SSL` (que não aceita read/write concorrentes) com um `TCriticalSection` interno nunca segurado durante I/O de socket. Sem `AMQP_OPENSSL` fora do Windows, `UseTls` levanta a mesma exceção clara de antes.
 
+## Sub-módulo broker (server) — Fase 1 em andamento (branch `feat/broker`)
+
+Avaliada em 2026-09-02 e iniciada: a "outra ponta" — uma lib para **criar um broker AMQP 0-9-1 dentro de uma app Delphi/FPC**, na mesma codebase (units `AMQP.Server.*`, pacote `pascal_amqp_faa_server.lpk` separado que depende do pacote cliente; quem só usa o cliente não linka nada de server). Plano detalhado e avaliação de modelo de execução: artifact `Broker AMQP — Fase 1` (https://claude.ai/code/artifact/9f07e23c-c200-4435-8770-77164bad0c13).
+
+**Proveniência (reforço da regra inegociável):** o server deriva SÓ da especificação AMQP 0-9-1 e do próprio cliente `pascal-amqp-faa` (MIT, mesmo autor). O servidor RabbitMQ é Erlang/MPL — consulta como conhecimento de protocolo é permitida, transcrição de código não. Nada de outras implementações de broker Pascal/Delphi.
+
+**Escopo Fase 1 ("null broker"):** aceita N conexões, cada uma com N canais; handshake completo; decodifica e aceita todo método cliente→servidor; responde os `*-Ok` corretos; heartbeats bidirecionais; close limpo com o modelo de erro de canal/conexão. **Sem engine**: declares são no-op, publishes descartados, nenhuma entrega real. Fases seguintes: engine em memória (roteamento direct/fanout/topic/headers, consume/get/ack/nack, confirms, mandatory/return), depois durabilidade/TTL/DLX/priority.
+
+**Não-objetivos (todas as fases):** cluster, HTTP management API, federation/shovel, AMQP 1.0, STOMP/MQTT, quorum queues, streams.
+
+**Decisões de arquitetura travadas:**
+- Modelo de execução: **thread-por-conexão, I/O bloqueante** (reusa `TAMQPTcpSocket`, `TAMQPMonitor`, `AmqpPool`, o truque `fpshutdown`/`Close` para desbloquear read pendente). Event loop (IOCP/epoll/kqueue) rejeitado — 3 backends, nenhum existe nas units compartilhadas, e o alvo é dezenas–centenas de conexões.
+- Escrita: **1 objeto writer por conexão com fila outbound limitada + 1 thread escritora** (backpressure natural = flow control TCP). API `Connection.PostFrames(array of TAMQPFrame)` enfileira method+header+body sob um único lock (senão o cliente vê UNEXPECTED_FRAME por interleave).
+- Engine (Fase 2): **ator-por-fila** — cada `TAMQPQueue` tem fila serial de comandos; toda mutação (enqueue, consumer, ack/nack, TTL, delete) passa por ela. Exchanges são lookup quase-imutável sob RWLock. Interface que a Fase 1 já expõe com impl nula: `IAMQPMessageSink.RouteMessage(...)`.
+- Mensagem: `TAMQPMessage` com refcount interlocked (`AmqpAtomicInc/Dec`); `Body: TBytes` compartilhado por N filas sem cópia (COW), ninguém muta.
+- Lifetime: cada `TAMQPServerConnection` possui sua read-thread/writer/canais; auto-registra/desregistra no broker sob lock; liberação por **reaper explícito** (lista + `OnTerminate`), **nunca `FreeOnTerminate`**.
+- Codec: os `Decode` dos métodos cliente→servidor e os `Build` dos métodos servidor→cliente entram **in-place** nas units `AMQP.*.Methods` existentes (adicionam funções, não alteram as existentes) — a suíte cliente (81/81 + 27/27) tem que continuar verde após cada mudança. `TAMQPSocketStream` foi promovido de `AMQP.Connection` (privado) para `AMQP.Transport` (público); `TAMQPTcpListener` vive em `AMQP.Transport`.
+
+**Auth / vhost da Fase 1:** SASL PLAIN só (sem `Secure`/`Secure-Ok`, sem `AMQPLAIN`). `IAMQPAuthenticator` + `TAMQPStaticAuthenticator` (default do broker semeado com `guest`/`guest` — o `TAMQPConnectionParams.Localhost` do cliente conecta sem mudança) + `TAMQPAllowAllAuthenticator` (testes). `TAMQPVirtualHostRegistry` default `{ '/' }`. `IAMQPAuthorizer` existe como stub allow-all para a Fase 2 encaixar. **Desvios deliberados do RabbitMQ (documentados de propósito):** (1) `guest` aceito fora de loopback — o RabbitMQ restringe a conexões locais por padrão (footgun para uso embarcado); (2) sem permissões por vhost; (3) sem delay pós-falha de auth (o param `APeerAddress` de `Authenticate` já está lá para o rate-limit futuro); (4) validação da propriedade `user-id` do `Basic.Publish` só entra com o sink real.
+
+**Modelo por workstream:** WS0/WS1/WS2/WS6/WS7/WS8 (scaffolding, codec, listener, broker skeleton, heartbeat, testes) são mecânicos → Sonnet. WS3 (TLS server), WS4 (handshake FSM), WS5 (regra de interleave de conteúdo) têm correção sutil de protocolo → Opus.
+
+**Build/teste do server:** `fpc -Fusrc -Fisrc -FEbuild -FUbuild src\AMQP.Server.Broker.pas` compila o server inteiro; pacote `lazbuild packages\pascal_amqp_faa_server.lpk`. Group projects próprios: `AMQP.Server.groupproj` (Delphi) / `AMQP.Server.lpg` (Lazarus). Suíte em `tests\Server\` (DUnitX) e `tests\Server\fpc\` (FPCUnit); a fixture sobe o broker in-process em porta efêmera e aponta o `TAMQPConnection` do cliente nele. Certs de TLS: reusar `docker\certs`.
+
 ## Build e testes
 
 - FPC: `fpc -Fusrc -Fisrc -FEbuild -FUbuild src\AMQP.Connection.pas` compila a lib inteira (somar `-dAMQP_OPENSSL` para o backend OpenSSL). Pacote Lazarus: `lazbuild packages\pascal_amqp_faa.lpk`.

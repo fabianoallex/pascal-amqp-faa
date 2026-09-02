@@ -61,17 +61,8 @@ type
   /// mode). Ver também EAMQPConnection (erros da conexão como um todo).
   EAMQPChannel = class(Exception);
 
-  { Adapta um TAMQPTcpSocket como TStream, para os frames trafegarem por
-    TAMQPFrame.ReadFrom/WriteTo. Não é dono do socket. }
-  TAMQPSocketStream = class(TStream)
-  private
-    FSocket: TAMQPTcpSocket;
-  public
-    constructor Create(ASocket: TAMQPTcpSocket);
-    function Read(var Buffer; Count: Longint): Longint; override;
-    function Write(const Buffer; Count: Longint): Longint; override;
-    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
-  end;
+  { TAMQPSocketStream foi promovido para AMQP.Transport (compartilhado com o
+    broker); segue visível aqui via `uses AMQP.Transport`. }
 
   TAMQPConnectionParams = record
     Host: string;
@@ -732,29 +723,6 @@ end;
 function TAMQPReturnedMessage.BodyAsText: string;
 begin
   Result := AmqpUtf8Decode(Body);
-end;
-
-{ TAMQPSocketStream }
-
-constructor TAMQPSocketStream.Create(ASocket: TAMQPTcpSocket);
-begin
-  inherited Create;
-  FSocket := ASocket;
-end;
-
-function TAMQPSocketStream.Read(var Buffer; Count: Longint): Longint;
-begin
-  Result := FSocket.Receive(Buffer, Count);
-end;
-
-function TAMQPSocketStream.Write(const Buffer; Count: Longint): Longint;
-begin
-  Result := FSocket.Send(Buffer, Count);
-end;
-
-function TAMQPSocketStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
-begin
-  raise EAMQPConnection.Create('TAMQPSocketStream não suporta Seek');
 end;
 
 { TAMQPConnectionParams }
