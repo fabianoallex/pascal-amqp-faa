@@ -76,6 +76,7 @@ type
     FDead: TList<TAMQPServerConnection>;
     FAuth: IAMQPAuthenticator;
     FAuthorizer: IAMQPAuthorizer;
+    FSink: IAMQPMessageSink;
     FVHosts: TAMQPVirtualHostRegistry;
     FBindAddress: string;
     FPort: Word;
@@ -127,6 +128,10 @@ type
     /// Default: TAMQPStaticAuthenticator com guest/guest. Só antes do Start.
     property Authenticator: IAMQPAuthenticator read FAuth write FAuth;
     property Authorizer: IAMQPAuthorizer read FAuthorizer write FAuthorizer;
+    /// Para onde vão as mensagens publicadas. Default: TAMQPNullMessageSink,
+    /// que descarta — é o que faz da Fase 1 um "null broker". A engine de
+    /// roteamento da Fase 2 entra por aqui.
+    property MessageSink: IAMQPMessageSink read FSink write FSink;
     property VirtualHosts: TAMQPVirtualHostRegistry read FVHosts;
   end;
 
@@ -169,6 +174,7 @@ begin
   FVHosts := TAMQPVirtualHostRegistry.Create;
   FAuth := TAMQPStaticAuthenticator.Create; // guest/guest
   FAuthorizer := TAMQPAllowAllAuthorizer.Create;
+  FSink := TAMQPNullMessageSink.Create;
   FMonitorStop := TEvent.Create(nil, True, False, '');
   FBindAddress := '0.0.0.0';
   FPort := 5672;
@@ -189,6 +195,7 @@ begin
   Result.FrameMax := FFrameMax;
   Result.Heartbeat := FHeartbeat;
   Result.CloseTimeoutMs := FCloseTimeoutMs;
+  Result.Sink := FSink;
   Result.Tls := False; // WS3 liga isto quando o listener for TLS
 end;
 
@@ -202,6 +209,7 @@ begin
   FLock.Free;
   FAuth := nil;
   FAuthorizer := nil;
+  FSink := nil;
   inherited;
 end;
 

@@ -22,6 +22,8 @@ uses
   SysUtils,
   Classes,
   SyncObjs,
+  AMQP.Threading,     // atomics
+  AMQP.Basic.Methods, // TAMQPBasicProperties
   AMQP.Server.Auth;
 
 const
@@ -59,6 +61,47 @@ type
     procedure Remove(const AName: string);
     function Contains(const AName: string): Boolean;
     function ToArray: TArray<string>;
+  end;
+
+  { Uma mensagem publicada, já com o conteúdo remontado (método Basic.Publish +
+    content-header + N body frames). }
+  TAMQPServerMessage = record
+    Exchange: string;
+    RoutingKey: string;
+    Mandatory: Boolean;   // sem rota => devolver com Basic.Return (Fase 2)
+    Immediate: Boolean;   // obsoleto no RabbitMQ; decodificado e ignorado
+    Properties: TAMQPBasicProperties;
+    Body: TBytes;
+    /// Usuário autenticado da conexão que publicou (para validar a propriedade
+    /// user-id e para auditoria na Fase 2).
+    UserId: string;
+  end;
+
+  { Destino de uma mensagem publicada. A Fase 1 usa TAMQPNullMessageSink (que
+    descarta); a engine de roteamento da Fase 2 entra aqui sem mudar a
+    assinatura de nenhum chamador.
+
+    IMPORTANTE: a mensagem e a tabela de Headers dentro de Properties pertencem
+    ao CANAL, que as libera assim que RouteMessage retorna. Uma implementação
+    que precise guardar a mensagem tem de copiar o que interessa. }
+  IAMQPMessageSink = interface
+    ['{2A0F6E31-1C5D-4E8B-9F27-6D3B0A5C4E19}']
+    /// True se a mensagem foi roteada para ao menos uma fila. False com
+    /// Mandatory=True é o que dispara o Basic.Return na Fase 2.
+    function RouteMessage(const AVHost: string;
+      const AMessage: TAMQPServerMessage): Boolean;
+  end;
+
+  { Descarta tudo (broker "nulo" da Fase 1). Conta o que passou, para os testes
+    e para diagnóstico. }
+  TAMQPNullMessageSink = class(TInterfacedObject, IAMQPMessageSink)
+  private
+    FCount: Integer; // atômico
+  public
+    function RouteMessage(const AVHost: string;
+      const AMessage: TAMQPServerMessage): Boolean;
+    /// Quantas mensagens foram descartadas desde a criação.
+    function Count: Integer;
   end;
 
   { Erro de canal (spec 1.4.2.2): o broker manda Channel.Close no canal
@@ -115,6 +158,9 @@ type
     Tls: Boolean;
     /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
     CloseTimeoutMs: Cardinal;
+    /// Para onde vão as mensagens publicadas. Nunca nil nas conexões que o
+    /// broker cria (ele semeia com TAMQPNullMessageSink).
+    Sink: IAMQPMessageSink;
     /// Config sem autenticador/vhosts (o broker preenche esses dois).
     class function Defaults: TAMQPServerConnConfig; static;
   end;
@@ -225,6 +271,23 @@ begin
   Result.Heartbeat := AMQP_SERVER_DEFAULT_HEARTBEAT;
   Result.Tls := False;
   Result.CloseTimeoutMs := AMQP_SERVER_CLOSE_TIMEOUT_MS;
+  Result.Sink := nil;
+end;
+
+{ TAMQPNullMessageSink }
+
+function TAMQPNullMessageSink.RouteMessage(const AVHost: string;
+  const AMessage: TAMQPServerMessage): Boolean;
+begin
+  AmqpAtomicInc(FCount);
+  // Fase 1: nenhuma fila existe, então nada foi roteado. Devolver False é o
+  // que a Fase 2 usará para disparar o Basic.Return de um publish mandatory.
+  Result := False;
+end;
+
+function TAMQPNullMessageSink.Count: Integer;
+begin
+  Result := AmqpAtomicGet(FCount);
 end;
 
 end.

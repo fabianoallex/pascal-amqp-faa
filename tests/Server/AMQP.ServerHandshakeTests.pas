@@ -20,6 +20,7 @@ uses
   System.SysUtils,
   System.Classes,
   System.Rtti,
+  System.SyncObjs,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Method,
@@ -28,7 +29,9 @@ uses
   AMQP.Transport,
   AMQP.Connection.Methods,
   AMQP.Channel.Methods,
+  AMQP.Exchange.Methods,
   AMQP.Queue.Methods,
+  AMQP.Basic.Methods,
   AMQP.Connection,
   AMQP.Server.Auth,
   AMQP.Server.Types,
@@ -49,7 +52,6 @@ type
     [Test] procedure VhostInexistente_530;
     [Test] procedure VhostExtraAceito;
     [Test] procedure CanalAbreEFecha;
-    [Test] procedure MetodoNaoImplementado_FechaSoOCanal;
     [Test] procedure DuasConexoesSimultaneas;
     [Test] procedure ClienteFechaLimpo;
   end;
@@ -72,6 +74,34 @@ type
     [Test] procedure TipoDeFrameDesconhecido_501;
     [Test] procedure ConteudoSemPublish_505;
     [Test] procedure ClienteFechaConexao_RecebeCloseOk;
+    [Test] procedure ClasseNaoImplementada_FechaSoOCanal;
+  end;
+
+  { Conteudo (WS5): remontagem de Basic.Publish + content-header + body frames,
+    a regra de interleave da spec 2.3.5 e o despacho "nulo" das classes de
+    recurso -- todo metodo cliente->servidor e' decodificado e respondido com o
+    *-Ok correto, sem engine por tras. }
+  [TestFixture]
+  TContentTests = class
+  private
+    FBroker: TAMQPServer;
+    /// Consumer nunca chamado (o broker nulo nao entrega); a lib exige um
+    /// metodo de objeto, nao aceita closure.
+    procedure OnDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+  public
+    [Setup]    procedure Setup;
+    [TearDown] procedure TearDown;
+
+    [Test] procedure ClientePublicaMensagemSimples;
+    [Test] procedure CorpoGrandeEmVariosFrames;
+    [Test] procedure PropriedadesEHeadersChegamIntactos;
+    [Test] procedure MensagemSemCorpo_Aceita;
+    [Test] procedure DoisCanaisIntercalados;
+    [Test] procedure MetodoNoMeioDoConteudo_505;
+    [Test] procedure BodySemHeader_505;
+    [Test] procedure CorpoMaiorQueOBodySize_505;
+    [Test] procedure ContentHeaderDeOutraClasse_505;
+    [Test] procedure ClienteDeclaraTopologia;
   end;
 
   { Heartbeat (spec 4.2.7) e o prazo do Connection.Close-Ok. Os testes negociam
@@ -311,6 +341,22 @@ begin
   end;
 end;
 
+function ExpectChannelClose(AStream: TStream; out ACh: Word): TAMQPCloseInfo;
+var
+  LR: TAMQPReader;
+  LId: TAMQPMethodId;
+begin
+  LR := ReadMethod(AStream, ACh, LId);
+  try
+    if not LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE) then
+      raise Exception.CreateFmt('esperava Channel.Close, veio %d/%d',
+        [LId.ClassId, LId.MethodId]);
+    Result := DecodeChannelClose(LR);
+  finally
+    LR.Free;
+  end;
+end;
+
 procedure ExpectMethodId(AStream: TStream; AClassId, AMethodId: Word;
   out ACh: Word);
 var
@@ -334,6 +380,200 @@ begin
   ASock := TAMQPTcpSocket.Create;
   ASock.Connect('127.0.0.1', APort);
   Result := TAMQPSocketStream.Create(ASock);
+end;
+
+{ Sink que grava o que passou, para os testes conferirem a remontagem. As
+  chamadas vem da thread da conexao, entao tudo e' protegido. A mensagem e a
+  tabela de headers pertencem ao canal e somem assim que RouteMessage retorna:
+  por isso copiamos o que interessa AQUI DENTRO. }
+type
+  TRecordingSink = class(TInterfacedObject, IAMQPMessageSink)
+  private
+    FLock: TCriticalSection;
+    FCount: Integer;
+    FExchange: string;
+    FRoutingKey: string;
+    FBody: TBytes;
+    FContentType: string;
+    FCorrelationId: string;
+    FHeaderFoo: string;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function RouteMessage(const AVHost: string;
+      const AMessage: TAMQPServerMessage): Boolean;
+    function Count: Integer;
+    function Exchange: string;
+    function RoutingKey: string;
+    function Body: TBytes;
+    function ContentType: string;
+    function CorrelationId: string;
+    function HeaderFoo: string;
+    /// Espera ACount mensagens roteadas por ate ATimeoutMs.
+    function WaitCount(ACount, ATimeoutMs: Integer): Boolean;
+  end;
+
+constructor TRecordingSink.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TRecordingSink.Destroy;
+begin
+  FLock.Free;
+  inherited;
+end;
+
+function TRecordingSink.RouteMessage(const AVHost: string;
+  const AMessage: TAMQPServerMessage): Boolean;
+var
+  LValue: TValue;
+begin
+  FLock.Enter;
+  try
+    Inc(FCount);
+    FExchange := AMessage.Exchange;
+    FRoutingKey := AMessage.RoutingKey;
+    FBody := Copy(AMessage.Body, 0, Length(AMessage.Body));
+    FContentType := AMessage.Properties.ContentType;
+    FCorrelationId := AMessage.Properties.CorrelationId;
+    FHeaderFoo := '';
+    if AMessage.Properties.Has(bpHeaders) and
+       Assigned(AMessage.Properties.Headers) and
+       AMessage.Properties.Headers.TryGetValue('foo', LValue) then
+      FHeaderFoo := LValue.AsString;
+  finally
+    FLock.Leave;
+  end;
+  Result := False; // broker nulo: nada foi roteado
+end;
+
+function TRecordingSink.Count: Integer;
+begin
+  FLock.Enter;
+  try
+    Result := FCount;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.Exchange: string;
+begin
+  FLock.Enter;
+  try
+    Result := FExchange;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.RoutingKey: string;
+begin
+  FLock.Enter;
+  try
+    Result := FRoutingKey;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.Body: TBytes;
+begin
+  FLock.Enter;
+  try
+    Result := Copy(FBody, 0, Length(FBody));
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.ContentType: string;
+begin
+  FLock.Enter;
+  try
+    Result := FContentType;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.CorrelationId: string;
+begin
+  FLock.Enter;
+  try
+    Result := FCorrelationId;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.HeaderFoo: string;
+begin
+  FLock.Enter;
+  try
+    Result := FHeaderFoo;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.WaitCount(ACount, ATimeoutMs: Integer): Boolean;
+var
+  LDeadline: UInt64;
+begin
+  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  repeat
+    if Count >= ACount then
+      Exit(True);
+    TThread.Sleep(10);
+  until AmqpTickMs > LDeadline;
+  Result := Count >= ACount;
+end;
+
+// Monta um content-header de Basic (classe 60) com o body-size dado e nenhuma
+// propriedade. AClassId permite forjar uma classe errada nos testes de erro.
+function BuildRawContentHeader(ABodySize: UInt64; AClassId: Word = 60): TBytes;
+var
+  W: TAMQPWriter;
+begin
+  W := TAMQPWriter.Create;
+  try
+    W.WriteShortUInt(AClassId);
+    W.WriteShortUInt(0);            // weight (reservado, sempre 0)
+    W.WriteLongLongUInt(ABodySize);
+    W.WriteShortUInt(0);            // property flags: nenhuma propriedade
+    Result := W.ToBytes;
+  finally
+    W.Free;
+  end;
+end;
+
+procedure SendFrameRaw(AStream: TStream; AType: Byte; ACh: Word;
+  const APayload: TBytes);
+var
+  LF: TAMQPFrame;
+begin
+  LF := TAMQPFrame.Create(AType, ACh, APayload);
+  LF.WriteTo(AStream);
+end;
+
+function BytesOf(const AText: string): TBytes;
+begin
+  Result := AmqpUtf8Encode(AText);
+end;
+
+// Abre um canal e confirma o Open-Ok.
+procedure OpenChannel(AStream: TStream; ACh: Word);
+var
+  LGot: Word;
+begin
+  SendMethod(AStream, ACh, BuildChannelOpen);
+  ExpectMethodId(AStream, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LGot);
+  if LGot <> ACh then
+    raise Exception.CreateFmt('Open-Ok veio no canal %d, esperava %d',
+      [LGot, ACh]);
 end;
 
 { TClientHandshakeTests }
@@ -471,51 +711,6 @@ begin
     end;
     Assert.IsTrue(WaitChannels(LConn, 0), 'nenhum canal aberto');
     Assert.IsTrue(LCli.IsOpen, 'conexao segue aberta');
-  finally
-    LCli.Free;
-  end;
-end;
-
-procedure TClientHandshakeTests.MetodoNaoImplementado_FechaSoOCanal;
-var
-  LCli: TAMQPConnection;
-  LConn: TAMQPServerConnection;
-  LCh: TAMQPChannel;
-  LDeclare: TAMQPQueueDeclare;
-  LMsg: string;
-begin
-  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
-  try
-    LCli.Open;
-    LConn := ServerConn(FBroker);
-
-    LCh := LCli.CreateChannel;
-    try
-      Assert.IsTrue(WaitChannels(LConn, 1));
-      LDeclare := TAMQPQueueDeclare.Create('q.ws4');
-      LMsg := '';
-      try
-        LCh.DeclareQueue(LDeclare);
-      except
-        on E: Exception do
-          LMsg := E.Message;
-      end;
-      // WS4 ainda não implementa a classe Queue: erro de CANAL (540).
-      Assert.IsTrue(Pos('540', LMsg) > 0,
-        'erro de canal com 540 (veio: ' + LMsg + ')');
-    finally
-      LCh.Free;
-    end;
-
-    // O canal morreu, mas a conexão não: dá para abrir outro.
-    Assert.IsTrue(WaitChannels(LConn, 0), 'canal reapado no servidor');
-    Assert.IsTrue(LCli.IsOpen, 'conexao segue aberta');
-    LCh := LCli.CreateChannel;
-    try
-      Assert.IsTrue(WaitChannels(LConn, 1), 'novo canal abre normalmente');
-    finally
-      LCh.Free;
-    end;
   finally
     LCli.Free;
   end;
@@ -979,9 +1174,389 @@ begin
   end;
 end;
 
+{ TRawHandshakeTests -- classe fora da Fase 1 }
+
+procedure TRawHandshakeTests.ClasseNaoImplementada_FechaSoOCanal;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPCloseInfo;
+  LCh: Word;
+  W: TAMQPWriter;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+
+    // Tx (classe 90) e' deliberadamente fora do escopo da Fase 1.
+    W := BeginMethod(AMQP_CLASS_TX, 10); // Tx.Select
+    try
+      SendMethod(LStrm, 1, W.ToBytes);
+    finally
+      W.Free;
+    end;
+
+    LClose := ExpectChannelClose(LStrm, LCh);
+    Assert.AreEqual(1, Integer(LCh), 'erro no canal 1');
+    Assert.AreEqual(AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode),
+      'NOT_IMPLEMENTED');
+
+    // A conexao sobrevive: respondemos o Close-Ok e reabrimos o canal.
+    SendMethod(LStrm, 1, BuildChannelCloseOk);
+    OpenChannel(LStrm, 1);
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+{ TContentTests }
+
+procedure TContentTests.Setup;
+begin
+  FBroker := NewBroker;
+end;
+
+procedure TContentTests.TearDown;
+begin
+  if FBroker <> nil then
+  begin
+    FBroker.Stop;
+    FreeAndNil(FBroker);
+  end;
+end;
+
+procedure TContentTests.OnDelivery(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery);
+begin
+  // nada: a Fase 1 nao entrega mensagem nenhuma
+end;
+
+procedure TContentTests.ClientePublicaMensagemSimples;
+var
+  LSink: TRecordingSink;
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink; // o broker segura a referencia
+  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      LCh.PublishText('', 'fila.teste', 'ola do WS5');
+      Assert.IsTrue(LSink.WaitCount(1, 3000), 'mensagem chegou ao sink');
+      Assert.AreEqual('fila.teste', LSink.RoutingKey, 'routing key');
+      Assert.AreEqual('', LSink.Exchange, 'exchange default');
+      Assert.AreEqual('ola do WS5', AmqpUtf8Decode(LSink.Body), 'corpo remontado');
+      Assert.IsTrue(LCli.IsOpen, 'conexao segue aberta');
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TContentTests.CorpoGrandeEmVariosFrames;
+var
+  LSink: TRecordingSink;
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LBody: TBytes;
+  LGot: TBytes;
+  I: Integer;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  // 300 KB com frame-max de 128 KB => o cliente parte em varios body frames.
+  SetLength(LBody, 300 * 1024);
+  for I := 0 to High(LBody) do
+    LBody[I] := Byte(I and $FF);
+
+  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      LCh.Publish('', 'grande', LBody, TAMQPBasicProperties.Empty);
+      Assert.IsTrue(LSink.WaitCount(1, 5000), 'mensagem chegou');
+      LGot := LSink.Body;
+      Assert.AreEqual(Length(LBody), Length(LGot), 'tamanho remontado');
+      for I := 0 to High(LBody) do
+        if LGot[I] <> LBody[I] then
+          Assert.Fail(Format('corpo diverge no octeto %d', [I]));
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TContentTests.PropriedadesEHeadersChegamIntactos;
+var
+  LSink: TRecordingSink;
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LProps: TAMQPBasicProperties;
+  LHeaders: TAMQPFieldTable;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      // O chamador e' dono da tabela: SetHeaders nao copia e o Publish nao
+      // libera (mesma convencao do sample EventosHeadersVcl).
+      LHeaders := TAMQPFieldTable.Create;
+      try
+        LHeaders.Put('foo', 'bar');
+        LProps := TAMQPBasicProperties.Empty;
+        LProps.SetContentType('application/json');
+        LProps.SetCorrelationId('req-42');
+        LProps.SetHeaders(LHeaders);
+        LCh.Publish('', 'props', BytesOf('{}'), LProps);
+      finally
+        LHeaders.Free;
+      end;
+
+      Assert.IsTrue(LSink.WaitCount(1, 3000), 'mensagem chegou');
+      Assert.AreEqual('application/json', LSink.ContentType, 'content-type');
+      Assert.AreEqual('req-42', LSink.CorrelationId, 'correlation-id');
+      Assert.AreEqual('bar', LSink.HeaderFoo, 'header foo');
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TContentTests.MensagemSemCorpo_Aceita;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LSink: TRecordingSink;
+  LCh: Word;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+    SendMethod(LStrm, 1, BuildBasicPublish('', 'vazia'));
+    // body-size 0: a mensagem fecha no proprio content-header.
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(0));
+    Assert.IsTrue(LSink.WaitCount(1, 3000), 'mensagem sem corpo aceita');
+    Assert.AreEqual(0, Length(LSink.Body), 'corpo vazio');
+
+    // Canal voltou ao ocioso: um metodo normal e' respondido.
+    SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));
+    ExpectMethodId(LStrm, AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK, LCh);
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TContentTests.DoisCanaisIntercalados;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LSink: TRecordingSink;
+  LCh: Word;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+    OpenChannel(LStrm, 2);
+
+    // Canal 1 comeca a publicar e PARA no meio...
+    SendMethod(LStrm, 1, BuildBasicPublish('', 'r1'));
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(5));
+
+    // ...e o canal 2 publica inteiro no meio disso. Intercalar entre CANAIS e'
+    // legitimo -- so dentro do mesmo canal e' que e' proibido.
+    SendMethod(LStrm, 2, BuildBasicPublish('', 'r2'));
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 2, BuildRawContentHeader(4));
+    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 2, BytesOf('dois'));
+
+    Assert.IsTrue(LSink.WaitCount(1, 3000), 'canal 2 completou');
+
+    // Agora o canal 1 termina o dele.
+    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, BytesOf('umumu'));
+    Assert.IsTrue(LSink.WaitCount(2, 3000), 'canal 1 completou');
+
+    // Conexao intacta.
+    SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));
+    ExpectMethodId(LStrm, AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK, LCh);
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TContentTests.MetodoNoMeioDoConteudo_505;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPConnectionClose;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+    SendMethod(LStrm, 1, BuildBasicPublish('', 'r'));
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(10));
+    // Em vez do body, um metodo NO MESMO canal: viola a regra de interleave.
+    SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));
+    LClose := ExpectConnectionClose(LStrm);
+    Assert.AreEqual(AMQP_UNEXPECTED_FRAME, Integer(LClose.ReplyCode),
+      'UNEXPECTED_FRAME');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TContentTests.BodySemHeader_505;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPConnectionClose;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+    SendMethod(LStrm, 1, BuildBasicPublish('', 'r'));
+    // Body direto, sem o content-header no meio.
+    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, BytesOf('xxx'));
+    LClose := ExpectConnectionClose(LStrm);
+    Assert.AreEqual(AMQP_UNEXPECTED_FRAME, Integer(LClose.ReplyCode),
+      'UNEXPECTED_FRAME');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TContentTests.CorpoMaiorQueOBodySize_505;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPConnectionClose;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+    SendMethod(LStrm, 1, BuildBasicPublish('', 'r'));
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(5));
+    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, BytesOf('dez octetos'));
+    LClose := ExpectConnectionClose(LStrm);
+    Assert.AreEqual(AMQP_UNEXPECTED_FRAME, Integer(LClose.ReplyCode),
+      'UNEXPECTED_FRAME');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TContentTests.ContentHeaderDeOutraClasse_505;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPConnectionClose;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    OpenChannel(LStrm, 1);
+    SendMethod(LStrm, 1, BuildBasicPublish('', 'r'));
+    // class-id do content-header tem de casar com a classe do metodo (60).
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1,
+      BuildRawContentHeader(3, AMQP_CLASS_QUEUE));
+    LClose := ExpectConnectionClose(LStrm);
+    Assert.AreEqual(AMQP_UNEXPECTED_FRAME, Integer(LClose.ReplyCode),
+      'UNEXPECTED_FRAME');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TContentTests.ClienteDeclaraTopologia;
+var
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDeclareOk: TAMQPQueueDeclareOk;
+  LBind: TAMQPQueueBind;
+  LGet: TAMQPGetResult;
+  LDelete: TAMQPQueueDelete;
+  LTag: string;
+begin
+  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      // Fila anonima: o nome vem do servidor.
+      LDeclareOk := LCh.DeclareQueue(TAMQPQueueDeclare.Create(''));
+      Assert.IsTrue(Pos('amq.gen-', LDeclareOk.QueueName) = 1,
+        'nome gerado pelo servidor (veio: ' + LDeclareOk.QueueName + ')');
+
+      LDeclareOk := LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ws5'));
+      Assert.AreEqual('q.ws5', LDeclareOk.QueueName, 'nome ecoado');
+
+      LCh.DeclareExchange(TAMQPExchangeDeclare.Create('x.ws5'));
+
+      LBind.QueueName := 'q.ws5';
+      LBind.ExchangeName := 'x.ws5';
+      LBind.RoutingKey := 'k';
+      LBind.NoWait := False;
+      LBind.Arguments := nil;
+      LCh.BindQueue(LBind);
+
+      LCh.Qos(10);
+      LCh.ConfirmSelect;
+
+      // Broker nulo: Basic.Get sempre devolve Get-Empty.
+      LGet := LCh.BasicGet('q.ws5');
+      Assert.IsFalse(LGet.Found, 'fila vazia no broker nulo');
+
+      LTag := LCh.Consume('q.ws5', OnDelivery, True);
+      Assert.IsTrue(LTag <> '', 'consumer-tag devolvido');
+      LCh.Cancel(LTag);
+
+      LDelete.QueueName := 'q.ws5';
+      LDelete.IfUnused := False;
+      LDelete.IfEmpty := False;
+      LDelete.NoWait := False;
+      Assert.AreEqual(0, Integer(LCh.DeleteQueue(LDelete)),
+        'nenhuma mensagem apagada');
+      Assert.IsTrue(LCli.IsOpen, 'conexao intacta');
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TClientHandshakeTests);
   TDUnitX.RegisterTestFixture(TRawHandshakeTests);
   TDUnitX.RegisterTestFixture(THeartbeatTests);
+  TDUnitX.RegisterTestFixture(TContentTests);
 
 end.

@@ -52,6 +52,9 @@ uses
   AMQP.Transport,
   AMQP.Connection.Methods,
   AMQP.Channel.Methods,
+  AMQP.Exchange.Methods,
+  AMQP.Queue.Methods,
+  AMQP.Basic.Methods,
   AMQP.Server.Auth,
   AMQP.Server.Types,
   AMQP.Server.Channel,
@@ -118,6 +121,7 @@ type
     FAuthFailureClose: Boolean; // cliente anunciou a capability
     FCloseDeadline: UInt64;     // tick-limite do Close-Ok (0 = sem prazo)
     FLastReadTick: UInt64;      // atomico; ultimo frame CHEGADO do peer
+    FNameSeq: Integer;          // gera nomes de fila / consumer-tag unicos
 
     // --- canais ---
     FChLock: TCriticalSection;
@@ -154,6 +158,17 @@ type
 
     function ClientWantsAuthFailureClose(AProps: TAMQPFieldTable): Boolean;
     function MechanismOffered(const AMechanism: string): Boolean;
+
+    function GeneratedName(const APrefix: string): string;
+    function DispatchExchange(AChannel: TAMQPServerChannel;
+      const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+    function DispatchQueue(AChannel: TAMQPServerChannel;
+      const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+    function DispatchBasic(AChannel: TAMQPServerChannel;
+      const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+    function DispatchConfirm(AChannel: TAMQPServerChannel;
+      const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+    procedure CompleteContent(AChannel: TAMQPServerChannel);
   protected
     /// WS5/Fase 2: despacha um método das classes Exchange/Queue/Basic/
     /// Confirm/Tx num canal aberto. Devolver False = método não tratado, e a
@@ -698,6 +713,16 @@ begin
     Exit;
   end;
 
+  // Regra de interleave (spec 2.3.5): entre o método que carrega conteúdo
+  // (Basic.Publish) e o último frame de body, NENHUM outro frame pode aparecer
+  // NESTE canal — nem outro método, nem um Channel.Close. Vale só por canal:
+  // outros canais continuam livres para intercalar, que é justamente para isso
+  // que o estado de montagem vive no canal.
+  if (LCh <> nil) and (LCh.AsmState <> amqasIdle) then
+    raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
+      Format('método %d/%d no canal %d no meio de um conteúdo',
+        [AId.ClassId, AId.MethodId, AFrame.Channel]), AId.ClassId, AId.MethodId);
+
   if AId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN) then
   begin
     DecodeChannelOpen(AReader);
@@ -812,8 +837,9 @@ begin
 
   if not DispatchContent(LCh, AFrame) then
     raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
-      Format('frame de conteúdo (tipo %d) sem Basic.Publish em curso no canal %d',
-        [AFrame.FrameType, AFrame.Channel]), 0, 0);
+      Format('frame de conteúdo (tipo %d) fora de sequência no canal %d ' +
+        '(estado da montagem: %d)',
+        [AFrame.FrameType, AFrame.Channel, Ord(LCh.AsmState)]), 0, 0);
 end;
 
 procedure TAMQPServerConnection.HandleFrame(const AFrame: TAMQPFrame);
@@ -838,18 +864,265 @@ begin
   end;
 end;
 
-{ --- hooks do WS5 --------------------------------------------------------- }
+{ --- despacho das classes de recurso (broker "nulo" da Fase 1) ------------ }
+
+// Nomes que o servidor gera quando o cliente manda vazio (fila anonima,
+// consumer-tag automatico). Unicos dentro da conexao, que e' o que a spec pede.
+function TAMQPServerConnection.GeneratedName(const APrefix: string): string;
+begin
+  Result := Format('%s%d-%d', [APrefix, AmqpAtomicInc(FNameSeq),
+    Integer(AmqpTickMs and $FFFFFF)]);
+end;
+
+function TAMQPServerConnection.DispatchExchange(AChannel: TAMQPServerChannel;
+  const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+var
+  LDeclare: TAMQPExchangeDeclare;
+  LDelete: TAMQPExchangeDelete;
+  LBind: TAMQPExchangeBinding;
+begin
+  Result := True;
+  case AId.MethodId of
+    AMQP_EXCHANGE_DECLARE:
+      begin
+        LDeclare := DecodeExchangeDeclare(AReader);
+        LDeclare.Arguments.Free; // a tabela decodificada e' nossa
+        if not LDeclare.NoWait then
+          PostMethod(AChannel.Id, BuildExchangeDeclareOk);
+      end;
+    AMQP_EXCHANGE_DELETE:
+      begin
+        LDelete := DecodeExchangeDelete(AReader);
+        if not LDelete.NoWait then
+          PostMethod(AChannel.Id, BuildExchangeDeleteOk);
+      end;
+    AMQP_EXCHANGE_BIND:
+      begin
+        LBind := DecodeExchangeBind(AReader);
+        LBind.Arguments.Free;
+        if not LBind.NoWait then
+          PostMethod(AChannel.Id, BuildExchangeBindOk);
+      end;
+    AMQP_EXCHANGE_UNBIND:
+      begin
+        LBind := DecodeExchangeUnbind(AReader);
+        LBind.Arguments.Free;
+        if not LBind.NoWait then
+          PostMethod(AChannel.Id, BuildExchangeUnbindOk);
+      end;
+  else
+    Result := False;
+  end;
+end;
+
+function TAMQPServerConnection.DispatchQueue(AChannel: TAMQPServerChannel;
+  const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+var
+  LDeclare: TAMQPQueueDeclare;
+  LBind: TAMQPQueueBind;
+  LUnbind: TAMQPQueueUnbind;
+  LPurge: TAMQPQueuePurge;
+  LDelete: TAMQPQueueDelete;
+  LName: string;
+begin
+  Result := True;
+  case AId.MethodId of
+    AMQP_QUEUE_DECLARE:
+      begin
+        LDeclare := DecodeQueueDeclare(AReader);
+        LDeclare.Arguments.Free;
+        LName := LDeclare.QueueName;
+        if LName = '' then
+          LName := GeneratedName('amq.gen-'); // fila anonima: o nome e' nosso
+        if not LDeclare.NoWait then
+          // Sem engine ainda: 0 mensagens, 0 consumidores.
+          PostMethod(AChannel.Id, BuildQueueDeclareOk(LName, 0, 0));
+      end;
+    AMQP_QUEUE_BIND:
+      begin
+        LBind := DecodeQueueBind(AReader);
+        LBind.Arguments.Free;
+        if not LBind.NoWait then
+          PostMethod(AChannel.Id, BuildQueueBindOk);
+      end;
+    AMQP_QUEUE_UNBIND:
+      begin
+        // queue.unbind nao tem no-wait no 0-9-1: sempre responde.
+        LUnbind := DecodeQueueUnbind(AReader);
+        LUnbind.Arguments.Free;
+        PostMethod(AChannel.Id, BuildQueueUnbindOk);
+      end;
+    AMQP_QUEUE_PURGE:
+      begin
+        LPurge := DecodeQueuePurge(AReader);
+        if not LPurge.NoWait then
+          PostMethod(AChannel.Id, BuildQueuePurgeOk(0));
+      end;
+    AMQP_QUEUE_DELETE:
+      begin
+        LDelete := DecodeQueueDelete(AReader);
+        if not LDelete.NoWait then
+          PostMethod(AChannel.Id, BuildQueueDeleteOk(0));
+      end;
+  else
+    Result := False;
+  end;
+end;
+
+function TAMQPServerConnection.DispatchBasic(AChannel: TAMQPServerChannel;
+  const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+var
+  LQos: TAMQPBasicQosArgs;
+  LConsume: TAMQPBasicConsume;
+  LCancel: TAMQPBasicCancelArgs;
+  LPublish: TAMQPBasicPublish;
+  LTag: string;
+begin
+  Result := True;
+  case AId.MethodId of
+    AMQP_BASIC_QOS:
+      begin
+        LQos := DecodeBasicQos(AReader);
+        AChannel.PrefetchCount := LQos.PrefetchCount;
+        PostMethod(AChannel.Id, BuildBasicQosOk); // qos nao tem no-wait
+      end;
+    AMQP_BASIC_CONSUME:
+      begin
+        LConsume := DecodeBasicConsume(AReader);
+        LConsume.Arguments.Free;
+        LTag := LConsume.ConsumerTag;
+        if LTag = '' then
+          LTag := GeneratedName('amq.ctag-');
+        if not LConsume.NoWait then
+          PostMethod(AChannel.Id, BuildBasicConsumeOk(LTag));
+      end;
+    AMQP_BASIC_CANCEL:
+      begin
+        LCancel := DecodeBasicCancelArgs(AReader);
+        if not LCancel.NoWait then
+          PostMethod(AChannel.Id, BuildBasicCancelOk(LCancel.ConsumerTag));
+      end;
+    AMQP_BASIC_PUBLISH:
+      begin
+        // Sem resposta: o que vem a seguir e' o content-header e o body. A
+        // partir daqui o canal esta "montando" e nenhum outro frame pode
+        // aparecer nele (ver a regra de interleave em HandleChannelFrame).
+        LPublish := DecodeBasicPublish(AReader);
+        AChannel.BeginContent(LPublish);
+      end;
+    AMQP_BASIC_GET:
+      begin
+        DecodeBasicGet(AReader);
+        PostMethod(AChannel.Id, BuildBasicGetEmpty); // broker nulo: sempre vazia
+      end;
+    AMQP_BASIC_ACK:
+      DecodeBasicAck(AReader);      // sem resposta
+    AMQP_BASIC_NACK:
+      DecodeBasicNack(AReader);     // sem resposta
+    AMQP_BASIC_REJECT:
+      DecodeBasicReject(AReader);   // sem resposta
+  else
+    Result := False;
+  end;
+end;
+
+function TAMQPServerConnection.DispatchConfirm(AChannel: TAMQPServerChannel;
+  const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
+var
+  LNoWait: Boolean;
+begin
+  Result := True;
+  case AId.MethodId of
+    AMQP_CONFIRM_SELECT:
+      begin
+        LNoWait := DecodeConfirmSelect(AReader);
+        AChannel.ConfirmMode := True;
+        if not LNoWait then
+          PostMethod(AChannel.Id, BuildConfirmSelectOk);
+      end;
+  else
+    Result := False;
+  end;
+end;
 
 function TAMQPServerConnection.DispatchChannelMethod(
   AChannel: TAMQPServerChannel; const AId: TAMQPMethodId;
   const AReader: TAMQPReader): Boolean;
 begin
-  Result := False;
+  // Fase 1 ("null broker"): decodifica tudo o que o cliente pode mandar e
+  // responde o *-Ok correto, sem estado nenhum por tras. A classe Tx (90) fica
+  // de fora de proposito -- nao esta no codec e nao entra na Fase 1 (ver a
+  // decisao de nao implementar transacoes no CLAUDE.md) --, entao cai no False
+  // e o canal fecha com NOT_IMPLEMENTED.
+  case AId.ClassId of
+    AMQP_CLASS_EXCHANGE: Result := DispatchExchange(AChannel, AId, AReader);
+    AMQP_CLASS_QUEUE:    Result := DispatchQueue(AChannel, AId, AReader);
+    AMQP_CLASS_BASIC:    Result := DispatchBasic(AChannel, AId, AReader);
+    AMQP_CLASS_CONFIRM:  Result := DispatchConfirm(AChannel, AId, AReader);
+  else
+    Result := False;
+  end;
+end;
+
+{ --- montagem de conteudo (spec 2.3.5) ------------------------------------ }
+
+// Conteudo completo: entrega ao sink e limpa o canal. O sink NAO fica dono da
+// mensagem -- o ResetContent no finally libera a tabela de headers.
+procedure TAMQPServerConnection.CompleteContent(AChannel: TAMQPServerChannel);
+begin
+  try
+    if FConfig.Sink <> nil then
+      FConfig.Sink.RouteMessage(FVirtualHost, AChannel.CurrentMessage(FUserId));
+  finally
+    AChannel.ResetContent;
+  end;
 end;
 
 function TAMQPServerConnection.DispatchContent(AChannel: TAMQPServerChannel;
   const AFrame: TAMQPFrame): Boolean;
+var
+  LReader: TAMQPReader;
+  LHeader: TAMQPContentHeader;
+  LClassId: Word;
 begin
+  if AFrame.FrameType = AMQP_FRAME_HEADER then
+  begin
+    if AChannel.AsmState <> amqasHeader then
+      Exit(False); // content-header sem Basic.Publish antes -> 505
+
+    // O class-id do content-header tem de casar com a classe do metodo que o
+    // pediu (spec 2.3.5.2). Lido direto do payload porque o DecodeContentHeader
+    // consome e descarta esse campo.
+    if Length(AFrame.Payload) < 2 then
+      raise EAMQPConnectionError.Create(AMQP_FRAME_ERROR,
+        'content-header truncado', 0, 0);
+    LClassId := (Word(AFrame.Payload[0]) shl 8) or Word(AFrame.Payload[1]);
+    if LClassId <> AMQP_CLASS_BASIC then
+      raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
+        Format('content-header da classe %d apos Basic.Publish', [LClassId]),
+        0, 0);
+
+    LReader := TAMQPReader.Create(AFrame.Payload);
+    try
+      LHeader := DecodeContentHeader(LReader);
+    finally
+      LReader.Free;
+    end;
+
+    if AChannel.SetContentHeader(LHeader) then
+      CompleteContent(AChannel); // body-size 0: mensagem sem corpo
+    Exit(True);
+  end;
+
+  if AFrame.FrameType = AMQP_FRAME_BODY then
+  begin
+    if AChannel.AsmState <> amqasBody then
+      Exit(False); // body sem header antes -> 505
+    if AChannel.AppendBody(AFrame.Payload) then
+      CompleteContent(AChannel);
+    Exit(True);
+  end;
+
   Result := False;
 end;
 
