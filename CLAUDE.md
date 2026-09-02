@@ -80,6 +80,8 @@ Avaliada em 2026-09-02 e iniciada: a "outra ponta" — uma lib para **criar um b
 
 **Modelo por workstream:** WS0/WS1/WS2/WS6/WS7/WS8 (scaffolding, codec, listener, broker skeleton, heartbeat, testes) são mecânicos → Sonnet. WS3 (TLS server), WS4 (handshake FSM), WS5 (regra de interleave de conteúdo) têm correção sutil de protocolo → Opus.
 
+**Progresso:** WS0 concluído (commit `Broker WS0`) — `CLAUDE.md`, `TAMQPSocketStream` promovido para `AMQP.Transport`, `AMQP.Server.Auth` (PLAIN, `TAMQPStaticAuthenticator` default guest/guest), `pascal_amqp_faa_server.lpk`. Regressão do cliente revalidada contra o broker real: SmokeTest plain e `--tls` PASS (Default e build `openssl`), integração FPC 28/28, unitária FPC 81/81. **Próximo: WS1** (codec bidirecional, classe Connection primeiro).
+
 **Build/teste do server:** `fpc -Fusrc -Fisrc -FEbuild -FUbuild src\AMQP.Server.Broker.pas` compila o server inteiro; pacote `lazbuild packages\pascal_amqp_faa_server.lpk`. Group projects próprios: `AMQP.Server.groupproj` (Delphi) / `AMQP.Server.lpg` (Lazarus). Suíte em `tests\Server\` (DUnitX) e `tests\Server\fpc\` (FPCUnit); a fixture sobe o broker in-process em porta efêmera e aponta o `TAMQPConnection` do cliente nele. Certs de TLS: reusar `docker\certs`.
 
 ## Build e testes
