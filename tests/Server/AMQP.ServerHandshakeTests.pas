@@ -104,6 +104,28 @@ type
     [Test] procedure ClienteDeclaraTopologia;
   end;
 
+  {$IFDEF AMQP_OPENSSL}
+  { TLS do lado servidor (WS3). So existe em builds com -dAMQP_OPENSSL: o
+    backend SChannel desta lib implementa apenas o lado cliente, entao no build
+    Default o broker nao aceita TLS e nao ha o que testar. Usa os certs de dev
+    de docker\certs (self-signed), por isso o cliente conecta com
+    TlsVerifyPeer=False. }
+  [TestFixture]
+  TServerTlsTests = class
+  private
+    FBroker: TAMQPServer;
+    function TlsParams: TAMQPConnectionParams;
+  public
+    [Setup]    procedure Setup;
+    [TearDown] procedure TearDown;
+
+    [Test] procedure ClienteRealConectaSobreTls;
+    [Test] procedure PublicaSobreTls;
+    [Test] procedure ClientePlainNaPortaTls_Falha;
+    [Test] procedure CertInexistente_ConexaoFalha;
+  end;
+  {$ENDIF}
+
   { Heartbeat (spec 4.2.7) e o prazo do Connection.Close-Ok. Os testes negociam
     intervalos de 1 s no Tune-Ok para caber num tempo de suíte razoável. }
   [TestFixture]
@@ -380,6 +402,44 @@ begin
   ASock := TAMQPTcpSocket.Create;
   ASock.Connect('127.0.0.1', APort);
   Result := TAMQPSocketStream.Create(ASock);
+end;
+
+// Sobe da pasta do executavel procurando docker\certs\server.crt: as duas
+// suites rodam de profundidades diferentes (tests\Server\fpc no FPC,
+// tests\Server\Win32\<config> no Delphi).
+function CertsDir: string;
+var
+  LDir: string;
+  I: Integer;
+begin
+  LDir := ExtractFilePath(ParamStr(0));
+  for I := 0 to 6 do
+  begin
+    if FileExists(LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.crt') then
+      Exit(LDir + 'docker' + PathDelim + 'certs' + PathDelim);
+    LDir := ExtractFilePath(ExcludeTrailingPathDelimiter(LDir));
+    if LDir = '' then
+      Break;
+  end;
+  Result := '';
+end;
+
+// Broker com TLS ligado apontando para os certs de dev do repo.
+function NewTlsBroker: TAMQPServer;
+var
+  LCerts: string;
+begin
+  LCerts := CertsDir;
+  if LCerts = '' then
+    raise Exception.Create('docker/certs/server.crt nao encontrado a partir de ' +
+      ExtractFilePath(ParamStr(0)));
+  Result := TAMQPServer.Create;
+  Result.BindAddress := '127.0.0.1';
+  Result.Port := 0;
+  Result.UseTls := True;
+  Result.TlsCertFile := LCerts + 'server.crt';
+  Result.TlsKeyFile := LCerts + 'server.key';
+  Result.Start;
 end;
 
 { Sink que grava o que passou, para os testes conferirem a remontagem. As
@@ -1553,10 +1613,149 @@ begin
   end;
 end;
 
+{$IFDEF AMQP_OPENSSL}
+{ TServerTlsTests }
+
+procedure TServerTlsTests.Setup;
+begin
+  FBroker := NewTlsBroker;
+end;
+
+procedure TServerTlsTests.TearDown;
+begin
+  if FBroker <> nil then
+  begin
+    FBroker.Stop;
+    FreeAndNil(FBroker);
+  end;
+end;
+
+function TServerTlsTests.TlsParams: TAMQPConnectionParams;
+begin
+  Result := TAMQPConnectionParams.Localhost;
+  Result.Host := '127.0.0.1';
+  Result.Port := FBroker.Port;
+  Result.UseTls := True;
+  Result.TlsVerifyPeer := False; // cert self-signed de dev
+end;
+
+procedure TServerTlsTests.ClienteRealConectaSobreTls;
+var
+  LCli: TAMQPConnection;
+  LConn: TAMQPServerConnection;
+  LCh: TAMQPChannel;
+begin
+  LCli := TAMQPConnection.Create(TlsParams);
+  try
+    LCli.Open;
+    Assert.IsTrue(LCli.IsOpen, 'cliente aberto sobre TLS');
+    LConn := ServerConn(FBroker);
+    Assert.IsNotNull(LConn, 'conexao registrada');
+    Assert.IsTrue(WaitState(LConn, amqssOpen), 'FSM chegou a amqssOpen');
+    Assert.AreEqual('guest', LConn.UserId, 'usuario autenticado');
+    // E' uma conexao AMQP de verdade, nao so um socket cifrado.
+    LCh := LCli.CreateChannel;
+    try
+      Assert.IsTrue(WaitChannels(LConn, 1), 'canal abre sobre TLS');
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.PublicaSobreTls;
+var
+  LSink: TRecordingSink;
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LBody: TBytes;
+  LGot: TBytes;
+  I: Integer;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  // 300 KB: forca varios body frames E varios registros TLS.
+  SetLength(LBody, 300 * 1024);
+  for I := 0 to High(LBody) do
+    LBody[I] := Byte((I * 7) and $FF);
+
+  LCli := TAMQPConnection.Create(TlsParams);
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      LCh.Publish('', 'sobre.tls', LBody, TAMQPBasicProperties.Empty);
+      Assert.IsTrue(LSink.WaitCount(1, 8000), 'mensagem chegou');
+      LGot := LSink.Body;
+      Assert.AreEqual(Length(LBody), Length(LGot), 'tamanho remontado');
+      for I := 0 to High(LBody) do
+        if LGot[I] <> LBody[I] then
+          Assert.Fail(Format('corpo diverge no octeto %d', [I]));
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.ClientePlainNaPortaTls_Falha;
+var
+  LP: TAMQPConnectionParams;
+  LCli: TAMQPConnection;
+  LFalhou: Boolean;
+begin
+  LP := TlsParams;
+  LP.UseTls := False; // cliente em claro contra uma porta que espera TLS
+  LCli := TAMQPConnection.Create(LP);
+  try
+    LFalhou := False;
+    try
+      LCli.Open;
+    except
+      on Exception do
+        LFalhou := True;
+    end;
+    Assert.IsTrue(LFalhou or (not LCli.IsOpen),
+      'cliente plain nao pode abrir numa porta TLS');
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.CertInexistente_ConexaoFalha;
+var
+  LCli: TAMQPConnection;
+  LFalhou: Boolean;
+begin
+  // Reconfigura o broker: a config e' lida a cada conexao aceita.
+  FBroker.TlsCertFile := CertsDir + 'nao-existe.crt';
+  LCli := TAMQPConnection.Create(TlsParams);
+  try
+    LFalhou := False;
+    try
+      LCli.Open;
+    except
+      on Exception do
+        LFalhou := True;
+    end;
+    Assert.IsTrue(LFalhou or (not LCli.IsOpen),
+      'sem certificado valido a conexao nao abre');
+  finally
+    LCli.Free;
+  end;
+end;
+{$ENDIF}
+
 initialization
   TDUnitX.RegisterTestFixture(TClientHandshakeTests);
   TDUnitX.RegisterTestFixture(TRawHandshakeTests);
   TDUnitX.RegisterTestFixture(THeartbeatTests);
   TDUnitX.RegisterTestFixture(TContentTests);
+  {$IFDEF AMQP_OPENSSL}
+  TDUnitX.RegisterTestFixture(TServerTlsTests);
+  {$ENDIF}
 
 end.

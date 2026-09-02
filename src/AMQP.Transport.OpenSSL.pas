@@ -58,9 +58,18 @@ uses
   AMQP.Transport; // EAMQPTls (comum aos transportes TLS)
 
 type
-  { Stream TLS cliente sobre OpenSSL. Faz o handshake no construtor (síncrono,
-    sobre o stream cru), depois cifra/decifra em Read/Write. É dono do stream
-    de baixo (Free libera os dois). }
+  { Stream TLS sobre OpenSSL, nos DOIS papéis. Faz o handshake no construtor
+    (síncrono, sobre o stream cru), depois cifra/decifra em Read/Write. É dono
+    do stream de baixo (Free libera os dois).
+
+    - Create       = cliente: SSL_set_connect_state, SNI e validação opcional
+                     do certificado do servidor.
+    - CreateServer = servidor (broker): SSL_set_accept_state e um contexto com
+                     certificado + chave privada em PEM.
+
+    Todo o resto — par de BIOs de memória, locks, drenagem, Read/Write,
+    close_notify — é o mesmo nos dois papéis, que é justamente por que os dois
+    moram na mesma classe. }
   TAMQPOpenSslStream = class(TStream)
   private
     FUnderlying: TStream; // bytes crus (socket); TAMQPOpenSslStream é dono
@@ -76,19 +85,29 @@ type
     FBioOut: Pointer; // BIO de memória: ciphertext SSL -> rede
     // AnsiString nos dois compiladores: a API OpenSSL recebe char* (hostname
     // ASCII; IDN exigiria punycode do chamador).
-    FTargetName: AnsiString; // SNI / nome para validação
+    FTargetName: AnsiString; // SNI / nome para validação (cliente)
     FVerifyPeer: Boolean;
+    FIsServer: Boolean;      // papel: muda o setup e o texto dos erros
+    FCertFile: AnsiString;   // servidor: cadeia de certificados PEM
+    FKeyFile: AnsiString;    // servidor: chave privada PEM
     function DrainBioOut: TBytes;    // esvazia FBioOut (chamar com FLock)
     procedure SendRaw(const AData: TBytes); // envia tudo (SEM FLock)
     procedure FlushBioOut;           // DrainBioOut+SendRaw; só handshake/shutdown
     procedure FlushBioOutBestEffort; // idem, engolindo falhas (caminho de Read)
     function ReadRawIntoBio: Boolean; // lê do socket (SEM FLock) e alimenta FBioIn
     procedure SetupSsl;
+    procedure SetupSslServer;
     procedure DoHandshake;
     procedure ShutdownTls;
   public
     constructor Create(AUnderlying: TStream; const ATargetName: string;
       AVerifyPeer: Boolean);
+    /// Lado servidor: ACertFile é a cadeia de certificados em PEM (o do
+    /// servidor primeiro, depois os intermediários) e AKeyFile a chave privada
+    /// em PEM, sem senha. Levanta EAMQPTls se os arquivos não existirem, não
+    /// casarem entre si, ou se o cliente falhar no handshake.
+    constructor CreateServer(AUnderlying: TStream;
+      const ACertFile, AKeyFile: string);
     destructor Destroy; override;
     function Read(var Buffer; Count: Longint): Longint; override;
     function Write(const Buffer; Count: Longint): Longint; override;
@@ -155,6 +174,8 @@ const
 
   // SSL_CTX_set_verify
   SSL_VERIFY_NONE = 0;
+  /// Tipo de arquivo PEM para SSL_CTX_use_PrivateKey_file.
+  SSL_FILETYPE_PEM = 1;
   SSL_VERIFY_PEER = 1;
 
   // SSL_ctrl / SSL_CTX_ctrl (as "funções" SSL_set_min_proto_version e
@@ -171,6 +192,7 @@ const
 var
   // libssl
   p_TLS_client_method: function: Pointer; cdecl;
+  p_TLS_server_method: function: Pointer; cdecl;
   p_SSL_CTX_new: function(AMeth: Pointer): Pointer; cdecl;
   p_SSL_CTX_free: procedure(ACtx: Pointer); cdecl;
   p_SSL_CTX_ctrl: function(ACtx: Pointer; ACmd: Integer; ALarg: TSslLong;
@@ -178,6 +200,11 @@ var
   p_SSL_CTX_set_verify: procedure(ACtx: Pointer; AMode: Integer;
     ACallback: Pointer); cdecl;
   p_SSL_CTX_set_default_verify_paths: function(ACtx: Pointer): Integer; cdecl;
+  p_SSL_CTX_use_certificate_chain_file: function(ACtx: Pointer;
+    AFile: PAnsiChar): Integer; cdecl;
+  p_SSL_CTX_use_PrivateKey_file: function(ACtx: Pointer; AFile: PAnsiChar;
+    AType: Integer): Integer; cdecl;
+  p_SSL_CTX_check_private_key: function(ACtx: Pointer): Integer; cdecl;
   p_SSL_new: function(ACtx: Pointer): Pointer; cdecl;
   p_SSL_free: procedure(ASsl: Pointer); cdecl;
   p_SSL_ctrl: function(ASsl: Pointer; ACmd: Integer; ALarg: TSslLong;
@@ -185,6 +212,7 @@ var
   p_SSL_set1_host: function(ASsl: Pointer; AHost: PAnsiChar): Integer; cdecl;
   p_SSL_set_bio: procedure(ASsl: Pointer; ARbio, AWbio: Pointer); cdecl;
   p_SSL_set_connect_state: procedure(ASsl: Pointer); cdecl;
+  p_SSL_set_accept_state: procedure(ASsl: Pointer); cdecl;
   p_SSL_do_handshake: function(ASsl: Pointer): Integer; cdecl;
   p_SSL_read: function(ASsl: Pointer; ABuf: Pointer; ANum: Integer): Integer; cdecl;
   p_SSL_write: function(ASsl: Pointer; ABuf: Pointer; ANum: Integer): Integer; cdecl;
@@ -300,17 +328,26 @@ begin
 
     try
       p_TLS_client_method := SslMustGet(LSsl, 'TLS_client_method', LSslName);
+      p_TLS_server_method := SslMustGet(LSsl, 'TLS_server_method', LSslName);
       p_SSL_CTX_new := SslMustGet(LSsl, 'SSL_CTX_new', LSslName);
       p_SSL_CTX_free := SslMustGet(LSsl, 'SSL_CTX_free', LSslName);
       p_SSL_CTX_ctrl := SslMustGet(LSsl, 'SSL_CTX_ctrl', LSslName);
       p_SSL_CTX_set_verify := SslMustGet(LSsl, 'SSL_CTX_set_verify', LSslName);
       p_SSL_CTX_set_default_verify_paths :=
         SslMustGet(LSsl, 'SSL_CTX_set_default_verify_paths', LSslName);
+      p_SSL_CTX_use_certificate_chain_file :=
+        SslMustGet(LSsl, 'SSL_CTX_use_certificate_chain_file', LSslName);
+      p_SSL_CTX_use_PrivateKey_file :=
+        SslMustGet(LSsl, 'SSL_CTX_use_PrivateKey_file', LSslName);
+      p_SSL_CTX_check_private_key :=
+        SslMustGet(LSsl, 'SSL_CTX_check_private_key', LSslName);
       p_SSL_new := SslMustGet(LSsl, 'SSL_new', LSslName);
       p_SSL_free := SslMustGet(LSsl, 'SSL_free', LSslName);
       p_SSL_ctrl := SslMustGet(LSsl, 'SSL_ctrl', LSslName);
       p_SSL_set1_host := SslMustGet(LSsl, 'SSL_set1_host', LSslName);
       p_SSL_set_bio := SslMustGet(LSsl, 'SSL_set_bio', LSslName);
+      p_SSL_set_accept_state :=
+        SslMustGet(LSsl, 'SSL_set_accept_state', LSslName);
       p_SSL_set_connect_state := SslMustGet(LSsl, 'SSL_set_connect_state', LSslName);
       p_SSL_do_handshake := SslMustGet(LSsl, 'SSL_do_handshake', LSslName);
       p_SSL_read := SslMustGet(LSsl, 'SSL_read', LSslName);
@@ -397,6 +434,23 @@ begin
   DoHandshake;
 end;
 
+constructor TAMQPOpenSslStream.CreateServer(AUnderlying: TStream;
+  const ACertFile, AKeyFile: string);
+begin
+  inherited Create;
+  FUnderlying := AUnderlying;
+  FIsServer := True;
+  FCertFile := AnsiString(ACertFile);
+  FKeyFile := AnsiString(AKeyFile);
+  FLock := TCriticalSection.Create;
+  FSendLock := TCriticalSection.Create;
+  // Mesmo contrato do construtor cliente: se algo abaixo levantar, o destrutor
+  // libera o que existir (inclusive o stream de baixo) — nada de cleanup aqui.
+  EnsureOpenSsl;
+  SetupSslServer;
+  DoHandshake;
+end;
+
 destructor TAMQPOpenSslStream.Destroy;
 begin
   try
@@ -465,6 +519,52 @@ begin
   end;
 
   p_SSL_set_connect_state(FSsl);
+end;
+
+procedure TAMQPOpenSslStream.SetupSslServer;
+begin
+  FCtx := p_SSL_CTX_new(p_TLS_server_method());
+  if FCtx = nil then
+    raise EAMQPTls.CreateFmt('SSL_CTX_new (server) falhou (%s)', [LastSslErrorText]);
+
+  // Mesmo piso do lado cliente.
+  p_SSL_CTX_ctrl(FCtx, SSL_CTRL_SET_MIN_PROTO_VERSION, TLS1_2_VERSION, nil);
+
+  // Sem TLS mútuo na Fase 1: não pedimos certificado ao cliente.
+  p_SSL_CTX_set_verify(FCtx, SSL_VERIFY_NONE, nil);
+
+  if FCertFile = '' then
+    raise EAMQPTls.Create('TLS do servidor exige um certificado (CertFile)');
+  if FKeyFile = '' then
+    raise EAMQPTls.Create('TLS do servidor exige uma chave privada (KeyFile)');
+
+  // _chain_file (e não _certificate_file): aceita a cadeia inteira num PEM só,
+  // que é como os certs de teste em docker\certs são gerados.
+  if p_SSL_CTX_use_certificate_chain_file(FCtx, PAnsiChar(FCertFile)) <> 1 then
+    raise EAMQPTls.CreateFmt('não foi possível carregar o certificado "%s" (%s)',
+      [string(FCertFile), LastSslErrorText]);
+  if p_SSL_CTX_use_PrivateKey_file(FCtx, PAnsiChar(FKeyFile),
+       SSL_FILETYPE_PEM) <> 1 then
+    raise EAMQPTls.CreateFmt('não foi possível carregar a chave privada "%s" (%s)',
+      [string(FKeyFile), LastSslErrorText]);
+  // Erro de configuração clássico: cert e chave de pares diferentes. Melhor
+  // falhar aqui, no Start do broker, que num handshake obscuro depois.
+  if p_SSL_CTX_check_private_key(FCtx) <> 1 then
+    raise EAMQPTls.CreateFmt('a chave privada não corresponde ao certificado (%s)',
+      [LastSslErrorText]);
+
+  // Mesma ordem de criação do caminho cliente (ver SetupSsl): BIOs, SSL,
+  // SSL_set_bio transferindo a posse dos dois.
+  FBioIn := p_BIO_new(p_BIO_s_mem());
+  FBioOut := p_BIO_new(p_BIO_s_mem());
+  if (FBioIn = nil) or (FBioOut = nil) then
+    raise EAMQPTls.Create('BIO_new(BIO_s_mem) falhou');
+  FSsl := p_SSL_new(FCtx);
+  if FSsl = nil then
+    raise EAMQPTls.CreateFmt('SSL_new falhou (%s)', [LastSslErrorText]);
+  p_SSL_set_bio(FSsl, FBioIn, FBioOut);
+
+  p_SSL_set_accept_state(FSsl);
 end;
 
 // Esvazia FBioOut (o ciphertext que o engine produziu) num buffer; devolve
@@ -592,6 +692,11 @@ begin
           raise EAMQPTls.CreateFmt(
             'validação do certificado do servidor falhou (X509 err %d; %s)',
             [Integer(LVerify), SslFailureText(LErr)]);
+        if FIsServer then
+          // Do lado servidor o mais comum é o cliente desistir por não confiar
+          // no nosso certificado — o motivo real fica do lado dele.
+          raise EAMQPTls.CreateFmt(
+            'handshake TLS com o cliente falhou (%s)', [SslFailureText(LErr)]);
         raise EAMQPTls.CreateFmt('handshake TLS falhou (%s)', [SslFailureText(LErr)]);
       end;
     end;

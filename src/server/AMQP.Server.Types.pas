@@ -154,8 +154,13 @@ type
     ChannelMax: Word;
     FrameMax: Cardinal;
     Heartbeat: Word;
-    /// True se o socket já está cifrado (repassado ao autenticador).
+    /// True => a conexão faz handshake TLS antes de qualquer byte de AMQP.
+    /// Também é repassado ao autenticador (que pode exigir canal cifrado).
     Tls: Boolean;
+    /// Cadeia de certificados (PEM) e chave privada (PEM, sem senha) do
+    /// servidor. Obrigatórios quando Tls=True.
+    TlsCertFile: string;
+    TlsKeyFile: string;
     /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
     CloseTimeoutMs: Cardinal;
     /// Para onde vão as mensagens publicadas. Nunca nil nas conexões que o
@@ -270,6 +275,8 @@ begin
   Result.FrameMax := AMQP_SERVER_DEFAULT_FRAME_MAX;
   Result.Heartbeat := AMQP_SERVER_DEFAULT_HEARTBEAT;
   Result.Tls := False;
+  Result.TlsCertFile := '';
+  Result.TlsKeyFile := '';
   Result.CloseTimeoutMs := AMQP_SERVER_CLOSE_TIMEOUT_MS;
   Result.Sink := nil;
 end;

@@ -85,6 +85,9 @@ type
     FFrameMax: Cardinal;
     FHeartbeat: Word;
     FCloseTimeoutMs: Cardinal;
+    FUseTls: Boolean;
+    FTlsCertFile: string;
+    FTlsKeyFile: string;
     FRunning: Boolean;
     FStopping: Boolean;
     FTotalAccepted: Integer; // atômico
@@ -124,6 +127,17 @@ type
     property Heartbeat: Word read FHeartbeat write FHeartbeat;
     /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
     property CloseTimeoutMs: Cardinal read FCloseTimeoutMs write FCloseTimeoutMs;
+
+    // --- TLS (WS3). Exige um build com -dAMQP_OPENSSL: o backend SChannel
+    //     desta lib só implementa o lado cliente. Com UseTls=True cada conexão
+    //     aceita faz o handshake TLS na PRÓPRIA thread, antes do
+    //     protocol-header do AMQP -- é a porta 5671 "AMQPS", não STARTTLS.
+    /// Liga o TLS. Sem CertFile/KeyFile válidos a conexão morre no handshake.
+    property UseTls: Boolean read FUseTls write FUseTls;
+    /// Cadeia de certificados em PEM (o do servidor primeiro).
+    property TlsCertFile: string read FTlsCertFile write FTlsCertFile;
+    /// Chave privada em PEM, sem senha.
+    property TlsKeyFile: string read FTlsKeyFile write FTlsKeyFile;
 
     /// Default: TAMQPStaticAuthenticator com guest/guest. Só antes do Start.
     property Authenticator: IAMQPAuthenticator read FAuth write FAuth;
@@ -196,7 +210,9 @@ begin
   Result.Heartbeat := FHeartbeat;
   Result.CloseTimeoutMs := FCloseTimeoutMs;
   Result.Sink := FSink;
-  Result.Tls := False; // WS3 liga isto quando o listener for TLS
+  Result.Tls := FUseTls;
+  Result.TlsCertFile := FTlsCertFile;
+  Result.TlsKeyFile := FTlsKeyFile;
 end;
 
 destructor TAMQPServer.Destroy;

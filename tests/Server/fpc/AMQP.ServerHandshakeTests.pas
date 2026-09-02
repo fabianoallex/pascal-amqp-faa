@@ -99,6 +99,25 @@ type
     procedure ClienteDeclaraTopologia;
   end;
 
+  {$IFDEF AMQP_OPENSSL}
+  { TLS do lado servidor (WS3). So existe em builds com -dAMQP_OPENSSL: o
+    backend SChannel desta lib implementa apenas o lado cliente, entao no build
+    Default o broker nao aceita TLS e nao ha o que testar. Usa os certs de dev
+    de docker\certs (self-signed), por isso o cliente conecta com
+    TlsVerifyPeer=False. }
+  TServerTlsTests = class(TServerFixture)
+  protected
+    /// Troca o broker plain da fixture por um com TLS ligado.
+    procedure SetUp; override;
+    function TlsParams: TAMQPConnectionParams;
+  published
+    procedure ClienteRealConectaSobreTls;
+    procedure PublicaSobreTls;
+    procedure ClientePlainNaPortaTls_Falha;
+    procedure CertInexistente_ConexaoFalha;
+  end;
+  {$ENDIF}
+
   { Heartbeat (spec 4.2.7) e o prazo do Connection.Close-Ok. Os testes negociam
     intervalos de 1 s no Tune-Ok para caber num tempo de suíte razoável. }
   THeartbeatTests = class(TServerFixture)
@@ -500,6 +519,44 @@ begin
   if LGot <> ACh then
     raise Exception.CreateFmt('Open-Ok veio no canal %d, esperava %d',
       [LGot, ACh]);
+end;
+
+// Sobe da pasta do executavel procurando docker\certs\server.crt: as duas
+// suites rodam de profundidades diferentes (tests\Server\fpc no FPC,
+// tests\Server\Win32\<config> no Delphi).
+function CertsDir: string;
+var
+  LDir: string;
+  I: Integer;
+begin
+  LDir := ExtractFilePath(ParamStr(0));
+  for I := 0 to 6 do
+  begin
+    if FileExists(LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.crt') then
+      Exit(LDir + 'docker' + PathDelim + 'certs' + PathDelim);
+    LDir := ExtractFilePath(ExcludeTrailingPathDelimiter(LDir));
+    if LDir = '' then
+      Break;
+  end;
+  Result := '';
+end;
+
+// Broker com TLS ligado apontando para os certs de dev do repo.
+function NewTlsBroker: TAMQPServer;
+var
+  LCerts: string;
+begin
+  LCerts := CertsDir;
+  if LCerts = '' then
+    raise Exception.Create('docker/certs/server.crt nao encontrado a partir de ' +
+      ExtractFilePath(ParamStr(0)));
+  Result := TAMQPServer.Create;
+  Result.BindAddress := '127.0.0.1';
+  Result.Port := 0;
+  Result.UseTls := True;
+  Result.TlsCertFile := LCerts + 'server.crt';
+  Result.TlsKeyFile := LCerts + 'server.key';
+  Result.Start;
 end;
 
 { TServerFixture }
@@ -1490,10 +1547,142 @@ begin
   end;
 end;
 
+{$IFDEF AMQP_OPENSSL}
+{ TServerTlsTests }
+
+procedure TServerTlsTests.SetUp;
+begin
+  // De proposito NAO chama inherited: o SetUp da TServerFixture sobe um broker
+  // plain, e aqui queremos um com TLS. O TearDown herdado para e libera este.
+  FBroker := NewTlsBroker;
+end;
+
+function TServerTlsTests.TlsParams: TAMQPConnectionParams;
+begin
+  Result := TAMQPConnectionParams.Localhost;
+  Result.Host := '127.0.0.1';
+  Result.Port := FBroker.Port;
+  Result.UseTls := True;
+  Result.TlsVerifyPeer := False; // cert self-signed de dev
+end;
+
+procedure TServerTlsTests.ClienteRealConectaSobreTls;
+var
+  LCli: TAMQPConnection;
+  LConn: TAMQPServerConnection;
+  LCh: TAMQPChannel;
+begin
+  LCli := TAMQPConnection.Create(TlsParams);
+  try
+    LCli.Open;
+    AssertTrue('cliente aberto sobre TLS', LCli.IsOpen);
+    LConn := ServerConn;
+    AssertNotNull('conexao registrada', LConn);
+    AssertTrue('FSM chegou a amqssOpen', WaitState(LConn, amqssOpen));
+    AssertEquals('usuario autenticado', 'guest', LConn.UserId);
+    // E' uma conexao AMQP de verdade, nao so um socket cifrado.
+    LCh := LCli.CreateChannel;
+    try
+      AssertTrue('canal abre sobre TLS', WaitChannels(LConn, 1));
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.PublicaSobreTls;
+var
+  LSink: TRecordingSink;
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LBody: TBytes;
+  LGot: TBytes;
+  I: Integer;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  // 300 KB: forca varios body frames E varios registros TLS.
+  SetLength(LBody, 300 * 1024);
+  for I := 0 to High(LBody) do
+    LBody[I] := Byte((I * 7) and $FF);
+
+  LCli := TAMQPConnection.Create(TlsParams);
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      LCh.Publish('', 'sobre.tls', LBody, TAMQPBasicProperties.Empty);
+      AssertTrue('mensagem chegou', LSink.WaitCount(1, 8000));
+      LGot := LSink.Body;
+      AssertEquals('tamanho remontado', Length(LBody), Length(LGot));
+      for I := 0 to High(LBody) do
+        if LGot[I] <> LBody[I] then
+          Fail(Format('corpo diverge no octeto %d', [I]));
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.ClientePlainNaPortaTls_Falha;
+var
+  LP: TAMQPConnectionParams;
+  LCli: TAMQPConnection;
+  LFalhou: Boolean;
+begin
+  LP := TlsParams;
+  LP.UseTls := False; // cliente em claro contra uma porta que espera TLS
+  LCli := TAMQPConnection.Create(LP);
+  try
+    LFalhou := False;
+    try
+      LCli.Open;
+    except
+      on Exception do
+        LFalhou := True;
+    end;
+    AssertTrue('cliente plain nao pode abrir numa porta TLS',
+      LFalhou or (not LCli.IsOpen));
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.CertInexistente_ConexaoFalha;
+var
+  LCli: TAMQPConnection;
+  LFalhou: Boolean;
+begin
+  // Reconfigura o broker: a config e' lida a cada conexao aceita.
+  FBroker.TlsCertFile := CertsDir + 'nao-existe.crt';
+  LCli := TAMQPConnection.Create(TlsParams);
+  try
+    LFalhou := False;
+    try
+      LCli.Open;
+    except
+      on Exception do
+        LFalhou := True;
+    end;
+    AssertTrue('sem certificado valido a conexao nao abre',
+      LFalhou or (not LCli.IsOpen));
+  finally
+    LCli.Free;
+  end;
+end;
+{$ENDIF}
+
 initialization
   RegisterTest(TClientHandshakeTests);
   RegisterTest(TRawHandshakeTests);
   RegisterTest(THeartbeatTests);
   RegisterTest(TContentTests);
+  {$IFDEF AMQP_OPENSSL}
+  RegisterTest(TServerTlsTests);
+  {$ENDIF}
 
 end.

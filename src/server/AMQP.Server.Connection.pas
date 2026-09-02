@@ -50,6 +50,9 @@ uses
   AMQP.Method,
   AMQP.Frame,
   AMQP.Transport,
+  {$IFDEF AMQP_OPENSSL}
+  AMQP.Transport.OpenSSL,
+  {$ENDIF}
   AMQP.Connection.Methods,
   AMQP.Channel.Methods,
   AMQP.Exchange.Methods,
@@ -102,7 +105,11 @@ type
   TAMQPServerConnection = class
   private
     FSocket: TAMQPTcpSocket;
-    FStream: TAMQPSocketStream;
+    FRawStream: TAMQPSocketStream; // bytes crus do socket
+    // Stream efetivo do AMQP: = FRawStream em plain; o wrapper TLS quando
+    // cifrado (e aí o wrapper é dono do FRawStream). Só existe depois que a
+    // thread da conexão monta o transporte — ver SetupTransport.
+    FStream: TStream;
     FWriter: TAMQPFrameWriter;
     FThread: TAMQPServerConnThread;
     FConfig: TAMQPServerConnConfig;
@@ -127,6 +134,7 @@ type
     FChLock: TCriticalSection;
     FChannels: TDictionary<Word, TAMQPServerChannel>;
 
+    procedure SetupTransport;
     function ReadProtocolHeader: Boolean;
     procedure RunReadLoop;
     function CurrentMaxPayload: Cardinal;
@@ -252,8 +260,10 @@ begin
   FConfig := AConfig;
   FPeer := ASocket.PeerAddress;
   FState := amqssHeader;
-  FStream := TAMQPSocketStream.Create(FSocket); // não é dono do socket
-  FWriter := TAMQPFrameWriter.Create(FStream);
+  FRawStream := TAMQPSocketStream.Create(FSocket); // não é dono do socket
+  // FStream e FWriter só nascem em SetupTransport, na thread desta conexão: o
+  // handshake TLS é bloqueante e não pode rodar na thread de accept, senão um
+  // cliente lento (ou hostil) trava o broker inteiro.
   FChLock := TCriticalSection.Create;
   FChannels := TDictionary<Word, TAMQPServerChannel>.Create;
   FThread := TAMQPServerConnThread.Create(Self);
@@ -267,8 +277,15 @@ begin
     FThread.WaitFor;
     FThread.Free;
   end;
-  FWriter.Free;   // Stop já foi chamado no Shutdown
-  FStream.Free;
+  FWriter.Free;   // Stop já foi chamado no Shutdown (nil-safe)
+  // Em TLS o wrapper é dono do stream cru e libera os dois; em plain os dois
+  // ponteiros são o mesmo objeto.
+  if (FStream <> nil) and (FStream <> TStream(FRawStream)) then
+  begin
+    FStream.Free;
+    FRawStream := nil;
+  end;
+  FRawStream.Free;
   FSocket.Free;   // a conexão É dona do socket aceito
   ClearChannels;
   FChannels.Free;
@@ -1128,6 +1145,39 @@ end;
 
 { --- loop de leitura ------------------------------------------------------ }
 
+// Monta o transporte na thread DESTA conexão: em TLS, o handshake é síncrono e
+// pode demorar (ou nunca terminar, se o peer sumir). Só depois dele o writer
+// nasce, porque tudo o que ele escreve tem de sair cifrado.
+procedure TAMQPServerConnection.SetupTransport;
+begin
+  if FConfig.Tls then
+  begin
+    {$IFDEF AMQP_OPENSSL}
+    try
+      FStream := TAMQPOpenSslStream.CreateServer(FRawStream,
+        FConfig.TlsCertFile, FConfig.TlsKeyFile);
+    except
+      // O wrapper e' dono do stream de baixo, e o destrutor auto-chamado de um
+      // construtor que levanta JA o liberou. Soltamos a referencia para o
+      // destrutor da conexao nao liberar de novo (era double-free em toda falha
+      // de handshake: cert invalido, cliente em claro na porta TLS...).
+      FRawStream := nil;
+      raise;
+    end;
+    {$ELSE}
+    // SChannel do lado servidor ainda não existe (ver CLAUDE.md); no Windows
+    // sem OpenSSL o broker não tem como aceitar TLS.
+    raise EAMQPTls.Create(
+      'TLS do servidor exige um build com -dAMQP_OPENSSL ' +
+      '(o backend SChannel só implementa o lado cliente)');
+    {$ENDIF}
+  end
+  else
+    FStream := FRawStream;
+
+  FWriter := TAMQPFrameWriter.Create(FStream);
+end;
+
 function TAMQPServerConnection.ReadProtocolHeader: Boolean;
 var
   LBuf: array[0..7] of Byte;
@@ -1145,10 +1195,11 @@ begin
   for I := 0 to 7 do
     if LBuf[I] <> AMQP_PROTOCOL_HEADER[I] then
     begin
-      // spec 4.2.2: devolve o header suportado e encerra. Escrita direta no
-      // socket: nada foi postado no writer ainda, então não há corrida.
+      // spec 4.2.2: devolve o header suportado e encerra. Vai pelo FStream (e
+      // não direto no socket) para sair CIFRADO quando a conexão é TLS; nada
+      // foi postado no writer ainda, então não há corrida com ele.
       try
-        FSocket.Send(AMQP_PROTOCOL_HEADER[0], Length(AMQP_PROTOCOL_HEADER));
+        FStream.Write(AMQP_PROTOCOL_HEADER[0], Length(AMQP_PROTOCOL_HEADER));
       except
       end;
       FError := 'protocol-header inválido';
@@ -1179,6 +1230,8 @@ var
 begin
   try
     try
+      SetupTransport; // handshake TLS aqui, se for o caso
+
       FProtocolOk := ReadProtocolHeader;
       if not FProtocolOk then
         Exit;
@@ -1246,6 +1299,9 @@ begin
     except
       on E: EAMQPFrame do
         ; // fim de stream fora do loop — normal
+      on E: EAMQPTls do
+        if FError = '' then
+          FError := 'TLS: ' + E.Message;
       on E: EAMQPTransport do
         if FError = '' then
           FError := E.Message;
