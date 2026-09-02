@@ -102,6 +102,7 @@ type
     [Test] procedure CorpoMaiorQueOBodySize_505;
     [Test] procedure ContentHeaderDeOutraClasse_505;
     [Test] procedure ClienteDeclaraTopologia;
+    [Test] procedure HeaderPayloadCru_DecodificaIgual;
   end;
 
   {$IFDEF AMQP_OPENSSL}
@@ -457,6 +458,7 @@ type
     FContentType: string;
     FCorrelationId: string;
     FHeaderFoo: string;
+    FHeaderPayload: TBytes;
   public
     constructor Create;
     destructor Destroy; override;
@@ -469,6 +471,9 @@ type
     function ContentType: string;
     function CorrelationId: string;
     function HeaderFoo: string;
+    /// Payload cru do content-header (decisao D1 da Fase 2, ver CLAUDE.md e
+    /// AMQP.Server.Message) -- o que a mensagem entrega a' engine.
+    function HeaderPayload: TBytes;
     /// Espera ACount mensagens roteadas por ate ATimeoutMs.
     function WaitCount(ACount, ATimeoutMs: Integer): Boolean;
   end;
@@ -498,6 +503,7 @@ begin
     FBody := Copy(AMessage.Body, 0, Length(AMessage.Body));
     FContentType := AMessage.Properties.ContentType;
     FCorrelationId := AMessage.Properties.CorrelationId;
+    FHeaderPayload := Copy(AMessage.HeaderPayload, 0, Length(AMessage.HeaderPayload));
     FHeaderFoo := '';
     if AMessage.Properties.Has(bpHeaders) and
        Assigned(AMessage.Properties.Headers) and
@@ -574,6 +580,16 @@ begin
   FLock.Enter;
   try
     Result := FHeaderFoo;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TRecordingSink.HeaderPayload: TBytes;
+begin
+  FLock.Enter;
+  try
+    Result := Copy(FHeaderPayload, 0, Length(FHeaderPayload));
   finally
     FLock.Leave;
   end;
@@ -1605,6 +1621,70 @@ begin
       Assert.AreEqual(0, Integer(LCh.DeleteQueue(LDelete)),
         'nenhuma mensagem apagada');
       Assert.IsTrue(LCli.IsOpen, 'conexao intacta');
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
+// WS1 da Fase 2 (CLAUDE.md, decisao D1): o payload cru do content-header
+// chega ate' o sink dentro da TAMQPServerMessage, e decodificar ESSE payload
+// (em vez da TAMQPFieldTable original) devolve as mesmas propriedades que o
+// cliente publicou -- prova que a reemissao fiel funciona sem redecodificar
+// nada no meio do caminho.
+procedure TContentTests.HeaderPayloadCru_DecodificaIgual;
+var
+  LSink: TRecordingSink;
+  LCli: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LProps: TAMQPBasicProperties;
+  LHeaders: TAMQPFieldTable;
+  LReader: TAMQPReader;
+  LDecoded: TAMQPContentHeader;
+  LFooVal: TValue;
+begin
+  LSink := TRecordingSink.Create;
+  FBroker.MessageSink := LSink;
+  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
+  try
+    LCli.Open;
+    LCh := LCli.CreateChannel;
+    try
+      LHeaders := TAMQPFieldTable.Create;
+      try
+        LHeaders.Put('foo', 'bar');
+        LProps := TAMQPBasicProperties.Empty;
+        LProps.SetContentType('application/json');
+        LProps.SetHeaders(LHeaders);
+        LCh.Publish('', 'crurun', BytesOf('{}'), LProps);
+      finally
+        LHeaders.Free;
+      end;
+
+      Assert.IsTrue(LSink.WaitCount(1, 3000), 'mensagem chegou');
+      Assert.IsTrue(Length(LSink.HeaderPayload) > 0,
+        'header payload cru nao vazio');
+
+      LReader := TAMQPReader.Create(LSink.HeaderPayload);
+      try
+        LDecoded := DecodeContentHeader(LReader);
+        try
+          Assert.AreEqual('application/json', LDecoded.Properties.ContentType,
+            'content-type decodificado do payload cru');
+          Assert.IsTrue(
+            LDecoded.Properties.Headers.TryGetValue('foo', LFooVal),
+            'header foo presente no payload cru');
+          Assert.AreEqual('bar', LFooVal.AsString, 'valor do header foo');
+        finally
+          if LDecoded.Properties.Has(bpHeaders) and
+             Assigned(LDecoded.Properties.Headers) then
+            LDecoded.Properties.Headers.Free;
+        end;
+      finally
+        LReader.Free;
+      end;
     finally
       LCh.Free;
     end;

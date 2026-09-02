@@ -1126,7 +1126,7 @@ begin
       LReader.Free;
     end;
 
-    if AChannel.SetContentHeader(LHeader) then
+    if AChannel.SetContentHeader(LHeader, AFrame.Payload) then
       CompleteContent(AChannel); // body-size 0: mensagem sem corpo
     Exit(True);
   end;

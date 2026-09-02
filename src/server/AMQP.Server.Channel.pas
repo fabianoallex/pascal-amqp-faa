@@ -49,6 +49,7 @@ type
     FAsmState: TAMQPChannelAsmState;
     FPublish: TAMQPBasicPublish;
     FProps: TAMQPBasicProperties;
+    FHeaderPayload: TBytes;
     FBodySize: UInt64;
     FBody: TBytes;
     FBodyLen: Integer;
@@ -62,9 +63,13 @@ type
     /// Chegou o Basic.Publish: começa a montagem, esperando o content-header.
     /// Descarta qualquer montagem anterior inacabada.
     procedure BeginContent(const APublish: TAMQPBasicPublish);
-    /// Chegou o content-header. Result = conteúdo JÁ completo (body-size 0,
-    /// mensagem sem corpo — caso legítimo e comum em RPC).
-    function SetContentHeader(const AHeader: TAMQPContentHeader): Boolean;
+    /// Chegou o content-header, já decodificado (AHeader) E o payload cru do
+    /// frame (AHeaderPayload — decisão D1 da Fase 2: a mensagem final carrega
+    /// esse payload para reemissão fiel, ver AMQP.Server.Message). Result =
+    /// conteúdo JÁ completo (body-size 0, mensagem sem corpo — caso legítimo
+    /// e comum em RPC).
+    function SetContentHeader(const AHeader: TAMQPContentHeader;
+      const AHeaderPayload: TBytes): Boolean;
     /// Acrescenta um frame de body. Result = conteúdo completo.
     /// Levanta EAMQPConnectionError (505) se o corpo passar do body-size
     /// declarado — o stream ficou fora de sincronia com o que o peer prometeu.
@@ -129,6 +134,7 @@ procedure TAMQPServerChannel.ResetContent;
 begin
   FreeProps;
   FAsmState := amqasIdle;
+  FHeaderPayload := nil;
   FBodySize := 0;
   FBody := nil;
   FBodyLen := 0;
@@ -141,11 +147,12 @@ begin
   FAsmState := amqasHeader;
 end;
 
-function TAMQPServerChannel.SetContentHeader(
-  const AHeader: TAMQPContentHeader): Boolean;
+function TAMQPServerChannel.SetContentHeader(const AHeader: TAMQPContentHeader;
+  const AHeaderPayload: TBytes): Boolean;
 begin
   FreeProps;
   FProps := AHeader.Properties;
+  FHeaderPayload := AHeaderPayload;
   FBodySize := AHeader.BodySize;
   FBody := nil;
   FBodyLen := 0;
@@ -193,6 +200,7 @@ begin
   Result.Properties := FProps;
   Result.Body := Copy(FBody, 0, FBodyLen); // FBody pode ter folga de alocação
   Result.UserId := AUserId;
+  Result.HeaderPayload := FHeaderPayload;
 end;
 
 end.

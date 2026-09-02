@@ -75,6 +75,13 @@ type
     /// Usuário autenticado da conexão que publicou (para validar a propriedade
     /// user-id e para auditoria na Fase 2).
     UserId: string;
+    /// Payload CRU do content-header (class-id/weight/body-size/flags e as
+    /// propriedades presentes), exatamente como veio no frame — decisão D1
+    /// da Fase 2 (CLAUDE.md): reemissão fiel ao consumidor sem redecodificar
+    /// e sem clonar TAMQPFieldTable (nada do TValue-em-TValue do FPC).
+    /// Preenchido pelo TAMQPServerChannel a partir dos bytes que a conexão
+    /// leu no frame de header (ver AMQP.Server.Channel.SetContentHeader).
+    HeaderPayload: TBytes;
   end;
 
   { Destino de uma mensagem publicada. A Fase 1 usa TAMQPNullMessageSink (que

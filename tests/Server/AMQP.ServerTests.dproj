@@ -138,11 +138,14 @@
         <DCCReference Include="..\..\src\server\AMQP.Server.Auth.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Types.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Channel.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Message.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Resources.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.FrameIO.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Connection.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Broker.pas"/>
         <DCCReference Include="AMQP.ServerSkeletonTests.pas"/>
         <DCCReference Include="AMQP.ServerHandshakeTests.pas"/>
+        <DCCReference Include="AMQP.ServerEngineTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
