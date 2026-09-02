@@ -55,6 +55,7 @@ type
     FShutdown: Boolean;
     {$ELSE}
     FSock: TSocket;
+    FAccepted: Boolean;    // veio de TAMQPTcpListener.Accept (ver Close)
     {$ENDIF}
   public
     constructor Create;
@@ -201,6 +202,7 @@ begin
   inherited Create;
   FPeerAddress := APeerAddr;
   FSock := ASock;
+  FAccepted := True;
 end;
 {$ENDIF}
 
@@ -217,7 +219,12 @@ begin
     FRawFd := -1;
   end;
   {$ENDIF}
-  FSock.Free;
+  // Guardado: no Delphi o TSocket.Destroy refaz o shutdown se o socket ainda
+  // se diz "Connected", e um destrutor não pode levantar.
+  try
+    FSock.Free;
+  except
+  end;
   inherited;
 end;
 
@@ -307,8 +314,36 @@ begin
   {$ELSE}
   if FSock = nil then
     Exit;
-  if TSocketState.Connected in FSock.State then
-    FSock.Close;
+  if not (TSocketState.Connected in FSock.State) then
+    Exit;
+  try
+    // Socket ACEITO: Close(True) — o Close(False) padrão da RTL faz
+    // shutdown(SD_BOTH) e depois DRENA o socket num "while recv(...) > 0" na
+    // thread que fechou. Isso (a) roda o recv na thread errada, concorrendo com
+    // a thread de leitura da conexão, e (b) no Windows o shutdown num socket
+    // aceito não desbloqueia um recv pendente — só o closesocket desbloqueia
+    // (medido no WS2, e é por isso que o caminho FPC usa fd cru + CloseSocket).
+    // Close(True) pula shutdown/drain e vai direto ao closesocket.
+    // O caminho CLIENTE mantém o Close padrão (shutdown gracioso), que é o
+    // validado contra brokers reais desde a lib original.
+    if FAccepted then
+      FSock.Close(True)
+    else
+      FSock.Close;
+  except
+    // O shutdown do Close padrão levanta ESocketError se o peer JÁ derrubou a
+    // conexão (WSAENOTCONN/10057 no Windows) — cenário normal quando o outro
+    // lado fecha o TCP logo após o Connection.Close-Ok. Pior: a RTL levanta
+    // ANTES de limpar o FState, então o TSocket.Destroy tentaria o shutdown de
+    // novo e a exceção escaparia de dentro do Free. Forçamos o closesocket
+    // para o socket sair do estado "Connected".
+    try
+      if TSocketState.Connected in FSock.State then
+        FSock.Close(True);
+    except
+      // desistimos: o handle vaza para o TSocket.Destroy resolver
+    end;
+  end;
   {$ENDIF}
 end;
 
@@ -335,7 +370,12 @@ begin
     FListenFd := -1;
   end;
   {$ELSE}
-  FListen.Free;
+  // Guardado: o TSocket.Destroy refaz o Close se o socket ainda se disser
+  // "Connected", e um destrutor não pode levantar.
+  try
+    FListen.Free;
+  except
+  end;
   {$ENDIF}
   inherited;
 end;
@@ -455,8 +495,18 @@ begin
   end;
     {$ENDIF}
   {$ELSE}
+  // Mesma regra do caminho FPC/Windows acima: é o closesocket que desbloqueia
+  // um Accept pendente. Close(True) vai direto ao closesocket; o Close padrão
+  // (ForceClosed=False) tentaria shutdown(SD_BOTH) ANTES — e um socket de
+  // escuta nunca esteve "connected", então o shutdown falha com WSAENOTCONN
+  // (10057) e levanta antes de fechar o handle: o Accept ficaria pendurado
+  // para sempre e o TSocket.Destroy repetiria o shutdown de dentro do Free.
   if FListen <> nil then
-    FListen.Close;
+    try
+      if TSocketState.Connected in FListen.State then
+        FListen.Close(True);
+    except
+    end;
   {$ENDIF}
 end;
 
