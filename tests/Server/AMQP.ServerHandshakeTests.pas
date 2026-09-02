@@ -74,6 +74,23 @@ type
     [Test] procedure ClienteFechaConexao_RecebeCloseOk;
   end;
 
+  { Heartbeat (spec 4.2.7) e o prazo do Connection.Close-Ok. Os testes negociam
+    intervalos de 1 s no Tune-Ok para caber num tempo de suíte razoável. }
+  [TestFixture]
+  THeartbeatTests = class
+  private
+    FBroker: TAMQPServer;
+  public
+    [Setup]    procedure Setup;
+    [TearDown] procedure TearDown;
+
+    [Test] procedure BrokerEmiteHeartbeat;
+    [Test] procedure PeerMudo_EhDerrubado;
+    [Test] procedure HeartbeatZero_NaoDerruba;
+    [Test] procedure SemCloseOk_DerrubadoNoPrazo;
+    [Test] procedure ClienteRealSobreviveComHeartbeat;
+  end;
+
 implementation
 
 const
@@ -239,6 +256,33 @@ begin
   LTune := RawTune(AStream);
   SendMethod(AStream, AMQP_CHANNEL_CONNECTION, BuildTuneOk(LTune));
   SendMethod(AStream, AMQP_CHANNEL_CONNECTION, BuildOpen(AVHost));
+  LR := ReadMethod(AStream, LCh, LId);
+  try
+    if not LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK) then
+      raise Exception.CreateFmt('esperava Connection.Open-Ok, veio %d/%d',
+        [LId.ClassId, LId.MethodId]);
+  finally
+    LR.Free;
+  end;
+end;
+
+// Handshake completo forçando um heartbeat no Tune-Ok (o broker adota o valor
+// que o CLIENTE devolve, conforme a spec).
+procedure RawHandshakeHb(AStream: TStream; AHeartbeat: Word);
+var
+  LStart: TAMQPConnectionStart;
+  LTune: TAMQPConnectionTune;
+  LR: TAMQPReader;
+  LCh: Word;
+  LId: TAMQPMethodId;
+begin
+  LStart := RawStart(AStream);
+  LStart.ServerProperties.Free;
+  RawStartOk(AStream, 'guest', 'guest');
+  LTune := RawTune(AStream);
+  LTune.Heartbeat := AHeartbeat;
+  SendMethod(AStream, AMQP_CHANNEL_CONNECTION, BuildTuneOk(LTune));
+  SendMethod(AStream, AMQP_CHANNEL_CONNECTION, BuildOpen('/'));
   LR := ReadMethod(AStream, LCh, LId);
   try
     if not LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK) then
@@ -773,8 +817,171 @@ begin
   end;
 end;
 
+{ THeartbeatTests }
+
+procedure THeartbeatTests.Setup;
+begin
+  FBroker := NewBroker;
+end;
+
+procedure THeartbeatTests.TearDown;
+begin
+  if FBroker <> nil then
+  begin
+    FBroker.Stop;
+    FreeAndNil(FBroker);
+  end;
+end;
+
+procedure THeartbeatTests.BrokerEmiteHeartbeat;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LF: TAMQPFrame;
+  LDeadline: UInt64;
+  LGot: Boolean;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshakeHb(LStrm, 1); // 1 s => broker emite a cada ~500 ms
+    LGot := False;
+    // Fica só lendo: com 1 s negociado, o primeiro heartbeat tem de chegar bem
+    // antes dos 2 s em que o broker nos consideraria mortos.
+    LDeadline := AmqpTickMs + 1500;
+    while (not LGot) and (AmqpTickMs < LDeadline) do
+    begin
+      LF := TAMQPFrame.ReadFrom(LStrm, MAX_PAYLOAD);
+      if LF.IsHeartbeat then
+        LGot := True;
+    end;
+    Assert.IsTrue(LGot, 'broker emitiu heartbeat sozinho');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure THeartbeatTests.PeerMudo_EhDerrubado;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LDeadline: UInt64;
+  LDropped: Boolean;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshakeHb(LStrm, 1);
+    // Não mandamos mais nada. O broker tem de nos derrubar depois de 2x1 s.
+    // Seguimos lendo (só chegam heartbeats dele) até o stream acabar.
+    LDropped := False;
+    LDeadline := AmqpTickMs + 6000;
+    while (not LDropped) and (AmqpTickMs < LDeadline) do
+      try
+        TAMQPFrame.ReadFrom(LStrm, MAX_PAYLOAD);
+      except
+        on EAMQPFrame do
+          LDropped := True;
+      end;
+    Assert.IsTrue(LDropped, 'peer mudo derrubado pelo heartbeat');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure THeartbeatTests.HeartbeatZero_NaoDerruba;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LCh: Word;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshakeHb(LStrm, 0);  // heartbeat desabilitado pelo cliente
+    TThread.Sleep(2500);       // mais que 2x o intervalo default, se houvesse
+    // Continua viva: um Channel.Open ainda é respondido.
+    SendMethod(LStrm, 1, BuildChannelOpen);
+    ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
+    Assert.AreEqual(1, Integer(LCh), 'canal aberto apos silencio');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure THeartbeatTests.SemCloseOk_DerrubadoNoPrazo;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPConnectionClose;
+  LCh: Word;
+  LDeadline: UInt64;
+  LDropped: Boolean;
+begin
+  FBroker.CloseTimeoutMs := 700; // vale para as conexões aceitas daqui em diante
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    // Heartbeat 0 isola o teste: só o prazo do Close-Ok pode nos derrubar.
+    RawHandshakeHb(LStrm, 0);
+    SendMethod(LStrm, 1, BuildChannelOpen);
+    ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
+    SendMethod(LStrm, 1, BuildChannelOpen); // segundo Open => 504
+    LClose := ExpectConnectionClose(LStrm);
+    Assert.AreEqual(AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode), 'CHANNEL_ERROR');
+
+    // Nunca respondemos o Close-Ok: o broker tem de derrubar no prazo.
+    LDropped := False;
+    LDeadline := AmqpTickMs + 5000;
+    while (not LDropped) and (AmqpTickMs < LDeadline) do
+      try
+        TAMQPFrame.ReadFrom(LStrm, MAX_PAYLOAD);
+      except
+        on EAMQPFrame do
+          LDropped := True;
+      end;
+    Assert.IsTrue(LDropped, 'derrubado por nao responder o Close-Ok');
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure THeartbeatTests.ClienteRealSobreviveComHeartbeat;
+var
+  LCli: TAMQPConnection;
+  LConn: TAMQPServerConnection;
+  LCh: TAMQPChannel;
+begin
+  // Broker propõe 1 s; o cliente negocia min(1,60) = 1. Os dois lados passam a
+  // emitir heartbeat a cada ~500 ms — se algum dos dois estiver errado, um
+  // derruba o outro dentro de 2 s.
+  FBroker.Heartbeat := 1;
+  LCli := TAMQPConnection.Create(BrokerParams(FBroker));
+  try
+    LCli.Open;
+    LConn := ServerConn(FBroker);
+    Assert.IsNotNull(LConn);
+    Assert.AreEqual(1, Integer(LConn.Negotiated.Heartbeat), 'heartbeat negociado');
+
+    TThread.Sleep(3000); // 3x o intervalo, ocioso dos dois lados
+
+    Assert.IsTrue(LCli.IsOpen, 'cliente segue aberto');
+    Assert.AreEqual(1, FBroker.ConnectionCount, 'broker nao derrubou');
+    // E ainda funciona de verdade.
+    LCh := LCli.CreateChannel;
+    try
+      Assert.IsTrue(WaitChannels(LConn, 1), 'canal abre apos o silencio');
+    finally
+      LCh.Free;
+    end;
+  finally
+    LCli.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TClientHandshakeTests);
   TDUnitX.RegisterTestFixture(TRawHandshakeTests);
+  TDUnitX.RegisterTestFixture(THeartbeatTests);
 
 end.

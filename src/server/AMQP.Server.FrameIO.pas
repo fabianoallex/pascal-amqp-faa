@@ -55,6 +55,7 @@ type
     FFailed: Boolean;     // escrita falhou (sob FMon)
     FError: string;       // motivo do FFailed (sob FMon)
     FStarted: Boolean;
+    FLastWriteTick: UInt64; // atomico; ultimo flush real no stream
     procedure DrainLoop;
     procedure EnqueueOne(const AFrame: TAMQPFrame);
   public
@@ -75,6 +76,11 @@ type
     /// '' enquanto sã; o motivo depois de uma falha de escrita.
     function LastError: string;
     function Failed: Boolean;
+    /// Tick (AmqpTickMs) da última escrita que chegou de fato ao stream — não
+    /// do último Post*. É o que o heartbeat precisa: a spec fala em ociosidade
+    /// do envio no wire, e um frame parado na fila ainda não saiu.
+    /// 0 enquanto nada foi escrito. Leitura atômica; chamável de outra thread.
+    function LastWriteTick: UInt64;
   end;
 
 implementation
@@ -217,6 +223,7 @@ begin
       try
         for I := 0 to High(LBatch) do
           LBatch[I].WriteTo(FStream);
+        AmqpAtomicWrite64(FLastWriteTick, AmqpTickMs);
       except
         on E: Exception do
         begin
@@ -246,6 +253,11 @@ begin
   finally
     FMon.Leave;
   end;
+end;
+
+function TAMQPFrameWriter.LastWriteTick: UInt64;
+begin
+  Result := AmqpAtomicRead64(FLastWriteTick);
 end;
 
 function TAMQPFrameWriter.Failed: Boolean;

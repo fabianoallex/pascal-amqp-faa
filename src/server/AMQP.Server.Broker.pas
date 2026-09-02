@@ -51,10 +51,26 @@ type
     constructor Create(AServer: TAMQPServer);
   end;
 
+  { Thread monitora: uma só para o broker inteiro (não uma por conexão). A cada
+    AMQP_SERVER_MONITOR_TICK_MS percorre as conexões vivas aplicando o passo de
+    heartbeat e o prazo do Connection.Close-Ok, e recolhe as mortas. É a ÚNICA
+    thread que libera conexões enquanto o broker roda — por isso o snapshot que
+    ela tira não pode ser liberado debaixo dela. }
+  TAMQPMonitorThread = class(TThread)
+  private
+    FServer: TAMQPServer;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AServer: TAMQPServer);
+  end;
+
   TAMQPServer = class
   private
     FListener: TAMQPTcpListener;
     FAccept: TAMQPAcceptThread;
+    FMonitor: TAMQPMonitorThread;
+    FMonitorStop: TEvent;
     FLock: TCriticalSection;
     FActive: TList<TAMQPServerConnection>;
     FDead: TList<TAMQPServerConnection>;
@@ -67,11 +83,14 @@ type
     FChannelMax: Word;
     FFrameMax: Cardinal;
     FHeartbeat: Word;
+    FCloseTimeoutMs: Cardinal;
     FRunning: Boolean;
     FStopping: Boolean;
     FTotalAccepted: Integer; // atômico
     function ConnConfig: TAMQPServerConnConfig;
     procedure AcceptLoop;
+    procedure MonitorLoop;
+    procedure StopMonitor;
     procedure HandleConnClosed(AConn: TAMQPServerConnection);
     procedure ReapDead;
   public
@@ -95,11 +114,15 @@ type
     property Backlog: Integer read FBacklog write FBacklog;
     property Running: Boolean read FRunning;
 
-    // --- limites propostos no Connection.Tune (0 = sem limite). Só antes do
-    //     Start; cada conexão recebe uma cópia ao ser aceita.
+    // --- limites propostos no Connection.Tune (0 = sem limite). Lidos a cada
+    //     conexão aceita, que recebe uma cópia da config.
     property ChannelMax: Word read FChannelMax write FChannelMax;
     property FrameMax: Cardinal read FFrameMax write FFrameMax;
+    /// Heartbeat proposto no Tune. Quem decide é o cliente no Tune-Ok (spec):
+    /// o broker adota o valor que ele devolver. 0 = sem heartbeat.
     property Heartbeat: Word read FHeartbeat write FHeartbeat;
+    /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
+    property CloseTimeoutMs: Cardinal read FCloseTimeoutMs write FCloseTimeoutMs;
 
     /// Default: TAMQPStaticAuthenticator com guest/guest. Só antes do Start.
     property Authenticator: IAMQPAuthenticator read FAuth write FAuth;
@@ -122,6 +145,19 @@ begin
   FServer.AcceptLoop;
 end;
 
+{ TAMQPMonitorThread }
+
+constructor TAMQPMonitorThread.Create(AServer: TAMQPServer);
+begin
+  FServer := AServer;
+  inherited Create(True);
+end;
+
+procedure TAMQPMonitorThread.Execute;
+begin
+  FServer.MonitorLoop;
+end;
+
 { TAMQPServer }
 
 constructor TAMQPServer.Create;
@@ -133,12 +169,14 @@ begin
   FVHosts := TAMQPVirtualHostRegistry.Create;
   FAuth := TAMQPStaticAuthenticator.Create; // guest/guest
   FAuthorizer := TAMQPAllowAllAuthorizer.Create;
+  FMonitorStop := TEvent.Create(nil, True, False, '');
   FBindAddress := '0.0.0.0';
   FPort := 5672;
   FBacklog := 64;
   FChannelMax := AMQP_SERVER_DEFAULT_CHANNEL_MAX;
   FFrameMax := AMQP_SERVER_DEFAULT_FRAME_MAX;
   FHeartbeat := AMQP_SERVER_DEFAULT_HEARTBEAT;
+  FCloseTimeoutMs := AMQP_SERVER_CLOSE_TIMEOUT_MS;
 end;
 
 function TAMQPServer.ConnConfig: TAMQPServerConnConfig;
@@ -150,6 +188,7 @@ begin
   Result.ChannelMax := FChannelMax;
   Result.FrameMax := FFrameMax;
   Result.Heartbeat := FHeartbeat;
+  Result.CloseTimeoutMs := FCloseTimeoutMs;
   Result.Tls := False; // WS3 liga isto quando o listener for TLS
 end;
 
@@ -159,6 +198,7 @@ begin
   FActive.Free;
   FDead.Free;
   FVHosts.Free;
+  FMonitorStop.Free;
   FLock.Free;
   FAuth := nil;
   FAuthorizer := nil;
@@ -177,6 +217,9 @@ begin
   FRunning := True;
   FAccept := TAMQPAcceptThread.Create(Self);
   FAccept.Start;
+  FMonitorStop.ResetEvent;
+  FMonitor := TAMQPMonitorThread.Create(Self);
+  FMonitor.Start;
 end;
 
 procedure TAMQPServer.Stop;
@@ -191,6 +234,10 @@ begin
     Exit;
   end;
   FStopping := True;
+
+  // 0) para a monitora ANTES de tudo: enquanto ela vive, é ela quem libera as
+  //    conexões mortas — dois reapers concorrentes dariam double-free.
+  StopMonitor;
 
   // 1) para o accept: fecha o listener (desbloqueia o Accept pendente).
   if FListener <> nil then
@@ -250,7 +297,7 @@ begin
       Break;
     end;
 
-    ReapDead; // aproveita para limpar conexões já mortas
+    // (o reap fica com a thread monitora — ver MonitorLoop)
 
     // A conexão vira dona do socket e recebe uma cópia da config do broker.
     LConn := TAMQPServerConnection.Create(LSock, ConnConfig);
@@ -264,6 +311,48 @@ begin
     AmqpAtomicInc(FTotalAccepted);
     LConn.Start;
   end;
+end;
+
+procedure TAMQPServer.MonitorLoop;
+var
+  LSnapshot: TArray<TAMQPServerConnection>;
+  I: Integer;
+begin
+  while not FStopping do
+  begin
+    if FMonitorStop.WaitFor(AMQP_SERVER_MONITOR_TICK_MS) = wrSignaled then
+      Break;
+    if FStopping then
+      Break;
+
+    // Snapshot sob lock; os Tick rodam FORA do lock (HeartbeatTick pode postar
+    // no writer e o Shutdown de uma conexão morta chama HandleConnClosed, que
+    // também pega o lock). Seguro porque só ESTA thread libera conexões
+    // enquanto o broker roda, e o ReapDead abaixo só acontece depois dos Tick.
+    LSnapshot := Connections;
+    for I := 0 to High(LSnapshot) do
+    begin
+      try
+        LSnapshot[I].HeartbeatTick;
+      except
+      end;
+      try
+        LSnapshot[I].EnforceCloseDeadline;
+      except
+      end;
+    end;
+
+    ReapDead;
+  end;
+end;
+
+procedure TAMQPServer.StopMonitor;
+begin
+  if FMonitor = nil then
+    Exit;
+  FMonitorStop.SetEvent;
+  FMonitor.WaitFor;
+  FreeAndNil(FMonitor);
 end;
 
 procedure TAMQPServer.HandleConnClosed(AConn: TAMQPServerConnection);

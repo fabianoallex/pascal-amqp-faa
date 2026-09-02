@@ -33,9 +33,15 @@ const
   AMQP_SERVER_DEFAULT_HEARTBEAT   = 60;
 
   /// Quanto esperamos pelo Connection.Close-Ok depois de mandarmos um
-  /// Connection.Close antes de simplesmente derrubar o socket. Aplicado por um
-  /// timer externo (WS7) via TAMQPServerConnection.EnforceCloseDeadline.
+  /// Connection.Close antes de simplesmente derrubar o socket. Aplicado pela
+  /// thread monitora do broker via TAMQPServerConnection.EnforceCloseDeadline.
   AMQP_SERVER_CLOSE_TIMEOUT_MS = 10000;
+
+  /// Período da thread monitora do broker (heartbeats, detecção de peer morto,
+  /// prazo do Close-Ok e reap das conexões mortas). Tem de ser bem menor que
+  /// metade do menor heartbeat útil — com 200 ms, um heartbeat negociado de
+  /// 1 s (usado nos testes) ainda é atendido com folga.
+  AMQP_SERVER_MONITOR_TICK_MS = 200;
 
 type
   { Conjunto de virtual-hosts que o broker aceita no Connection.Open.
@@ -107,6 +113,8 @@ type
     Heartbeat: Word;
     /// True se o socket já está cifrado (repassado ao autenticador).
     Tls: Boolean;
+    /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
+    CloseTimeoutMs: Cardinal;
     /// Config sem autenticador/vhosts (o broker preenche esses dois).
     class function Defaults: TAMQPServerConnConfig; static;
   end;
@@ -216,6 +224,7 @@ begin
   Result.FrameMax := AMQP_SERVER_DEFAULT_FRAME_MAX;
   Result.Heartbeat := AMQP_SERVER_DEFAULT_HEARTBEAT;
   Result.Tls := False;
+  Result.CloseTimeoutMs := AMQP_SERVER_CLOSE_TIMEOUT_MS;
 end;
 
 end.

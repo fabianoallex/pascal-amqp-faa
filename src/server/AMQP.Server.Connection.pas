@@ -117,6 +117,7 @@ type
     FVirtualHost: string;
     FAuthFailureClose: Boolean; // cliente anunciou a capability
     FCloseDeadline: UInt64;     // tick-limite do Close-Ok (0 = sem prazo)
+    FLastReadTick: UInt64;      // atomico; ultimo frame CHEGADO do peer
 
     // --- canais ---
     FChLock: TCriticalSection;
@@ -178,9 +179,20 @@ type
     procedure WaitFor;
 
     /// Derruba a conexão se ela está esperando um Connection.Close-Ok que não
-    /// veio dentro de AMQP_SERVER_CLOSE_TIMEOUT_MS. Chamável de outra thread;
-    /// o timer que a invoca periodicamente entra no WS7.
+    /// veio dentro de FConfig.CloseTimeoutMs. Chamável de outra thread.
     procedure EnforceCloseDeadline;
+
+    /// Um passo do heartbeat (spec 4.2.7), chamado periodicamente pela thread
+    /// monitora do broker — NÃO pela thread desta conexão, que está bloqueada
+    /// no read. Faz duas coisas, ambas sobre o intervalo negociado no Tune-Ok:
+    ///  - envio ocioso há >= metade do intervalo -> posta um heartbeat;
+    ///  - nada recebido há > 2x o intervalo -> considera o peer morto e derruba
+    ///    a conexão (fecha o socket, o que desbloqueia o read).
+    /// No-op enquanto o Tune-Ok não chegou ou se o intervalo negociado é 0.
+    procedure HeartbeatTick;
+
+    /// Tick do último frame recebido do peer (0 se nenhum). Diagnóstico/testes.
+    function LastReadTick: UInt64;
 
     /// Nº de canais abertos agora (thread-safe).
     function ChannelCount: Integer;
@@ -274,6 +286,49 @@ procedure TAMQPServerConnection.WaitFor;
 begin
   if FThread <> nil then
     FThread.WaitFor;
+end;
+
+function TAMQPServerConnection.LastReadTick: UInt64;
+begin
+  Result := AmqpAtomicRead64(FLastReadTick);
+end;
+
+procedure TAMQPServerConnection.HeartbeatTick;
+var
+  LIntervalMs, LNow, LLastRead, LLastWrite: UInt64;
+begin
+  // Antes do Tune-Ok não há intervalo negociado; depois do Closing não vale a
+  // pena mandar heartbeat (já estamos encerrando).
+  if not (FState in [amqssAwaitOpen, amqssOpen]) then
+    Exit;
+  LIntervalMs := UInt64(FNegotiated.Heartbeat) * 1000;
+  if LIntervalMs = 0 then
+    Exit; // heartbeat desabilitado pelo cliente no Tune-Ok
+
+  LNow := AmqpTickMs;
+
+  // Peer morto: a spec manda derrubar após dois intervalos sem NADA chegar
+  // (qualquer frame conta, não só heartbeat). Fechar o socket desbloqueia o
+  // ReadFrom da thread desta conexão, que então encerra pelo caminho normal.
+  LLastRead := AmqpAtomicRead64(FLastReadTick);
+  if (LLastRead <> 0) and ((LNow - LLastRead) > (2 * LIntervalMs)) then
+  begin
+    if FError = '' then
+      FError := Format('peer sem enviar frames há mais de %d ms (heartbeat)',
+        [2 * LIntervalMs]);
+    Shutdown;
+    Exit;
+  end;
+
+  // Envio ocioso: manda um heartbeat para o peer não nos julgar mortos. Meio
+  // intervalo dá folga para o frame chegar antes do prazo dele.
+  LLastWrite := FWriter.LastWriteTick;
+  if (LLastWrite = 0) or ((LNow - LLastWrite) >= (LIntervalMs div 2)) then
+    try
+      FWriter.PostFrame(TAMQPFrame.Heartbeat);
+    except
+      // writer parado/falho: a thread de leitura já vai perceber
+    end;
 end;
 
 procedure TAMQPServerConnection.EnforceCloseDeadline;
@@ -420,7 +475,7 @@ begin
   if FError = '' then
     FError := Format('%d %s', [ACode, AText]);
   PostMethod(AMQP_CHANNEL_CONNECTION, BuildClose(LClose));
-  FCloseDeadline := AmqpTickMs + AMQP_SERVER_CLOSE_TIMEOUT_MS;
+  FCloseDeadline := AmqpTickMs + FConfig.CloseTimeoutMs;
 end;
 
 procedure TAMQPServerConnection.SendChannelClose(AChannel, ACode: Word;
@@ -769,11 +824,9 @@ begin
         if AFrame.Channel <> AMQP_CHANNEL_CONNECTION then
           raise EAMQPConnectionError.Create(AMQP_FRAME_ERROR,
             'heartbeat fora do canal 0', 0, 0);
-        // Interino até o WS7 (que emite heartbeats pelo próprio timer): ecoar
-        // mantém vivo o detector de conexão morta do cliente, que derruba a
-        // conexão se nada chega em 2x o intervalo.
-        if FState <> amqssClosing then
-          FWriter.PostFrame(TAMQPFrame.Heartbeat);
+        // Nada a responder: heartbeat não se ecoa. Cada lado emite pelo
+        // próprio timer (ver HeartbeatTick); receber já valeu por si, porque o
+        // FLastReadTick foi atualizado no loop de leitura.
       end;
     AMQP_FRAME_METHOD:
       HandleMethodFrame(AFrame);
@@ -857,6 +910,7 @@ begin
       if not FProtocolOk then
         Exit;
 
+      AmqpAtomicWrite64(FLastReadTick, AmqpTickMs);
       SendConnectionStart;
       FState := amqssAwaitStartOk;
 
@@ -881,6 +935,7 @@ begin
         end;
 
         AmqpAtomicInc(FFramesRead);
+        AmqpAtomicWrite64(FLastReadTick, AmqpTickMs);
 
         try
           if FState = amqssClosing then

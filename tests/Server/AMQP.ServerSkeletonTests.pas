@@ -20,6 +20,7 @@ uses
   AMQP.Transport,
   AMQP.Server.FrameIO,
   AMQP.Server.Types,
+  AMQP.Server.Connection,
   AMQP.Server.Broker;
 
 type
@@ -54,7 +55,7 @@ type
     [Test] procedure ProtocolHeaderInvalido_Fecha;
     [Test] procedure VariasConexoesConcorrentes;
     [Test] procedure StopComConexoesAbertas_NaoTrava;
-    [Test] procedure HeartbeatEcoado;
+    [Test] procedure HeartbeatRecebido_NaoDerrubaNemResponde;
   end;
 
 implementation
@@ -546,14 +547,21 @@ begin
   end;
 end;
 
-procedure TServerSkeletonTests.HeartbeatEcoado;
+procedure TServerSkeletonTests.HeartbeatRecebido_NaoDerrubaNemResponde;
 var
   B: TAMQPServer;
   C: TAMQPTcpSocket;
   Strm: TAMQPSocketStream;
   HB: TAMQPFrame;
   Reply: TAMQPFrame;
+  Conns: TArray<TAMQPServerConnection>;
+  Deadline: UInt64;
 begin
+  // Heartbeat NAO se ecoa (spec 4.2.7): cada lado emite pelo proprio timer.
+  // Receber um so conta como sinal de vida. Aqui a conexao nem chegou ao
+  // Tune-Ok, entao o broker tambem nao tem intervalo para emitir -- o teste
+  // verifica so que o frame e' aceito e nao derruba nada. A emissao de verdade
+  // esta em THeartbeatTests (AMQP.ServerHandshakeTests).
   B := TAMQPServer.Create;
   try
     B.BindAddress := '127.0.0.1';
@@ -571,8 +579,18 @@ begin
 
         HB := TAMQPFrame.Heartbeat;
         HB.WriteTo(Strm);
-        Reply := TAMQPFrame.ReadFrom(Strm, 4096);
-        Assert.IsTrue(Reply.IsHeartbeat, 'resposta e heartbeat');
+
+        // O broker contabiliza o frame recebido e segue vivo.
+        Deadline := AmqpTickMs + 2000;
+        Conns := B.Connections;
+        while (Length(Conns) = 1) and (Conns[0].FramesRead < 1) and
+              (AmqpTickMs < Deadline) do
+        begin
+          TThread.Sleep(10);
+          Conns := B.Connections;
+        end;
+        Assert.AreEqual(1, Length(Conns), 'conexao viva');
+        Assert.IsTrue(Conns[0].FramesRead >= 1, 'heartbeat contabilizado');
       finally
         Strm.Free;
       end;

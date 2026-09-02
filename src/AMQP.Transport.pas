@@ -248,7 +248,18 @@ begin
   {$ELSE}
   if FSock = nil then
     Exit(0);
-  Result := FSock.Receive(Buffer, ACount);
+  try
+    Result := FSock.Receive(Buffer, ACount);
+  except
+    // Contrato desta classe (e comportamento do fprecv no FPC): erro de
+    // recepção devolve <= 0 e quem chama trata como conexão encerrada. O
+    // TSocket do Delphi, em vez disso, levanta ESocketError -- notoriamente com
+    // WSAECONNRESET (10054) quando o peer fecha com RST em vez de FIN, que é o
+    // que acontece quando o outro lado derruba a conexão sem close gracioso.
+    // Num socket bloqueante todo erro de recv é fatal, então -1 é a resposta
+    // certa para qualquer um deles.
+    Result := -1;
+  end;
   {$ENDIF}
 end;
 
