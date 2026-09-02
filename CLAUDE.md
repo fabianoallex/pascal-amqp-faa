@@ -1,4 +1,4 @@
-# pascal-amqp-faa — contexto do projeto
+﻿# pascal-amqp-faa — contexto do projeto
 
 Cliente AMQP 0-9-1 dual-compiler (**FPC/Lazarus + Delphi**) numa única codebase, MIT. É o porte multiplataforma da `../delphi-amqp-faa` (mesmo autor); aquela permanece como projeto à parte, Delphi/Windows-only. A arquitetura, os invariantes de concorrência e as lições de protocolo estão documentados no `CLAUDE.md` de lá e valem aqui integralmente.
 
@@ -80,7 +80,7 @@ Avaliada em 2026-09-02 e iniciada: a "outra ponta" — uma lib para **criar um b
 
 **Modelo por workstream:** WS0/WS1/WS2/WS6/WS7/WS8 (scaffolding, codec, listener, broker skeleton, heartbeat, testes) são mecânicos → Sonnet. WS3 (TLS server), WS4 (handshake FSM), WS5 (regra de interleave de conteúdo) têm correção sutil de protocolo → Opus.
 
-**Progresso:**
+**Progresso:** WS1 em andamento.
 - **WS0** concluído (commit `Broker WS0`) — `CLAUDE.md`, `TAMQPSocketStream` promovido para `AMQP.Transport`, `AMQP.Server.Auth` (PLAIN, `TAMQPStaticAuthenticator` default guest/guest), `pascal_amqp_faa_server.lpk`.
 - **WS1** concluído (commits `Broker WS1`) — codec bidirecional in-place nas units `AMQP.*.Methods`: `Build` dos métodos servidor→cliente (`BuildStart`/`Tune`/`OpenOk`/`Deliver`/`Return`/`GetOk`/`GetEmpty`/`*DeclareOk`/…) e `Decode` dos cliente→servidor (`DecodeStartOk`/`DecodeOpen`/`DecodeBasicPublish`/`DecodeBasicConsume`/`DecodeQueueDeclare`/…). `DecodeBasicAck/Nack` + `BuildBasicAck/Nack` já eram bidirecionais. Records novos: `TAMQPConnectionStartOk`, `TAMQPConnectionOpen`, `TAMQPQueuePurge`, `TAMQPBasicQosArgs/Publish/Get/CancelArgs/Reject`. SASL response lida como `TBytes` crus (PLAIN tem `#0`). Testes `TConnectionServerCodecTests` (11) + `TServerCodecTests` (25) nas duas suítes, cruzando Build do cliente ↔ Decode do servidor.
 - Revalidação do cliente contra broker real: SmokeTest plain e `--tls` PASS (Default e `openssl`), integração 28/28, unitária **117/117** — **nos dois compiladores** (FPC via CLI; Delphi/DUnitX na IDE, 0 leaks).
@@ -156,7 +156,29 @@ Avaliada em 2026-09-02 e iniciada: a "outra ponta" — uma lib para **criar um b
 
 **Fase 1 completa.** O broker faz handshake com SASL PLAIN, canais, todo método cliente→servidor com o `*-Ok` correto, remontagem de conteúdo com a regra de interleave, heartbeats bidirecionais, modelo de erro canal-vs-conexão e TLS. Falta engine: nada é roteado, entregue ou confirmado.
 
-**Próximo: Fase 2** (engine de roteamento em memória), que entra pelo `IAMQPMessageSink`: exchanges direct/fanout/topic/headers, filas com ator-por-fila, consume/get/ack/nack, publisher confirms (hoje o `Confirm.Select` é aceito mas nenhum `Basic.Ack` é enviado) e mandatory/Basic.Return.
+### Fase 2 — engine de roteamento em memória (em andamento)
+
+Entra inteira pelo `IAMQPMessageSink` que a Fase 1 já expõe: nem o cliente nem a forma do protocolo mudam. Plano de workstreams: artifact `Broker AMQP — Fase 2` (https://claude.ai/code/artifact/50acd241-e591-44c1-aa90-9879e28969d2).
+
+**Escopo:** exchanges direct/fanout/topic/headers + o default `""` + os `amq.*` predefinidos; filas em memória com ator-por-fila (declare/bind/unbind/purge/delete de verdade); `Basic.Consume`/`Cancel`, entrega assíncrona e `Basic.Get`; `Ack`/`Nack`/`Reject` com requeue e `redelivered`; `Basic.Qos` (prefetch por canal); publisher confirms reais e `mandatory` → `Basic.Return`; filas `exclusive`/`auto-delete`; modelo de erro completo (403/404/405/406/540).
+**Fora (Fase 3):** persistência, TTL, DLX/`x-death`, `x-max-priority`, `x-max-length` por fila, alternate exchange, permissões por vhost.
+
+**Workstreams e modelo por frente** — Opus onde a correção é de concorrência/ciclo de vida entre threads ou de ordem de frames no wire; Sonnet onde a spec já é tabela ou o trabalho é espelhar:
+WS1 mensagem + descritores de recurso (Sonnet) · WS2 topologia por vhost + matchers (Sonnet) · WS3 fila-ator (**Opus**) · WS4 entrega/QoS/ack (**Opus**) · WS5 despacho real na FSM (Sonnet) · WS6 confirms + mandatory/Return (**Opus**) · WS7 ciclo de vida cruzado e teardown (**Opus**) · WS8 suítes espelhadas FPCUnit↔DUnitX (Sonnet, contínuo) · WS9 aceitação: integração do cliente + SmokeTest contra o broker embutido (Sonnet) · WS10 docs (Sonnet).
+
+**Decisões travadas (D1–D8, aprovadas em 2026-09-02 — não reavaliar do zero):**
+1. **A mensagem carrega o payload cru do content-header**, não um clone da `TAMQPFieldTable`: re-emissão fiel byte a byte e nada do `TValue`-em-`TValue` do FPC. Consequência: o canal guarda os bytes do content-header e os entrega no `TAMQPServerMessage`. O match de bindings de headers usa a tabela **viva do canal**, antes do enqueue. A Fase 3 (`x-death`) vai precisar de um caminho de reescrita (decodifica → muda → re-encoda) só quando o header mudar de fato.
+2. **O ator da fila roda agendado no `AmqpPool`** (work item + flag "já agendado"), não uma thread por fila — N filas ociosas não podem virar N threads. Regra que isso impõe: nenhum comando do ator pode bloquear o worker esperando I/O.
+3. **Consumidor lento sai do rodízio**: a entrega é post sem bloqueio; se a fila outbound do writer recusar, o consumidor fica suspenso até drenar. Bloquear o ator seria head-of-line para todos os consumidores daquela fila.
+4. **`Basic.Recover` implementado com `requeue=true`** (constantes e codec novos), `540` para `requeue=false` — mesmo desvio do RabbitMQ.
+5. **Binding exchange→exchange suportado** (`Exchange.Bind`/`Unbind` já estão no codec), com conjunto de visitados por publicação e profundidade máxima: o grafo pode ter ciclo.
+6. **`durable` e `delivery-mode 2` aceitos e ignorados** na Fase 2 (tudo em memória), documentado como desvio deliberado — recusar quebraria clientes que sempre declaram durável.
+7. **Teto de segurança de memória**: `TAMQPServer.MaxQueueLength` global (default 0 = ilimitado; ao estourar, descarta da cabeça). O broker roda *dentro* da app do usuário — uma fila sem consumidor não pode derrubar o processo hospedeiro. `x-max-length` por fila continua Fase 3.
+8. **O WS9 roda a suíte de integração do cliente contra o broker embutido**, exceto os testes que dependem de recurso de Fase 3 (TTL, DLX/`x-death`, prioridade); cada exceção vira item do backlog da Fase 3, não teste "pulado".
+
+**Invariante nova:** o *match* de bindings roda na thread do publicador (tabela de exchanges quase-imutável sob RWLock; tabela de headers viva do canal). Só o *enqueue* atravessa para o ator da fila.
+
+**Progresso:**
 
 **Build/teste do server:** `fpc -Fusrc -Fusrc\server -Fisrc -FEbuild -FUbuild src\server\AMQP.Server.Broker.pas` compila o server inteiro; pacote `lazbuild packages\pascal_amqp_faa_server.lpk`. Suíte em `tests\Server\AMQP.ServerTests.dproj` (DUnitX, dentro do `AMQP.groupproj`) e `tests\Server\fpc\AMQPServerTestsFpc.lpi` (FPCUnit) — **espelhos um do outro: mesmos nomes de teste e mesmas asserções, mantenha os dois em sincronia**. A fixture sobe o broker in-process em porta efêmera e aponta o `TAMQPConnection` do cliente nele. Certs de TLS: reusar `docker\certs`.
 
