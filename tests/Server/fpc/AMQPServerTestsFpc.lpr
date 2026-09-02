@@ -19,6 +19,7 @@ uses
   AMQP.ServerSkeletonTests,
   AMQP.ServerHandshakeTests,
   AMQP.ServerEngineTests,
+  AMQP.ServerRoutingTests;
 
 var
   ConsoleApp: TTestRunner;

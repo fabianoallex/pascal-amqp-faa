@@ -38,6 +38,14 @@
         <UnitName Value="AMQP.Server.Resources"/>
       </Item>
       <Item>
+        <Filename Value="..\src\server\AMQP.Server.Routing.pas"/>
+        <UnitName Value="AMQP.Server.Routing"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.VHost.pas"/>
+        <UnitName Value="AMQP.Server.VHost"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\server\AMQP.Server.FrameIO.pas"/>
         <UnitName Value="AMQP.Server.FrameIO"/>
       </Item>

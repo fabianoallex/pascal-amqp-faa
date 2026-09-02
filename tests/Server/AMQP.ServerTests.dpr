@@ -26,12 +26,15 @@ uses
   AMQP.Server.Channel in '..\..\src\server\AMQP.Server.Channel.pas',
   AMQP.Server.Message in '..\..\src\server\AMQP.Server.Message.pas',
   AMQP.Server.Resources in '..\..\src\server\AMQP.Server.Resources.pas',
+  AMQP.Server.Routing in '..\..\src\server\AMQP.Server.Routing.pas',
+  AMQP.Server.VHost in '..\..\src\server\AMQP.Server.VHost.pas',
   AMQP.Server.FrameIO in '..\..\src\server\AMQP.Server.FrameIO.pas',
   AMQP.Server.Connection in '..\..\src\server\AMQP.Server.Connection.pas',
   AMQP.Server.Broker in '..\..\src\server\AMQP.Server.Broker.pas',
   AMQP.ServerSkeletonTests in 'AMQP.ServerSkeletonTests.pas',
   AMQP.ServerHandshakeTests in 'AMQP.ServerHandshakeTests.pas',
   AMQP.ServerEngineTests in 'AMQP.ServerEngineTests.pas',
+  AMQP.ServerRoutingTests in 'AMQP.ServerRoutingTests.pas';
 
 var
   runner: ITestRunner;
