@@ -52,6 +52,8 @@ type
     [Test] procedure RefCount_FilaSeguraUmaReferencia;
     [Test] procedure Sincrono_DeDentroDoAtor_Levanta;
     [Test] procedure Estresse_ProdutoresConcorrentesESincronos;
+    [Test] procedure Delete_AvisaConsumidoresComCancel;
+    [Test] procedure EverHadConsumer_SoViraVerdadeComConsumidor;
     [Test] procedure CaixaSerial_PostNaJanelaDoFimDeRodada_NaoPerdeWakeup;
   end;
 
@@ -861,6 +863,54 @@ begin
     Assert.AreEqual(1, AmqpAtomicGet(LQ.FConcluiu),
       'o comando postado na janela do fim de rodada tem de ser atendido');
     Assert.AreEqual(1, AmqpAtomicGet(LQ.FOk), 'e sem levantar');
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueueActorTests.Delete_AvisaConsumidoresComCancel;
+var
+  LQ: TAMQPServerQueue;
+  LA, LB: TAlvoFalso;
+  LRefA, LRefB: IAMQPDeliveryTarget;
+  LCount: Integer;
+begin
+  LQ := TAMQPServerQueue.Create('q');
+  try
+    LA := TAlvoFalso.Create(1);
+    LA.Recusar := True;
+    LRefA := LA;
+    LB := TAlvoFalso.Create(2);
+    LB.Recusar := True;
+    LRefB := LB;
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, LRefA));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', False, False, LRefB));
+
+    Assert.IsTrue(LQ.Delete(False, False, LCount) = amqqdOk, 'delete');
+
+    // A fila sumiu debaixo dos consumidores: os dois tem de saber.
+    Assert.AreEqual('ct-a', LA.Cancelados, 'o primeiro foi avisado');
+    Assert.AreEqual('ct-b', LB.Cancelados, 'o segundo tambem');
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueueActorTests.EverHadConsumer_SoViraVerdadeComConsumidor;
+var
+  LQ: TAMQPServerQueue;
+begin
+  LQ := TAMQPServerQueue.Create('q');
+  try
+    Assert.IsFalse(LQ.Stats.EverHadConsumer, 'fila nova nunca teve consumidor');
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
+      AlvoQueRecusa(1)));
+    Assert.IsTrue(LQ.Stats.EverHadConsumer, 'agora teve');
+    LQ.PostRemoveConsumer(1, 'ct');
+    // Continua verdade DEPOIS de o consumidor sair -- e' o que distingue
+    // "auto-delete que perdeu o ultimo" de "auto-delete que nunca teve".
+    Assert.IsTrue(LQ.Stats.EverHadConsumer, 'e continua tendo tido');
+    Assert.AreEqual(0, LQ.Stats.ConsumerCount, 'sem consumidor agora');
   finally
     LQ.Free;
   end;

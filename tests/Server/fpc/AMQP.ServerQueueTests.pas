@@ -51,6 +51,8 @@ type
     procedure RefCount_FilaSeguraUmaReferencia;
     procedure Sincrono_DeDentroDoAtor_Levanta;
     procedure Estresse_ProdutoresConcorrentesESincronos;
+    procedure Delete_AvisaConsumidoresComCancel;
+    procedure EverHadConsumer_SoViraVerdadeComConsumidor;
     procedure CaixaSerial_PostNaJanelaDoFimDeRodada_NaoPerdeWakeup;
   end;
 
@@ -863,6 +865,54 @@ begin
     AssertEquals('o comando postado na janela do fim de rodada tem de ser atendido',
       1, AmqpAtomicGet(LQ.FConcluiu));
     AssertEquals('e sem levantar', 1, AmqpAtomicGet(LQ.FOk));
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueueActorTests.Delete_AvisaConsumidoresComCancel;
+var
+  LQ: TAMQPServerQueue;
+  LA, LB: TAlvoFalso;
+  LRefA, LRefB: IAMQPDeliveryTarget;
+  LCount: Integer;
+begin
+  LQ := TAMQPServerQueue.Create('q');
+  try
+    LA := TAlvoFalso.Create(1);
+    LA.Recusar := True;
+    LRefA := LA;
+    LB := TAlvoFalso.Create(2);
+    LB.Recusar := True;
+    LRefB := LB;
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, LRefA));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', False, False, LRefB));
+
+    AssertTrue('delete', LQ.Delete(False, False, LCount) = amqqdOk);
+
+    // A fila sumiu debaixo dos consumidores: os dois tem de saber.
+    AssertEquals('o primeiro foi avisado', 'ct-a', LA.Cancelados);
+    AssertEquals('o segundo tambem', 'ct-b', LB.Cancelados);
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueueActorTests.EverHadConsumer_SoViraVerdadeComConsumidor;
+var
+  LQ: TAMQPServerQueue;
+begin
+  LQ := TAMQPServerQueue.Create('q');
+  try
+    AssertFalse('fila nova nunca teve consumidor', LQ.Stats.EverHadConsumer);
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
+      AlvoQueRecusa(1)));
+    AssertTrue('agora teve', LQ.Stats.EverHadConsumer);
+    LQ.PostRemoveConsumer(1, 'ct');
+    // Continua verdade DEPOIS de o consumidor sair -- e' o que distingue
+    // "auto-delete que perdeu o ultimo" de "auto-delete que nunca teve".
+    AssertTrue('e continua tendo tido', LQ.Stats.EverHadConsumer);
+    AssertEquals('sem consumidor agora', 0, LQ.Stats.ConsumerCount);
   finally
     LQ.Free;
   end;

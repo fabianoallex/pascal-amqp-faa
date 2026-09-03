@@ -368,6 +368,16 @@ type
     /// Cancela um consumer pelo tag.
     procedure Cancel(const AConsumerTag: string);
 
+    /// Fecha o canal (Channel.Close + espera o Close-Ok).
+    ///
+    /// ATENÇÃO à posse: o canal continua sendo SEU depois do Close — libere-o.
+    /// Fechar DESREGISTRA o canal da conexão (é o que faz um frame atrasado do
+    /// servidor ser descartado em vez de cair num canal já fechado), e o
+    /// destrutor da conexão só recolhe os canais que ainda estão registrados.
+    /// Ou seja: esquecer o Free de um canal que você NUNCA fechou é perdoado
+    /// pelo destrutor da conexão; esquecer o Free depois de um Close vaza o
+    /// objeto. O par correto é sempre `Ch.Close; Ch.Free;` (ou só `Ch.Free`,
+    /// que fecha antes de liberar).
     procedure Close(AReplyCode: Word = 200; const AReplyText: string = 'OK');
 
     property ChannelId: Word read FChannelId;
@@ -468,7 +478,9 @@ type
 
     /// Conecta o socket e executa o handshake. Levanta EAMQPConnection em falha.
     procedure Open;
-    /// Abre um novo canal (já aberto). O chamador é dono e deve liberá-lo.
+    /// Abre um novo canal (já aberto). O chamador é dono e deve liberá-lo
+    /// (ver a nota de posse em TAMQPChannel.Close: fechar não libera, e tira
+    /// o canal da rede de segurança do destrutor da conexão).
     /// ADedicatedConsumerThread: se True, as entregas/returns/confirms deste
     /// canal são despachados para uma única thread própria do canal (ordem
     /// garantida, nunca concorrente) em vez do pool global compartilhado.

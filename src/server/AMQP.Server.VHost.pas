@@ -166,6 +166,14 @@ type
       AArguments: TAMQPFieldTable): TAMQPTopologyResult;
 
     function ExchangeExists(const AName: string): Boolean;
+    /// Nomes de todos os exchanges declarados (snapshot).
+    function ExchangeNames: TArray<string>;
+    /// True se ALGUM binding parte de AName (fila ou exchange de destino).
+    /// E' o que decide se um exchange auto-delete ja perdeu o ultimo binding.
+    function HasBindingsFrom(const AName: string): Boolean;
+    /// Nomes das filas exclusivas de AOwnerId (WS7: elas somem com a conexao
+    /// dona). Snapshot -- o chamador apaga uma a uma depois.
+    function ExclusiveQueuesOf(AOwnerId: NativeUInt): TArray<string>;
     function QueueExists(const AName: string): Boolean;
     /// Devolve o descritor (referencia direta, NAO uma copia -- o chamador
     /// NAO e' dono e nao deve reter alem do uso imediato: um Delete
@@ -563,6 +571,73 @@ begin
     Result := FExchanges.ContainsKey(AName);
   finally
     FLock.EndRead;
+  end;
+end;
+
+function TAMQPVHost.ExchangeNames: TArray<string>;
+var
+  LPar: TPair<string, TAMQPExchangeDef>;
+  LNomes: TList<string>;
+begin
+  LNomes := TList<string>.Create;
+  try
+    FLock.BeginRead;
+    try
+      // NAO usar FExchanges.Values aqui -- ver o comentario em
+      // ExclusiveQueuesOf: e' uma escrita disfarcada de leitura.
+      for LPar in FExchanges do
+        LNomes.Add(LPar.Value.Name);
+    finally
+      FLock.EndRead;
+    end;
+    Result := LNomes.ToArray;
+  finally
+    LNomes.Free;
+  end;
+end;
+
+function TAMQPVHost.HasBindingsFrom(const AName: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  FLock.BeginRead;
+  try
+    for I := 0 to FBindings.Count - 1 do
+      if FBindings[I].Source = AName then
+        Exit(True);
+  finally
+    FLock.EndRead;
+  end;
+end;
+
+function TAMQPVHost.ExclusiveQueuesOf(AOwnerId: NativeUInt): TArray<string>;
+var
+  LPar: TPair<string, TAMQPQueueDef>;
+  LNomes: TList<string>;
+begin
+  LNomes := TList<string>.Create;
+  try
+    FLock.BeginRead;
+    try
+      // ATENCAO: `FQueues.Values` NAO pode ser usado sob BeginRead. O
+      // TDictionary cria a colecao de valores SOB DEMANDA e a guarda num
+      // campo interno (`if not Assigned(FValues) then FValues := ...`), ou
+      // seja: e' uma ESCRITA disfarcada de leitura. Como o BeginRead admite
+      // varios leitores ao mesmo tempo, duas conexoes caindo juntas criavam
+      // duas colecoes e uma sobrescrevia a outra -- vazando 16 bytes em ~10%
+      // das execucoes. Achado com heaptrc; ver CLAUDE.md. Iterar o
+      // dicionario direto cria um enumerador NOVO a cada chamada (nada de
+      // campo compartilhado) e e' seguro entre leitores.
+      for LPar in FQueues do
+        if LPar.Value.Exclusive and (LPar.Value.OwnerId = AOwnerId) then
+          LNomes.Add(LPar.Value.Name);
+    finally
+      FLock.EndRead;
+    end;
+    Result := LNomes.ToArray;
+  finally
+    LNomes.Free;
   end;
 end;
 

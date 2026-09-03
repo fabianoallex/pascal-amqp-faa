@@ -1,4 +1,4 @@
-unit AMQP.ServerTestDoubles;
+﻿unit AMQP.ServerTestDoubles;
 
 { Dublês compartilhados pelas suítes do broker -- WS4 da Fase 2.
 
@@ -39,6 +39,7 @@ type
   private
     FLock: TCriticalSection;
     FEntregas: TList<TEntregaReg>;
+    FCancelados: TStringList;
     FId: NativeUInt;
     FNextTag: UInt64;
     FRecusar: Boolean;
@@ -52,11 +53,15 @@ type
     function TryDeliver(const AConsumerTag, AQueueName: string;
       ANoAck, ARedelivered: Boolean; AMessage: TAMQPMessage;
       out ADeliveryTag: UInt64): Boolean;
+    function TryCancel(const AConsumerTag: string): Boolean;
 
     function Count: Integer;
     function Entrega(AIndex: Integer): TEntregaReg;
     /// Corpos entregues, na ordem, separados por '|'.
     function Corpos: string;
+    /// Consumer-tags que receberam Basic.Cancel (fila apagada sob eles).
+    function Cancelados: string;
+    function CanceladosCount: Integer;
     property Recusar: Boolean read FRecusar write FRecusar;
     property Vivo: Boolean read FVivo write FVivo;
   end;
@@ -84,6 +89,7 @@ begin
   inherited Create;
   FLock := TCriticalSection.Create;
   FEntregas := TList<TEntregaReg>.Create;
+  FCancelados := TStringList.Create;
   FId := AId;
   FNextTag := 1;
   FVivo := True;
@@ -92,6 +98,7 @@ end;
 destructor TAlvoFalso.Destroy;
 begin
   FEntregas.Free;
+  FCancelados.Free;
   FLock.Free;
   inherited;
 end;
@@ -131,6 +138,17 @@ begin
   end;
 end;
 
+function TAlvoFalso.TryCancel(const AConsumerTag: string): Boolean;
+begin
+  FLock.Enter;
+  try
+    FCancelados.Add(AConsumerTag);
+    Result := True;
+  finally
+    FLock.Leave;
+  end;
+end;
+
 function TAlvoFalso.Count: Integer;
 begin
   FLock.Enter;
@@ -146,6 +164,26 @@ begin
   FLock.Enter;
   try
     Result := FEntregas[AIndex];
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TAlvoFalso.Cancelados: string;
+begin
+  FLock.Enter;
+  try
+    Result := FCancelados.CommaText;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TAlvoFalso.CanceladosCount: Integer;
+begin
+  FLock.Enter;
+  try
+    Result := FCancelados.Count;
   finally
     FLock.Leave;
   end;

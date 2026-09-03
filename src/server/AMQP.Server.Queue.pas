@@ -113,6 +113,10 @@ type
     DroppedCount: Int64;
     /// Entregues a consumidores desde a criacao (nao conta Basic.Get).
     DeliveredCount: Int64;
+    /// True se esta fila JA TEVE ao menos um consumidor. E' o que separa
+    /// "auto-delete que perdeu o ultimo consumidor" (some) de "auto-delete
+    /// que nunca teve nenhum" (fica) -- mesma regra do RabbitMQ.
+    EverHadConsumer: Boolean;
   end;
 
   { Costura da entrega (WS4). O canal/conexao implementa; a fila so' guarda a
@@ -145,6 +149,12 @@ type
     function TryDeliver(const AConsumerTag, AQueueName: string;
       ANoAck, ARedelivered: Boolean; AMessage: TAMQPMessage;
       out ADeliveryTag: UInt64): Boolean;
+    /// A fila sumiu debaixo do consumidor (Queue.Delete, ou auto-delete):
+    /// manda Basic.Cancel para o cliente saber. Como TryDeliver, NAO PODE
+    /// BLOQUEAR -- False = nao coube agora, e o consumidor morre em silencio
+    /// (o cliente descobre no proximo uso). Nao ha retentativa: a fila esta
+    /// sendo destruida.
+    function TryCancel(const AConsumerTag: string): Boolean;
   end;
 
   { Um consumidor registrado (Basic.Consume). A fila e' dona destes objetos
@@ -272,6 +282,7 @@ type
     FUnacked: TList<TAMQPUnackedEntry>;
     FConsumers: TObjectList<TAMQPServerConsumer>;
     FRoundRobin: Integer; // proximo consumidor a atender (rodizio)
+    FEverHadConsumer: Boolean;
     FDropped: Int64;
     FDelivered: Int64;
 
@@ -1029,6 +1040,7 @@ begin
   Result.UnackedCount := FUnacked.Count;
   Result.DroppedCount := FDropped;
   Result.DeliveredCount := FDelivered;
+  Result.EverHadConsumer := FEverHadConsumer;
 end;
 
 { --- o despacho de comandos, na thread do ator --- }
@@ -1053,6 +1065,7 @@ begin
       begin
         FConsumers.Add(ACmd.Consumer);
         ACmd.Consumer := nil; // a fila e' dona agora
+        FEverHadConsumer := True;
       end;
 
     amqqcRemoveConsumer:
@@ -1136,6 +1149,17 @@ begin
         begin
           ACmd.ResCount := ReadyCount;
           ACmd.ResDelete := amqqdOk;
+          // Avisa quem estava consumindo ANTES de o estado ir embora: a fila
+          // sumiu debaixo deles e o cliente precisa saber (spec 1.7.2.9 --
+          // "the server MUST cancel all consumers"). Best-effort e sem
+          // bloquear: a fila esta' sendo destruida, nao ha retentativa.
+          for I := 0 to FConsumers.Count - 1 do
+            try
+              FConsumers[I].Target.TryCancel(FConsumers[I].ConsumerTag);
+            except
+              on E: Exception do
+                ; // canal morrendo junto: nao atrapalha o delete
+            end;
           // O estado sai no DrainState do Stop que o Delete dispara --
           // liberar aqui e depois de novo la' seria double-free.
         end;

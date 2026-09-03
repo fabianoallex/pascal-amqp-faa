@@ -109,6 +109,7 @@ type
     function TryDeliver(const AConsumerTag, AQueueName: string;
       ANoAck, ARedelivered: Boolean; AMessage: TAMQPMessage;
       out ADeliveryTag: UInt64): Boolean;
+    function TryCancel(const AConsumerTag: string): Boolean;
 
     /// O canal/conexao morreu: solta o writer e marca o alvo como morto.
     /// Idempotente e chamavel de qualquer thread.
@@ -378,6 +379,23 @@ begin
     BuildBasicDeliver(LDeliver));
   for I := 0 to High(LConteudo) do
     Result[1 + I] := LConteudo[I];
+end;
+
+// Basic.Cancel servidor -> cliente: a fila do consumidor sumiu. Um unico
+// frame de metodo, pelo mesmo caminho nao-bloqueante da entrega.
+function TAMQPChannelDeliveryTarget.TryCancel(
+  const AConsumerTag: string): Boolean;
+begin
+  Result := False;
+  FLock.Enter;
+  try
+    if FWriter = nil then
+      Exit; // canal ja morreu: nao ha a quem avisar
+    Result := FWriter.TryPostFrames([TAMQPFrame.Create(AMQP_FRAME_METHOD,
+      FChannelNo, BuildBasicCancel(AConsumerTag, True))]);
+  finally
+    FLock.Leave;
+  end;
 end;
 
 function TAMQPChannelDeliveryTarget.TryDeliver(

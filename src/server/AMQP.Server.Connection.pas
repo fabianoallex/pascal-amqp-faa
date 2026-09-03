@@ -1057,6 +1057,11 @@ begin
         // para a fila -- o cliente nunca as confirmou.
         LFila.PostRemoveChannel(LId);
     end;
+    // WS7, DEPOIS de postar todas as remocoes: uma fila auto-delete que
+    // perdeu o ultimo consumidor com este canal some agora. O Stats de dentro
+    // do MaybeAutoDeleteQueue e' a barreira sobre o PostRemoveChannel acima.
+    for I := 0 to High(LNomes) do
+      FEngine.MaybeAutoDeleteQueue(FVirtualHost, LNomes[I]);
   end;
   AChannel.DetachDelivery;
 end;
@@ -1207,6 +1212,7 @@ begin
             LBind.Arguments := nil;
             CheckEngine(AChannel, LRes, 'exchange ' + LBind.Source,
               AId.ClassId, AId.MethodId);
+            FEngine.MaybeAutoDeleteExchange(FVirtualHost, LBind.Source);
           end;
           if not LBind.NoWait then
             PostMethod(AChannel.Id, BuildExchangeUnbindOk);
@@ -1317,6 +1323,9 @@ begin
             CheckEngine(AChannel, LRes,
               'queue ' + LName + ' or exchange ' + LUnbind.ExchangeName,
               AId.ClassId, AId.MethodId);
+            // WS7: pode ter sido o ultimo binding de um exchange auto-delete.
+            FEngine.MaybeAutoDeleteExchange(FVirtualHost,
+              LUnbind.ExchangeName);
           end;
           PostMethod(AChannel.Id, BuildQueueUnbindOk);
         finally
@@ -1438,6 +1447,9 @@ begin
             FEngine.RemoveConsumer(FVirtualHost, LFila, LCancel.ConsumerTag,
               AChannel.Delivery.ChannelId);
             AChannel.RemoveConsumerTag(LCancel.ConsumerTag);
+            // WS7: se a fila e' auto-delete e este era o ultimo consumidor,
+            // ela some agora.
+            FEngine.MaybeAutoDeleteQueue(FVirtualHost, LFila);
           end;
         end;
         if not LCancel.NoWait then
@@ -1870,6 +1882,16 @@ begin
       except
       end;
     ClearChannels;
+    // WS7: fila exclusiva pertence a UMA conexao e morre com ela (spec
+    // 1.7.2.1). Depois do ClearChannels, que ja soltou consumidores e
+    // devolveu as nao-confirmadas.
+    if FEngine <> nil then
+      try
+        FEngine.DeleteExclusiveQueuesOf(FVirtualHost, FConnId);
+      except
+        on E: Exception do
+          ; // teardown nao pode falhar por causa disto
+      end;
     if Assigned(FOnClosed) then
       FOnClosed(Self);
   end;

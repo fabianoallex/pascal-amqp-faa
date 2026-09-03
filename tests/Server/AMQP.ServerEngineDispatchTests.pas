@@ -120,6 +120,36 @@ type
     [Test] procedure Mandatory_SemConfirmMode_AindaDevolve;
   end;
 
+  [TestFixture]
+  TLifecycleTests = class
+  private
+    FBroker: TAMQPServer;
+    function Params: TAMQPConnectionParams;
+    procedure OnDelivery(AChannel: TAMQPChannel;
+      const ADelivery: TAMQPDelivery);
+    /// Passive declare num canal NOVO (um passive que falha mata o canal).
+    function FilaExiste(AConn: TAMQPConnection; const ANome: string): Boolean;
+    function ExchangeExiste(AConn: TAMQPConnection;
+      const ANome: string): Boolean;
+    /// O teardown do lado servidor e assincrono: espera a fila sumir.
+    function EsperaFilaSumir(AConn: TAMQPConnection; const ANome: string;
+      ATimeoutMs: Integer): Boolean;
+  public
+    [Setup]    procedure Setup;
+    [TearDown] procedure TearDown;
+
+    [Test] procedure Exclusiva_SomeComAConexaoDona;
+    [Test] procedure Exclusiva_ViveEnquantoADonaVive;
+    [Test] procedure AutoDelete_SomeAoSairOUltimoConsumidor;
+    [Test] procedure AutoDelete_NaoSomeSemNuncaTerConsumidor;
+    [Test] procedure AutoDelete_NaoSomeComOutroConsumidorAtivo;
+    [Test] procedure AutoDelete_SomeQuandoOConsumidorCai;
+    [Test] procedure SemAutoDelete_FicaAposOConsumidorSair;
+    [Test] procedure ExchangeAutoDelete_SomeAoPerderOUltimoBinding;
+    [Test] procedure ExchangeAutoDelete_SomeQuandoAFilaEApagada;
+    [Test] procedure ExchangeAutoDelete_FicaEnquantoHouverBinding;
+  end;
+
 implementation
 
 { --- helpers --- }
@@ -1194,9 +1224,369 @@ begin
   end;
 end;
 
+{ --- TLifecycleTests --- }
+
+procedure TLifecycleTests.Setup;
+begin
+  FBroker := NovoBroker;
+end;
+
+procedure TLifecycleTests.TearDown;
+begin
+  FBroker.Free;
+end;
+
+function TLifecycleTests.Params: TAMQPConnectionParams;
+begin
+  Result := ParamsDe(FBroker);
+end;
+
+procedure TLifecycleTests.OnDelivery(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery);
+begin
+  // os testes de ciclo de vida nao olham o conteudo entregue
+end;
+
+function TLifecycleTests.FilaExiste(AConn: TAMQPConnection;
+  const ANome: string): Boolean;
+var
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+begin
+  // Canal novo a cada checagem: um passive que nao acha a fila fecha o canal
+  // com 404, e um canal morto nao serve para a checagem seguinte.
+  LCh := AConn.CreateChannel;
+  LDecl := TAMQPQueueDeclare.Create(ANome);
+  LDecl.Passive := True;
+  Result := True;
+  try
+    LCh.DeclareQueue(LDecl);
+  except
+    on E: EAMQPChannel do
+      Result := False;
+  end;
+end;
+
+function TLifecycleTests.ExchangeExiste(AConn: TAMQPConnection;
+  const ANome: string): Boolean;
+var
+  LCh: TAMQPChannel;
+  LDecl: TAMQPExchangeDeclare;
+begin
+  LCh := AConn.CreateChannel;
+  LDecl := TAMQPExchangeDeclare.Create(ANome);
+  LDecl.Passive := True;
+  Result := True;
+  try
+    LCh.DeclareExchange(LDecl);
+  except
+    on E: EAMQPChannel do
+      Result := False;
+  end;
+end;
+
+function TLifecycleTests.EsperaFilaSumir(AConn: TAMQPConnection;
+  const ANome: string; ATimeoutMs: Integer): Boolean;
+var
+  LDeadline: UInt64;
+begin
+  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  while FilaExiste(AConn, ANome) and (AmqpTickMs < LDeadline) do
+    Sleep(20);
+  Result := not FilaExiste(AConn, ANome);
+end;
+
+procedure TLifecycleTests.Exclusiva_SomeComAConexaoDona;
+var
+  LDona, LOutra: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+begin
+  LOutra := TAMQPConnection.Create(Params);
+  try
+    LOutra.Open;
+
+    LDona := TAMQPConnection.Create(Params);
+    try
+      LDona.Open;
+      LCh := LDona.CreateChannel;
+      LDecl := TAMQPQueueDeclare.Create('q.excl.vida');
+      LDecl.Exclusive := True;
+      LCh.DeclareQueue(LDecl);
+      Assert.IsTrue(FilaExiste(LDona, 'q.excl.vida'),
+        'a fila existe enquanto a dona vive');
+    finally
+      LDona.Free; // a dona cai
+    end;
+
+    Assert.IsTrue(EsperaFilaSumir(LOutra, 'q.excl.vida', 5000),
+      'fila exclusiva morre com a conexao dona');
+  finally
+    LOutra.Free;
+  end;
+end;
+
+procedure TLifecycleTests.Exclusiva_ViveEnquantoADonaVive;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPQueueDeclare.Create('q.excl.viva');
+    LDecl.Exclusive := True;
+    LCh.DeclareQueue(LDecl);
+
+    // Abrir e fechar OUTRA conexao nao pode levar a fila junto.
+    with TAMQPConnection.Create(Params) do
+      try
+        Open;
+      finally
+        Free;
+      end;
+    Sleep(200);
+    Assert.IsTrue(FilaExiste(LConn, 'q.excl.viva'),
+      'so a conexao DONA leva a fila exclusiva embora');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.AutoDelete_SomeAoSairOUltimoConsumidor;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LTag: string;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPQueueDeclare.Create('q.ad');
+    LDecl.AutoDelete := True;
+    LCh.DeclareQueue(LDecl);
+    LTag := LCh.Consume('q.ad', OnDelivery, True);
+    Assert.IsTrue(FilaExiste(LConn, 'q.ad'), 'existe com consumidor');
+
+    LCh.Cancel(LTag); // o Cancel-Ok volta so' depois do broker processar
+    Assert.IsFalse(FilaExiste(LConn, 'q.ad'),
+      'auto-delete some quando o ultimo consumidor sai');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.AutoDelete_NaoSomeSemNuncaTerConsumidor;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPQueueDeclare.Create('q.ad.virgem');
+    LDecl.AutoDelete := True;
+    LCh.DeclareQueue(LDecl);
+    LCh.PublishText('', 'q.ad.virgem', 'x');
+
+    // O Basic.Get em modo ack deixa uma entrega em aberto, e e' isso que poe
+    // a fila na lista de "filas que este canal tocou" -- entao fechar o canal
+    // FAZ o teardown chamar o auto-delete nela. Sem esse passo o teste
+    // passaria sem nunca exercitar o guard (medido por mutacao: remover o
+    // EverHadConsumer nao derrubava a versao anterior deste teste).
+    LCh.BasicGet('q.ad.virgem', False);
+    LCh.Close;
+    // Close TIRA o canal do dicionario da conexao (UnregisterChannel), e o
+    // destrutor da conexao so' libera os que ainda estao la' -- entao quem
+    // fecha tem de liberar. Sem este Free o heaptrc acusa o objeto.
+    LCh.Free;
+
+    // A fila nunca teve CONSUMIDOR, so' um Get: nao pode sumir, senao ela
+    // desapareceria entre o declare e o primeiro consume.
+    Assert.IsTrue(FilaExiste(LConn, 'q.ad.virgem'),
+      'auto-delete que NUNCA teve consumidor nao some');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.AutoDelete_NaoSomeComOutroConsumidorAtivo;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LTag1: string;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPQueueDeclare.Create('q.ad2');
+    LDecl.AutoDelete := True;
+    LCh.DeclareQueue(LDecl);
+    LTag1 := LCh.Consume('q.ad2', OnDelivery, True);
+    LCh.Consume('q.ad2', OnDelivery, True); // segundo consumidor
+
+    LCh.Cancel(LTag1);
+    Assert.IsTrue(FilaExiste(LConn, 'q.ad2'),
+      'ainda ha consumidor: a fila fica');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.AutoDelete_SomeQuandoOConsumidorCai;
+var
+  LDono, LOutra: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+begin
+  LOutra := TAMQPConnection.Create(Params);
+  try
+    LOutra.Open;
+    // A fila e' declarada pela OUTRA conexao (nao e' exclusiva), e o
+    // consumidor vem de uma conexao que vai cair -- e' a queda do CONSUMIDOR
+    // que dispara o auto-delete, nao a do declarante.
+    LCh := LOutra.CreateChannel;
+    LDecl := TAMQPQueueDeclare.Create('q.ad.queda');
+    LDecl.AutoDelete := True;
+    LCh.DeclareQueue(LDecl);
+
+    LDono := TAMQPConnection.Create(Params);
+    try
+      LDono.Open;
+      LDono.CreateChannel.Consume('q.ad.queda', OnDelivery, True);
+      Assert.IsTrue(FilaExiste(LOutra, 'q.ad.queda'), 'existe com consumidor');
+    finally
+      LDono.Free; // o consumidor cai junto com a conexao
+    end;
+
+    Assert.IsTrue(EsperaFilaSumir(LOutra, 'q.ad.queda', 5000),
+      'auto-delete some quando o ultimo consumidor CAI, nao so no cancel');
+  finally
+    LOutra.Free;
+  end;
+end;
+
+procedure TLifecycleTests.SemAutoDelete_FicaAposOConsumidorSair;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LTag: string;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.normal')); // sem auto-delete
+    LTag := LCh.Consume('q.normal', OnDelivery, True);
+    LCh.Cancel(LTag);
+    Assert.IsTrue(FilaExiste(LConn, 'q.normal'),
+      'fila comum nao some quando o consumidor sai');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.ExchangeAutoDelete_SomeAoPerderOUltimoBinding;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPExchangeDeclare;
+  LUnbind: TAMQPQueueUnbind;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPExchangeDeclare.Create('ex.ad', AMQP_EXCHANGE_TYPE_DIRECT);
+    LDecl.AutoDelete := True;
+    LCh.DeclareExchange(LDecl);
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ex.ad'));
+    LCh.BindQueue(NovoBind('q.ex.ad', 'ex.ad', 'k'));
+    Assert.IsTrue(ExchangeExiste(LConn, 'ex.ad'), 'existe com binding');
+
+    LUnbind.QueueName := 'q.ex.ad';
+    LUnbind.ExchangeName := 'ex.ad';
+    LUnbind.RoutingKey := 'k';
+    LUnbind.Arguments := nil;
+    LCh.UnbindQueue(LUnbind);
+
+    Assert.IsFalse(ExchangeExiste(LConn, 'ex.ad'),
+      'exchange auto-delete some ao perder o ultimo binding');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.ExchangeAutoDelete_SomeQuandoAFilaEApagada;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPExchangeDeclare;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPExchangeDeclare.Create('ex.ad2', AMQP_EXCHANGE_TYPE_DIRECT);
+    LDecl.AutoDelete := True;
+    LCh.DeclareExchange(LDecl);
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ex.ad2'));
+    LCh.BindQueue(NovoBind('q.ex.ad2', 'ex.ad2', 'k'));
+
+    // Apagar a FILA leva os bindings dela junto -- e o exchange fica orfao.
+    LCh.DeleteQueue(NovoDelete('q.ex.ad2', False, False));
+
+    Assert.IsFalse(ExchangeExiste(LConn, 'ex.ad2'),
+      'o binding que sumiu com a fila tambem conta');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TLifecycleTests.ExchangeAutoDelete_FicaEnquantoHouverBinding;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPExchangeDeclare;
+  LUnbind: TAMQPQueueUnbind;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDecl := TAMQPExchangeDeclare.Create('ex.ad3', AMQP_EXCHANGE_TYPE_DIRECT);
+    LDecl.AutoDelete := True;
+    LCh.DeclareExchange(LDecl);
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.a'));
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.b'));
+    LCh.BindQueue(NovoBind('q.a', 'ex.ad3', 'k1'));
+    LCh.BindQueue(NovoBind('q.b', 'ex.ad3', 'k2'));
+
+    LUnbind.QueueName := 'q.a';
+    LUnbind.ExchangeName := 'ex.ad3';
+    LUnbind.RoutingKey := 'k1';
+    LUnbind.Arguments := nil;
+    LCh.UnbindQueue(LUnbind);
+
+    Assert.IsTrue(ExchangeExiste(LConn, 'ex.ad3'),
+      'ainda ha um binding: o exchange fica');
+  finally
+    LConn.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TEngineDispatchTests);
   TDUnitX.RegisterTestFixture(TErrorTableTests);
   TDUnitX.RegisterTestFixture(TConfirmTests);
+  TDUnitX.RegisterTestFixture(TLifecycleTests);
 
 end.

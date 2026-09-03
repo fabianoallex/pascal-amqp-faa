@@ -146,6 +146,27 @@ type
       out AFound: Boolean; out AMessage: TAMQPMessage;
       out ARedelivered: Boolean; out AMessageCount: Integer): TAMQPEngineResult;
 
+    // --- ciclo de vida automatico (WS7) ---
+    /// Apaga a fila se ela for `auto-delete`, JA TIVER TIDO consumidor e nao
+    /// tiver mais nenhum. Chamar DEPOIS de remover um consumidor -- e como o
+    /// Stats e' comando sincrono e a caixa da fila e' FIFO, a leitura aqui ja
+    /// enxerga a remocao que acabou de ser postada. No-op se a fila nao
+    /// existe ou nao e' auto-delete.
+    procedure MaybeAutoDeleteQueue(const AVHost, AQueue: string);
+    /// Apaga o exchange se ele for `auto-delete` e nao for mais origem de
+    /// binding nenhum. Chamar depois de todo unbind (inclusive os implicitos,
+    /// como os que somem junto com uma fila apagada).
+    procedure MaybeAutoDeleteExchange(const AVHost, AExchange: string);
+    /// Varre os exchanges auto-delete e apaga os que ficaram sem binding.
+    /// Existe porque apagar uma FILA leva junto os bindings dela, e nao ha
+    /// como saber de fora quais exchanges ficaram orfaos -- exchange
+    /// auto-delete e' raro, entao a varredura e' mais barata que rastrear.
+    procedure SweepAutoDeleteExchanges(const AVHost: string);
+    /// Apaga TODAS as filas exclusivas de AOwnerId (a conexao dona caiu).
+    /// Devolve quantas foram.
+    function DeleteExclusiveQueuesOf(const AVHost: string;
+      AOwnerId: NativeUInt): Integer;
+
     /// A fila viva de AName, ou nil. Usada pelo canal para encaminhar
     /// ack/nack/reject e para o teardown -- o chamador NAO e' dono.
     function FindQueue(const AVHost, AName: string): TAMQPServerQueue;
@@ -428,6 +449,9 @@ begin
   end;
 
   LVHost.DeleteQueue(AName); // tira o descritor e os bindings pendurados
+  // Os bindings que sumiram com a fila podem ter sido os ultimos de um
+  // exchange auto-delete.
+  SweepAutoDeleteExchanges(AVHost);
   Result := amqerOk;
 end;
 
@@ -548,6 +572,73 @@ begin
   // message-count do Get-Ok: quantas SOBRARAM depois desta.
   AMessageCount := LQueue.Stats.MessageCount;
   Result := amqerOk;
+end;
+
+{ --- ciclo de vida automatico (WS7) --- }
+
+procedure TAMQPEngine.MaybeAutoDeleteQueue(const AVHost, AQueue: string);
+var
+  LDef: TAMQPQueueDef;
+  LQueue: TAMQPServerQueue;
+  LStats: TAMQPQueueStats;
+  LCount: Integer;
+begin
+  LDef := FVHosts.GetOrCreate(AVHost).QueueDef(AQueue);
+  if (LDef = nil) or (not LDef.AutoDelete) then
+    Exit;
+  LQueue := FindQueue(AVHost, AQueue);
+  if LQueue = nil then
+    Exit;
+  LStats := LQueue.Stats; // sincrono: barreira sobre a remocao ja postada
+  // Uma fila auto-delete que NUNCA teve consumidor nao some -- senao ela
+  // desapareceria entre o declare e o consume (mesma regra do RabbitMQ).
+  if (not LStats.EverHadConsumer) or (LStats.ConsumerCount > 0) then
+    Exit;
+  DeleteQueue(AVHost, AQueue, False, False, 0, LCount);
+end;
+
+procedure TAMQPEngine.MaybeAutoDeleteExchange(const AVHost,
+  AExchange: string);
+var
+  LVHost: TAMQPVHost;
+  LDef: TAMQPExchangeDef;
+begin
+  if AExchange = '' then
+    Exit; // o exchange default nunca some
+  LVHost := FVHosts.GetOrCreate(AVHost);
+  LDef := LVHost.ExchangeDef(AExchange);
+  if (LDef = nil) or (not LDef.AutoDelete) then
+    Exit;
+  if LVHost.HasBindingsFrom(AExchange) then
+    Exit;
+  LVHost.DeleteExchange(AExchange, False);
+end;
+
+procedure TAMQPEngine.SweepAutoDeleteExchanges(const AVHost: string);
+var
+  LNomes: TArray<string>;
+  I: Integer;
+begin
+  LNomes := FVHosts.GetOrCreate(AVHost).ExchangeNames;
+  for I := 0 to High(LNomes) do
+    MaybeAutoDeleteExchange(AVHost, LNomes[I]);
+end;
+
+function TAMQPEngine.DeleteExclusiveQueuesOf(const AVHost: string;
+  AOwnerId: NativeUInt): Integer;
+var
+  LNomes: TArray<string>;
+  I, LCount: Integer;
+begin
+  Result := 0;
+  if AOwnerId = 0 then
+    Exit;
+  LNomes := FVHosts.GetOrCreate(AVHost).ExclusiveQueuesOf(AOwnerId);
+  for I := 0 to High(LNomes) do
+    // AOwnerId=0 no DeleteQueue: chamada interna, ja sabemos que o dono e'
+    // esta conexao (foi assim que a fila entrou na lista).
+    if DeleteQueue(AVHost, LNomes[I], False, False, 0, LCount) = amqerOk then
+      Inc(Result);
 end;
 
 { --- publicacao --- }
