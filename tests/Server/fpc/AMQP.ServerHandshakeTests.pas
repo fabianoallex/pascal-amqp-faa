@@ -77,6 +77,7 @@ type
     procedure ClasseNaoImplementada_FechaSoOCanal;
     procedure NoLocalNoConsume_540;
     procedure PrefetchSizeNaoZero_540;
+    procedure MandatorySemRota_ReturnAntesDoAck_312;
   end;
 
   { Conteudo (WS5): remontagem de Basic.Publish + content-header + body frames,
@@ -1808,6 +1809,92 @@ begin
     LClose := ExpectChannelClose(LStrm, LCh);
     AssertEquals('prefetch-size fecha o canal com NOT_IMPLEMENTED',
       AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TRawHandshakeTests.MandatorySemRota_ReturnAntesDoAck_312;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LCh: Word;
+  LDecl: TAMQPExchangeDeclare;
+  LCorpo: TBytes;
+  LFrame: TAMQPFrame;
+  LR: TAMQPReader;
+  LId: TAMQPMethodId;
+  LReturn: TAMQPBasicReturn;
+  LAck: TAMQPBasicAck;
+begin
+  // A ORDEM entre Basic.Return e Basic.Ack e o ponto sutil da WS6, e nenhum
+  // teste pelo cliente a observa de forma deterministica (os dois chegam em
+  // callbacks de threads diferentes). No socket cru, a ordem no wire e a
+  // propria assercao.
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    SendMethod(LStrm, 1, BuildChannelOpen);
+    ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
+
+    LDecl := TAMQPExchangeDeclare.Create('ex.ord', AMQP_EXCHANGE_TYPE_DIRECT);
+    SendMethod(LStrm, 1, BuildExchangeDeclare(LDecl));
+    ExpectMethodId(LStrm, AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_DECLARE_OK, LCh);
+
+    SendMethod(LStrm, 1, BuildConfirmSelect(False));
+    ExpectMethodId(LStrm, AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT_OK, LCh);
+
+    // Publish mandatory num exchange SEM binding nenhum.
+    LCorpo := AmqpUtf8Encode('sem rota');
+    SendMethod(LStrm, 1, BuildBasicPublish('ex.ord', 'nada', True, False));
+    SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1,
+      BuildContentHeader(Length(LCorpo), TAMQPBasicProperties.Empty));
+    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, LCorpo);
+
+    // 1o: o Basic.Return, com o conteudo logo atras.
+    LFrame := TAMQPFrame.ReadFrom(LStrm);
+    AssertEquals('1o frame e metodo', Integer(AMQP_FRAME_METHOD),
+      Integer(LFrame.FrameType));
+    LR := TAMQPReader.Create(LFrame.Payload);
+    try
+      LId.ClassId := LR.ReadShortUInt;
+      LId.MethodId := LR.ReadShortUInt;
+      AssertTrue('o 1o metodo e Basic.Return, nao o Ack',
+        LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN));
+      LReturn := DecodeBasicReturn(LR);
+    finally
+      LR.Free;
+    end;
+    AssertEquals('NO_ROUTE', Integer(AMQP_NO_ROUTE), Integer(LReturn.ReplyCode));
+    AssertEquals('exchange devolvido', 'ex.ord', LReturn.Exchange);
+    AssertEquals('routing key devolvida', 'nada', LReturn.RoutingKey);
+
+    LFrame := TAMQPFrame.ReadFrom(LStrm);
+    AssertEquals('2o frame e o content-header', Integer(AMQP_FRAME_HEADER),
+      Integer(LFrame.FrameType));
+    LFrame := TAMQPFrame.ReadFrom(LStrm);
+    AssertEquals('3o frame e o body', Integer(AMQP_FRAME_BODY),
+      Integer(LFrame.FrameType));
+    AssertEquals('com o corpo original', 'sem rota',
+      AmqpUtf8Decode(LFrame.Payload));
+
+    // SO' ENTAO o Basic.Ack do confirm: mensagem sem rota tambem e confirmada.
+    LFrame := TAMQPFrame.ReadFrom(LStrm);
+    AssertEquals('4o frame e metodo', Integer(AMQP_FRAME_METHOD),
+      Integer(LFrame.FrameType));
+    LR := TAMQPReader.Create(LFrame.Payload);
+    try
+      LId.ClassId := LR.ReadShortUInt;
+      LId.MethodId := LR.ReadShortUInt;
+      AssertTrue('e o Basic.Ack, depois do Return',
+        LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK));
+      LAck := DecodeBasicAck(LR);
+    finally
+      LR.Free;
+    end;
+    AssertEquals('confirmando o seq-no 1', 1, Integer(LAck.DeliveryTag));
+    AssertFalse('sem multiple', LAck.Multiple);
   finally
     LStrm.Free;
     LSock.Free;

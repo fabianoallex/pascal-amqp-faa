@@ -96,6 +96,30 @@ type
     [Test] procedure ErroDeCanal_NaoDerrubaAConexao;
   end;
 
+  [TestFixture]
+  TConfirmTests = class
+  private
+    FBroker: TAMQPServer;
+    FLock: TCriticalSection;
+    FDevolvidas: TStringList;
+    procedure OnReturn(AChannel: TAMQPChannel;
+      const AReturned: TAMQPReturnedMessage);
+    function Params: TAMQPConnectionParams;
+    function EsperaDevolucoes(ACount, ATimeoutMs: Integer): Boolean;
+    function QuantasDevolvidas: Integer;
+  public
+    [Setup]    procedure Setup;
+    [TearDown] procedure TearDown;
+
+    [Test] procedure Confirm_PublishRecebeAck;
+    [Test] procedure Confirm_SeqNoComecaEmUmESegue;
+    [Test] procedure Confirm_PublishSemRotaTambemEConfirmado;
+    [Test] procedure Confirm_LoteGrandeTodoConfirmado;
+    [Test] procedure Mandatory_SemRota_DisparaBasicReturn;
+    [Test] procedure Mandatory_ComRota_NaoDisparaReturn;
+    [Test] procedure Mandatory_SemConfirmMode_AindaDevolve;
+  end;
+
 implementation
 
 { --- helpers --- }
@@ -959,8 +983,220 @@ begin
   end;
 end;
 
+{ --- TConfirmTests --- }
+
+procedure TConfirmTests.Setup;
+begin
+  FBroker := NovoBroker;
+  FLock := TCriticalSection.Create;
+  FDevolvidas := TStringList.Create;
+end;
+
+procedure TConfirmTests.TearDown;
+begin
+  FBroker.Free;
+  FDevolvidas.Free;
+  FLock.Free;
+end;
+
+function TConfirmTests.Params: TAMQPConnectionParams;
+begin
+  Result := ParamsDe(FBroker);
+end;
+
+procedure TConfirmTests.OnReturn(AChannel: TAMQPChannel;
+  const AReturned: TAMQPReturnedMessage);
+begin
+  FLock.Enter;
+  try
+    FDevolvidas.Add(IntToStr(AReturned.ReplyCode) + ':' + AReturned.BodyAsText);
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TConfirmTests.QuantasDevolvidas: Integer;
+begin
+  FLock.Enter;
+  try
+    Result := FDevolvidas.Count;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TConfirmTests.EsperaDevolucoes(ACount, ATimeoutMs: Integer): Boolean;
+var
+  LDeadline: UInt64;
+begin
+  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  while (QuantasDevolvidas < ACount) and (AmqpTickMs < LDeadline) do
+    Sleep(10);
+  Result := QuantasDevolvidas >= ACount;
+end;
+
+procedure TConfirmTests.Confirm_PublishRecebeAck;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.conf'));
+    LCh.ConfirmSelect;
+    LCh.PublishText('', 'q.conf', 'confirmada');
+    Assert.IsTrue(LCh.WaitForConfirms(5000),
+      'o broker confirmou o publish -- ate a WS5 isto expirava');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TConfirmTests.Confirm_SeqNoComecaEmUmESegue;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.seq'));
+    LCh.ConfirmSelect;
+    // O seq-no e do CLIENTE; o teste garante que o broker confirma cada um
+    // deles individualmente (a sequencia do broker tem de bater com a dele).
+    Assert.AreEqual(1, Integer(LCh.PublishText('', 'q.seq', 'a')), 'primeiro');
+    Assert.AreEqual(2, Integer(LCh.PublishText('', 'q.seq', 'b')), 'segundo');
+    Assert.AreEqual(3, Integer(LCh.PublishText('', 'q.seq', 'c')), 'terceiro');
+    Assert.IsTrue(LCh.WaitForConfirm(2, 5000), 'o seq-no 2 foi confirmado');
+    Assert.IsTrue(LCh.WaitForConfirms(5000), 'e o lote todo tambem');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TConfirmTests.Confirm_PublishSemRotaTambemEConfirmado;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.vazio',
+      AMQP_EXCHANGE_TYPE_DIRECT));
+    LCh.ConfirmSelect;
+    LCh.PublishText('ex.vazio', 'sem.bind', 'ninguem quer');
+    // Sem rota NAO e falha: a mensagem foi tratada, entao leva ack (nack e
+    // reservado a falha interna do broker).
+    Assert.IsTrue(LCh.WaitForConfirms(5000),
+      'publish sem rota tambem e confirmado');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TConfirmTests.Confirm_LoteGrandeTodoConfirmado;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  I: Integer;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.lote'));
+    LCh.ConfirmSelect;
+    for I := 1 to 50 do
+      LCh.PublishText('', 'q.lote', 'm' + IntToStr(I));
+    Assert.IsTrue(LCh.WaitForConfirms(10000), 'as 50 confirmadas');
+    Assert.AreEqual(50, Integer(LCh.DeleteQueue(NovoDelete('q.lote', False,
+      False))), 'e as 50 chegaram na fila');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TConfirmTests.Mandatory_SemRota_DisparaBasicReturn;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.OnBasicReturn := OnReturn;
+    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.mand',
+      AMQP_EXCHANGE_TYPE_DIRECT));
+    LCh.Publish('ex.mand', 'sem.bind', AmqpUtf8Encode('devolve'),
+      TAMQPBasicProperties.Empty, True); // mandatory
+
+    Assert.IsTrue(EsperaDevolucoes(1, 5000), 'o broker devolveu a mensagem');
+    FLock.Enter;
+    try
+      Assert.AreEqual('312:devolve', FDevolvidas[0],
+        'com NO_ROUTE e o corpo intacto');
+    finally
+      FLock.Leave;
+    end;
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TConfirmTests.Mandatory_ComRota_NaoDisparaReturn;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.OnBasicReturn := OnReturn;
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.mand'));
+    LCh.Publish('', 'q.mand', AmqpUtf8Encode('tem rota'),
+      TAMQPBasicProperties.Empty, True); // mandatory, mas COM rota
+    Sleep(300);
+    Assert.AreEqual(0, QuantasDevolvidas, 'nada devolvido');
+    Assert.AreEqual('tem rota', LCh.BasicGet('q.mand', True).BodyAsText,
+      'a mensagem foi para a fila');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TConfirmTests.Mandatory_SemConfirmMode_AindaDevolve;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  // mandatory e confirm mode sao independentes: um publish mandatory sem
+  // confirm mode continua gerando Basic.Return.
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.OnBasicReturn := OnReturn;
+    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.mand2',
+      AMQP_EXCHANGE_TYPE_DIRECT));
+    LCh.Publish('ex.mand2', 'nada', AmqpUtf8Encode('x'),
+      TAMQPBasicProperties.Empty, True);
+    Assert.IsTrue(EsperaDevolucoes(1, 5000),
+      'Basic.Return nao depende de confirm mode');
+  finally
+    LConn.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TEngineDispatchTests);
   TDUnitX.RegisterTestFixture(TErrorTableTests);
+  TDUnitX.RegisterTestFixture(TConfirmTests);
 
 end.

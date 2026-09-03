@@ -48,6 +48,7 @@ type
     FState: TAMQPServerChannelState;
     FActive: Boolean;
     FConfirmMode: Boolean;
+    FPublishSeq: UInt64;
     FPrefetchCount: Word;
     // Alvo de entrega (WS4). O canal cria e DESTACA; as filas onde este canal
     // tem consumidores seguram a interface, o que mantem o objeto vivo mesmo
@@ -79,6 +80,7 @@ type
     procedure FreeProps;
     procedure SetActive(AValue: Boolean);
     procedure SetPrefetchCount(AValue: Word);
+    procedure SetConfirmMode(AValue: Boolean);
   public
     constructor Create(AId: Word);
     destructor Destroy; override;
@@ -137,9 +139,15 @@ type
     /// Channel.Flow: False = o peer pediu que paremos de entregar conteúdo
     /// neste canal. A Fase 2 respeita na entrega.
     property Active: Boolean read FActive write SetActive;
-    /// Confirm.Select recebido (publisher confirms). A Fase 2 usa para decidir
-    /// se cada publish gera Basic.Ack.
-    property ConfirmMode: Boolean read FConfirmMode write FConfirmMode;
+    /// Confirm.Select recebido (publisher confirms): cada publish passa a
+    /// gerar um Basic.Ack. Ligar zera a sequência de seq-no (spec 1.3.1 da
+    /// extensão: a contagem começa quando o modo é ligado).
+    property ConfirmMode: Boolean read FConfirmMode write SetConfirmMode;
+    /// Consome e devolve o próximo seq-no de publicação deste canal. A
+    /// sequência começa em 1 e conta TODO publish enquanto o confirm mode
+    /// estiver ligado — roteado ou não, porque é assim que o cliente
+    /// correlaciona o ack com o publish que ele numerou.
+    function NextPublishSeq: UInt64;
     /// Basic.Qos. A Fase 2 usa para limitar entregas não confirmadas.
     property PrefetchCount: Word read FPrefetchCount write SetPrefetchCount;
 
@@ -230,6 +238,19 @@ begin
   finally
     LSet.Free;
   end;
+end;
+
+procedure TAMQPServerChannel.SetConfirmMode(AValue: Boolean);
+begin
+  if AValue and (not FConfirmMode) then
+    FPublishSeq := 0; // a sequência nasce com o modo
+  FConfirmMode := AValue;
+end;
+
+function TAMQPServerChannel.NextPublishSeq: UInt64;
+begin
+  Inc(FPublishSeq);
+  Result := FPublishSeq;
 end;
 
 procedure TAMQPServerChannel.SetActive(AValue: Boolean);

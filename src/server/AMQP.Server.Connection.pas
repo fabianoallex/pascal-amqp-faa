@@ -190,6 +190,10 @@ type
     /// Manda a engine soltar o que este canal segurava (consumidores e
     /// nao-confirmadas voltam para as filas) e destaca o alvo de entrega.
     procedure ReleaseChannelResources(AChannel: TAMQPServerChannel);
+    /// Basic.Return + content-header + body de um publish `mandatory` que não
+    /// achou rota (spec 1.8.3.6, reply-code 312 NO_ROUTE).
+    procedure SendBasicReturn(AChannel: TAMQPServerChannel;
+      const AMessage: TAMQPServerMessage);
     procedure SendGetOk(AChannel: TAMQPServerChannel;
       ADeliveryTag: UInt64; ARedelivered: Boolean; AMessageCount: Integer;
       AMessage: TAMQPMessage);
@@ -1057,6 +1061,37 @@ begin
   AChannel.DetachDelivery;
 end;
 
+// Basic.Return + content-header + body, num lote indivisivel: o cliente
+// remonta a mensagem devolvida exatamente como a publicou.
+procedure TAMQPServerConnection.SendBasicReturn(AChannel: TAMQPServerChannel;
+  const AMessage: TAMQPServerMessage);
+var
+  LReturn: TAMQPBasicReturn;
+  LMsg: TAMQPMessage;
+  LConteudo, LTodos: TArray<TAMQPFrame>;
+  I: Integer;
+begin
+  LReturn.ReplyCode := AMQP_NO_ROUTE;
+  LReturn.ReplyText := 'NO_ROUTE';
+  LReturn.Exchange := AMessage.Exchange;
+  LReturn.RoutingKey := AMessage.RoutingKey;
+
+  // So' para reusar a montagem de conteudo (que le o payload cru do header --
+  // decisao D1); esta mensagem nao vai para fila nenhuma.
+  LMsg := TAMQPMessage.FromServerMessage(AMessage);
+  try
+    LConteudo := AmqpBuildContentFrames(AChannel.Id, LMsg, CurrentMaxPayload);
+    SetLength(LTodos, 1 + Length(LConteudo));
+    LTodos[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, AChannel.Id,
+      BuildBasicReturn(LReturn));
+    for I := 0 to High(LConteudo) do
+      LTodos[1 + I] := LConteudo[I];
+    FWriter.PostFrames(LTodos);
+  finally
+    LMsg.Release;
+  end;
+end;
+
 // Basic.Get-Ok + content-header + body, num lote indivisivel.
 procedure TAMQPServerConnection.SendGetOk(AChannel: TAMQPServerChannel;
   ADeliveryTag: UInt64; ARedelivered: Boolean; AMessageCount: Integer;
@@ -1553,6 +1588,8 @@ end;
 procedure TAMQPServerConnection.CompleteContent(AChannel: TAMQPServerChannel);
 var
   LMsg: TAMQPServerMessage;
+  LSeq: UInt64;
+  LRoteada: Boolean;
 begin
   try
     LMsg := AChannel.CurrentMessage(FUserId);
@@ -1562,8 +1599,39 @@ begin
       raise EAMQPChannelError.Create(AChannel.Id, AMQP_ACCESS_REFUSED,
         'user-id property does not match authenticated user',
         AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH);
-    if FConfig.Sink <> nil then
-      FConfig.Sink.RouteMessage(FVirtualHost, LMsg);
+
+    // WS6: o seq-no e' consumido por TODO publish em confirm mode -- roteado
+    // ou nao. E' assim que o cliente correlaciona o ack com o publish que ele
+    // proprio numerou; pular numeros quebraria o WaitForConfirms dele.
+    LSeq := 0;
+    if AChannel.ConfirmMode then
+      LSeq := AChannel.NextPublishSeq;
+
+    LRoteada := False;
+    try
+      if FConfig.Sink <> nil then
+        LRoteada := FConfig.Sink.RouteMessage(FVirtualHost, LMsg);
+    except
+      // Basic.Nack e' reservado a FALHA INTERNA do broker (spec da extensao:
+      // "the broker could not handle the message"). Nao e' o caso de mensagem
+      // sem rota, que e' sucesso e leva ack.
+      on E: Exception do
+      begin
+        if AChannel.ConfirmMode then
+          PostMethod(AChannel.Id, BuildBasicNack(LSeq, False, False));
+        raise;
+      end;
+    end;
+
+    // ORDEM: o Return sai ANTES do Ack. O cliente pode liberar o estado do
+    // publish assim que o ack chega (o WaitForConfirms desta lib faz isso);
+    // se o ack viesse primeiro, o return chegaria para um publish que o
+    // cliente ja considera resolvido.
+    if (not LRoteada) and LMsg.Mandatory then
+      SendBasicReturn(AChannel, LMsg);
+
+    if AChannel.ConfirmMode then
+      PostMethod(AChannel.Id, BuildBasicAck(LSeq, False));
   finally
     AChannel.ResetContent;
   end;
