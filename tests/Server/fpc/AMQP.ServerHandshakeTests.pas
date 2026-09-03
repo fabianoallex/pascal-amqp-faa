@@ -75,6 +75,8 @@ type
     procedure ConteudoSemPublish_505;
     procedure ClienteFechaConexao_RecebeCloseOk;
     procedure ClasseNaoImplementada_FechaSoOCanal;
+    procedure NoLocalNoConsume_540;
+    procedure PrefetchSizeNaoZero_540;
   end;
 
   { Conteudo (WS5): remontagem de Basic.Publish + content-header + body frames,
@@ -1753,6 +1755,64 @@ begin
   end;
 end;
 {$ENDIF}
+
+procedure TRawHandshakeTests.NoLocalNoConsume_540;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPCloseInfo;
+  LCh: Word;
+  LCons: TAMQPBasicConsume;
+begin
+  // A lib cliente nao expoe no-local nem prefetch-size, entao estas duas
+  // linhas da tabela de erros so' sao alcancaveis por socket cru.
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    SendMethod(LStrm, 1, BuildChannelOpen);
+    ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
+    SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q.nl')));
+    ExpectMethodId(LStrm, AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK, LCh);
+
+    LCons := TAMQPBasicConsume.Create('q.nl', 'ct', True);
+    LCons.NoLocal := True;
+    SendMethod(LStrm, 1, BuildBasicConsume(LCons));
+
+    LClose := ExpectChannelClose(LStrm, LCh);
+    AssertEquals('no-local fecha o canal com NOT_IMPLEMENTED',
+      AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
+    AssertEquals('no canal ofensor', 1, Integer(LCh));
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
+
+procedure TRawHandshakeTests.PrefetchSizeNaoZero_540;
+var
+  LSock: TAMQPTcpSocket;
+  LStrm: TAMQPSocketStream;
+  LClose: TAMQPCloseInfo;
+  LCh: Word;
+begin
+  LStrm := RawConnect(FBroker.Port, LSock);
+  try
+    RawHandshake(LStrm);
+    SendMethod(LStrm, 1, BuildChannelOpen);
+    ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
+
+    // prefetch-size (limite em OCTETOS) nao e' implementado -- e o broker
+    // recusa em vez de aceitar em silencio.
+    SendMethod(LStrm, 1, BuildBasicQos(10, False, 4096));
+
+    LClose := ExpectChannelClose(LStrm, LCh);
+    AssertEquals('prefetch-size fecha o canal com NOT_IMPLEMENTED',
+      AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
+  finally
+    LStrm.Free;
+    LSock.Free;
+  end;
+end;
 
 initialization
   RegisterTest(TClientHandshakeTests);

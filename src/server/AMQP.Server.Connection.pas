@@ -61,6 +61,11 @@ uses
   AMQP.Server.Auth,
   AMQP.Server.Types,
   AMQP.Server.Channel,
+  AMQP.Server.Delivery,
+  AMQP.Server.Message,
+  AMQP.Server.Queue,
+  AMQP.Server.Resources,
+  AMQP.Server.Engine,
   AMQP.Server.FrameIO;
 
 const
@@ -129,6 +134,8 @@ type
     FCloseDeadline: UInt64;     // tick-limite do Close-Ok (0 = sem prazo)
     FLastReadTick: UInt64;      // atomico; ultimo frame CHEGADO do peer
     FNameSeq: Integer;          // gera nomes de fila / consumer-tag unicos
+    FEngine: TAMQPEngine;       // WS5: quem realmente declara/roteia/entrega
+    FConnId: NativeUInt;        // identidade desta conexao (fila exclusiva)
 
     // --- canais ---
     FChLock: TCriticalSection;
@@ -169,6 +176,23 @@ type
     function MechanismOffered(const AMechanism: string): Boolean;
 
     function GeneratedName(const APrefix: string): string;
+    /// Traduz o resultado da engine para o modelo de erro do AMQP. amqerOk
+    /// nao faz nada; o resto levanta EAMQPChannelError com o reply-code da
+    /// tabela (403/404/405/406) -- todos sao erros de CANAL: a conexao
+    /// sobrevive e o cliente pode abrir outro canal.
+    procedure CheckEngine(AChannel: TAMQPServerChannel;
+      ARes: TAMQPEngineResult; const AWhat: string;
+      AClassId, AMethodId: Word);
+    /// Levanta 403 se o nome for reservado ('amq.') ou vazio quando o cliente
+    /// nao pode escolher -- spec 1.4: o prefixo e' do servidor.
+    procedure CheckReservedName(AChannel: TAMQPServerChannel;
+      const AName, AWhat: string; AClassId, AMethodId: Word);
+    /// Manda a engine soltar o que este canal segurava (consumidores e
+    /// nao-confirmadas voltam para as filas) e destaca o alvo de entrega.
+    procedure ReleaseChannelResources(AChannel: TAMQPServerChannel);
+    procedure SendGetOk(AChannel: TAMQPServerChannel;
+      ADeliveryTag: UInt64; ARedelivered: Boolean; AMessageCount: Integer;
+      AMessage: TAMQPMessage);
     function DispatchExchange(AChannel: TAMQPServerChannel;
       const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
     function DispatchQueue(AChannel: TAMQPServerChannel;
@@ -234,9 +258,22 @@ type
     property VirtualHost: string read FVirtualHost;
     property Negotiated: TAMQPConnectionTune read FNegotiated;
     property OnClosed: TAMQPConnectionClosedEvent read FOnClosed write FOnClosed;
+    /// A engine do broker (WS5). Atribuida pelo TAMQPServer logo depois de
+    /// aceitar a conexao e ANTES do Start. nil = broker sem engine (a Fase 1
+    /// respondia os *-Ok sem fazer nada) -- os testes de handshake usam assim.
+    property Engine: TAMQPEngine read FEngine write FEngine;
+    /// Identidade desta conexao, usada como dono de fila exclusiva.
+    property ConnId: NativeUInt read FConnId;
   end;
 
 implementation
+
+var
+  // Identidade de conexao (dono de fila exclusiva). Contador monotonico e nao
+  // endereco de objeto: endereco reusado casaria uma fila exclusiva orfa com
+  // a conexao errada -- mesma razao da identidade de canal em
+  // AMQP.Server.Delivery.
+  GConnIdSeq: Integer = 0;
 
 { TAMQPServerConnThread }
 
@@ -267,6 +304,7 @@ begin
   // cliente lento (ou hostil) trava o broker inteiro.
   FChLock := TCriticalSection.Create;
   FChannels := TDictionary<Word, TAMQPServerChannel>.Create;
+  FConnId := NativeUInt(Cardinal(AmqpAtomicInc(GConnIdSeq)));
   FThread := TAMQPServerConnThread.Create(Self);
 end;
 
@@ -416,7 +454,13 @@ begin
   finally
     FChLock.Leave;
   end;
-  LCh.Free;
+  if LCh <> nil then
+  begin
+    // Antes de liberar: as filas precisam saber que os consumidores deste
+    // canal se foram e que as nao-confirmadas dele voltam para a fila.
+    ReleaseChannelResources(LCh);
+    LCh.Free;
+  end;
 end;
 
 // Solta o alvo de entrega de todos os canais. Chamado no Shutdown ANTES de
@@ -456,7 +500,10 @@ begin
     FChLock.Leave;
   end;
   for I := 0 to High(LAll) do
+  begin
+    ReleaseChannelResources(LAll[I]);
     LAll[I].Free;
+  end;
 end;
 
 function TAMQPServerConnection.ChannelCount: Integer;
@@ -684,6 +731,10 @@ begin
       AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN);
 
   FVirtualHost := LOpen.VirtualHost;
+  if FEngine <> nil then
+    // A topologia deste vhost passa a existir (com os exchanges predefinidos)
+    // no momento em que alguem abre nele.
+    FEngine.EnsureVHost(FVirtualHost);
   PostMethod(AMQP_CHANNEL_CONNECTION, BuildOpenOk);
   FState := amqssOpen;
 end;
@@ -913,41 +964,220 @@ begin
     Integer(AmqpTickMs and $FFFFFF)]);
 end;
 
+procedure TAMQPServerConnection.CheckEngine(AChannel: TAMQPServerChannel;
+  ARes: TAMQPEngineResult; const AWhat: string; AClassId, AMethodId: Word);
+var
+  LCode: Word;
+  LTexto: string;
+begin
+  if ARes = amqerOk then
+    Exit;
+  case ARes of
+    amqerNaoEncontrado:
+      begin
+        LCode := AMQP_NOT_FOUND;
+        LTexto := 'no ' + AWhat;
+      end;
+    amqerDivergente:
+      begin
+        LCode := AMQP_PRECONDITION_FAILED;
+        LTexto := 'inequivalent arg for ' + AWhat;
+      end;
+    amqerTipoInvalido:
+      begin
+        // Desvio deliberado do RabbitMQ, decidido no WS2 e registrado no
+        // CLAUDE.md: ele trata tipo de exchange desconhecido como 503
+        // COMMAND_INVALID, que derruba a CONEXAO. Aqui e' 406 de canal --
+        // config errada de um declare nao precisa levar a conexao junto.
+        LCode := AMQP_PRECONDITION_FAILED;
+        LTexto := 'invalid type or match for ' + AWhat;
+      end;
+    amqerEmUso:
+      begin
+        LCode := AMQP_PRECONDITION_FAILED;
+        LTexto := AWhat + ' in use';
+      end;
+    amqerNaoVazia:
+      begin
+        LCode := AMQP_PRECONDITION_FAILED;
+        LTexto := AWhat + ' not empty';
+      end;
+    amqerNomeReservado:
+      begin
+        LCode := AMQP_ACCESS_REFUSED;
+        LTexto := 'access to ' + AWhat + ' refused: reserved name';
+      end;
+    amqerExclusivaDeOutro:
+      begin
+        LCode := AMQP_RESOURCE_LOCKED;
+        LTexto := 'cannot obtain exclusive access to ' + AWhat;
+      end;
+  else
+    LCode := AMQP_PRECONDITION_FAILED;
+    LTexto := AWhat;
+  end;
+  raise EAMQPChannelError.Create(AChannel.Id, LCode, LTexto, AClassId,
+    AMethodId);
+end;
+
+procedure TAMQPServerConnection.CheckReservedName(
+  AChannel: TAMQPServerChannel; const AName, AWhat: string;
+  AClassId, AMethodId: Word);
+begin
+  if AmqpIsReservedName(AName) then
+    CheckEngine(AChannel, amqerNomeReservado, AWhat + ' ' + AName,
+      AClassId, AMethodId);
+end;
+
+procedure TAMQPServerConnection.ReleaseChannelResources(
+  AChannel: TAMQPServerChannel);
+var
+  LNomes: TArray<string>;
+  LFila: TAMQPServerQueue;
+  I: Integer;
+  LId: NativeUInt;
+begin
+  // DeliveryId e nao Delivery.ChannelId: quando este metodo roda no teardown
+  // da conexao, o DetachAllDelivery ja soltou o alvo e Delivery e' nil -- foi
+  // exatamente assim que as nao-confirmadas de uma conexao derrubada deixaram
+  // de voltar para a fila.
+  if (FEngine <> nil) and (AChannel.DeliveryId <> 0) then
+  begin
+    LId := AChannel.DeliveryId;
+    LNomes := AChannel.TouchedQueues;
+    for I := 0 to High(LNomes) do
+    begin
+      LFila := FEngine.FindQueue(FVirtualHost, LNomes[I]);
+      if LFila <> nil then
+        // Tira os consumidores deste canal e devolve as nao-confirmadas dele
+        // para a fila -- o cliente nunca as confirmou.
+        LFila.PostRemoveChannel(LId);
+    end;
+  end;
+  AChannel.DetachDelivery;
+end;
+
+// Basic.Get-Ok + content-header + body, num lote indivisivel.
+procedure TAMQPServerConnection.SendGetOk(AChannel: TAMQPServerChannel;
+  ADeliveryTag: UInt64; ARedelivered: Boolean; AMessageCount: Integer;
+  AMessage: TAMQPMessage);
+var
+  LGetOk: TAMQPBasicGetOk;
+  LConteudo, LTodos: TArray<TAMQPFrame>;
+  I: Integer;
+begin
+  LGetOk.DeliveryTag := ADeliveryTag;
+  LGetOk.Redelivered := ARedelivered;
+  LGetOk.Exchange := AMessage.Exchange;
+  LGetOk.RoutingKey := AMessage.RoutingKey;
+  LGetOk.MessageCount := Cardinal(AMessageCount);
+
+  LConteudo := AmqpBuildContentFrames(AChannel.Id, AMessage,
+    CurrentMaxPayload);
+  SetLength(LTodos, 1 + Length(LConteudo));
+  LTodos[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, AChannel.Id,
+    BuildBasicGetOk(LGetOk));
+  for I := 0 to High(LConteudo) do
+    LTodos[1 + I] := LConteudo[I];
+  FWriter.PostFrames(LTodos);
+end;
+
 function TAMQPServerConnection.DispatchExchange(AChannel: TAMQPServerChannel;
   const AId: TAMQPMethodId; const AReader: TAMQPReader): Boolean;
 var
   LDeclare: TAMQPExchangeDeclare;
   LDelete: TAMQPExchangeDelete;
   LBind: TAMQPExchangeBinding;
+  LRes: TAMQPEngineResult;
 begin
   Result := True;
   case AId.MethodId of
     AMQP_EXCHANGE_DECLARE:
       begin
         LDeclare := DecodeExchangeDeclare(AReader);
-        LDeclare.Arguments.Free; // a tabela decodificada e' nossa
-        if not LDeclare.NoWait then
-          PostMethod(AChannel.Id, BuildExchangeDeclareOk);
+        // A tabela de argumentos decodificada e' NOSSA ate' a engine tomar
+        // posse dela. Os testes de nome reservado levantam ANTES disso, entao
+        // sem este try/finally a tabela vazaria -- foi o que o relatorio de
+        // leaks do DUnitX pegou (o FPCUnit nao reporta leak).
+        try
+          if FEngine <> nil then
+          begin
+            if not LDeclare.Passive then
+            begin
+              // Nome reservado ou o exchange default: nenhum dos dois pode ser
+              // declarado pelo cliente (spec 1.4). Passive escapa: consultar
+              // 'amq.direct' e' legitimo e comum.
+              if LDeclare.ExchangeName = '' then
+                CheckEngine(AChannel, amqerNomeReservado, 'default exchange',
+                  AId.ClassId, AId.MethodId);
+              CheckReservedName(AChannel, LDeclare.ExchangeName, 'exchange',
+                AId.ClassId, AId.MethodId);
+            end;
+            LRes := FEngine.DeclareExchange(FVirtualHost,
+              LDeclare.ExchangeName, LDeclare.ExchangeType, LDeclare.Passive,
+              LDeclare.Durable, LDeclare.AutoDelete, LDeclare.Internal,
+              LDeclare.Arguments);
+            LDeclare.Arguments := nil; // a engine tomou posse (em QUALQUER resultado)
+            CheckEngine(AChannel, LRes, 'exchange ' + LDeclare.ExchangeName,
+              AId.ClassId, AId.MethodId);
+          end;
+          if not LDeclare.NoWait then
+            PostMethod(AChannel.Id, BuildExchangeDeclareOk);
+        finally
+          LDeclare.Arguments.Free; // so' sobra se ninguem tomou posse
+        end;
       end;
     AMQP_EXCHANGE_DELETE:
       begin
         LDelete := DecodeExchangeDelete(AReader);
+        if FEngine <> nil then
+        begin
+          CheckReservedName(AChannel, LDelete.ExchangeName, 'exchange',
+            AId.ClassId, AId.MethodId);
+          CheckEngine(AChannel,
+            FEngine.DeleteExchange(FVirtualHost, LDelete.ExchangeName,
+              LDelete.IfUnused),
+            'exchange ' + LDelete.ExchangeName,
+            AId.ClassId, AId.MethodId);
+        end;
         if not LDelete.NoWait then
           PostMethod(AChannel.Id, BuildExchangeDeleteOk);
       end;
     AMQP_EXCHANGE_BIND:
       begin
         LBind := DecodeExchangeBind(AReader);
-        LBind.Arguments.Free;
-        if not LBind.NoWait then
-          PostMethod(AChannel.Id, BuildExchangeBindOk);
+        try
+          if FEngine <> nil then
+          begin
+            LRes := FEngine.BindExchange(FVirtualHost, LBind.Destination,
+              LBind.Source, LBind.RoutingKey, LBind.Arguments);
+            LBind.Arguments := nil;
+            CheckEngine(AChannel, LRes, 'exchange ' + LBind.Source,
+              AId.ClassId, AId.MethodId);
+          end;
+          if not LBind.NoWait then
+            PostMethod(AChannel.Id, BuildExchangeBindOk);
+        finally
+          LBind.Arguments.Free;
+        end;
       end;
     AMQP_EXCHANGE_UNBIND:
       begin
         LBind := DecodeExchangeUnbind(AReader);
-        LBind.Arguments.Free;
-        if not LBind.NoWait then
-          PostMethod(AChannel.Id, BuildExchangeUnbindOk);
+        try
+          if FEngine <> nil then
+          begin
+            LRes := FEngine.UnbindExchange(FVirtualHost, LBind.Destination,
+              LBind.Source, LBind.RoutingKey, LBind.Arguments);
+            LBind.Arguments := nil;
+            CheckEngine(AChannel, LRes, 'exchange ' + LBind.Source,
+              AId.ClassId, AId.MethodId);
+          end;
+          if not LBind.NoWait then
+            PostMethod(AChannel.Id, BuildExchangeUnbindOk);
+        finally
+          LBind.Arguments.Free;
+        end;
       end;
   else
     Result := False;
@@ -963,45 +1193,133 @@ var
   LPurge: TAMQPQueuePurge;
   LDelete: TAMQPQueueDelete;
   LName: string;
+  LMsgs, LCons: Integer;
+  LRes: TAMQPEngineResult;
 begin
   Result := True;
   case AId.MethodId of
     AMQP_QUEUE_DECLARE:
       begin
         LDeclare := DecodeQueueDeclare(AReader);
-        LDeclare.Arguments.Free;
         LName := LDeclare.QueueName;
-        if LName = '' then
-          LName := GeneratedName('amq.gen-'); // fila anonima: o nome e' nosso
-        if not LDeclare.NoWait then
-          // Sem engine ainda: 0 mensagens, 0 consumidores.
-          PostMethod(AChannel.Id, BuildQueueDeclareOk(LName, 0, 0));
+        LMsgs := 0;
+        LCons := 0;
+        // Ver o comentario de posse em AMQP_EXCHANGE_DECLARE: as checagens
+        // abaixo levantam ANTES de a engine assumir a tabela.
+        try
+          if FEngine = nil then
+          begin
+            if LName = '' then
+              LName := GeneratedName('amq.gen-');
+          end
+          else
+          begin
+            // O nome reservado e' checado ANTES de gerar o nosso, que tambem
+            // comeca com 'amq.' e e' legitimo justamente por ser nosso.
+            if (LName <> '') and (not LDeclare.Passive) then
+              CheckReservedName(AChannel, LName, 'queue',
+                AId.ClassId, AId.MethodId);
+            if LName = '' then
+            begin
+              if LDeclare.Passive then
+                // Passive sem nome nao tem o que verificar.
+                CheckEngine(AChannel, amqerNaoEncontrado, 'queue',
+                  AId.ClassId, AId.MethodId);
+              LName := GeneratedName('amq.gen-');
+            end;
+            LRes := FEngine.DeclareQueue(FVirtualHost, LName, LDeclare.Passive,
+              LDeclare.Durable, LDeclare.Exclusive, LDeclare.AutoDelete,
+              LDeclare.Arguments, FConnId, LMsgs, LCons);
+            LDeclare.Arguments := nil; // posse transferida
+            CheckEngine(AChannel, LRes, 'queue ' + LName,
+              AId.ClassId, AId.MethodId);
+            // Fila "corrente" do canal: o cliente pode omitir o nome no
+            // Basic.Consume/Get e no Queue.Bind (spec 1.7.2.1).
+            AChannel.LastQueue := LName;
+          end;
+          if not LDeclare.NoWait then
+            PostMethod(AChannel.Id, BuildQueueDeclareOk(LName, LMsgs, LCons));
+        finally
+          LDeclare.Arguments.Free;
+        end;
       end;
     AMQP_QUEUE_BIND:
       begin
         LBind := DecodeQueueBind(AReader);
-        LBind.Arguments.Free;
-        if not LBind.NoWait then
-          PostMethod(AChannel.Id, BuildQueueBindOk);
+        try
+          if FEngine <> nil then
+          begin
+            LName := LBind.QueueName;
+            if LName = '' then
+              LName := AChannel.LastQueue;
+            LRes := FEngine.BindQueue(FVirtualHost, LName, LBind.ExchangeName,
+              LBind.RoutingKey, LBind.Arguments, FConnId);
+            LBind.Arguments := nil;
+            CheckEngine(AChannel, LRes,
+              'queue ' + LName + ' or exchange ' + LBind.ExchangeName,
+              AId.ClassId, AId.MethodId);
+          end;
+          if not LBind.NoWait then
+            PostMethod(AChannel.Id, BuildQueueBindOk);
+        finally
+          LBind.Arguments.Free;
+        end;
       end;
     AMQP_QUEUE_UNBIND:
       begin
         // queue.unbind nao tem no-wait no 0-9-1: sempre responde.
         LUnbind := DecodeQueueUnbind(AReader);
-        LUnbind.Arguments.Free;
-        PostMethod(AChannel.Id, BuildQueueUnbindOk);
+        try
+          if FEngine <> nil then
+          begin
+            LName := LUnbind.QueueName;
+            if LName = '' then
+              LName := AChannel.LastQueue;
+            LRes := FEngine.UnbindQueue(FVirtualHost, LName,
+              LUnbind.ExchangeName, LUnbind.RoutingKey, LUnbind.Arguments,
+              FConnId);
+            LUnbind.Arguments := nil;
+            CheckEngine(AChannel, LRes,
+              'queue ' + LName + ' or exchange ' + LUnbind.ExchangeName,
+              AId.ClassId, AId.MethodId);
+          end;
+          PostMethod(AChannel.Id, BuildQueueUnbindOk);
+        finally
+          LUnbind.Arguments.Free;
+        end;
       end;
     AMQP_QUEUE_PURGE:
       begin
         LPurge := DecodeQueuePurge(AReader);
+        LMsgs := 0;
+        if FEngine <> nil then
+        begin
+          LName := LPurge.QueueName;
+          if LName = '' then
+            LName := AChannel.LastQueue;
+          CheckEngine(AChannel,
+            FEngine.PurgeQueue(FVirtualHost, LName, FConnId, LMsgs),
+            'queue ' + LName, AId.ClassId, AId.MethodId);
+        end;
         if not LPurge.NoWait then
-          PostMethod(AChannel.Id, BuildQueuePurgeOk(0));
+          PostMethod(AChannel.Id, BuildQueuePurgeOk(Cardinal(LMsgs)));
       end;
     AMQP_QUEUE_DELETE:
       begin
         LDelete := DecodeQueueDelete(AReader);
+        LMsgs := 0;
+        if FEngine <> nil then
+        begin
+          LName := LDelete.QueueName;
+          if LName = '' then
+            LName := AChannel.LastQueue;
+          CheckEngine(AChannel,
+            FEngine.DeleteQueue(FVirtualHost, LName, LDelete.IfUnused,
+              LDelete.IfEmpty, FConnId, LMsgs),
+            'queue ' + LName, AId.ClassId, AId.MethodId);
+        end;
         if not LDelete.NoWait then
-          PostMethod(AChannel.Id, BuildQueueDeleteOk(0));
+          PostMethod(AChannel.Id, BuildQueueDeleteOk(Cardinal(LMsgs)));
       end;
   else
     Result := False;
@@ -1015,16 +1333,30 @@ var
   LConsume: TAMQPBasicConsume;
   LCancel: TAMQPBasicCancelArgs;
   LPublish: TAMQPBasicPublish;
+  LGet: TAMQPBasicGet;
   LAck: TAMQPBasicAck;
   LNack: TAMQPBasicNack;
   LReject: TAMQPBasicReject;
-  LTag: string;
+  LTag, LFila: string;
+  LDeliveryTag: UInt64;
+  LFound, LRedelivered: Boolean;
+  LMsg: TAMQPMessage;
+  LMsgs: Integer;
+  LRefs: TArray<TAMQPOutstanding>;
+  LQueue: TAMQPServerQueue;
+  I: Integer;
 begin
   Result := True;
   case AId.MethodId of
     AMQP_BASIC_QOS:
       begin
         LQos := DecodeBasicQos(AReader);
+        // prefetch-size (limite em OCTETOS) nao e implementado -- o RabbitMQ
+        // tambem nao implementa. Silenciar seria pior que recusar: o cliente
+        // acharia que ha um limite de bytes valendo.
+        if LQos.PrefetchSize <> 0 then
+          raise EAMQPChannelError.Create(AChannel.Id, AMQP_NOT_IMPLEMENTED,
+            'prefetch-size not implemented', AId.ClassId, AId.MethodId);
         AChannel.PrefetchCount := LQos.PrefetchCount;
         PostMethod(AChannel.Id, BuildBasicQosOk); // qos nao tem no-wait
       end;
@@ -1035,51 +1367,141 @@ begin
         LTag := LConsume.ConsumerTag;
         if LTag = '' then
           LTag := GeneratedName('amq.ctag-');
+        if FEngine <> nil then
+        begin
+          // no-local (nao me entregue o que EU publiquei) exigiria marcar a
+          // origem em cada mensagem; o RabbitMQ tambem nao implementa.
+          if LConsume.NoLocal then
+            raise EAMQPChannelError.Create(AChannel.Id, AMQP_NOT_IMPLEMENTED,
+              'no-local not implemented', AId.ClassId, AId.MethodId);
+          // Tag repetida no mesmo canal e erro de CONEXAO pela spec
+          // (1.8.3.3, not-allowed), nao de canal.
+          if AChannel.ConsumerQueue(LTag, LFila) then
+            raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED,
+              'consumer tag already used: ' + LTag, AId.ClassId, AId.MethodId);
+          LFila := LConsume.Queue;
+          if LFila = '' then
+            LFila := AChannel.LastQueue;
+          CheckEngine(AChannel,
+            FEngine.AddConsumer(FVirtualHost, LFila, LTag, LConsume.NoAck,
+              LConsume.Exclusive, AChannel.DeliveryTarget, FConnId),
+            'queue ' + LFila, AId.ClassId, AId.MethodId);
+          AChannel.AddConsumerTag(LTag, LFila);
+        end;
         if not LConsume.NoWait then
           PostMethod(AChannel.Id, BuildBasicConsumeOk(LTag));
       end;
     AMQP_BASIC_CANCEL:
       begin
         LCancel := DecodeBasicCancelArgs(AReader);
+        if FEngine <> nil then
+        begin
+          // Tag desconhecida nao e erro: a spec manda responder Cancel-Ok do
+          // mesmo jeito (o consumidor pode ter sumido junto com a fila).
+          if AChannel.ConsumerQueue(LCancel.ConsumerTag, LFila) then
+          begin
+            FEngine.RemoveConsumer(FVirtualHost, LFila, LCancel.ConsumerTag,
+              AChannel.Delivery.ChannelId);
+            AChannel.RemoveConsumerTag(LCancel.ConsumerTag);
+          end;
+        end;
         if not LCancel.NoWait then
           PostMethod(AChannel.Id, BuildBasicCancelOk(LCancel.ConsumerTag));
       end;
     AMQP_BASIC_PUBLISH:
       begin
-        // Sem resposta: o que vem a seguir e' o content-header e o body. A
-        // partir daqui o canal esta "montando" e nenhum outro frame pode
+        // Sem resposta: o que vem a seguir e o content-header e o body. A
+        // partir daqui o canal esta montando e nenhum outro frame pode
         // aparecer nele (ver a regra de interleave em HandleChannelFrame).
         LPublish := DecodeBasicPublish(AReader);
+        if (FEngine <> nil) and (LPublish.Exchange <> '')
+          and (not FEngine.ExchangeExists(FVirtualHost, LPublish.Exchange)) then
+          raise EAMQPChannelError.Create(AChannel.Id, AMQP_NOT_FOUND,
+            'no exchange ' + LPublish.Exchange, AId.ClassId, AId.MethodId);
         AChannel.BeginContent(LPublish);
       end;
     AMQP_BASIC_GET:
       begin
-        DecodeBasicGet(AReader);
-        PostMethod(AChannel.Id, BuildBasicGetEmpty); // broker nulo: sempre vazia
+        LGet := DecodeBasicGet(AReader);
+        if FEngine = nil then
+        begin
+          PostMethod(AChannel.Id, BuildBasicGetEmpty);
+          Exit;
+        end;
+        LFila := LGet.Queue;
+        if LFila = '' then
+          LFila := AChannel.LastQueue;
+        // A tag e do CANAL, mesmo no Get: sai da mesma sequencia da entrega.
+        LDeliveryTag := AChannel.Delivery.NextDeliveryTag;
+        CheckEngine(AChannel,
+          FEngine.GetMessage(FVirtualHost, LFila, LGet.NoAck, LDeliveryTag,
+            AChannel.Delivery.ChannelId, FConnId, LFound, LMsg, LRedelivered,
+            LMsgs),
+          'queue ' + LFila, AId.ClassId, AId.MethodId);
+        if not LFound then
+          PostMethod(AChannel.Id, BuildBasicGetEmpty)
+        else
+          try
+            if not LGet.NoAck then
+              // Registrado no ALVO, como as entregas a consumidor -- mas sem
+              // contar para o prefetch (a spec limita entrega a consumidor).
+              AChannel.Delivery.NoteGet(LDeliveryTag, LFila);
+            SendGetOk(AChannel, LDeliveryTag, LRedelivered, LMsgs, LMsg);
+          finally
+            LMsg.Release; // a referencia que o Get entregou a nos
+          end;
       end;
-    // Ack/Nack/Reject não respondem nada. O que a WS4 já faz aqui é a
-    // contabilidade do prefetch: a entrega INCREMENTA (no alvo, ao escrever
-    // os frames) e é esta thread — a única que vê o método do cliente — que
-    // DECREMENTA. O reencaminhamento para o ator da fila (devolver a mensagem
-    // com requeue, tirá-la das não-confirmadas) é da WS5, que é quem sabe a
-    // qual fila cada consumer-tag pertence.
+    // Ack/Nack/Reject nao respondem nada. Duas coisas acontecem aqui: a baixa
+    // do prefetch no alvo (a entrega incrementa; so esta thread ve o metodo do
+    // cliente) e o encaminhamento para a FILA que guarda a nao-confirmada -- a
+    // tag e do canal, mas a mensagem e da fila.
     AMQP_BASIC_ACK:
       begin
         LAck := DecodeBasicAck(AReader);
-        if AChannel.Delivery <> nil then
-          AChannel.Delivery.NoteResolved(LAck.DeliveryTag, LAck.Multiple);
+        if AChannel.Delivery = nil then
+          Exit;
+        // NoteResolved faz as duas coisas de uma vez: libera o prefetch e
+        // devolve as entregas resolvidas COM a fila de origem de cada uma.
+        LRefs := AChannel.Delivery.NoteResolved(LAck.DeliveryTag,
+          LAck.Multiple);
+        if FEngine <> nil then
+          for I := 0 to High(LRefs) do
+          begin
+            LQueue := FEngine.FindQueue(FVirtualHost, LRefs[I].Queue);
+            if LQueue <> nil then
+              LQueue.PostAck(AChannel.DeliveryId, LRefs[I].Tag, False);
+          end;
       end;
     AMQP_BASIC_NACK:
       begin
         LNack := DecodeBasicNack(AReader);
-        if AChannel.Delivery <> nil then
-          AChannel.Delivery.NoteResolved(LNack.DeliveryTag, LNack.Multiple);
+        if AChannel.Delivery = nil then
+          Exit;
+        LRefs := AChannel.Delivery.NoteResolved(LNack.DeliveryTag,
+          LNack.Multiple);
+        if FEngine <> nil then
+          for I := 0 to High(LRefs) do
+          begin
+            LQueue := FEngine.FindQueue(FVirtualHost, LRefs[I].Queue);
+            if LQueue <> nil then
+              LQueue.PostNack(AChannel.DeliveryId, LRefs[I].Tag, False,
+                LNack.Requeue);
+          end;
       end;
     AMQP_BASIC_REJECT:
       begin
-        LReject := DecodeBasicReject(AReader); // Reject não tem multiple
-        if AChannel.Delivery <> nil then
-          AChannel.Delivery.NoteResolved(LReject.DeliveryTag, False);
+        LReject := DecodeBasicReject(AReader); // Reject nao tem multiple
+        if AChannel.Delivery = nil then
+          Exit;
+        LRefs := AChannel.Delivery.NoteResolved(LReject.DeliveryTag, False);
+        if FEngine <> nil then
+          for I := 0 to High(LRefs) do
+          begin
+            LQueue := FEngine.FindQueue(FVirtualHost, LRefs[I].Queue);
+            if LQueue <> nil then
+              LQueue.PostReject(AChannel.DeliveryId, LRefs[I].Tag,
+                LReject.Requeue);
+          end;
       end;
   else
     Result := False;
@@ -1129,10 +1551,19 @@ end;
 // Conteudo completo: entrega ao sink e limpa o canal. O sink NAO fica dono da
 // mensagem -- o ResetContent no finally libera a tabela de headers.
 procedure TAMQPServerConnection.CompleteContent(AChannel: TAMQPServerChannel);
+var
+  LMsg: TAMQPServerMessage;
 begin
   try
+    LMsg := AChannel.CurrentMessage(FUserId);
+    // A propriedade user-id, quando presente, tem de bater com o usuario
+    // autenticado -- senao um cliente assinaria mensagem em nome de outro.
+    if LMsg.Properties.Has(bpUserId) and (LMsg.Properties.UserId <> FUserId) then
+      raise EAMQPChannelError.Create(AChannel.Id, AMQP_ACCESS_REFUSED,
+        'user-id property does not match authenticated user',
+        AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH);
     if FConfig.Sink <> nil then
-      FConfig.Sink.RouteMessage(FVirtualHost, AChannel.CurrentMessage(FUserId));
+      FConfig.Sink.RouteMessage(FVirtualHost, LMsg);
   finally
     AChannel.ResetContent;
   end;

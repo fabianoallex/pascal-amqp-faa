@@ -30,6 +30,7 @@ uses
   AMQP.Server.VHost in '..\..\src\server\AMQP.Server.VHost.pas',
   AMQP.Server.Queue in '..\..\src\server\AMQP.Server.Queue.pas',
   AMQP.Server.Delivery in '..\..\src\server\AMQP.Server.Delivery.pas',
+  AMQP.Server.Engine in '..\..\src\server\AMQP.Server.Engine.pas',
   AMQP.Server.FrameIO in '..\..\src\server\AMQP.Server.FrameIO.pas',
   AMQP.Server.Connection in '..\..\src\server\AMQP.Server.Connection.pas',
   AMQP.Server.Broker in '..\..\src\server\AMQP.Server.Broker.pas',
@@ -39,7 +40,8 @@ uses
   AMQP.ServerRoutingTests in 'AMQP.ServerRoutingTests.pas',
   AMQP.ServerTestDoubles in 'AMQP.ServerTestDoubles.pas',
   AMQP.ServerQueueTests in 'AMQP.ServerQueueTests.pas',
-  AMQP.ServerDeliveryTests in 'AMQP.ServerDeliveryTests.pas';
+  AMQP.ServerDeliveryTests in 'AMQP.ServerDeliveryTests.pas',
+  AMQP.ServerEngineDispatchTests in 'AMQP.ServerEngineDispatchTests.pas';
 
 var
   runner: ITestRunner;

@@ -22,7 +22,8 @@ uses
   AMQP.ServerRoutingTests,
   AMQP.ServerTestDoubles,
   AMQP.ServerQueueTests,
-  AMQP.ServerDeliveryTests;
+  AMQP.ServerDeliveryTests,
+  AMQP.ServerEngineDispatchTests;
 
 var
   ConsoleApp: TTestRunner;

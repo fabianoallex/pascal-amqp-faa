@@ -759,10 +759,10 @@ begin
         LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag);
       AssertEquals('quatro pendentes', 4, LAlvo.UnackedCount);
 
-      AssertEquals('multiple ate a tag 2', 2, LAlvo.NoteResolved(2, True));
+      AssertEquals('multiple ate a tag 2', 2, Length(LAlvo.NoteResolved(2, True)));
       AssertEquals('sobraram duas', 2, LAlvo.UnackedCount);
-      AssertEquals('tag ja resolvida nao conta de novo', 0, LAlvo.NoteResolved(2, False));
-      AssertEquals('multiple com tag 0 resolve todas as pendentes', 2, LAlvo.NoteResolved(0, True));
+      AssertEquals('tag ja resolvida nao conta de novo', 0, Length(LAlvo.NoteResolved(2, False)));
+      AssertEquals('multiple com tag 0 resolve todas as pendentes', 2, Length(LAlvo.NoteResolved(0, True)));
       AssertEquals('nada pendente', 0, LAlvo.UnackedCount);
     finally
       LMsg.Release;

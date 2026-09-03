@@ -33,6 +33,7 @@ uses
   AMQP.Transport,
   AMQP.Server.Auth,
   AMQP.Server.Types,
+  AMQP.Server.Engine,
   AMQP.Server.Connection;
 
 // TAMQPVirtualHostRegistry mudou-se para AMQP.Server.Types no WS4 (a FSM de
@@ -77,6 +78,8 @@ type
     FAuth: IAMQPAuthenticator;
     FAuthorizer: IAMQPAuthorizer;
     FSink: IAMQPMessageSink;
+    FEngine: TAMQPEngine; // WS5: a engine de verdade; tambem e' o Sink
+    FMaxQueueLength: Integer;
     FVHosts: TAMQPVirtualHostRegistry;
     FBindAddress: string;
     FPort: Word;
@@ -97,6 +100,7 @@ type
     procedure StopMonitor;
     procedure HandleConnClosed(AConn: TAMQPServerConnection);
     procedure ReapDead;
+    procedure SetMaxQueueLength(AValue: Integer);
   public
     constructor Create;
     destructor Destroy; override;
@@ -111,6 +115,16 @@ type
     function Connections: TArray<TAMQPServerConnection>;
     /// Total de conexões aceitas desde o Start (inclui as já fechadas).
     property TotalAccepted: Integer read FTotalAccepted;
+
+    /// A engine de roteamento (Fase 2). Criada pelo broker e usada como
+    /// MessageSink; exposta para testes e diagnóstico.
+    property Engine: TAMQPEngine read FEngine;
+    /// Teto de mensagens prontas POR FILA (decisão D7 do CLAUDE.md).
+    /// 0 (default) = ilimitado. O broker roda dentro da app do usuário: uma
+    /// fila sem consumidor não pode derrubar o processo hospedeiro. Vale para
+    /// as filas criadas depois de atribuído. `x-max-length` por fila é Fase 3.
+    property MaxQueueLength: Integer read FMaxQueueLength
+      write SetMaxQueueLength;
 
     property BindAddress: string read FBindAddress write FBindAddress;
     /// Porta a ligar; 0 = o SO escolhe. Depois do Start, reflete a efetiva.
@@ -188,7 +202,10 @@ begin
   FVHosts := TAMQPVirtualHostRegistry.Create;
   FAuth := TAMQPStaticAuthenticator.Create; // guest/guest
   FAuthorizer := TAMQPAllowAllAuthorizer.Create;
-  FSink := TAMQPNullMessageSink.Create;
+  // WS5: a engine e' o sink. O caminho de conteudo da Fase 1 (canal remonta
+  // -> Sink.RouteMessage) nao mudou -- so' quem esta' plugado nele.
+  FEngine := TAMQPEngine.Create;
+  FSink := FEngine;
   FMonitorStop := TEvent.Create(nil, True, False, '');
   FBindAddress := '0.0.0.0';
   FPort := 5672;
@@ -226,6 +243,9 @@ begin
   FAuth := nil;
   FAuthorizer := nil;
   FSink := nil;
+  // Depois do Stop: nenhuma conexao viva, entao nenhum ator de fila esta'
+  // sendo alimentado. O destrutor da engine para os atores antes de liberar.
+  FEngine.Free;
   inherited;
 end;
 
@@ -326,6 +346,8 @@ begin
     // A conexão vira dona do socket e recebe uma cópia da config do broker.
     LConn := TAMQPServerConnection.Create(LSock, ConnConfig);
     LConn.OnClosed := HandleConnClosed;
+    // Antes do Start: a FSM consulta a engine desde o Connection.Open.
+    LConn.Engine := FEngine;
     FLock.Enter;
     try
       FActive.Add(LConn);
@@ -366,8 +388,25 @@ begin
       end;
     end;
 
+    // Caso degradado da D3: consumidor que recusou e nenhum ack chegando --
+    // sem este empurrao a fila so' voltaria a entregar no proximo publish.
+    if FEngine <> nil then
+      try
+        FEngine.DeliverTick;
+      except
+      end;
+
     ReapDead;
   end;
+end;
+
+procedure TAMQPServer.SetMaxQueueLength(AValue: Integer);
+begin
+  if AValue < 0 then
+    AValue := 0;
+  FMaxQueueLength := AValue;
+  if FEngine <> nil then
+    FEngine.MaxQueueLength := AValue;
 end;
 
 procedure TAMQPServer.StopMonitor;

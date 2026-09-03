@@ -38,6 +38,7 @@
           </CodeGeneration>
           <Linking>
             <Debugging>
+              <UseHeaptrc Value="True"/>
               <DebugInfoType Value="dsDwarf3"/>
             </Debugging>
           </Linking>
@@ -96,6 +97,7 @@
     </CodeGeneration>
     <Linking>
       <Debugging>
+        <UseHeaptrc Value="True"/>
         <DebugInfoType Value="dsDwarf3"/>
       </Debugging>
     </Linking>

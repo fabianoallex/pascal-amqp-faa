@@ -54,6 +54,10 @@
         <UnitName Value="AMQP.Server.Delivery"/>
       </Item>
       <Item>
+        <Filename Value="..\src\server\AMQP.Server.Engine.pas"/>
+        <UnitName Value="AMQP.Server.Engine"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\server\AMQP.Server.FrameIO.pas"/>
         <UnitName Value="AMQP.Server.FrameIO"/>
       </Item>

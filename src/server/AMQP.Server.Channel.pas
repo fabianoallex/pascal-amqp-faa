@@ -23,6 +23,7 @@ interface
 
 uses
   SysUtils,
+  Generics.Collections,
   AMQP.Protocol,
   AMQP.Basic.Methods,
   AMQP.Server.Types,
@@ -53,6 +54,20 @@ type
     // depois de o canal morrer -- ver AMQP.Server.Delivery.
     FTargetObj: TAMQPChannelDeliveryTarget;
     FTarget: IAMQPDeliveryTarget;
+    // Identidade do alvo, guardada A PARTE porque ela precisa SOBREVIVER ao
+    // DetachDelivery: o teardown da conexao destaca os alvos antes de varrer
+    // os canais, e e' justamente nessa varredura que as filas precisam saber
+    // de qual canal soltar consumidores e nao-confirmadas.
+    FDeliveryId: NativeUInt;
+    // WS5: o canal e' quem sabe amarrar o que o cliente diz ao que a engine
+    // precisa. Duas amarracoes:
+    //  - consumer-tag -> nome da fila, para o Basic.Cancel e para o teardown;
+    //  - delivery-tag -> nome da fila, porque o Basic.Ack/Nack/Reject chega
+    //    com uma tag do CANAL e quem tem a nao-confirmada e' a FILA.
+    // Só a thread de leitura desta conexão mexe nestes mapas.
+    FLastQueue: string;
+    FConsumers: TDictionary<string, string>;
+    FUnacked: TDictionary<UInt64, string>;
     // --- montagem de conteúdo ---
     FAsmState: TAMQPChannelAsmState;
     FPublish: TAMQPBasicPublish;
@@ -100,6 +115,14 @@ type
     /// Volta a amqasIdle liberando o que foi acumulado. Idempotente.
     procedure ResetContent;
 
+    // --- amarrações do WS5 ---
+    procedure AddConsumerTag(const ATag, AQueue: string);
+    function ConsumerQueue(const ATag: string; out AQueue: string): Boolean;
+    procedure RemoveConsumerTag(const ATag: string);
+    /// Filas em que este canal tem consumidor ou entrega pendente — o
+    /// teardown precisa avisar cada uma.
+    function TouchedQueues: TArray<string>;
+
     property Id: Word read FId;
     property State: TAMQPServerChannelState read FState write FState;
     /// Alvo de entrega para pendurar num consumidor de fila (nil antes do
@@ -108,6 +131,9 @@ type
     /// O mesmo alvo como objeto, para o que so' a conexao faz (delivery-tag
     /// do Basic.Get, baixa de prefetch no ack). nil antes do AttachDelivery.
     property Delivery: TAMQPChannelDeliveryTarget read FTargetObj;
+    /// Identidade do alvo deste canal. Continua valida depois do
+    /// DetachDelivery (ver o campo). 0 antes do AttachDelivery.
+    property DeliveryId: NativeUInt read FDeliveryId;
     /// Channel.Flow: False = o peer pediu que paremos de entregar conteúdo
     /// neste canal. A Fase 2 respeita na entrega.
     property Active: Boolean read FActive write SetActive;
@@ -117,6 +143,10 @@ type
     /// Basic.Qos. A Fase 2 usa para limitar entregas não confirmadas.
     property PrefetchCount: Word read FPrefetchCount write SetPrefetchCount;
 
+    /// Última fila declarada NESTE canal. A spec deixa o cliente omitir o
+    /// nome da fila em Queue.Bind/Purge/Delete e Basic.Consume/Get, e nesse
+    /// caso vale a última declarada no canal (spec 1.7.2.1).
+    property LastQueue: string read FLastQueue write FLastQueue;
     property AsmState: TAMQPChannelAsmState read FAsmState;
     /// Body-size declarado no content-header (válido em amqasBody).
     property BodySize: UInt64 read FBodySize;
@@ -134,12 +164,14 @@ begin
   FActive := True;
   FAsmState := amqasIdle;
   FProps := TAMQPBasicProperties.Empty;
+  FConsumers := TDictionary<string, string>.Create;
 end;
 
 destructor TAMQPServerChannel.Destroy;
 begin
   DetachDelivery; // nunca liberar o canal deixando entrega viva apontando aqui
   ResetContent; // um canal fechado no meio de um publish não pode vazar a tabela
+  FConsumers.Free;
   inherited;
 end;
 
@@ -150,6 +182,7 @@ begin
     Exit;
   FTargetObj := TAMQPChannelDeliveryTarget.Create(AWriter, FId, AMaxPayload);
   FTarget := FTargetObj; // a interface e' quem conta as referencias
+  FDeliveryId := FTargetObj.ChannelId;
   FTargetObj.SetActive(FActive);
   FTargetObj.SetPrefetch(FPrefetchCount);
 end;
@@ -158,8 +191,45 @@ procedure TAMQPServerChannel.DetachDelivery;
 begin
   if FTargetObj <> nil then
     FTargetObj.Detach;
-  FTargetObj := nil;
-  FTarget := nil; // as filas que ainda seguram a interface e' que o liberam
+  // A REFERENCIA continua aqui de proposito (so' o Detach acontece): o
+  // teardown da conexao destaca todos os alvos ANTES de varrer os canais, e
+  // essa varredura ainda precisa perguntar ao alvo em que filas este canal
+  // tem entrega em aberto. Quem libera o objeto e' o refcount da interface,
+  // quando o canal e as filas soltarem a ultima referencia.
+end;
+
+procedure TAMQPServerChannel.AddConsumerTag(const ATag, AQueue: string);
+begin
+  FConsumers.AddOrSetValue(ATag, AQueue);
+end;
+
+function TAMQPServerChannel.ConsumerQueue(const ATag: string;
+  out AQueue: string): Boolean;
+begin
+  Result := FConsumers.TryGetValue(ATag, AQueue);
+end;
+
+procedure TAMQPServerChannel.RemoveConsumerTag(const ATag: string);
+begin
+  FConsumers.Remove(ATag);
+end;
+
+function TAMQPServerChannel.TouchedQueues: TArray<string>;
+var
+  LNome: string;
+  LSet: TDictionary<string, Boolean>;
+begin
+  LSet := TDictionary<string, Boolean>.Create;
+  try
+    for LNome in FConsumers.Values do
+      LSet.AddOrSetValue(LNome, True);
+    if FTargetObj <> nil then
+      for LNome in FTargetObj.PendingQueues do
+        LSet.AddOrSetValue(LNome, True);
+    Result := LSet.Keys.ToArray;
+  finally
+    LSet.Free;
+  end;
 end;
 
 procedure TAMQPServerChannel.SetActive(AValue: Boolean);
