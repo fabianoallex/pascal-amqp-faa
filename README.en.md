@@ -2,9 +2,18 @@
 
 > 🇧🇷 Este documento também está disponível em [português](README.md) — a versão em português é a canônica; em caso de divergência, ela prevalece.
 
-**AMQP 0-9-1** client (RabbitMQ) for **Free Pascal / Lazarus** and **Delphi**, from a single codebase. Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa) (same author, MIT), which was Delphi/Windows-only.
+**AMQP 0-9-1** for **Free Pascal / Lazarus** and **Delphi**, from a single codebase — **both ends**:
+
+- a full **client** (publish/consume, confirms, TLS, automatic reconnection), used in production against RabbitMQ;
+- an **embeddable broker**: `TAMQPServer` runs an AMQP server **inside your application**, with no RabbitMQ install. Useful for integration tests without an external dependency, for messaging between processes on the same machine, and for shipping a queue inside a product that cannot require an installed broker.
+
+Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa) (same author, MIT), which was Delphi/Windows-only and client-only.
+
+> Proof that the two ends talk to each other: **the client's integration suite runs against the embedded broker without a single test rewritten** — 27 of 28 pass, and the only one that doesn't depends on a feature that is not implemented yet ([see below](#what-the-broker-does-not-do-yet)).
 
 ## Features
+
+### Client
 
 - Full handshake (`Start/Tune/Open`) with correct `channel-max`/`frame-max`/`heartbeat` negotiation (compatible with RabbitMQ 3.13+).
 - Publish/consume with **manual ack** (at-least-once); consumer callbacks dispatched on the library's **own thread pool** — the read thread never runs user code.
@@ -15,12 +24,22 @@
 - **TLS (amqps)** with two backends behind the same API: native **SChannel** on Windows (automatic, zero dependencies) and **OpenSSL** on any platform (opt-in via `-dAMQP_OPENSSL`) — see the [TLS (amqps)](#tls-amqps) section.
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (RabbitMQ extension), `Basic.Get`, `Qos`.
 
+### Embedded broker
+
+- **Full handshake** with SASL PLAIN, virtual hosts, `channel-max`/`frame-max`/`heartbeat` negotiation and the spec's channel-vs-connection error model.
+- **Routing** through `direct`, `fanout`, `topic` and `headers` exchanges, plus the default one (`""`) and the predefined `amq.*`; **exchange-to-exchange** bindings (RabbitMQ extension), with cycle cutting.
+- **In-memory queues** with round-robin delivery to consumers, `Basic.Get`, `Ack`/`Nack`/`Reject` with requeue and the `redelivered` flag, and **per-channel prefetch** (`Basic.Qos`).
+- **Publisher confirms** and `mandatory` → `Basic.Return`.
+- `exclusive` queues (they die with the owning connection), queue and exchange `auto-delete`, and `Basic.Cancel` notifying the consumers of a deleted queue.
+- **Server-side TLS** through OpenSSL (`-dAMQP_OPENSSL`), on a dedicated 5671-style port.
+- **Separate package** (`pascal_amqp_faa_server`): client-only users link nothing from the server.
+
 ## Compatibility
 
 | Compiler | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test, FPCUnit suite (80 unit + 28 integration) and the 4 samples pass against a real RabbitMQ |
-| Delphi (tested on 12 / Athens) | Same codebase; DUnitX suite (80 unit + 28 integration) and the 4 samples validated through the IDE (Community Edition has no command-line compiler) |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test, FPCUnit suites (117 unit + 28 integration + 201 broker + 28 acceptance) and the samples pass against a real RabbitMQ |
+| Delphi (tested on 12 / Athens) | Same codebase; DUnitX suites (same numbers) and the samples validated through the IDE (Community Edition has no command-line compiler) |
 | FPC 3.2.2, Linux x86_64 (Debian, container) | Compiles; smoke test (plain and `--tls` with `-dAMQP_OPENSSL`), FPCUnit suite (80 unit + 27 integration, TLS included via OpenSSL) and the 4 samples (console and GUI/LCL-GTK2) pass against a real RabbitMQ |
 | FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Same coverage as x86_64: smoke test plain and `--tls` (aarch64 OpenSSL) and FPCUnit suite 80 + 27 pass against a real RabbitMQ |
 
@@ -201,12 +220,87 @@ On a drop, the library reconnects and **restores the topology** declared on that
 
 The channel's `Close`/`Destroy` wait (without timeout, on purpose) for in-flight callbacks to finish before releasing the object — slow I/O is fine, but a callback that blocks indefinitely waiting for user interaction, or for an event only another application thread signals, stalls that shutdown; if the `Free` runs on the main thread of a VCL/LCL app, the UI freezes with it (deadlock). If the flow depends on human approval, prefer **not blocking**: store the *delivery-tag* and the content in your own structure, return, and confirm later (`Ack`/`Nack` can be called from any thread). If you choose to block on a `TEvent`, the shutdown must wake **all** the waits and also cover deliveries arriving *during* the disconnection — a nack+requeue can be redelivered immediately to the same consumer until `Cancel` completes (`samples/RetaguardaVcl` shows the pattern with a shutdown flag).
 
+## Embedded broker
+
+An AMQP 0-9-1 broker **inside your process**. This library's client — or any AMQP 0-9-1
+client — connects to it over TCP just like it would to a RabbitMQ.
+
+```pascal
+uses AMQP.Server.Broker;
+
+var
+  LBroker: TAMQPServer;
+begin
+  LBroker := TAMQPServer.Create;
+  try
+    LBroker.BindAddress := '127.0.0.1';
+    LBroker.Port := 5672;        // 0 = the OS picks one (read LBroker.Port after Start)
+    LBroker.Start;
+    // ... your application carries on; the broker serves on its own threads ...
+  finally
+    LBroker.Free;                // stops accepting, closes connections, releases the queues
+  end;
+end;
+```
+
+That is all it takes: a client can already connect as `guest`/`guest` on vhost `/`,
+declare topology, publish and consume. Useful configuration:
+
+| Property | What for |
+|---|---|
+| `BindAddress` / `Port` | where to listen; `Port := 0` grabs an ephemeral port (great for tests) |
+| `Authenticator` | replace `TAMQPStaticAuthenticator` (guest/guest) with your own — the interface is `IAMQPAuthenticator` |
+| `VirtualHosts` | vhosts accepted on `Connection.Open` (default: only `/`) |
+| `ChannelMax` / `FrameMax` / `Heartbeat` | limits proposed in `Connection.Tune` (defaults match RabbitMQ's) |
+| `MaxQueueLength` | cap of ready messages **per queue** (0 = unlimited). On overflow it drops from the head — the broker runs inside your app, and a queue with no consumer must not take the host process down |
+| `UseTls` + `TlsCertFile` / `TlsKeyFile` | encrypted port (only with `-dAMQP_OPENSSL`; see below) |
+
+**Building with the broker.** It is a separate package that depends on the client package:
+
+```
+lazbuild packages\pascal_amqp_faa_server.lpk
+```
+
+With plain FPC, add `-Fusrc\server` to what you already use for the client. In Delphi,
+add `src\server\` to the search path.
+
+### What the broker does not do yet
+
+Everything lives in memory — **there is no persistence**. `durable` and `delivery-mode 2`
+are accepted and **ignored**: rejecting them would break clients that always declare
+durable, but nothing survives the end of the process.
+
+Also not implemented (the broker accepts the arguments and ignores them, rather than
+rejecting): `x-message-ttl`, dead-lettering (`x-dead-letter-exchange`, `x-death`),
+`x-max-priority`, per-queue `x-max-length`/`x-overflow`, and alternate exchange. If you
+rely on those, test against a real RabbitMQ — that is exactly the gap the acceptance suite
+measures (its only test that fails against the embedded broker is the one that depends on
+`x-max-length` + `x-overflow: reject-publish`).
+
+Out of scope by decision, in any version: clustering, HTTP management API,
+federation/shovel, AMQP 1.0, STOMP/MQTT, quorum queues and streams.
+
+### Deliberate deviations from RabbitMQ
+
+Documented on purpose — these are not bugs:
+
+- **`guest` connects from anywhere.** RabbitMQ restricts `guest` to local connections; for
+  an embedded broker that would be a footgun. Replace the `Authenticator` in production.
+- **No per-vhost permissions** (`IAMQPAuthorizer` exists as the extension point).
+- **An unknown exchange type is a channel-level `406`**, not a connection-level `503` as in
+  RabbitMQ — a bad declare need not take the connection down with it.
+- **`Basic.Recover` only with `requeue=true`**; with `false`, `540`.
+- **No server-side TLS on the SChannel backend** — this library's SChannel implements the
+  client side only. For an encrypted broker port, build with `-dAMQP_OPENSSL`.
+
 ## Architecture (summary)
 
 - **One read thread** is the only one reading the socket after the handshake; it demultiplexes frames per channel and **dispatches consumer callbacks to the thread pool** (`AmqpPool`, from `AMQP.Threading`) — it never runs user code and never blocks.
 - All **writes** are serialized by a lock; the frames of one message (method + header + body) go out together.
 - **RPC** (declare/bind/get/consume/close) is event-based: send and wait for the read thread to deliver the response.
 - **Heartbeat** and **reconnection** run on their own threads with interruptible waits (`TEvent`).
+
+On the **broker** side the model is: **one thread per connection** with blocking I/O, **one writer thread per connection** (a bounded outbound queue gives natural backpressure), **a single monitor thread** for the whole broker (heartbeats, the `Close-Ok` deadline, reaping dead connections) and **one actor per queue** — each queue has a serial command mailbox scheduled on the thread pool, so no queue state is ever touched by two threads. Binding matching runs on the publisher's thread; only the enqueue crosses over to the actor.
 
 ## Errors and exceptions
 
@@ -275,6 +369,8 @@ fpc -Fusrc -Fisrc your_program.pas
 
 **Delphi**: add `src\` to the project search path (unit scope names `System;Winapi`, which is the default). Ready-made example in `samples\SmokeTest\SmokeTest.dproj`.
 
+**To use the embedded broker**, add the server package/directory as well: `packages\pascal_amqp_faa_server.lpk` in Lazarus, `-Fusrc\server` in plain FPC, `src\server\` in Delphi's search path. Client-only users need none of this — the two packages are separate on purpose.
+
 ## TLS (amqps)
 
 Two backends behind the **same API** — the application code doesn't change, only the build:
@@ -319,6 +415,23 @@ To know **which engine an executable is using** (useful in UI/log — the VCL/LC
 
 Scope (same on both backends): server authentication with TLS 1.2+; validation via the system trust store; no mTLS/client-cert and no server-initiated renegotiation.
 
+### Server-side TLS (embedded broker)
+
+**OpenSSL only** (`-dAMQP_OPENSSL`) — this library's SChannel backend implements the
+client side only. It is a dedicated 5671-style port, not STARTTLS:
+
+```pascal
+LBroker.UseTls := True;
+LBroker.TlsCertFile := 'docker\certs\server.crt';  // PEM chain
+LBroker.TlsKeyFile  := 'docker\certs\server.key';  // PEM key, no passphrase
+LBroker.Port := 5671;
+LBroker.Start;
+```
+
+A cert and key from different pairs fail **at `Start`**, not in an obscure handshake
+later. Without `-dAMQP_OPENSSL`, `UseTls := True` raises `EAMQPTls` with a message
+explaining why.
+
 ### Dev broker with TLS
 
 The `docker/docker-compose.tls.yml` overlay adds the 5671 listener to the main compose broker — the file header has the step-by-step to generate the self-signed certificate (including the mandatory `chmod 644` on the key):
@@ -348,6 +461,13 @@ SmokeTest.exe --tls
 
 On Windows that uses SChannel; to exercise the OpenSSL backend, build with `-dAMQP_OPENSSL` — `SmokeTest.lpi` ships the `openssl` build mode ready for that (on Linux, OpenSSL is the only TLS option).
 
+It also accepts `--host <name>` and `--port <n>`, so it can run against **any** broker. That is how it runs against the embedded broker, without this sample taking a dependency on the server sub-module:
+
+```
+tests\Acceptance\fpc\BrokerHostFpc.exe 5673        &:: starts the embedded broker
+SmokeTest.exe --host 127.0.0.1 --port 5673
+```
+
 ## Samples
 
 The flow that motivated the library: the authorizer publishes the response of an NFe (Brazilian electronic invoice) to a queue; the **back office** consumes that queue and answers the polling of **several simultaneous POS terminals**. Thread-pool consumption + manual ack serves that directly — each response is processed in parallel, correlated by the invoice key (`CorrelationId` or a header), and only confirmed after processing. The samples implement this flow (POS → authorizer → back office), each pair compiling from the same source on both compilers:
@@ -368,7 +488,18 @@ Start the broker (`docker compose -f docker/docker-compose.yml up -d`) and open 
 - **Delphi (DUnitX)**: open `AMQP.groupproj` in RAD Studio.
 - **FPC/Lazarus (FPCUnit)**: open `AMQP.lpg` (Project Group — requires the optional `LazProjectGroups` package installed in the IDE) or each `.lpi` individually.
 
-In both: `AMQP.UnitTests` / `AMQPUnitTestsFpc` (80 tests, no broker needed — frame/method/content-header encode/decode, tune negotiation) and `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` (28 tests, needs RabbitMQ up: `docker compose -f docker/docker-compose.yml up -d`, TLS included via `docker-compose.tls.yml`). The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down — and, outside Windows, if the runner was not built with `-dAMQP_OPENSSL`. On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as Passed, but the console log shows `Success. : IGNORADO: broker TLS (5671) indisponível...` on each — if the 5 appear without that message, they really connected.
+In both:
+
+| Suite | Tests | Requires |
+|---|---|---|
+| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 117 | nothing — frame/method/content-header encode/decode, tune negotiation |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 28 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 201 (205 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 28 | nothing — runs the **client's integration suite against the embedded broker** |
+
+The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. 27 of the 28 pass; the only one that does not depends on `x-max-length` + `x-overflow` and self-ignores stating the reason.
+
+As for the TLS tests: The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down — and, outside Windows, if the runner was not built with `-dAMQP_OPENSSL`. On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as **Passed** — so an "N Passed / 0 Ignored" summary can hide tests that never touched the broker. Two signals resolve the ambiguity: the `IGNORADO: ...` message in the console log, and the **time** — a self-ignored test comes out at ~0.000s, which is why the DUnitX projects here register their own logger (`tests\AMQP.TestTimeLogger.pas`) that prints each test's duration and marks near-zero ones with `~`. The same data is in `dunitx-results.xml` (the `time` attribute); the `asserts` attribute is **not** usable for this — it reads 0 even for tests that really ran.
 
 The FPCUnit runner decides by itself via `ParamCount`: with no arguments it opens the GUI (test tree + green/red bar); with arguments (`--all --format=plain`) it runs in console mode. Running from the Lazarus IDE, the switch is in `Run → Run Parameters → Command line parameters` — the `.lpi` files come with `--all --format=plain` saved (console mode); clear the field to make F9 open the GUI. In console mode via F9 the window closes when done: either check *Use launching application* with `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, or run the executable directly in a terminal.
 
@@ -378,6 +509,7 @@ The FPCUnit runner decides by itself via `ParamCount`: with no arguments it open
 - Publisher confirms + reconnection: publishes unconfirmed before the drop are reported as **not confirmed**; republishing on reconnection is **opt-in** (`RepublishUnconfirmedOnReconnect`, at-least-once) — without it, resend at your layer if you need an end-to-end guarantee. See [Publisher confirms in detail](#publisher-confirms-in-detail).
 - **Topology recovery with server-named queues** — see the section below.
 - TLS: server authentication only — no mTLS/client-cert, no manual version/cipher-suite selection (see [TLS (amqps)](#tls-amqps)).
+- **Embedded broker**: everything in memory (no persistence), no TTL/dead-lettering/priority/`x-max-length`, and no server-side TLS on the SChannel backend — see [What the broker does not do yet](#what-the-broker-does-not-do-yet).
 
 ### Recovery of server-named queues
 
@@ -401,7 +533,10 @@ That way the queue is temporary with a **stable, known name**, and recovery work
 ## Roadmap
 
 - ~~Linux validation~~ — done: x86_64 and ARM64, TLS/OpenSSL included, GUI samples validated on LCL/GTK2 (see the compatibility table).
+- ~~Embeddable broker — full protocol~~ and ~~in-memory routing engine~~ — done: handshake, channels, every client method answered with the correct `*-Ok`, server-side TLS, routing across the four exchange types, delivery with prefetch and ack, confirms, `mandatory`/`Return` and lifecycle (`exclusive`/`auto-delete`).
+- **Broker — durability and queue features**: persistence, `x-message-ttl`, dead-lettering (`x-dead-letter-exchange`/`x-death`), `x-max-priority`, per-queue `x-max-length`/`x-overflow`, and alternate exchange.
 - Validation of the OpenSSL backend compiled by Delphi on Linux (the Community Edition doesn't have the target; the same source is the one validated by FPC/Linux).
+- Server-side TLS on the SChannel backend (OpenSSL only today).
 - mTLS/client-cert.
 
 ## License
