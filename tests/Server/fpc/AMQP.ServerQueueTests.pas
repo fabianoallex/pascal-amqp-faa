@@ -23,7 +23,8 @@ uses
   AMQP.Wire,
   AMQP.Threading,
   AMQP.Server.Message,
-  AMQP.Server.Queue;
+  AMQP.Server.Queue,
+  AMQP.ServerTestDoubles;
 
 type
   TQueueActorTests = class(TTestCase)
@@ -493,8 +494,8 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-1', 77, False, False, nil));
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-2', 88, False, False, nil));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-1', False, False, AlvoQueRecusa(77)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-2', False, False, AlvoQueRecusa(88)));
 
     LMsg := NovaMensagem('a');
     try
@@ -528,8 +529,8 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', 1, False, False, nil));
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', 1, True, False, nil));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, AlvoQueRecusa(1)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', True, False, AlvoQueRecusa(1)));
     AssertEquals('dois consumidores', 2, LQ.Stats.ConsumerCount);
 
     // Tag certa, canal errado: nao remove.
@@ -640,7 +641,7 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', 1, False, False, nil));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False, AlvoQueRecusa(1)));
     AssertTrue('if-unused com consumidor',
       LQ.Delete(True, False, LCount) = amqqdEmUso);
     // A fila continua viva.

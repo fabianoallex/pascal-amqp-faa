@@ -111,6 +111,8 @@ type
     /// Descartadas por MaxLength (D7) ou por post numa fila ja parada.
     /// Metrica OBRIGATORIA: sem ela, mensagem some sem ninguem saber.
     DroppedCount: Int64;
+    /// Entregues a consumidores desde a criacao (nao conta Basic.Get).
+    DeliveredCount: Int64;
   end;
 
   { Costura da entrega (WS4). O canal/conexao implementa; a fila so' guarda a
@@ -127,11 +129,22 @@ type
     function ChannelId: NativeUInt;
     /// False se o canal/conexao ja' morreu -- o ator descarta o consumidor.
     function IsAlive: Boolean;
-    /// Tenta escrever Basic.Deliver + header + body. False = nao coube agora
-    /// (sem bloquear). A mensagem continua sendo do chamador.
+    /// Tenta escrever Basic.Deliver + content-header + body frames, como UM
+    /// lote indivisivel. False = nao coube AGORA (fila outbound cheia, canal
+    /// com Channel.Flow desligado, prefetch estourado ou canal morto) -- sem
+    /// bloquear e sem levantar. A mensagem continua sendo do chamador.
+    ///
+    /// A delivery-tag e' MONOTONICA POR CANAL, logo quem a gera e' o alvo (o
+    /// canal), nao a fila: uma fila entrega para N canais e um canal recebe de
+    /// N filas. Sai em ADeliveryTag e so' e' consumida quando a entrega de
+    /// fato entra na fila de escrita -- uma recusa nao abre buraco na
+    /// sequencia.
+    ///
+    /// ANoAck vem do consumidor porque muda duas coisas no alvo: entrega em
+    /// no-ack nao conta para o prefetch e nao gera nao-confirmada.
     function TryDeliver(const AConsumerTag, AQueueName: string;
-      ADeliveryTag: UInt64; ARedelivered: Boolean;
-      AMessage: TAMQPMessage): Boolean;
+      ANoAck, ARedelivered: Boolean; AMessage: TAMQPMessage;
+      out ADeliveryTag: UInt64): Boolean;
   end;
 
   { Um consumidor registrado (Basic.Consume). A fila e' dona destes objetos
@@ -145,15 +158,24 @@ type
     FTarget: IAMQPDeliveryTarget;
     FSuspended: Boolean;
   public
-    constructor Create(const AConsumerTag: string; AChannelId: NativeUInt;
+    /// ATarget NAO pode ser nil: um consumidor sem alvo nao teria como
+    /// receber nada. O ChannelId vem DELE -- e' a mesma identidade com que a
+    /// fila chaveia as nao-confirmadas e com que o teardown da conexao pede o
+    /// PostRemoveChannel; guardar uma copia independente abriria espaco para
+    /// as duas divergirem e o requeue de um canal morto errar o alvo.
+    constructor Create(const AConsumerTag: string;
       ANoAck, AExclusive: Boolean; const ATarget: IAMQPDeliveryTarget);
     property ConsumerTag: string read FConsumerTag;
     property ChannelId: NativeUInt read FChannelId;
     property NoAck: Boolean read FNoAck;
     property Exclusive: Boolean read FExclusive;
     property Target: IAMQPDeliveryTarget read FTarget;
-    /// D3: fora do rodizio ate a fila outbound do canal drenar. Quem liga e
-    /// desliga isto e' a WS4.
+    /// D3: recusou a entrega NESTA rodada (fila outbound cheia, prefetch
+    /// estourado, flow desligado) e por isso sai do rodizio ate' o fim dela.
+    /// Nao e' estado persistente: toda rodada de entrega recomeca com todos os
+    /// consumidores elegiveis e simplesmente tenta de novo -- uma tentativa
+    /// custa um lock e uma comparacao de contador, e assim nao ha nenhum
+    /// estado de "suspenso" para ressincronizar quando o canal drena.
     property Suspended: Boolean read FSuspended write FSuspended;
   end;
 
@@ -174,7 +196,7 @@ type
 
   TAMQPQueueCmdKind = (
     amqqcEnqueue, amqqcAddConsumer, amqqcRemoveConsumer, amqqcRemoveChannel,
-    amqqcAck, amqqcNack, amqqcReject,
+    amqqcAck, amqqcNack, amqqcReject, amqqcDeliverTick,
     amqqcGet, amqqcPurge, amqqcDelete, amqqcStats);
 
   { Um comando na caixa. Campos publicos de proposito: e' um registro de
@@ -249,7 +271,9 @@ type
     FRequeued: TQueue<TAMQPQueueEntry>; // cabeca logica da fila
     FUnacked: TList<TAMQPUnackedEntry>;
     FConsumers: TObjectList<TAMQPServerConsumer>;
+    FRoundRobin: Integer; // proximo consumidor a atender (rodizio)
     FDropped: Int64;
+    FDelivered: Int64;
 
     procedure ScheduleLocked;
     procedure Post(ACmd: TAMQPQueueCommand);
@@ -257,6 +281,9 @@ type
     // --- helpers do ator (nunca chamados de fora dele) ---
     function ReadyCount: Integer;
     function TakeReady(out AEntry: TAMQPQueueEntry): Boolean;
+    function PeekReady(out AEntry: TAMQPQueueEntry): Boolean;
+    function NextEligible: TAMQPServerConsumer;
+    procedure DeliverPending;
     procedure RequeueFront(AMsg: TAMQPMessage);
     procedure EnforceMaxLength;
     procedure ResolveUnacked(AChannelId: NativeUInt; ADeliveryTag: UInt64;
@@ -304,6 +331,13 @@ type
     /// Canal (ou conexao) caiu: tira todos os consumidores dele e devolve as
     /// nao-confirmadas dele para a fila, com redelivered. WS7 usa.
     procedure PostRemoveChannel(AChannelId: NativeUInt);
+    /// Reexamina a entrega sem nenhum outro evento. Existe para o caso
+    /// degradado da D3: consumidores que recusaram (fila outbound cheia) e
+    /// nenhum ack chegando -- tipico de consumidor em no-ack mais lento que o
+    /// produtor. Nesse caso nada mais acordaria o ator, entao a thread
+    /// monitora do broker cutuca as filas periodicamente. No caminho normal a
+    /// entrega sai do proprio enqueue/ack, sem depender deste tick.
+    procedure PostDeliverTick;
     procedure PostAck(AChannelId: NativeUInt; ADeliveryTag: UInt64;
       AMultiple: Boolean);
     procedure PostNack(AChannelId: NativeUInt; ADeliveryTag: UInt64;
@@ -343,12 +377,14 @@ implementation
 { TAMQPServerConsumer }
 
 constructor TAMQPServerConsumer.Create(const AConsumerTag: string;
-  AChannelId: NativeUInt; ANoAck, AExclusive: Boolean;
-  const ATarget: IAMQPDeliveryTarget);
+  ANoAck, AExclusive: Boolean; const ATarget: IAMQPDeliveryTarget);
 begin
   inherited Create;
+  if ATarget = nil then
+    raise EAMQPQueueActor.CreateFmt(
+      'consumidor "%s" sem alvo de entrega', [AConsumerTag]);
   FConsumerTag := AConsumerTag;
-  FChannelId := AChannelId;
+  FChannelId := ATarget.ChannelId;
   FNoAck := ANoAck;
   FExclusive := AExclusive;
   FTarget := ATarget;
@@ -693,6 +729,11 @@ begin
   Post(LCmd);
 end;
 
+procedure TAMQPServerQueue.PostDeliverTick;
+begin
+  Post(TAMQPQueueCommand.Create(amqqcDeliverTick, False));
+end;
+
 procedure TAMQPServerQueue.PostAck(AChannelId: NativeUInt;
   ADeliveryTag: UInt64; AMultiple: Boolean);
 var
@@ -823,6 +864,102 @@ begin
   Result := True;
 end;
 
+// Espia a proxima pronta SEM tirar do estoque -- a entrega so' tira depois
+// de o alvo aceitar o lote de frames; se ele recusar, a mensagem tem de
+// continuar exatamente onde estava.
+function TAMQPServerQueue.PeekReady(out AEntry: TAMQPQueueEntry): Boolean;
+begin
+  if FRequeued.Count > 0 then
+    AEntry := FRequeued.Peek
+  else if FStock.Count > 0 then
+    AEntry := FStock.Peek
+  else
+  begin
+    Result := False;
+    Exit;
+  end;
+  Result := True;
+end;
+
+// Proximo consumidor do rodizio que ainda nao recusou nesta rodada.
+// nil = todos recusaram (ou nao ha consumidor).
+function TAMQPServerQueue.NextEligible: TAMQPServerConsumer;
+var
+  I, N, LIdx: Integer;
+begin
+  Result := nil;
+  N := FConsumers.Count;
+  if N = 0 then
+    Exit;
+  if (FRoundRobin < 0) or (FRoundRobin >= N) then
+    FRoundRobin := 0;
+  for I := 0 to N - 1 do
+  begin
+    LIdx := (FRoundRobin + I) mod N;
+    if not FConsumers[LIdx].Suspended then
+    begin
+      Result := FConsumers[LIdx];
+      // O ponteiro avanca mesmo quando este consumidor acaba recusando: quem
+      // nao pode receber nao tem por que segurar a vez.
+      FRoundRobin := (LIdx + 1) mod N;
+      Exit;
+    end;
+  end;
+end;
+
+// Uma RODADA de entrega. Roda na thread do ator, fora do lock da caixa, e
+// NUNCA bloqueia (D2): o alvo devolve False em vez de esperar, e o consumidor
+// que recusou sai do rodizio ate' o fim desta rodada (D3) -- os outros
+// continuam recebendo, que e' justamente o head-of-line que a D3 evita.
+procedure TAMQPServerQueue.DeliverPending;
+var
+  I: Integer;
+  LCons: TAMQPServerConsumer;
+  LEntry: TAMQPQueueEntry;
+  LUnacked: TAMQPUnackedEntry;
+  LTag: UInt64;
+begin
+  // Canal/conexao que ja morreu nao volta: o consumidor sai aqui. As
+  // nao-confirmadas dele sao devolvidas pelo amqqcRemoveChannel, que o
+  // teardown da conexao posta (WS7).
+  for I := FConsumers.Count - 1 downto 0 do
+    if not FConsumers[I].Target.IsAlive then
+      FConsumers.Delete(I);
+  if FConsumers.Count = 0 then
+    Exit;
+
+  for I := 0 to FConsumers.Count - 1 do
+    FConsumers[I].Suspended := False; // rodada nova: todos elegiveis de novo
+
+  while ReadyCount > 0 do
+  begin
+    LCons := NextEligible;
+    if LCons = nil then
+      Break; // todos recusaram nesta rodada
+    if not PeekReady(LEntry) then
+      Break;
+
+    if LCons.Target.TryDeliver(LCons.ConsumerTag, FName, LCons.NoAck,
+      LEntry.Redelivered, LEntry.Msg, LTag) then
+    begin
+      TakeReady(LEntry); // so' sai do estoque depois de o lote ser aceito
+      Inc(FDelivered);
+      if LCons.NoAck then
+        LEntry.Msg.Release // sem ack: a fila larga a referencia dela agora
+      else
+      begin
+        // A referencia do estoque passa para as nao-confirmadas.
+        LUnacked.ChannelId := LCons.Target.ChannelId;
+        LUnacked.DeliveryTag := LTag;
+        LUnacked.Msg := LEntry.Msg;
+        FUnacked.Add(LUnacked);
+      end;
+    end
+    else
+      LCons.Suspended := True;
+  end;
+end;
+
 // Devolve para a CABECA da fila, marcada como reentregue (spec: Basic.Nack/
 // Reject com requeue devolvem a mensagem a' sua posicao original).
 procedure TAMQPServerQueue.RequeueFront(AMsg: TAMQPMessage);
@@ -891,6 +1028,7 @@ begin
   Result.ConsumerCount := FConsumers.Count;
   Result.UnackedCount := FUnacked.Count;
   Result.DroppedCount := FDropped;
+  Result.DeliveredCount := FDelivered;
 end;
 
 { --- o despacho de comandos, na thread do ator --- }
@@ -1009,7 +1147,19 @@ begin
         ACmd.ResStats := CurrentStats;
         ACmd.ResOk := True;
       end;
+
+    amqqcDeliverTick:
+      ; // so' existe para disparar a rodada de entrega abaixo
   end;
+
+  // Uma rodada de entrega depois de todo comando que pode ter DESTRAVADO
+  // entrega: mensagem nova, consumidor novo, ack/nack/reject (que libera
+  // prefetch ou devolve mensagem) e o tick do caso degradado da D3. Get,
+  // Purge, Stats, Delete e a saida de um consumidor nunca criam oportunidade
+  // de entrega, entao nem tentam.
+  if ACmd.Kind in [amqqcEnqueue, amqqcAddConsumer, amqqcAck, amqqcNack,
+    amqqcReject, amqqcRemoveChannel, amqqcDeliverTick] then
+    DeliverPending;
 end;
 
 end.

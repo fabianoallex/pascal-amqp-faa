@@ -93,7 +93,15 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
+        <Filename Value="AMQP.ServerTestDoubles.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
         <Filename Value="AMQP.ServerQueueTests.pas"/>
+        <IsPartOfProject Value="True"/>
+      </Unit>
+      <Unit>
+        <Filename Value="AMQP.ServerDeliveryTests.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
     </Units>

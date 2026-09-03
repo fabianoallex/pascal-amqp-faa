@@ -20,7 +20,9 @@ uses
   AMQP.ServerHandshakeTests,
   AMQP.ServerEngineTests,
   AMQP.ServerRoutingTests,
-  AMQP.ServerQueueTests;
+  AMQP.ServerTestDoubles,
+  AMQP.ServerQueueTests,
+  AMQP.ServerDeliveryTests;
 
 var
   ConsoleApp: TTestRunner;

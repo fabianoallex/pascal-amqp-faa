@@ -25,7 +25,10 @@ uses
   SysUtils,
   AMQP.Protocol,
   AMQP.Basic.Methods,
-  AMQP.Server.Types;
+  AMQP.Server.Types,
+  AMQP.Server.FrameIO,
+  AMQP.Server.Queue,
+  AMQP.Server.Delivery;
 
 type
   { amqchOpen  — canal utilizável.
@@ -45,6 +48,11 @@ type
     FActive: Boolean;
     FConfirmMode: Boolean;
     FPrefetchCount: Word;
+    // Alvo de entrega (WS4). O canal cria e DESTACA; as filas onde este canal
+    // tem consumidores seguram a interface, o que mantem o objeto vivo mesmo
+    // depois de o canal morrer -- ver AMQP.Server.Delivery.
+    FTargetObj: TAMQPChannelDeliveryTarget;
+    FTarget: IAMQPDeliveryTarget;
     // --- montagem de conteúdo ---
     FAsmState: TAMQPChannelAsmState;
     FPublish: TAMQPBasicPublish;
@@ -54,11 +62,23 @@ type
     FBody: TBytes;
     FBodyLen: Integer;
     procedure FreeProps;
+    procedure SetActive(AValue: Boolean);
+    procedure SetPrefetchCount(AValue: Word);
   public
     constructor Create(AId: Word);
     destructor Destroy; override;
 
     function IsOpen: Boolean;
+
+    /// Cria o alvo de entrega deste canal sobre o writer da conexao.
+    /// AMaxPayload = quanto cabe no payload de um frame (frame-max negociado
+    /// menos o overhead). Chamar uma vez, ao abrir o canal.
+    procedure AttachDelivery(AWriter: TAMQPFrameWriter; AMaxPayload: Cardinal);
+    /// Solta o alvo: a partir daqui toda entrega pendente falha em vez de
+    /// tocar no writer. OBRIGATORIO antes de liberar o canal ou o writer --
+    /// uma fila pode estar entregando neste exato instante, numa thread do
+    /// pool. Idempotente; o destrutor chama.
+    procedure DetachDelivery;
 
     /// Chegou o Basic.Publish: começa a montagem, esperando o content-header.
     /// Descarta qualquer montagem anterior inacabada.
@@ -82,14 +102,20 @@ type
 
     property Id: Word read FId;
     property State: TAMQPServerChannelState read FState write FState;
+    /// Alvo de entrega para pendurar num consumidor de fila (nil antes do
+    /// AttachDelivery). E' interface: quem guardar mantem o objeto vivo.
+    property DeliveryTarget: IAMQPDeliveryTarget read FTarget;
+    /// O mesmo alvo como objeto, para o que so' a conexao faz (delivery-tag
+    /// do Basic.Get, baixa de prefetch no ack). nil antes do AttachDelivery.
+    property Delivery: TAMQPChannelDeliveryTarget read FTargetObj;
     /// Channel.Flow: False = o peer pediu que paremos de entregar conteúdo
     /// neste canal. A Fase 2 respeita na entrega.
-    property Active: Boolean read FActive write FActive;
+    property Active: Boolean read FActive write SetActive;
     /// Confirm.Select recebido (publisher confirms). A Fase 2 usa para decidir
     /// se cada publish gera Basic.Ack.
     property ConfirmMode: Boolean read FConfirmMode write FConfirmMode;
     /// Basic.Qos. A Fase 2 usa para limitar entregas não confirmadas.
-    property PrefetchCount: Word read FPrefetchCount write FPrefetchCount;
+    property PrefetchCount: Word read FPrefetchCount write SetPrefetchCount;
 
     property AsmState: TAMQPChannelAsmState read FAsmState;
     /// Body-size declarado no content-header (válido em amqasBody).
@@ -112,8 +138,42 @@ end;
 
 destructor TAMQPServerChannel.Destroy;
 begin
+  DetachDelivery; // nunca liberar o canal deixando entrega viva apontando aqui
   ResetContent; // um canal fechado no meio de um publish não pode vazar a tabela
   inherited;
+end;
+
+procedure TAMQPServerChannel.AttachDelivery(AWriter: TAMQPFrameWriter;
+  AMaxPayload: Cardinal);
+begin
+  if FTarget <> nil then
+    Exit;
+  FTargetObj := TAMQPChannelDeliveryTarget.Create(AWriter, FId, AMaxPayload);
+  FTarget := FTargetObj; // a interface e' quem conta as referencias
+  FTargetObj.SetActive(FActive);
+  FTargetObj.SetPrefetch(FPrefetchCount);
+end;
+
+procedure TAMQPServerChannel.DetachDelivery;
+begin
+  if FTargetObj <> nil then
+    FTargetObj.Detach;
+  FTargetObj := nil;
+  FTarget := nil; // as filas que ainda seguram a interface e' que o liberam
+end;
+
+procedure TAMQPServerChannel.SetActive(AValue: Boolean);
+begin
+  FActive := AValue;
+  if FTargetObj <> nil then
+    FTargetObj.SetActive(AValue);
+end;
+
+procedure TAMQPServerChannel.SetPrefetchCount(AValue: Word);
+begin
+  FPrefetchCount := AValue;
+  if FTargetObj <> nil then
+    FTargetObj.SetPrefetch(AValue);
 end;
 
 function TAMQPServerChannel.IsOpen: Boolean;

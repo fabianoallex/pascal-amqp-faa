@@ -163,6 +163,7 @@ type
     function AddChannel(AId: Word): TAMQPServerChannel;
     procedure DropChannel(AId: Word);
     procedure ClearChannels;
+    procedure DetachAllDelivery;
 
     function ClientWantsAuthFailureClose(AProps: TAMQPFieldTable): Boolean;
     function MechanismOffered(const AMechanism: string): Boolean;
@@ -310,6 +311,7 @@ begin
       FSocket.Close;
     except
     end;
+  DetachAllDelivery; // nenhuma entrega pode alcancar o writer depois daqui
   if FWriter <> nil then
     FWriter.Stop;
 end;
@@ -390,6 +392,10 @@ end;
 function TAMQPServerConnection.AddChannel(AId: Word): TAMQPServerChannel;
 begin
   Result := TAMQPServerChannel.Create(AId);
+  // WS4: o canal ja nasce com alvo de entrega. O DropChannel/ClearChannels
+  // (e, em ultimo caso, o destrutor do canal) fazem o Detach -- sem isso uma
+  // fila entregando numa thread do pool escreveria num writer ja liberado.
+  Result.AttachDelivery(FWriter, CurrentMaxPayload);
   FChLock.Enter;
   try
     FChannels.Add(AId, Result);
@@ -411,6 +417,22 @@ begin
     FChLock.Leave;
   end;
   LCh.Free;
+end;
+
+// Solta o alvo de entrega de todos os canais. Chamado no Shutdown ANTES de
+// parar o writer: a partir daqui toda entrega em voo (numa thread do pool)
+// falha limpo em vez de escrever num writer que esta sendo derrubado.
+procedure TAMQPServerConnection.DetachAllDelivery;
+var
+  LCh: TAMQPServerChannel;
+begin
+  FChLock.Enter;
+  try
+    for LCh in FChannels.Values do
+      LCh.DetachDelivery;
+  finally
+    FChLock.Leave;
+  end;
 end;
 
 procedure TAMQPServerConnection.ClearChannels;
@@ -993,6 +1015,9 @@ var
   LConsume: TAMQPBasicConsume;
   LCancel: TAMQPBasicCancelArgs;
   LPublish: TAMQPBasicPublish;
+  LAck: TAMQPBasicAck;
+  LNack: TAMQPBasicNack;
+  LReject: TAMQPBasicReject;
   LTag: string;
 begin
   Result := True;
@@ -1032,12 +1057,30 @@ begin
         DecodeBasicGet(AReader);
         PostMethod(AChannel.Id, BuildBasicGetEmpty); // broker nulo: sempre vazia
       end;
+    // Ack/Nack/Reject não respondem nada. O que a WS4 já faz aqui é a
+    // contabilidade do prefetch: a entrega INCREMENTA (no alvo, ao escrever
+    // os frames) e é esta thread — a única que vê o método do cliente — que
+    // DECREMENTA. O reencaminhamento para o ator da fila (devolver a mensagem
+    // com requeue, tirá-la das não-confirmadas) é da WS5, que é quem sabe a
+    // qual fila cada consumer-tag pertence.
     AMQP_BASIC_ACK:
-      DecodeBasicAck(AReader);      // sem resposta
+      begin
+        LAck := DecodeBasicAck(AReader);
+        if AChannel.Delivery <> nil then
+          AChannel.Delivery.NoteResolved(LAck.DeliveryTag, LAck.Multiple);
+      end;
     AMQP_BASIC_NACK:
-      DecodeBasicNack(AReader);     // sem resposta
+      begin
+        LNack := DecodeBasicNack(AReader);
+        if AChannel.Delivery <> nil then
+          AChannel.Delivery.NoteResolved(LNack.DeliveryTag, LNack.Multiple);
+      end;
     AMQP_BASIC_REJECT:
-      DecodeBasicReject(AReader);   // sem resposta
+      begin
+        LReject := DecodeBasicReject(AReader); // Reject não tem multiple
+        if AChannel.Delivery <> nil then
+          AChannel.Delivery.NoteResolved(LReject.DeliveryTag, False);
+      end;
   else
     Result := False;
   end;
@@ -1316,6 +1359,10 @@ begin
     // — é o que a spec manda depois do Close-Ok, e é o que faz o peer sair do
     // recv dele: um cliente que fecha limpo fica pendurado se o socket do
     // servidor continuar aberto até o reaper passar.
+    // Antes disso, o Detach: este é o caminho de fechamento NORMAL (o peer
+    // mandou Connection.Close), e uma fila pode estar entregando neste exato
+    // instante numa thread do pool.
+    DetachAllDelivery;
     if FWriter <> nil then
       FWriter.Stop;
     if FSocket <> nil then

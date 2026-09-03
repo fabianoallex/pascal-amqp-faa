@@ -68,6 +68,17 @@ type
     procedure PostFrame(const AFrame: TAMQPFrame);
     /// Enfileira vários frames atomicamente (não intercalados com outro lote).
     procedure PostFrames(const AFrames: array of TAMQPFrame);
+    /// Como PostFrames, mas **NÃO BLOQUEIA e NÃO LEVANTA**: devolve False se a
+    /// fila está cheia agora, ou se a escritora já parou/falhou — e nesse caso
+    /// nada é enfileirado (o lote é indivisível: method + header + body de uma
+    /// entrega jamais entram pela metade).
+    ///
+    /// É o caminho da ENTREGA (WS4 da Fase 2). O ator da fila roda num worker
+    /// do pool e não pode bloquear esperando I/O (decisão D2); um consumidor
+    /// cujo canal não aceita mais frames sai do rodízio daquela rodada em vez
+    /// de travar a fila inteira (decisão D3) — que é o que aconteceria se a
+    /// entrega usasse PostFrames.
+    function TryPostFrames(const AFrames: array of TAMQPFrame): Boolean;
 
     /// Para a escritora: drena o que já está na fila (best-effort) e encerra a
     /// thread. Idempotente. Após Stop, Post* levanta exceção.
@@ -120,6 +131,28 @@ begin
   FQueue.Free;
   FMon.Free;
   inherited;
+end;
+
+function TAMQPFrameWriter.TryPostFrames(
+  const AFrames: array of TAMQPFrame): Boolean;
+var
+  I: Integer;
+begin
+  if Length(AFrames) = 0 then
+    Exit(True);
+  FMon.Enter;
+  try
+    if FStopping or FFailed or (FQueue.Count >= FMaxDepth) then
+      Exit(False);
+    // Uma vez decidido que cabe, o lote inteiro entra -- como no PostFrames,
+    // o último lote pode passar do teto, e é isso que preserva a atomicidade.
+    for I := 0 to High(AFrames) do
+      FQueue.Enqueue(AFrames[I]);
+    FMon.PulseAll;
+    Result := True;
+  finally
+    FMon.Leave;
+  end;
 end;
 
 procedure TAMQPFrameWriter.Stop;
