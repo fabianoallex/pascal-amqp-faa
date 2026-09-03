@@ -21,6 +21,7 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.Loggers.Xml.NUnit,
   DUnitX.TestFramework,
+  AMQP.TestTimeLogger in '..\AMQP.TestTimeLogger.pas',
   AMQP.Protocol in '..\..\src\AMQP.Protocol.pas',
   AMQP.Wire in '..\..\src\AMQP.Wire.pas',
   AMQP.Frame in '..\..\src\AMQP.Frame.pas',
@@ -138,6 +139,12 @@ begin
       runner := TDUnitX.CreateRunner;
       runner.UseRTTI := True;
       runner.FailsOnNoAsserts := False;
+
+      // ANTES do logger de console, de proposito: o runner percorre os
+      // loggers na ordem de registro, e o rodape "Done testing" sai do
+      // OnTestingEnds do console. Assim a tabela de tempos aparece entre a
+      // saida detalhada e o resumo que ela qualifica.
+      runner.AddLogger(TAMQPTestTimeLogger.Create);
 
       if TDUnitX.Options.ConsoleMode <> TDunitXConsoleMode.Off then
       begin

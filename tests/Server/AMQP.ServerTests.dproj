@@ -122,6 +122,7 @@
         <DelphiCompile Include="$(MainSource)">
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
+        <DCCReference Include="..\AMQP.TestTimeLogger.pas"/>
         <DCCReference Include="..\..\src\AMQP.Protocol.pas"/>
         <DCCReference Include="..\..\src\AMQP.Wire.pas"/>
         <DCCReference Include="..\..\src\AMQP.Frame.pas"/>
