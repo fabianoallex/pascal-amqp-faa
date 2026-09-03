@@ -1,4 +1,4 @@
-program AMQPServerTestsFpc;
+﻿program AMQPServerTestsFpc;
 
 { Runner FPCUnit dos testes do sub-módulo broker (server).
 
@@ -19,7 +19,8 @@ uses
   AMQP.ServerSkeletonTests,
   AMQP.ServerHandshakeTests,
   AMQP.ServerEngineTests,
-  AMQP.ServerRoutingTests;
+  AMQP.ServerRoutingTests,
+  AMQP.ServerQueueTests;
 
 var
   ConsoleApp: TTestRunner;

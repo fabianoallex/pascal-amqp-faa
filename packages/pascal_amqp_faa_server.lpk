@@ -46,6 +46,10 @@
         <UnitName Value="AMQP.Server.VHost"/>
       </Item>
       <Item>
+        <Filename Value="..\src\server\AMQP.Server.Queue.pas"/>
+        <UnitName Value="AMQP.Server.Queue"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\server\AMQP.Server.FrameIO.pas"/>
         <UnitName Value="AMQP.Server.FrameIO"/>
       </Item>
