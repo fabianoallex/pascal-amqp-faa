@@ -30,6 +30,7 @@ uses
   Interfaces, Forms, GuiTestRunner,
   {$ENDIF}
   Classes, consoletestrunner, testregistry,
+  AMQP.IntegrationConfig,
   AMQP.HandshakeIntegrationTests,
   AMQP.ChannelIntegrationTests,
   AMQP.ConsumeIntegrationTests,

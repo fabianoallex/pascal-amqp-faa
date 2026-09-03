@@ -12,6 +12,7 @@ uses
   fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
   AMQP.Threading,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
 
 type
@@ -43,7 +44,7 @@ implementation
 
 procedure TAMQPConsumeIntegrationTests.SetUp;
 begin
-  FConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  FConn := TAMQPConnection.Create(IntegrationParams);
   FConn.Open;
   FChan := FConn.CreateChannel;
   FReceived := TThreadList<string>.Create;

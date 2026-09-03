@@ -21,6 +21,7 @@ uses
   System.Classes,
   System.SyncObjs,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Transport, // EAMQPTls
   AMQP.Queue.Methods;
 
@@ -60,7 +61,7 @@ begin
   FCurrent := 0;
   FPeak := 0;
   // TlsVerifyPeer=False: aceita o cert self-signed do broker de dev.
-  FConn := TAMQPConnection.Create(TAMQPConnectionParams.LocalhostTls);
+  FConn := TAMQPConnection.Create(IntegrationTlsParams);
   try
     FConn.Open;
     FChan := FConn.CreateChannel;
@@ -244,7 +245,7 @@ begin
 
   // Handshake TLS contra a porta plain (5672): o broker responde com o header
   // AMQP e fecha — deve virar EAMQPTls rápido, sem travar a suíte.
-  LParams := TAMQPConnectionParams.LocalhostTls;
+  LParams := IntegrationTlsParams;
   LParams.Port := 5672;
 
   Assert.WillRaise(
@@ -272,7 +273,7 @@ begin
 
   // Mesmo broker (cert self-signed), mas AGORA exigindo validação da cadeia +
   // hostname: o handshake TLS deve FALHAR (prova que TlsVerifyPeer=True valida).
-  LParams := TAMQPConnectionParams.LocalhostTls;
+  LParams := IntegrationTlsParams;
   LParams.TlsVerifyPeer := True;
 
   Assert.WillRaise(

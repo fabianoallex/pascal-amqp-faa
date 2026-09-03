@@ -13,6 +13,7 @@ uses
   fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
   AMQP.Threading,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
 
 type
@@ -62,12 +63,12 @@ begin
   FQueue := 'test-recon-' + IntToStr(AmqpTickMs);
 
   // Conexão de controle (sem auto-reconnect) só para publicar.
-  FControlConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  FControlConn := TAMQPConnection.Create(IntegrationParams);
   FControlConn.Open;
   FControlChan := FControlConn.CreateChannel;
 
   // Conexão consumidora com auto-reconexão.
-  LParams := TAMQPConnectionParams.Localhost;
+  LParams := IntegrationParams;
   LParams.AutoReconnect := True;
   LParams.ReconnectDelayMs := 500;
   LParams.ConnectionName := 'pascal-amqp-faa-recon-test-fpc';
@@ -188,7 +189,7 @@ var
 begin
   // Conexão própria (isolada das fixtures do Setup) com auto-reconexão.
   FDropTestReconnected := 0;
-  LParams := TAMQPConnectionParams.Localhost;
+  LParams := IntegrationParams;
   LParams.AutoReconnect := True;
   LParams.ReconnectDelayMs := 500;
   LConn := TAMQPConnection.Create(LParams);
@@ -244,7 +245,7 @@ begin
 
   // Conexão publicadora: auto-reconnect + reenvio de não confirmados.
   FRepublishTestReconnected := 0;
-  LPubParams := TAMQPConnectionParams.Localhost;
+  LPubParams := IntegrationParams;
   LPubParams.AutoReconnect := True;
   LPubParams.ReconnectDelayMs := 500;
   LPubParams.RepublishUnconfirmedOnReconnect := True;

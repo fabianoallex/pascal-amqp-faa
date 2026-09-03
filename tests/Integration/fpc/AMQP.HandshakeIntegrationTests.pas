@@ -11,6 +11,7 @@ interface
 uses
   fpcunit, testregistry, SysUtils, Classes,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Connection.Methods,
   AMQP.Queue.Methods;
 
@@ -47,7 +48,7 @@ procedure TAMQPHandshakeIntegrationTests.Conecta_FazHandshake_E_Fecha;
 var
   LConn: TAMQPConnection;
 begin
-  LConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  LConn := TAMQPConnection.Create(IntegrationParams);
   try
     LConn.Open;
     AssertTrue('deveria estar aberta após o handshake', LConn.IsOpen);
@@ -63,7 +64,7 @@ var
   LConn: TAMQPConnection;
   LTune: TAMQPConnectionTune;
 begin
-  LConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  LConn := TAMQPConnection.Create(IntegrationParams);
   try
     LConn.Open;
     LTune := LConn.NegotiatedTune;
@@ -83,7 +84,7 @@ procedure TAMQPHandshakeIntegrationTests.CredenciaisInvalidas_Levanta;
 var
   LRaised: Boolean;
 begin
-  FParams := TAMQPConnectionParams.Localhost;
+  FParams := IntegrationParams;
   FParams.Password := 'senha-obviamente-errada';
   // Com a capability authentication_failure_close, o servidor responde
   // Connection.Close (403) — mas aceitamos qualquer exceção (broker pode só
@@ -104,7 +105,7 @@ end;
 
 procedure TAMQPHandshakeIntegrationTests.VirtualHostInexistente_Levanta;
 begin
-  FParams := TAMQPConnectionParams.Localhost;
+  FParams := IntegrationParams;
   FParams.VirtualHost := '/vhost-que-nao-existe';
   AssertException(EAMQPConnection, DoOpenWithParams);
 end;
@@ -116,7 +117,7 @@ var
   LChan: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
 begin
-  LParams := TAMQPConnectionParams.Localhost;
+  LParams := IntegrationParams;
   LParams.Heartbeat := 2; // negocia 2s; cliente manda heartbeat a cada 1s
   LConn := TAMQPConnection.Create(LParams);
   try

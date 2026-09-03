@@ -11,6 +11,10 @@
   despachado no thread pool), Cancel e teardown limpo. Sai com exit code 0 se
   tudo passou; 1 se algo falhou.
 
+  Aceita --host <nome> e --port <n> para apontar para outro broker (é assim
+  que o WS9 o roda contra o broker embutido desta lib, sem que este sample
+  passe a depender do sub-módulo server).
+
   Com o argumento --tls, roda os mesmos passos sobre TLS (localhost:5671 do
   docker-compose.tls.yml, cert self-signed): SChannel no Windows, OpenSSL se
   compilado com -dAMQP_OPENSSL. }
@@ -113,15 +117,44 @@ begin
   Result := FAllReceived.WaitFor(ATimeoutMs) = wrSignaled;
 end;
 
-// Parâmetros do teste: com --tls na linha de comando, roda TUDO sobre TLS
-// (localhost:5671, cert self-signed do docker-compose.tls.yml; no build é
-// SChannel no Windows ou OpenSSL com -dAMQP_OPENSSL). Sem argumento, plain 5672.
+// Parâmetros do teste. Argumentos aceitos, em qualquer ordem:
+//   --tls          roda TUDO sobre TLS (localhost:5671, cert self-signed do
+//                  docker-compose.tls.yml; SChannel no Windows ou OpenSSL com
+//                  -dAMQP_OPENSSL)
+//   --host <nome>  aponta para outro host (default: o de Localhost)
+//   --port <n>     aponta para outra porta (default: 5672, ou 5671 com --tls)
+//
+// --host/--port existem para o SmokeTest poder rodar contra QUALQUER broker --
+// inclusive o broker embutido desta própria lib, que o runner de aceitação
+// (tests\Acceptance\fpc\BrokerHostFpc) sobe numa porta fixa. É o passo do
+// WS9 que faltava sem transformar este sample num programa que depende do
+// sub-módulo server: ele continua sendo 100% cliente.
 function SmokeParams: TAMQPConnectionParams;
+var
+  I: Integer;
+  LArg: string;
 begin
-  if (ParamCount > 0) and SameText(ParamStr(1), '--tls') then
-    Result := TAMQPConnectionParams.LocalhostTls
-  else
-    Result := TAMQPConnectionParams.Localhost;
+  Result := TAMQPConnectionParams.Localhost;
+  for I := 1 to ParamCount do
+    if SameText(ParamStr(I), '--tls') then
+      Result := TAMQPConnectionParams.LocalhostTls;
+
+  I := 1;
+  while I <= ParamCount do
+  begin
+    LArg := ParamStr(I);
+    if SameText(LArg, '--host') and (I < ParamCount) then
+    begin
+      Result.Host := ParamStr(I + 1);
+      Inc(I);
+    end
+    else if SameText(LArg, '--port') and (I < ParamCount) then
+    begin
+      Result.Port := StrToIntDef(ParamStr(I + 1), Result.Port);
+      Inc(I);
+    end;
+    Inc(I);
+  end;
 end;
 
 procedure Check(ACondition: Boolean; const AWhat: string);

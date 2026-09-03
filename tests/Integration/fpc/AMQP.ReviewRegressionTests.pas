@@ -13,6 +13,7 @@ uses
   fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
   AMQP.Threading,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
 
 type
@@ -85,7 +86,7 @@ end;
 
 procedure TAMQPReviewRegressionTests.SetUp;
 begin
-  FConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  FConn := TAMQPConnection.Create(IntegrationParams);
   FConn.Open;
   FStarted := 0;
   FFinished := 0;

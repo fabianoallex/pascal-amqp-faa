@@ -15,6 +15,7 @@ uses
   System.Threading,
   System.Generics.Collections,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
 
 type
@@ -39,7 +40,7 @@ implementation
 
 procedure TAMQPReviewRegressionTests.Setup;
 begin
-  FConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  FConn := TAMQPConnection.Create(IntegrationParams);
   FConn.Open;
   FStarted := 0;
   FFinished := 0;

@@ -11,6 +11,7 @@ uses
   fpcunit, testregistry, SysUtils, Classes, Rtti,
   AMQP.Threading,
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Wire,
   AMQP.Exchange.Methods,
   AMQP.Queue.Methods,
@@ -55,7 +56,7 @@ implementation
 
 procedure TAMQPChannelIntegrationTests.SetUp;
 begin
-  FConn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
+  FConn := TAMQPConnection.Create(IntegrationParams);
   FConn.Open;
   FChan := FConn.CreateChannel;
   FGotReturn := 0;
@@ -340,6 +341,19 @@ var
 begin
   // Fila que REJEITA publishes quando cheia: x-max-length=1 + x-overflow=reject-publish.
   // Em confirm mode, o publish que estoura o limite volta como Basic.Nack.
+  //
+  // WS9 / decisao D8: este e' o UNICO teste da suite que depende de recurso
+  // de Fase 3 (x-max-length por fila + x-overflow). Contra o broker embutido
+  // ele nao tem como passar -- e ficar mascarado como falha generica seria
+  // pior que dizer o motivo. Vira item do backlog da Fase 3, nao teste
+  // silenciosamente pulado (ver CLAUDE.md, backlog da Fase 3).
+  if AmqpUsingEmbeddedBroker then
+  begin
+    Ignore('depende de x-max-length + x-overflow=reject-publish (Fase 3) -- '
+      + 'backlog: o broker embutido aceita os argumentos e os ignora');
+    Exit;
+  end;
+
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-max-length', TValue.From<Integer>(1));

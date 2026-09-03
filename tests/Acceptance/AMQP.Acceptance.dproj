@@ -1,6 +1,6 @@
 ﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
-        <ProjectGuid>{EF080C45-761A-48DE-A6C8-C475CACCE494}</ProjectGuid>
+        <ProjectGuid>{F36B7EC4-055A-4F6C-A2E0-A05E8ECD7593}</ProjectGuid>
         <ProjectVersion>20.1</ProjectVersion>
         <FrameworkType>None</FrameworkType>
         <Base>True</Base>
@@ -8,8 +8,8 @@
         <Platform Condition="'$(Platform)'==''">Win32</Platform>
         <TargetedPlatforms>693267</TargetedPlatforms>
         <AppType>Console</AppType>
-        <MainSource>AMQP.UnitTests.dpr</MainSource>
-        <ProjectName Condition="'$(ProjectName)'==''">AMQP.UnitTests</ProjectName>
+        <MainSource>AMQP.Acceptance.dpr</MainSource>
+        <ProjectName Condition="'$(ProjectName)'==''">AMQP.Acceptance</ProjectName>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Config)'=='Base' or '$(Base)'!=''">
         <Base>true</Base>
@@ -75,7 +75,7 @@
         <DCC_ExeOutput>.\$(Platform)\$(Config)</DCC_ExeOutput>
         <DCC_Namespace>System;Xml;Data;Datasnap;Web;Soap;$(DCC_Namespace)</DCC_Namespace>
         <DCC_UnitSearchPath>$(DUnitX);..\..\src;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
-        <SanitizedProjectName>AMQP_UnitTests</SanitizedProjectName>
+        <SanitizedProjectName>AMQP_Acceptance</SanitizedProjectName>
         <UsingDelphiRTL>true</UsingDelphiRTL>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
@@ -131,10 +131,28 @@
         <DCCReference Include="..\..\src\AMQP.Exchange.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Queue.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Basic.Methods.pas"/>
-        <DCCReference Include="AMQP.WireTests.pas"/>
-        <DCCReference Include="AMQP.FrameTests.pas"/>
-        <DCCReference Include="AMQP.ConnectionMethodsTests.pas"/>
-        <DCCReference Include="AMQP.Item2MethodsTests.pas"/>
+        <DCCReference Include="..\..\src\AMQP.Transport.Tls.pas"/>
+        <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Auth.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Types.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Message.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Resources.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Routing.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.VHost.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Queue.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.FrameIO.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Delivery.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Engine.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Channel.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Connection.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Broker.pas"/>
+        <DCCReference Include="..\Integration\AMQP.HandshakeIntegrationTests.pas"/>
+        <DCCReference Include="..\Integration\AMQP.IntegrationConfig.pas"/>
+        <DCCReference Include="..\Integration\AMQP.ChannelIntegrationTests.pas"/>
+        <DCCReference Include="..\Integration\AMQP.ConsumeIntegrationTests.pas"/>
+        <DCCReference Include="..\Integration\AMQP.ReconnectIntegrationTests.pas"/>
+        <DCCReference Include="..\Integration\AMQP.TlsIntegrationTests.pas"/>
+        <DCCReference Include="..\Integration\AMQP.ReviewRegressionTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
@@ -157,7 +175,7 @@
         <BorlandProject>
             <Delphi.Personality>
                 <Source>
-                    <Source Name="MainSource">AMQP.UnitTests.dpr</Source>
+                    <Source Name="MainSource">AMQP.Acceptance.dpr</Source>
                 </Source>
             </Delphi.Personality>
             <Platforms>

@@ -21,6 +21,7 @@ uses
   fpcunit, testregistry, SysUtils, Classes,
   AMQP.Threading, // AmqpAtomic* (TInterlocked não existe no FPC)
   AMQP.Connection,
+  AMQP.IntegrationConfig,
   AMQP.Transport, // EAMQPTls (vale pra SChannel e OpenSSL)
   AMQP.Queue.Methods;
 
@@ -63,7 +64,7 @@ begin
   FCurrent := 0;
   FPeak := 0;
   // TlsVerifyPeer=False: aceita o cert self-signed do broker de dev.
-  FConn := TAMQPConnection.Create(TAMQPConnectionParams.LocalhostTls);
+  FConn := TAMQPConnection.Create(IntegrationTlsParams);
   try
     FConn.Open;
     FChan := FConn.CreateChannel;
@@ -255,7 +256,7 @@ begin
 
   // Handshake TLS contra a porta plain (5672): o broker responde com o header
   // AMQP e fecha — deve virar EAMQPTls rápido, sem travar a suíte.
-  FPlainPortParams := TAMQPConnectionParams.LocalhostTls;
+  FPlainPortParams := IntegrationTlsParams;
   FPlainPortParams.Port := 5672;
 
   AssertException('handshake TLS contra a porta plain deveria falhar com EAMQPTls',
@@ -281,7 +282,7 @@ begin
 
   // Mesmo broker (cert self-signed), mas AGORA exigindo validação da cadeia +
   // hostname: o handshake TLS deve FALHAR (prova que TlsVerifyPeer=True valida).
-  FVerifyPeerParams := TAMQPConnectionParams.LocalhostTls;
+  FVerifyPeerParams := IntegrationTlsParams;
   FVerifyPeerParams.TlsVerifyPeer := True;
 
   AssertException('validar o cert self-signed deveria recusar a conexão',

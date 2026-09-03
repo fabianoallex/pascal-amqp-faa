@@ -12,6 +12,12 @@
         <Projects Include="tests\Server\AMQP.ServerTests.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="tests\Acceptance\AMQP.Acceptance.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="samples\SmokeTest\SmokeTest.dproj">
+            <Dependencies/>
+        </Projects>
         <Projects Include="samples\AutorizadorSim\AutorizadorSim.dproj">
             <Dependencies/>
         </Projects>
@@ -40,9 +46,6 @@
             <Dependencies/>
         </Projects>
         <Projects Include="samples\PrioridadeVcl\PrioridadeVcl.dproj">
-            <Dependencies/>
-        </Projects>
-        <Projects Include="samples\SmokeTest\SmokeTest.dproj">
             <Dependencies/>
         </Projects>
     </ItemGroup>
@@ -79,6 +82,24 @@
     </Target>
     <Target Name="AMQP_ServerTests:Make">
         <MSBuild Projects="tests\Server\AMQP.ServerTests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="AMQP_Acceptance">
+        <MSBuild Projects="tests\Acceptance\AMQP.Acceptance.dproj"/>
+    </Target>
+    <Target Name="AMQP_Acceptance:Clean">
+        <MSBuild Projects="tests\Acceptance\AMQP.Acceptance.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="AMQP_Acceptance:Make">
+        <MSBuild Projects="tests\Acceptance\AMQP.Acceptance.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="SmokeTest">
+        <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj"/>
+    </Target>
+    <Target Name="SmokeTest:Clean">
+        <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="SmokeTest:Make">
+        <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj" Targets="Make"/>
     </Target>
     <Target Name="AutorizadorSim">
         <MSBuild Projects="samples\AutorizadorSim\AutorizadorSim.dproj"/>
@@ -170,23 +191,14 @@
     <Target Name="PrioridadeVcl:Make">
         <MSBuild Projects="samples\PrioridadeVcl\PrioridadeVcl.dproj" Targets="Make"/>
     </Target>
-    <Target Name="SmokeTest">
-        <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj"/>
-    </Target>
-    <Target Name="SmokeTest:Clean">
-        <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj" Targets="Clean"/>
-    </Target>
-    <Target Name="SmokeTest:Make">
-        <MSBuild Projects="samples\SmokeTest\SmokeTest.dproj" Targets="Make"/>
-    </Target>
     <Target Name="Build">
-        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AMQP_ServerTests;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;EventosTopicVcl;EventosHeadersVcl;PrioridadeVcl;SmokeTest"/>
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AMQP_ServerTests;AMQP_Acceptance;SmokeTest;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;EventosTopicVcl;EventosHeadersVcl;PrioridadeVcl"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AMQP_ServerTests:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;EventosTopicVcl:Clean;EventosHeadersVcl:Clean;PrioridadeVcl:Clean;SmokeTest:Clean"/>
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AMQP_ServerTests:Clean;AMQP_Acceptance:Clean;SmokeTest:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;EventosTopicVcl:Clean;EventosHeadersVcl:Clean;PrioridadeVcl:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AMQP_ServerTests:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;EventosTopicVcl:Make;EventosHeadersVcl:Make;PrioridadeVcl:Make;SmokeTest:Make"/>
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AMQP_ServerTests:Make;AMQP_Acceptance:Make;SmokeTest:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;EventosTopicVcl:Make;EventosHeadersVcl:Make;PrioridadeVcl:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>
