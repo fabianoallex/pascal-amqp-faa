@@ -1,8 +1,8 @@
-# Broker AMQP — worklog detalhado (Fases 1, 2 e 3)
+# Broker AMQP — worklog detalhado (Fases 1 a 4)
 
-> Este arquivo guarda a narrativa completa, workstream a workstream, do submódulo broker (`src\server\`): bugs achados, mutações de teste, contagens de suíte rodada a rodada. **Não é carregado automaticamente** (ao contrário do `CLAUDE.md`) — leia sob demanda quando o histórico de uma decisão específica for relevante. O resumo do estado atual, as decisões travadas (D1–D18) e as regras vivas (gotchas de FPC/Delphi) ficam no `CLAUDE.md`.
+> Este arquivo guarda a narrativa completa, workstream a workstream, do submódulo broker (`src\server\`): bugs achados, mutações de teste, contagens de suíte rodada a rodada. **Não é carregado automaticamente** (ao contrário do `CLAUDE.md`) — leia sob demanda quando o histórico de uma decisão específica for relevante. O resumo do estado atual, as decisões travadas (D1–D28) e as regras vivas (gotchas de FPC/Delphi) ficam no `CLAUDE.md`.
 >
-> Artifacts de planejamento: [Fase 1](https://claude.ai/code/artifact/9f07e23c-c200-4435-8770-77164bad0c13) · [Fase 2](https://claude.ai/code/artifact/50acd241-e591-44c1-aa90-9879e28969d2) · [Fase 3](https://claude.ai/code/artifact/5fdf5f48-dd2c-4084-9884-7b1d862c3d04)
+> Artifacts de planejamento: [Fase 1](https://claude.ai/code/artifact/9f07e23c-c200-4435-8770-77164bad0c13) · [Fase 2](https://claude.ai/code/artifact/50acd241-e591-44c1-aa90-9879e28969d2) · [Fase 3](https://claude.ai/code/artifact/5fdf5f48-dd2c-4084-9884-7b1d862c3d04) · [Fase 4](https://claude.ai/code/artifact/46b89cbc-060b-406c-b10b-31f9e8c99bd1)
 
 ## Fase 1 — protocolo ("null broker")
 
@@ -347,6 +347,17 @@ WS1 escrita de array no field-table (`AMQP.Wire`) (Sonnet) · WS2 política de f
   - **Erro meu, o mesmo de antes:** as escritas adicionaram **BOM aos dois READMEs**, detectado comparando o cabeçalho com o do `git show HEAD:` — sintoma: contagem de headings deu 33 num arquivo e 34 no outro, porque o BOM esconde o `#` da primeira linha do `grep '^#'`. Removido; voltaram a **34 headings casando uma a uma**.
 
 **Mutações obrigatórias, decididas ANTES de escrever os testes** (regra da Fase 2): entregar mensagem expirada em vez de expirá-la; requeue na cabeça absoluta em vez da cabeça do balde; descarte por teto começando pelo balde de maior prioridade; remover a guarda de ciclo de dead-letter; não colapsar o `count` do `x-death`; reusar o `HeaderPayload` original em vez de derivar um novo. Todas conferidas — cada uma derruba exatamente o teste que deveria.
+
+## Fase 4 — durabilidade
+
+Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28 estão no `CLAUDE.md`** — ler de lá, não re-derivar. Plano completo, com as tabelas de medição: artifact `Broker AMQP — Fase 4` (https://claude.ai/code/artifact/46b89cbc-060b-406c-b10b-31f9e8c99bd1).
+
+**Escopo:** WAL segmentado (registro com comprimento e CRC32, recuperação por prefixo válido, lock exclusivo do `DataDir`) · thread de journal com group commit auto-ajustável e marca d'água por LSN · topologia durável · mensagem persistente (`delivery-mode=2` em fila `durable`) · confirm assíncrono preso ao fsync · recuperação em três passes · rotação/compactação de segmento e teto duro · aparato de crash-safety.
+**Fora:** paginação para disco (lazy queues) — *durabilidade não é paginação*, a fila continua inteira na memória · `Connection.Blocked` e alarmes · persistir estado de consumidor · recuperar fila exclusiva · criptografia em repouso · ordem entre publicadores além da que a spec garante.
+
+**A colisão que a Fase 3 já tinha medido e apontado:** o relógio (`AmqpTickMs` = `GetTickCount64`) é relativo ao BOOT e a fila guarda prazos absolutos nele; persistir esses números é gravar coordenada de um referencial que não existe depois do restart. Resolvida pela D21 (parede no disco, monotônico na memória, conversão só nas duas fronteiras).
+
+**A previsão que a medição desmentiu:** a memória do projeto registrava a D15 (enqueue síncrono do `x-overflow: reject-publish`) como "o único ponto da Fase 3 desenhado para ser substituído". Lida contra o desenho da D24, ela **não precisa ser substituída**: `TryPostMessage` é síncrono mas não faz I/O, então a recusa é conhecida antes de o pendente de confirm ser registrado. O que muda é só quando o ack sai.
 
 ## Verificador de espelhos
 
