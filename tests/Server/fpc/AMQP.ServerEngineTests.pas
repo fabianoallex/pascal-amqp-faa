@@ -51,6 +51,23 @@ type
     procedure QueueDef_EquivalentTo;
   end;
 
+  TQueuePolicyTests = class(TTestCase)
+  published
+    procedure Ausente_TudoNeutro;
+    procedure Ttl_AceitaIntegerEInt64;
+    procedure Ttl_NegativoRecusa;
+    procedure Ttl_TipoErradoRecusa;
+    procedure Expires_ZeroRecusa;
+    procedure MaxLength_ZeroEValidoENaoAusente;
+    procedure MaxPriority_FaixaFechada;
+    procedure Overflow_DuasPoliticas;
+    procedure DeadLetter_VazioEPresente;
+    procedure ArgumentoDesconhecido_Ignorado;
+    procedure AlternateExchange_LeEValida;
+    procedure QueueDef_DerivaPolitica;
+    procedure ExchangeDef_DerivaAlternate;
+  end;
+
 implementation
 
 // Monta { 'x-lista': array de field-values ['S':ATexto, 'l':AInt] } pelo
@@ -487,8 +504,363 @@ begin
   end;
 end;
 
+
+{ Wrappers de assercao usados so' pela TQueuePolicyTests. Existem para o CORPO
+  da fixture ficar LITERALMENTE identico nas duas suites -- a divergencia de
+  espelho ja' mordeu antes (o helper ExpectChannelClose que so' existia do lado
+  FPCUnit). Aqui a unica coisa que difere entre os dois arquivos sao estas
+  quatro linhas. }
+procedure ChecaOk(AOk: Boolean; const AErro: string);
+begin
+  TAssert.AssertTrue('parse deveria passar, erro: ' + AErro, AOk);
+end;
+
+procedure ChecaInt(const AMsg: string; AEsperado, AReal: Int64);
+begin
+  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+end;
+
+procedure ChecaBool(const AMsg: string; AEsperado, AReal: Boolean);
+begin
+  TAssert.AssertTrue(AMsg, AReal = AEsperado);
+end;
+
+procedure ChecaStr(const AMsg, AEsperado, AReal: string);
+begin
+  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+end;
+
+{ TQueuePolicyTests }
+
+// Tabela com uma unica chave numerica, montada com o valor ja' num TValue
+// local (encadear TValue.From<T> inline num Put trava o FPC 3.2).
+function TabInt(const AChave: string; AValor: Int64): TAMQPFieldTable;
+var
+  LVal: TValue;
+begin
+  Result := TAMQPFieldTable.Create;
+  LVal := TValue.From<Int64>(AValor);
+  Result.Put(AChave, LVal);
+end;
+
+function TabStr(const AChave, AValor: string): TAMQPFieldTable;
+var
+  LVal: TValue;
+begin
+  Result := TAMQPFieldTable.Create;
+  LVal := TValue.From<string>(AValor);
+  Result.Put(AChave, LVal);
+end;
+
+procedure TQueuePolicyTests.Ausente_TudoNeutro;
+var
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  // nil e' o caso comum: a maioria dos Queue.Declare nao manda argumento.
+  ChecaOk(AmqpParseQueuePolicy(nil, LPol, LErro), LErro);
+  ChecaInt('ttl ausente', -1, LPol.MessageTtlMs);
+  ChecaInt('expires ausente', -1, LPol.ExpiresMs);
+  ChecaInt('max-length ausente', -1, LPol.MaxLength);
+  ChecaInt('max-priority ausente', -1, LPol.MaxPriority);
+  ChecaBool('sem dead-letter', False, LPol.HasDeadLetterExchange);
+  ChecaBool('HasAny False', False, LPol.HasAny);
+end;
+
+procedure TQueuePolicyTests.Ttl_AceitaIntegerEInt64;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+  LVal: TValue;
+begin
+  // O wire nao tem um tipo unico para numero: 'b'/'s'/'I' viram tkInteger e
+  // 'i'/'l'/'T' viram tkInt64. Um cliente que manda ttl como Integer e outro
+  // como Int64 estao os dois certos.
+  LTab := TAMQPFieldTable.Create;
+  try
+    LVal := TValue.From<Integer>(60000);
+    LTab.Put('x-message-ttl', LVal);
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaInt('ttl como Integer', 60000, LPol.MessageTtlMs);
+  finally
+    LTab.Free;
+  end;
+
+  LTab := TabInt('x-message-ttl', 60000);
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaInt('ttl como Int64', 60000, LPol.MessageTtlMs);
+    ChecaBool('HasAny True', True, LPol.HasAny);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.Ttl_NegativoRecusa;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  LTab := TabInt('x-message-ttl', -1);
+  try
+    ChecaBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPol, LErro));
+    // A mensagem tem de NOMEAR o argumento -- e' o que separa um erro
+    // acionavel de um "precondition failed" que o usuario adivinha.
+    ChecaBool('erro cita o argumento', True,
+      Pos('x-message-ttl', LErro) > 0);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.Ttl_TipoErradoRecusa;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  LTab := TabStr('x-message-ttl', '60000'); // string, nao numero
+  try
+    ChecaBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPol, LErro));
+    ChecaBool('erro diz integer', True, Pos('integer', LErro) > 0);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.Expires_ZeroRecusa;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  // Uma fila que expira em 0 ms sumiria no instante do proprio declare.
+  LTab := TabInt('x-expires', 0);
+  try
+    ChecaBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPol, LErro));
+    ChecaBool('erro cita o argumento', True, Pos('x-expires', LErro) > 0);
+  finally
+    LTab.Free;
+  end;
+  LTab := TabInt('x-expires', 1);
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaInt('1 ms e valido', 1, LPol.ExpiresMs);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.MaxLength_ZeroEValidoENaoAusente;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  // O motivo de ausencia ser -1 e nao 0: x-max-length=0 e' um valor legitimo
+  // ("fila que nao guarda nada"), diferente de nao ter sido informado.
+  LTab := TabInt('x-max-length', 0);
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaInt('zero preservado', 0, LPol.MaxLength);
+    ChecaBool('HasAny True com zero', True, LPol.HasAny);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.MaxPriority_FaixaFechada;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  LTab := TabInt('x-max-priority', AMQP_MAX_PRIORITY_LEVEL);
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaInt('teto aceito', AMQP_MAX_PRIORITY_LEVEL, LPol.MaxPriority);
+  finally
+    LTab.Free;
+  end;
+
+  // Desvio deliberado do RabbitMQ (D12): la' vai ate' 255, aqui para em 9 --
+  // e recusa em vez de fazer clamp silencioso.
+  LTab := TabInt('x-max-priority', AMQP_MAX_PRIORITY_LEVEL + 1);
+  try
+    ChecaBool('acima do teto recusa', False,
+      AmqpParseQueuePolicy(LTab, LPol, LErro));
+    ChecaBool('erro cita o argumento', True,
+      Pos('x-max-priority', LErro) > 0);
+  finally
+    LTab.Free;
+  end;
+
+  LTab := TabInt('x-max-priority', -1);
+  try
+    ChecaBool('negativo recusa', False,
+      AmqpParseQueuePolicy(LTab, LPol, LErro));
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.Overflow_DuasPoliticas;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  LTab := TabStr('x-overflow', 'drop-head');
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaBool('drop-head', True, LPol.Overflow = amqovDropHead);
+  finally
+    LTab.Free;
+  end;
+
+  LTab := TabStr('x-overflow', 'reject-publish');
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaBool('reject-publish', True, LPol.Overflow = amqovRejectPublish);
+    ChecaBool('HasAny True', True, LPol.HasAny);
+  finally
+    LTab.Free;
+  end;
+
+  // 'reject-publish-dlx' do RabbitMQ nao entra nesta implementacao.
+  LTab := TabStr('x-overflow', 'reject-publish-dlx');
+  try
+    ChecaBool('politica desconhecida recusa', False,
+      AmqpParseQueuePolicy(LTab, LPol, LErro));
+    ChecaBool('erro cita o argumento', True, Pos('x-overflow', LErro) > 0);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.DeadLetter_VazioEPresente;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  // x-dead-letter-exchange='' e' o exchange DEFAULT, nao "sem DLX" -- por isso
+  // o par Has*, e nao string vazia como sentinela.
+  LTab := TabStr('x-dead-letter-exchange', '');
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaBool('presente', True, LPol.HasDeadLetterExchange);
+    ChecaStr('valor vazio', '', LPol.DeadLetterExchange);
+    ChecaBool('HasAny True', True, LPol.HasAny);
+  finally
+    LTab.Free;
+  end;
+
+  LTab := TabStr('x-dead-letter-routing-key', 'falhou');
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaBool('dlrk presente', True, LPol.HasDeadLetterRoutingKey);
+    ChecaStr('dlrk valor', 'falhou', LPol.DeadLetterRoutingKey);
+    ChecaBool('dlx continua ausente', False, LPol.HasDeadLetterExchange);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.ArgumentoDesconhecido_Ignorado;
+var
+  LTab: TAMQPFieldTable;
+  LPol: TAMQPQueuePolicy;
+  LErro: string;
+begin
+  // Recusar 'x-' desconhecido quebraria cliente que manda argumento de uma
+  // extensao que este broker nao tem. Mesmo comportamento do RabbitMQ.
+  LTab := TabInt('x-invencao-do-cliente', 7);
+  try
+    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
+    ChecaBool('nao vira politica', False, LPol.HasAny);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.AlternateExchange_LeEValida;
+var
+  LTab: TAMQPFieldTable;
+  LNome, LErro: string;
+  LTem: Boolean;
+begin
+  ChecaOk(AmqpParseAlternateExchange(nil, LNome, LTem, LErro), LErro);
+  ChecaBool('ausente', False, LTem);
+
+  LTab := TabStr('alternate-exchange', 'ae');
+  try
+    ChecaOk(AmqpParseAlternateExchange(LTab, LNome, LTem, LErro), LErro);
+    ChecaBool('presente', True, LTem);
+    ChecaStr('nome', 'ae', LNome);
+  finally
+    LTab.Free;
+  end;
+
+  LTab := TabInt('alternate-exchange', 42); // numero onde se espera string
+  try
+    ChecaBool('tipo errado recusa', False,
+      AmqpParseAlternateExchange(LTab, LNome, LTem, LErro));
+    ChecaBool('erro cita o argumento', True,
+      Pos('alternate-exchange', LErro) > 0);
+  finally
+    LTab.Free;
+  end;
+end;
+
+procedure TQueuePolicyTests.QueueDef_DerivaPolitica;
+var
+  LTab: TAMQPFieldTable;
+  LDef: TAMQPQueueDef;
+  LVal: TValue;
+begin
+  // O descritor deriva a politica na construcao; a tabela continua sendo a
+  // fonte da verdade (e' ela que o EquivalentTo compara).
+  LTab := TAMQPFieldTable.Create;
+  LVal := TValue.From<Int64>(30000);
+  LTab.Put('x-message-ttl', LVal);
+  LVal := TValue.From<string>('dlx');
+  LTab.Put('x-dead-letter-exchange', LVal);
+
+  LDef := TAMQPQueueDef.Create('q', True, False, False, LTab);
+  try
+    ChecaInt('ttl derivado', 30000, LDef.Policy.MessageTtlMs);
+    ChecaBool('dlx derivado', True, LDef.Policy.HasDeadLetterExchange);
+    ChecaStr('dlx nome', 'dlx', LDef.Policy.DeadLetterExchange);
+  finally
+    LDef.Free; // dono da tabela
+  end;
+end;
+
+procedure TQueuePolicyTests.ExchangeDef_DerivaAlternate;
+var
+  LTab: TAMQPFieldTable;
+  LDef: TAMQPExchangeDef;
+  LVal: TValue;
+begin
+  LTab := TAMQPFieldTable.Create;
+  LVal := TValue.From<string>('ae');
+  LTab.Put('alternate-exchange', LVal);
+
+  LDef := TAMQPExchangeDef.Create('x', 'direct', True, False, False, LTab);
+  try
+    ChecaBool('tem AE', True, LDef.HasAlternateExchange);
+    ChecaStr('nome do AE', 'ae', LDef.AlternateExchange);
+  finally
+    LDef.Free;
+  end;
+end;
+
 initialization
   RegisterTest(TMessageTests);
   RegisterTest(TResourceTests);
+  RegisterTest(TQueuePolicyTests);
 
 end.

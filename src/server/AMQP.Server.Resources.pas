@@ -28,7 +28,51 @@ uses
   AMQP.Wire,
   AMQP.Exchange.Methods;
 
+const
+  /// Teto de x-max-priority desta implementacao (decisao D12 da Fase 3). O
+  /// RabbitMQ aceita ate' 255 e recomenda <= 5; acima de 9 o custo de memoria
+  /// por fila (um balde de prontas por nivel) deixa de valer o que entrega.
+  /// Declarar acima disto e' 406, nao um clamp silencioso -- desvio deliberado,
+  /// documentado no CLAUDE.md.
+  AMQP_MAX_PRIORITY_LEVEL = 9;
+
 type
+  { Politica de x-overflow: o que fazer quando a fila bate o teto.
+    - amqovDropHead: descarta da cabeca (default da spec de fato do RabbitMQ);
+    - amqovRejectPublish: recusa o publish, que em confirm mode vira Basic.Nack.
+    'reject-publish-dlx' do RabbitMQ nao entra: dead-letter no overflow e' a
+    razao 'maxlen' da WS5, que ja' cobre o caso pelo caminho normal. }
+  TAMQPOverflow = (amqovDropHead, amqovRejectPublish);
+
+  { Os x-arguments de uma fila, ja' decodificados e validados.
+
+    Escopo da WS2 (Fase 3): esta unit apenas LE e VALIDA. Nenhum campo daqui
+    tem efeito ainda -- TTL e prioridade sao a WS4, dead-letter a WS5, os tetos
+    a WS6, x-expires a WS8. Guardar a politica no descritor desde ja' evita que
+    cada frente reparseie a tabela do seu jeito.
+
+    Ausencia e' -1 nos numericos (e nao 0, que e' um valor VALIDO e diferente:
+    x-max-length=0 significa "fila que nao guarda nada"). Nas strings, o par
+    Has* separa "ausente" de "presente e vazia" -- x-dead-letter-exchange=''
+    e' o exchange DEFAULT, nao a ausencia de DLX. }
+  TAMQPQueuePolicy = record
+    MessageTtlMs: Int64;             // x-message-ttl        (-1 = ausente)
+    ExpiresMs: Int64;                // x-expires            (-1 = ausente)
+    MaxLength: Int64;                // x-max-length         (-1 = ausente)
+    MaxLengthBytes: Int64;           // x-max-length-bytes   (-1 = ausente)
+    MaxPriority: Integer;            // x-max-priority       (-1 = sem prioridade)
+    Overflow: TAMQPOverflow;         // x-overflow           (default drop-head)
+    DeadLetterExchange: string;      // x-dead-letter-exchange
+    HasDeadLetterExchange: Boolean;
+    DeadLetterRoutingKey: string;    // x-dead-letter-routing-key
+    HasDeadLetterRoutingKey: Boolean;
+
+    class function Empty: TAMQPQueuePolicy; static;
+    /// True se a fila tem ao menos um argumento com efeito -- atalho para as
+    /// frentes seguintes pularem o caminho caro numa fila comum.
+    function HasAny: Boolean;
+  end;
+
   { Descreve um exchange declarado. Dono de Arguments. }
   TAMQPExchangeDef = class
   private
@@ -38,6 +82,8 @@ type
     FAutoDelete: Boolean;
     FInternal: Boolean;
     FArguments: TAMQPFieldTable;
+    FAlternateExchange: string;
+    FHasAlternateExchange: Boolean;
   public
     /// AArguments: o descritor passa a ser dono (libera no destrutor); pode
     /// ser nil.
@@ -57,6 +103,11 @@ type
     property AutoDelete: Boolean read FAutoDelete;
     property Internal: Boolean read FInternal;
     property Arguments: TAMQPFieldTable read FArguments;
+    /// 'alternate-exchange', derivado de Arguments na construcao. A WS7 da
+    /// Fase 3 roteia para ca' o que nao casou binding nenhum; ate' la' o
+    /// campo so' existe. Has* separa ausente de presente-e-vazio.
+    property AlternateExchange: string read FAlternateExchange;
+    property HasAlternateExchange: Boolean read FHasAlternateExchange;
   end;
 
   { Descreve uma fila declarada. Dono de Arguments. }
@@ -68,6 +119,7 @@ type
     FAutoDelete: Boolean;
     FArguments: TAMQPFieldTable;
     FOwnerId: NativeUInt;
+    FPolicy: TAMQPQueuePolicy;
   public
     /// AArguments: o descritor passa a ser dono (libera no destrutor); pode
     /// ser nil. AOwnerId: identidade da conexao dona (0 = fila nao-exclusiva,
@@ -95,6 +147,11 @@ type
     /// (ciclo de vida cruzado / teardown) usam isso pra negar acesso de outra
     /// conexao e pra liberar a fila quando a dona cai.
     property OwnerId: NativeUInt read FOwnerId write FOwnerId;
+    /// Os x-arguments ja' decodificados (WS2 da Fase 3). Derivada de Arguments
+    /// na construcao -- a tabela continua sendo a fonte da verdade (e' ela que
+    /// o EquivalentTo compara), a politica e' so' a leitura tipada dela.
+    /// Argumento invalido nao chega aqui: a FSM valida ANTES de declarar.
+    property Policy: TAMQPQueuePolicy read FPolicy;
   end;
 
 /// Compara duas field-tables SEMANTICAMENTE (nao por referencia):
@@ -132,7 +189,234 @@ function AmqpIsValidExchangeType(const AType: string): Boolean;
 /// logica de comparacao de TValue.
 function AmqpValuesEqual(const A, B: TValue): Boolean;
 
+/// Le e VALIDA os x-arguments de fila de AArgs (pode ser nil = tabela vazia).
+///
+/// False = algum argumento e' invalido, e AErro traz a mensagem ja' no
+/// formato que vai para o reply-text do 406 PRECONDITION_FAILED, NOMEANDO o
+/// argumento ofensor (ex.: "invalid arg 'x-max-priority' for queue: must be
+/// an integer between 0 and 9"). Nomear e' o que separa um erro acionavel de
+/// um "precondition failed" que o usuario tem de adivinhar -- o RabbitMQ faz
+/// igual.
+///
+/// Quem chama e' a FSM (AMQP.Server.Connection), ANTES de entregar a tabela
+/// a' engine: validacao produz reply-code, e a engine nao conhece reply-code
+/// nenhum (invariante da Fase 2). Chaves 'x-' desconhecidas sao IGNORADAS,
+/// nao recusadas -- e' o que o RabbitMQ faz, e recusar quebraria cliente que
+/// manda argumento de uma extensao que este broker nao tem.
+function AmqpParseQueuePolicy(AArgs: TAMQPFieldTable;
+  out APolicy: TAMQPQueuePolicy; out AErro: string): Boolean;
+
+/// Le e valida o argumento 'alternate-exchange' de um Exchange.Declare.
+/// ANome sai vazio e Result=True quando o argumento esta ausente (use
+/// AHas para distinguir de "presente e vazio"). Mesmo contrato de AErro.
+function AmqpParseAlternateExchange(AArgs: TAMQPFieldTable;
+  out AName: string; out AHas: Boolean; out AErro: string): Boolean;
+
 implementation
+
+{ TAMQPQueuePolicy }
+
+class function TAMQPQueuePolicy.Empty: TAMQPQueuePolicy;
+begin
+  Result.MessageTtlMs := -1;
+  Result.ExpiresMs := -1;
+  Result.MaxLength := -1;
+  Result.MaxLengthBytes := -1;
+  Result.MaxPriority := -1;
+  Result.Overflow := amqovDropHead;
+  Result.DeadLetterExchange := '';
+  Result.HasDeadLetterExchange := False;
+  Result.DeadLetterRoutingKey := '';
+  Result.HasDeadLetterRoutingKey := False;
+end;
+
+function TAMQPQueuePolicy.HasAny: Boolean;
+begin
+  Result := (MessageTtlMs >= 0) or (ExpiresMs >= 0) or (MaxLength >= 0)
+    or (MaxLengthBytes >= 0) or (MaxPriority >= 0)
+    or (Overflow <> amqovDropHead)
+    or HasDeadLetterExchange or HasDeadLetterRoutingKey;
+end;
+
+{ --- leitura tipada de um x-argument --------------------------------------
+  O decoder do wire nao produz um tipo unico para numero: FV_INT8/16/32 viram
+  tkInteger e FV_UINT32/INT64/TIMESTAMP viram tkInt64 (ver TAMQPReader.
+  ReadFieldValue). Um cliente que manda x-message-ttl como 'b' e outro que
+  manda como 'l' estao os dois certos, entao aceitar so' um Kind recusaria
+  cliente valido. Boolean fica de fora de proposito: no FPC ele tem Kind
+  proprio (tkBool) e no Delphi cai em tkEnumeration -- em nenhum dos dois e'
+  um numero, e aceitar True como 1 mascararia erro de tipo do cliente. }
+
+// True se a chave existe. AOk sai False quando existe mas nao e' numero.
+function TryArgInt64(AArgs: TAMQPFieldTable; const AKey: string;
+  out AValue: Int64; out AOk: Boolean): Boolean;
+var
+  LVal: TValue;
+begin
+  AValue := 0;
+  AOk := False;
+  // O indexador encadeado (Tabela['k'].AsInt64) trava o FPC 3.2 com erro
+  // interno -- por isso o TValue vai para uma variavel local antes.
+  Result := (AArgs <> nil) and AArgs.TryGetValue(AKey, LVal);
+  if not Result then
+    Exit;
+  LVal := AmqpUnwrapValue(LVal);
+  case LVal.Kind of
+    tkInteger: begin AValue := LVal.AsInteger; AOk := True; end;
+    tkInt64:   begin AValue := LVal.AsInt64;   AOk := True; end;
+  end;
+end;
+
+// True se a chave existe. AOk sai False quando existe mas nao e' string.
+function TryArgString(AArgs: TAMQPFieldTable; const AKey: string;
+  out AValue: string; out AOk: Boolean): Boolean;
+var
+  LVal: TValue;
+begin
+  AValue := '';
+  AOk := False;
+  Result := (AArgs <> nil) and AArgs.TryGetValue(AKey, LVal);
+  if not Result then
+    Exit;
+  LVal := AmqpUnwrapValue(LVal);
+  case LVal.Kind of
+    tkString, tkUString, tkLString, tkWString, tkChar, tkWChar
+    {$IFDEF FPC}, tkAString{$ENDIF}:
+      begin
+        AValue := LVal.AsString;
+        AOk := True;
+      end;
+  end;
+end;
+
+function ErroArg(const AKey, ADetalhe: string): string;
+begin
+  Result := Format('invalid arg ''%s'' for queue: %s', [AKey, ADetalhe]);
+end;
+
+// Le um numerico com piso. AMin e' o menor valor ACEITO (0 para os tetos e
+// para o TTL, 1 para x-expires -- uma fila que expira em 0 ms sumiria no
+// instante do declare, o que o RabbitMQ tambem recusa).
+function LerNumerico(AArgs: TAMQPFieldTable; const AKey: string; AMin: Int64;
+  var ADestino: Int64; out AErro: string): Boolean;
+var
+  LVal: Int64;
+  LOk: Boolean;
+begin
+  AErro := '';
+  Result := True;
+  if not TryArgInt64(AArgs, AKey, LVal, LOk) then
+    Exit; // ausente
+  if not LOk then
+  begin
+    AErro := ErroArg(AKey, 'must be an integer');
+    Exit(False);
+  end;
+  if LVal < AMin then
+  begin
+    AErro := ErroArg(AKey, Format('must be >= %d', [AMin]));
+    Exit(False);
+  end;
+  ADestino := LVal;
+end;
+
+function AmqpParseQueuePolicy(AArgs: TAMQPFieldTable;
+  out APolicy: TAMQPQueuePolicy; out AErro: string): Boolean;
+var
+  LVal: Int64;
+  LTexto: string;
+  LOk: Boolean;
+begin
+  APolicy := TAMQPQueuePolicy.Empty;
+  AErro := '';
+
+  if not LerNumerico(AArgs, 'x-message-ttl', 0, APolicy.MessageTtlMs, AErro) then
+    Exit(False);
+  if not LerNumerico(AArgs, 'x-expires', 1, APolicy.ExpiresMs, AErro) then
+    Exit(False);
+  if not LerNumerico(AArgs, 'x-max-length', 0, APolicy.MaxLength, AErro) then
+    Exit(False);
+  if not LerNumerico(AArgs, 'x-max-length-bytes', 0, APolicy.MaxLengthBytes,
+    AErro) then
+    Exit(False);
+
+  // x-max-priority: faixa fechada da D12, nao so' "nao-negativo".
+  if TryArgInt64(AArgs, 'x-max-priority', LVal, LOk) then
+  begin
+    if (not LOk) or (LVal < 0) or (LVal > AMQP_MAX_PRIORITY_LEVEL) then
+    begin
+      AErro := ErroArg('x-max-priority', Format(
+        'must be an integer between 0 and %d', [AMQP_MAX_PRIORITY_LEVEL]));
+      Exit(False);
+    end;
+    APolicy.MaxPriority := Integer(LVal);
+  end;
+
+  // x-overflow: so' as duas politicas desta implementacao.
+  if TryArgString(AArgs, 'x-overflow', LTexto, LOk) then
+  begin
+    if not LOk then
+    begin
+      AErro := ErroArg('x-overflow', 'must be a string');
+      Exit(False);
+    end;
+    if LTexto = 'drop-head' then
+      APolicy.Overflow := amqovDropHead
+    else if LTexto = 'reject-publish' then
+      APolicy.Overflow := amqovRejectPublish
+    else
+    begin
+      AErro := ErroArg('x-overflow',
+        'must be ''drop-head'' or ''reject-publish''');
+      Exit(False);
+    end;
+  end;
+
+  if TryArgString(AArgs, 'x-dead-letter-exchange', LTexto, LOk) then
+  begin
+    if not LOk then
+    begin
+      AErro := ErroArg('x-dead-letter-exchange', 'must be a string');
+      Exit(False);
+    end;
+    APolicy.DeadLetterExchange := LTexto;
+    APolicy.HasDeadLetterExchange := True;
+  end;
+
+  if TryArgString(AArgs, 'x-dead-letter-routing-key', LTexto, LOk) then
+  begin
+    if not LOk then
+    begin
+      AErro := ErroArg('x-dead-letter-routing-key', 'must be a string');
+      Exit(False);
+    end;
+    APolicy.DeadLetterRoutingKey := LTexto;
+    APolicy.HasDeadLetterRoutingKey := True;
+  end;
+
+  Result := True;
+end;
+
+function AmqpParseAlternateExchange(AArgs: TAMQPFieldTable;
+  out AName: string; out AHas: Boolean; out AErro: string): Boolean;
+var
+  LOk: Boolean;
+begin
+  AName := '';
+  AHas := False;
+  AErro := '';
+  Result := True;
+  if not TryArgString(AArgs, 'alternate-exchange', AName, LOk) then
+    Exit; // ausente
+  if not LOk then
+  begin
+    AName := '';
+    AErro := 'invalid arg ''alternate-exchange'' for exchange: '
+      + 'must be a string';
+    Exit(False);
+  end;
+  AHas := True;
+end;
 
 function AmqpArgsEqual(A, B: TAMQPFieldTable): Boolean;
 var
@@ -255,6 +539,8 @@ end;
 
 constructor TAMQPExchangeDef.Create(const AName, AExchangeType: string;
   ADurable, AAutoDelete, AInternal: Boolean; AArguments: TAMQPFieldTable);
+var
+  LErro: string;
 begin
   inherited Create;
   FName := AName;
@@ -263,6 +549,13 @@ begin
   FAutoDelete := AAutoDelete;
   FInternal := AInternal;
   FArguments := AArguments;
+  // Mesma politica do TAMQPQueueDef: nao levanta -- a FSM ja' validou.
+  if not AmqpParseAlternateExchange(FArguments, FAlternateExchange,
+    FHasAlternateExchange, LErro) then
+  begin
+    FAlternateExchange := '';
+    FHasAlternateExchange := False;
+  end;
 end;
 
 destructor TAMQPExchangeDef.Destroy;
@@ -286,6 +579,8 @@ end;
 constructor TAMQPQueueDef.Create(const AName: string;
   ADurable, AExclusive, AAutoDelete: Boolean; AArguments: TAMQPFieldTable;
   AOwnerId: NativeUInt);
+var
+  LErro: string;
 begin
   inherited Create;
   FName := AName;
@@ -294,6 +589,11 @@ begin
   FAutoDelete := AAutoDelete;
   FArguments := AArguments;
   FOwnerId := AOwnerId;
+  // Nao levanta: a FSM ja' validou antes de chegar aqui, e um descritor que
+  // falha ao construir deixaria a topologia num estado pior que uma politica
+  // vazia. Se um dia falhar, e' bug nosso e aparece como argumento sem efeito.
+  if not AmqpParseQueuePolicy(FArguments, FPolicy, LErro) then
+    FPolicy := TAMQPQueuePolicy.Empty;
 end;
 
 destructor TAMQPQueueDef.Destroy;

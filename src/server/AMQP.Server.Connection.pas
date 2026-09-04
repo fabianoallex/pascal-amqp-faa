@@ -183,6 +183,12 @@ type
     procedure CheckEngine(AChannel: TAMQPServerChannel;
       ARes: TAMQPEngineResult; const AWhat: string;
       AClassId, AMethodId: Word);
+    /// Levanta 406 PRECONDITION_FAILED quando um x-argument do declare e'
+    /// invalido, com o AErro que o parser produziu -- que NOMEIA o argumento
+    /// ofensor. Erro de CANAL: config errada num declare nao leva a conexao
+    /// junto (mesma linha do amqerTipoInvalido; ver CheckEngine).
+    procedure CheckArgs(AChannel: TAMQPServerChannel; AOk: Boolean;
+      const AErro: string; AClassId, AMethodId: Word);
     /// Levanta 403 se o nome for reservado ('amq.') ou vazio quando o cliente
     /// nao pode escolher -- spec 1.4: o prefixo e' do servidor.
     procedure CheckReservedName(AChannel: TAMQPServerChannel;
@@ -968,6 +974,15 @@ begin
     Integer(AmqpTickMs and $FFFFFF)]);
 end;
 
+procedure TAMQPServerConnection.CheckArgs(AChannel: TAMQPServerChannel;
+  AOk: Boolean; const AErro: string; AClassId, AMethodId: Word);
+begin
+  if AOk then
+    Exit;
+  raise EAMQPChannelError.Create(AChannel.Id, AMQP_PRECONDITION_FAILED,
+    AErro, AClassId, AMethodId);
+end;
+
 procedure TAMQPServerConnection.CheckEngine(AChannel: TAMQPServerChannel;
   ARes: TAMQPEngineResult; const AWhat: string; AClassId, AMethodId: Word);
 var
@@ -1129,6 +1144,8 @@ var
   LDelete: TAMQPExchangeDelete;
   LBind: TAMQPExchangeBinding;
   LRes: TAMQPEngineResult;
+  LAltNome, LArgErro: string;
+  LAltTem: Boolean;
 begin
   Result := True;
   case AId.MethodId of
@@ -1153,6 +1170,15 @@ begin
               CheckReservedName(AChannel, LDeclare.ExchangeName, 'exchange',
                 AId.ClassId, AId.MethodId);
             end;
+            // WS2 da Fase 3: os x-arguments sao validados AQUI, antes de a
+            // engine tomar posse da tabela -- validacao produz reply-code, e a
+            // engine nao conhece reply-code nenhum (invariante da Fase 2).
+            // Passive nao valida: consultar um exchange existente nao declara
+            // nada, e o cliente costuma mandar a tabela vazia nesse caso.
+            if not LDeclare.Passive then
+              CheckArgs(AChannel, AmqpParseAlternateExchange(
+                LDeclare.Arguments, LAltNome, LAltTem, LArgErro), LArgErro,
+                AId.ClassId, AId.MethodId);
             LRes := FEngine.DeclareExchange(FVirtualHost,
               LDeclare.ExchangeName, LDeclare.ExchangeType, LDeclare.Passive,
               LDeclare.Durable, LDeclare.AutoDelete, LDeclare.Internal,
@@ -1236,6 +1262,8 @@ var
   LName: string;
   LMsgs, LCons: Integer;
   LRes: TAMQPEngineResult;
+  LPolicy: TAMQPQueuePolicy;
+  LArgErro: string;
 begin
   Result := True;
   case AId.MethodId of
@@ -1268,6 +1296,10 @@ begin
                   AId.ClassId, AId.MethodId);
               LName := GeneratedName('amq.gen-');
             end;
+            // WS2 da Fase 3 -- ver o comentario equivalente no Exchange.Declare.
+            if not LDeclare.Passive then
+              CheckArgs(AChannel, AmqpParseQueuePolicy(LDeclare.Arguments,
+                LPolicy, LArgErro), LArgErro, AId.ClassId, AId.MethodId);
             LRes := FEngine.DeclareQueue(FVirtualHost, LName, LDeclare.Passive,
               LDeclare.Durable, LDeclare.Exclusive, LDeclare.AutoDelete,
               LDeclare.Arguments, FConnId, LMsgs, LCons);

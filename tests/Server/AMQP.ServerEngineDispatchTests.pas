@@ -23,6 +23,7 @@ uses
   DUnitX.TestFramework,
   System.SysUtils,
   System.Classes,
+  System.Rtti,
   System.SyncObjs,
   AMQP.Protocol,
   AMQP.Wire,
@@ -93,6 +94,11 @@ type
     [Test] procedure Erro403_NomeReservadoNoDeclare;
     [Test] procedure Erro403_UserIdDivergente;
     [Test] procedure Erro405_FilaExclusivaDeOutraConexao;
+    [Test] procedure Erro406_MaxPriorityForaDaFaixa;
+    [Test] procedure Erro406_TtlComTipoErrado;
+    [Test] procedure Erro406_OverflowDesconhecido;
+    [Test] procedure ArgsValidos_DeclareAceito;
+    [Test] procedure Erro406_AlternateExchangeComTipoErrado;
     [Test] procedure ErroDeCanal_NaoDerrubaAConexao;
   end;
 
@@ -1578,6 +1584,197 @@ begin
 
     Assert.IsTrue(ExchangeExiste(LConn, 'ex.ad3'),
       'ainda ha um binding: o exchange fica');
+  finally
+    LConn.Free;
+  end;
+end;
+
+
+// WS2 da Fase 3: x-argument invalido no declare fecha o CANAL com 406, e a
+// conexao sobrevive -- mesma linha do tipo de exchange invalido.
+procedure TErrorTableTests.Erro406_MaxPriorityForaDaFaixa;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LArgs: TAMQPFieldTable;
+  LVal: TValue;
+  LCodigo: Integer;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCodigo := 0;
+    LArgs := TAMQPFieldTable.Create;
+    try
+      // Desvio deliberado do RabbitMQ (D12): la' o teto e' 255, aqui e' 9 --
+      // e a recusa e' explicita, nao um clamp silencioso.
+      LVal := TValue.From<Int64>(10);
+      LArgs.Put('x-max-priority', LVal);
+      LDecl := TAMQPQueueDeclare.Create('q.prio.ruim', False);
+      LDecl.Arguments := LArgs;
+      try
+        LCh.DeclareQueue(LDecl);
+      except
+        on E: EAMQPChannel do
+          LCodigo := CodigoDoErro(E.Message);
+      end;
+    finally
+      // O declare NAO libera a tabela -- o dono e' o chamador (mesma
+      // convencao do SetHeaders no publish).
+      LArgs.Free;
+    end;
+    Assert.AreEqual(406, LCodigo, 'x-max-priority fora da faixa e 406');
+    // A conexao tem de continuar utilizavel: e' erro de canal, nao de conexao.
+    Assert.IsTrue(LConn.IsOpen, 'conexao sobrevive ao 406');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TErrorTableTests.Erro406_TtlComTipoErrado;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LArgs: TAMQPFieldTable;
+  LVal: TValue;
+  LCodigo: Integer;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCodigo := 0;
+    LArgs := TAMQPFieldTable.Create;
+    try
+      // String onde se espera numero: o erro mais comum de quem monta a
+      // tabela na mao.
+      LVal := TValue.From<string>('60000');
+      LArgs.Put('x-message-ttl', LVal);
+      LDecl := TAMQPQueueDeclare.Create('q.ttl.ruim', False);
+      LDecl.Arguments := LArgs;
+      try
+        LCh.DeclareQueue(LDecl);
+      except
+        on E: EAMQPChannel do
+          LCodigo := CodigoDoErro(E.Message);
+      end;
+    finally
+      LArgs.Free;
+    end;
+    Assert.AreEqual(406, LCodigo, 'x-message-ttl como string e 406');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TErrorTableTests.Erro406_OverflowDesconhecido;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LArgs: TAMQPFieldTable;
+  LVal: TValue;
+  LCodigo: Integer;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCodigo := 0;
+    LArgs := TAMQPFieldTable.Create;
+    try
+      LVal := TValue.From<string>('reject-publish-dlx');
+      LArgs.Put('x-overflow', LVal);
+      LDecl := TAMQPQueueDeclare.Create('q.overflow.ruim', False);
+      LDecl.Arguments := LArgs;
+      try
+        LCh.DeclareQueue(LDecl);
+      except
+        on E: EAMQPChannel do
+          LCodigo := CodigoDoErro(E.Message);
+      end;
+    finally
+      LArgs.Free;
+    end;
+    Assert.AreEqual(406, LCodigo, 'x-overflow desconhecido e 406');
+  finally
+    LConn.Free;
+  end;
+end;
+
+// O caminho feliz: argumentos VALIDOS de Fase 3 continuam sendo aceitos (e
+// ignorados -- nada deles tem efeito antes da WS4/WS5/WS6). Este e' o teste
+// que impede a validacao nova de virar uma regressao para quem ja' declara
+// fila com TTL e DLX contra este broker.
+procedure TErrorTableTests.ArgsValidos_DeclareAceito;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LArgs: TAMQPFieldTable;
+  LVal: TValue;
+  LOk: TAMQPQueueDeclareOk;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LArgs := TAMQPFieldTable.Create;
+    try
+      LVal := TValue.From<Int64>(60000);
+      LArgs.Put('x-message-ttl', LVal);
+      LVal := TValue.From<string>('dlx.teste');
+      LArgs.Put('x-dead-letter-exchange', LVal);
+      LVal := TValue.From<Int64>(5);
+      LArgs.Put('x-max-priority', LVal);
+      LVal := TValue.From<string>('reject-publish');
+      LArgs.Put('x-overflow', LVal);
+      LDecl := TAMQPQueueDeclare.Create('q.args.ok', False);
+      LDecl.Arguments := LArgs;
+      LOk := LCh.DeclareQueue(LDecl);
+    finally
+      LArgs.Free;
+    end;
+    Assert.AreEqual('q.args.ok', LOk.QueueName, 'fila declarada');
+    Assert.IsTrue(LConn.IsOpen, 'conexao aberta');
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TErrorTableTests.Erro406_AlternateExchangeComTipoErrado;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDecl: TAMQPExchangeDeclare;
+  LArgs: TAMQPFieldTable;
+  LVal: TValue;
+  LCodigo: Integer;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCodigo := 0;
+    LArgs := TAMQPFieldTable.Create;
+    try
+      LVal := TValue.From<Int64>(42); // numero onde se espera nome
+      LArgs.Put('alternate-exchange', LVal);
+      LDecl := TAMQPExchangeDeclare.Create('ex.ae.ruim', 'direct');
+      LDecl.Arguments := LArgs;
+      try
+        LCh.DeclareExchange(LDecl);
+      except
+        on E: EAMQPChannel do
+          LCodigo := CodigoDoErro(E.Message);
+      end;
+    finally
+      LArgs.Free;
+    end;
+    Assert.AreEqual(406, LCodigo, 'alternate-exchange com tipo errado e 406');
   finally
     LConn.Free;
   end;
