@@ -496,7 +496,7 @@ O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própr
 
 **Correção:** join guardado por lock + flag nos dois pontos — o lock (e não só o flag) porque o segundo chamador tem de **esperar o primeiro join terminar**, não apenas pular. O cliente (`AMQP.Connection`) já era seguro por construção: ele faz `WaitFor` e em seguida `FreeAndNil`, então a segunda chamada vê `nil`. Os demais joins do projeto (`AmqpPool`, `TAMQPJournal.Stop`, `TAMQPServer.Stop` do accept) seguem o mesmo padrão de anular a referência. **A regra geral está no `CLAUDE.md`: ou anule a referência logo após o join, ou guarde o join; um comentário dizendo "seguro chamar mais de uma vez" num join é verdade só no Windows.**
 
-**Estado no Linux:** suíte do server **358/358**, 0 falhas. Regressão no Windows intacta: server 358/358 (Default) e 362/362 (`openssl`) com 0 blocos vazados, integração 28/28, aceitação 28/28, SmokeTest PASS. **Pendente: recompilar o lado Delphi na IDE** (`AMQP.Server.FrameIO` e `AMQP.Server.Connection` mudaram).
+**Estado no Linux:** suíte do server **358/358**, 0 falhas. Regressão no Windows intacta: server 358/358 (Default) e 362/362 (`openssl`) com 0 blocos vazados, integração 28/28, aceitação 28/28, SmokeTest PASS. **Validação Delphi (IDE): Build All limpo no grupo, server 358/358 (Debug) e 362/362 (OpenSSL), aceitação 28/28 nos dois configs, `Tests Leaked : 0` em todas** — o número que importava aqui, porque a correção acrescentou uma `TCriticalSection` por conexão e uma por writer.
 
 ## Verificador de espelhos
 
