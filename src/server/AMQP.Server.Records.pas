@@ -58,7 +58,13 @@ const
   AMQP_REC_EXCHANGE_BIND    = 16;
   AMQP_REC_EXCHANGE_UNBIND  = 17;
 
-  // 20-29 reservados para CONTENT / ENQ / DEQ (WS4, decisao D22).
+  // --- conteudo e colocacao (WS4, decisao D22) -- faixa 20-29 -------------
+  /// O CORPO da mensagem, escrito UMA vez. N filas o compartilham.
+  AMQP_REC_CONTENT = 20;
+  /// Uma COLOCACAO: esta mensagem, nesta fila, com este header.
+  AMQP_REC_ENQUEUE = 21;
+  /// Aposenta uma colocacao (ack, teto, expiracao, purge, morte).
+  AMQP_REC_DEQUEUE = 22;
 
 type
   EAMQPRecords = class(Exception);
@@ -102,6 +108,49 @@ type
     Name: string;
   end;
 
+  { O CORPO, escrito uma vez e compartilhado por N colocacoes (D22). Nada aqui
+    muda quando a mensagem e' republicada num dead-letter exchange -- e' por
+    isso que a parte cara nunca e' reescrita. }
+  TAMQPRecContent = record
+    ContentId: UInt64;
+    /// Usuario autenticado de quem publicou. Sobrevive ao dead-letter.
+    UserId: string;
+    Body: TBytes;
+  end;
+
+  { UMA COLOCACAO: esta mensagem, nesta fila, com ESTE header.
+
+    Exchange, RoutingKey e HeaderPayload vivem aqui, e nao no conteudo, porque
+    o dead-letter muda os tres -- ele deriva uma colocacao nova com o MESMO
+    ContentId (D22/D10).
+
+    O tempo obedece a D21: nada de relogio monotonico. Grava-se o instante de
+    PAREDE do enfileiramento mais o TTL efetivo em ms, e a recuperacao
+    recompoe o prazo. }
+  TAMQPRecEnqueue = record
+    VHost: string;
+    Queue: string;
+    EntryId: UInt64;
+    ContentId: UInt64;
+    Exchange: string;
+    RoutingKey: string;
+    Priority: Byte;
+    /// ms desde a epoch, UTC (AmqpWallMs).
+    EnqueuedAtWall: Int64;
+    /// TTL efetivo em ms; -1 = sem prazo.
+    TtlMs: Int64;
+    /// Payload CRU do content-header (decisao D1).
+    HeaderPayload: TBytes;
+  end;
+
+  { Aposenta uma colocacao. So' o par (fila, entrada) -- o resto ja' esta' no
+    ENQ correspondente. }
+  TAMQPRecDequeue = record
+    VHost: string;
+    Queue: string;
+    EntryId: UInt64;
+  end;
+
 function AmqpEncodeRecExchange(const ARec: TAMQPRecExchange): TBytes;
 function AmqpDecodeRecExchange(const APayload: TBytes): TAMQPRecExchange;
 
@@ -113,6 +162,19 @@ function AmqpDecodeRecBinding(const APayload: TBytes): TAMQPRecBinding;
 
 function AmqpEncodeRecName(const ARec: TAMQPRecName): TBytes;
 function AmqpDecodeRecName(const APayload: TBytes): TAMQPRecName;
+
+function AmqpEncodeRecContent(const ARec: TAMQPRecContent): TBytes;
+function AmqpDecodeRecContent(const APayload: TBytes): TAMQPRecContent;
+
+function AmqpEncodeRecEnqueue(const ARec: TAMQPRecEnqueue): TBytes;
+function AmqpDecodeRecEnqueue(const APayload: TBytes): TAMQPRecEnqueue;
+
+function AmqpEncodeRecDequeue(const ARec: TAMQPRecDequeue): TBytes;
+function AmqpDecodeRecDequeue(const APayload: TBytes): TAMQPRecDequeue;
+
+/// True se AKind e' registro de conteudo/colocacao (faixa 20-29). A
+/// recuperacao (WS6) usa junto com AmqpIsTopoRecord para separar os passes.
+function AmqpIsDataRecord(AKind: Byte): Boolean;
 
 /// True se AKind e' um dos registros de topologia desta unit. A recuperacao
 /// (WS6) usa para separar o passe de topologia do de entradas.
@@ -129,6 +191,11 @@ begin
     and (AKind <= AMQP_REC_EXCHANGE_UNBIND);
 end;
 
+function AmqpIsDataRecord(AKind: Byte): Boolean;
+begin
+  Result := (AKind >= AMQP_REC_CONTENT) and (AKind <= AMQP_REC_DEQUEUE);
+end;
+
 function AmqpRecordKindName(AKind: Byte): string;
 begin
   case AKind of
@@ -140,6 +207,9 @@ begin
     AMQP_REC_QUEUE_UNBIND:     Result := 'queue.unbind';
     AMQP_REC_EXCHANGE_BIND:    Result := 'exchange.bind';
     AMQP_REC_EXCHANGE_UNBIND:  Result := 'exchange.unbind';
+    AMQP_REC_CONTENT:          Result := 'content';
+    AMQP_REC_ENQUEUE:          Result := 'enqueue';
+    AMQP_REC_DEQUEUE:          Result := 'dequeue';
   else
     Result := Format('desconhecido(%d)', [AKind]);
   end;
@@ -305,6 +375,137 @@ begin
   try
     Result.VHost := LR.ReadShortStr;
     Result.Name := LR.ReadShortStr;
+  finally
+    LR.Free;
+  end;
+end;
+
+
+{ blob binario: comprimento de 32 bits + bytes crus.
+
+  NAO da' para usar WriteLongStr aqui: ele trata o valor como TEXTO e passa por
+  AmqpUtf8Encode. Corpo de mensagem e content-header sao BINARIO -- qualquer
+  transcodificacao os destruiria em silencio. }
+procedure EscreveBlob(AWriter: TAMQPWriter; const ABytes: TBytes);
+begin
+  AWriter.WriteLongUInt(Cardinal(Length(ABytes)));
+  if Length(ABytes) > 0 then
+    AWriter.WriteRaw(ABytes);
+end;
+
+function LeBlob(AReader: TAMQPReader): TBytes;
+var
+  LLen: Cardinal;
+begin
+  Result := nil;
+  LLen := AReader.ReadLongUInt;
+  if LLen = 0 then
+    Exit;
+  Result := AReader.ReadRaw(Integer(LLen));
+end;
+
+{ conteudo }
+
+function AmqpEncodeRecContent(const ARec: TAMQPRecContent): TBytes;
+var
+  LW: TAMQPWriter;
+begin
+  LW := TAMQPWriter.Create;
+  try
+    LW.WriteLongLongUInt(ARec.ContentId);
+    LW.WriteShortStr(ARec.UserId);
+    EscreveBlob(LW, ARec.Body);
+    Result := LW.ToBytes;
+  finally
+    LW.Free;
+  end;
+end;
+
+function AmqpDecodeRecContent(const APayload: TBytes): TAMQPRecContent;
+var
+  LR: TAMQPReader;
+begin
+  LR := TAMQPReader.Create(APayload);
+  try
+    Result.ContentId := LR.ReadLongLongUInt;
+    Result.UserId := LR.ReadShortStr;
+    Result.Body := LeBlob(LR);
+  finally
+    LR.Free;
+  end;
+end;
+
+{ colocacao }
+
+function AmqpEncodeRecEnqueue(const ARec: TAMQPRecEnqueue): TBytes;
+var
+  LW: TAMQPWriter;
+begin
+  LW := TAMQPWriter.Create;
+  try
+    LW.WriteShortStr(ARec.VHost);
+    LW.WriteShortStr(ARec.Queue);
+    LW.WriteLongLongUInt(ARec.EntryId);
+    LW.WriteLongLongUInt(ARec.ContentId);
+    LW.WriteShortStr(ARec.Exchange);
+    LW.WriteShortStr(ARec.RoutingKey);
+    LW.WriteOctet(ARec.Priority);
+    LW.WriteLongLongUInt(UInt64(ARec.EnqueuedAtWall));
+    LW.WriteLongLongUInt(UInt64(ARec.TtlMs));
+    EscreveBlob(LW, ARec.HeaderPayload);
+    Result := LW.ToBytes;
+  finally
+    LW.Free;
+  end;
+end;
+
+function AmqpDecodeRecEnqueue(const APayload: TBytes): TAMQPRecEnqueue;
+var
+  LR: TAMQPReader;
+begin
+  LR := TAMQPReader.Create(APayload);
+  try
+    Result.VHost := LR.ReadShortStr;
+    Result.Queue := LR.ReadShortStr;
+    Result.EntryId := LR.ReadLongLongUInt;
+    Result.ContentId := LR.ReadLongLongUInt;
+    Result.Exchange := LR.ReadShortStr;
+    Result.RoutingKey := LR.ReadShortStr;
+    Result.Priority := LR.ReadOctet;
+    Result.EnqueuedAtWall := Int64(LR.ReadLongLongUInt);
+    Result.TtlMs := Int64(LR.ReadLongLongUInt);
+    Result.HeaderPayload := LeBlob(LR);
+  finally
+    LR.Free;
+  end;
+end;
+
+{ aposentadoria }
+
+function AmqpEncodeRecDequeue(const ARec: TAMQPRecDequeue): TBytes;
+var
+  LW: TAMQPWriter;
+begin
+  LW := TAMQPWriter.Create;
+  try
+    LW.WriteShortStr(ARec.VHost);
+    LW.WriteShortStr(ARec.Queue);
+    LW.WriteLongLongUInt(ARec.EntryId);
+    Result := LW.ToBytes;
+  finally
+    LW.Free;
+  end;
+end;
+
+function AmqpDecodeRecDequeue(const APayload: TBytes): TAMQPRecDequeue;
+var
+  LR: TAMQPReader;
+begin
+  LR := TAMQPReader.Create(APayload);
+  try
+    Result.VHost := LR.ReadShortStr;
+    Result.Queue := LR.ReadShortStr;
+    Result.EntryId := LR.ReadLongLongUInt;
   finally
     LR.Free;
   end;

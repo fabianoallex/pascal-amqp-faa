@@ -49,7 +49,8 @@ uses
   AMQP.ServerEngineDispatchTests in 'AMQP.ServerEngineDispatchTests.pas',
   AMQP.ServerWalTests in 'AMQP.ServerWalTests.pas',
   AMQP.ServerJournalTests in 'AMQP.ServerJournalTests.pas',
-  AMQP.ServerTopologyTests in 'AMQP.ServerTopologyTests.pas';
+  AMQP.ServerTopologyTests in 'AMQP.ServerTopologyTests.pas',
+  AMQP.ServerPersistTests in 'AMQP.ServerPersistTests.pas';
 
 var
   runner: ITestRunner;

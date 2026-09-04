@@ -480,6 +480,22 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 358/358 (Debug) e 362/362 (OpenSSL), aceitação 28/28** — 0 leaked e 0 ignored em todas, números idênticos aos do FPC. **WS3 fechada nos dois compiladores.**
 
+- **WS4 (mensagem persistente), primeira parte: os registros de conteúdo e colocação.** `AMQP.Server.Records` ganhou os *kinds* 20–22 da D22 — `CONTENT` (o corpo, escrito **uma vez** e compartilhado por N colocações), `ENQUEUE` (uma colocação: esta mensagem, nesta fila, com **este** header) e `DEQUEUE` (aposenta a colocação).
+
+  A divisão não é arrumação: é o que faz o **dead-letter deixar de ser caso especial**. Ele muda exchange, routing-key e header, mas não o corpo — então grava um `ENQUEUE` novo com o **mesmo `ContentId`**, e a parte cara nunca é reescrita. Por isso `Exchange`, `RoutingKey` e `HeaderPayload` vivem na colocação, e não no conteúdo. O tempo segue a D21: `EnqueuedAtWall` + `TtlMs` efetivo, nada de relógio monotônico no disco.
+
+  **Blob binário com comprimento + bytes crus, e não `WriteLongStr`** — este trata o valor como texto e o passa por `AmqpUtf8Encode`; corpo de mensagem e content-header são binário.
+
+  **E aqui a rodada rendeu o achado mais instrutivo da fase até agora: uma mutação que SOBREVIVEU, e o motivo.** Trocar o blob por `WriteLongStr` não derrubava nenhum teste — nem o que varre os 256 valores de byte. Medido: o runner FPCUnit chama `SetMultiByteConversionCodePage(CP_UTF8)`, e com `DefaultSystemCodePage = 65001` o `AmqpUtf8Encode` vira **passthrough** (256 bytes entram, 256 saem, zero diferenças). Ou seja, **dentro do runner o mutante é genuinamente equivalente, e nenhum teste FPC poderia matá-lo**.
+
+  Só que o broker é uma **biblioteca embutida na app de terceiros**, e o `CLAUDE.md` já registrava que app console FPC pura nasce com codepage 1252. Medido nesse caso: os mesmos 256 bytes viram **401** — corpo corrompido. Isto é, a implementação por bytes crus é necessária, e o teste é que estava cego, porque herdava a configuração que o runner arrumou **para si**.
+
+  Correção: `Content_CorpoBinario_NaoDependeDoCodepageDaApp` fixa `DefaultSystemCodePage := 1252` durante o round-trip e restaura no `finally` — o teste passou a afirmar a propriedade que interessa (*o codec não depende do codepage ambiente*) em vez de confiar no ambiente. Com ele, o mutante morre.
+
+  **A lição, que vale para toda a fase:** o runner de teste é um ambiente com configuração própria, e um teste pode estar medindo essa configuração em vez do código. Quando uma mutação sobrevive, a pergunta seguinte não é só "o teste alcança a janela?" — é também "**o teste está herdando alguma coisa do runner que a produção não terá?**".
+
+  Suíte do server: **358 → 367** (Default) e **362 → 371** (`openssl`), com `0 unfreed memory blocks`. Aceitação 28/28. `verifica_espelhos.py` limpo. **Falta a fiação** (a fila e a engine gravando `CONTENT`/`ENQ`/`DEQ`), que é o resto da WS4.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

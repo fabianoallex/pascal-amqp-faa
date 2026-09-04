@@ -164,6 +164,7 @@
         <DCCReference Include="AMQP.ServerWalTests.pas"/>
         <DCCReference Include="AMQP.ServerJournalTests.pas"/>
         <DCCReference Include="AMQP.ServerTopologyTests.pas"/>
+        <DCCReference Include="AMQP.ServerPersistTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>
