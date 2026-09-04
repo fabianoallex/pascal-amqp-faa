@@ -26,6 +26,7 @@ interface
 uses
   SysUtils,
   Classes,
+  SyncObjs,
   Generics.Collections,
   AMQP.Threading,
   AMQP.Frame,
@@ -50,6 +51,8 @@ type
     FQueue: TQueue<TAMQPFrame>;
     FMon: TAMQPMonitor;
     FThread: TAMQPFrameWriterThread;
+    FJoinLock: TCriticalSection;
+    FJoined: Boolean;
     FMaxDepth: Integer;
     FStopping: Boolean;   // Stop pedido (sob FMon)
     FFailed: Boolean;     // escrita falhou (sob FMon)
@@ -120,16 +123,18 @@ begin
     FMaxDepth := 1;
   FQueue := TQueue<TAMQPFrame>.Create;
   FMon := TAMQPMonitor.Create;
+  FJoinLock := TCriticalSection.Create;
   FThread := TAMQPFrameWriterThread.Create(Self);
   FStarted := True;
 end;
 
 destructor TAMQPFrameWriter.Destroy;
 begin
-  Stop;
-  FThread.Free; // Stop já fez WaitFor via Terminated? não — juntamos aqui
+  Stop; // ja' faz o join (uma vez so')
+  FThread.Free;
   FQueue.Free;
   FMon.Free;
+  FJoinLock.Free;
   inherited;
 end;
 
@@ -166,7 +171,24 @@ begin
   finally
     FMon.Leave;
   end;
-  FThread.WaitFor; // seguro chamar mais de uma vez
+  // JOIN UMA VEZ SO'. `TThread.WaitFor` no FPC/Unix e' `pthread_join`
+  // INCONDICIONAL (rtl/unix/tthread.inc: WaitForThreadTerminate -> pthread_join,
+  // sem checar se ja' houve join); no Windows e' WaitForSingleObject, que num
+  // handle ja' sinalizado e' idempotente. Chamar duas vezes, portanto, e'
+  // inofensivo num e comportamento INDEFINIDO no outro -- e se o pthread_t
+  // tiver sido reciclado por uma thread nova, o segundo join espera pela
+  // thread ERRADA, para sempre. O lock e' o que faz o segundo chamador esperar
+  // o primeiro join TERMINAR antes de seguir, em vez de so' pular.
+  FJoinLock.Enter;
+  try
+    if not FJoined then
+    begin
+      FThread.WaitFor;
+      FJoined := True;
+    end;
+  finally
+    FJoinLock.Leave;
+  end;
 end;
 
 procedure TAMQPFrameWriter.EnqueueOne(const AFrame: TAMQPFrame);

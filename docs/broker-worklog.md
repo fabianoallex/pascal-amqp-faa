@@ -480,6 +480,24 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 358/358 (Debug) e 362/362 (OpenSSL), aceitação 28/28** — 0 leaked e 0 ignored em todas, números idênticos aos do FPC. **WS3 fechada nos dois compiladores.**
 
+### O travamento no Linux, investigado e corrigido
+
+O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
+
+**A investigação, na ordem, com as hipóteses que morreram pelo caminho:**
+
+1. **Primeira hipótese, errada:** "o `fpshutdown` do ramo Unix não desbloqueia o `recv` de um socket aceito". Sonda com o código real (`TAMQPTcpListener` + `TAMQPTcpSocket`): o `Close` do socket aceito desbloqueia o peer em **11 ms** no Linux (EOF), praticamente igual aos 15 ms do Windows. Hipótese derrubada.
+2. **`gdb` não attacha** no container (falta `SYS_PTRACE`), e `ps`/`pgrep` não existem na imagem mínima. Sem pilha de usuário, sobrou o `/proc`: as duas únicas threads do processo travado estavam em **`futex_wait`**, nenhuma em socket, e a conexão TCP já estava em `TIME_WAIT`. Ou seja: **não era socket, era lock.**
+3. **Instrumentação por checkpoints** (a técnica que sobrou, e que resolveu): `WriteLn` + `Flush` no teste, depois no `TAMQPServer.Stop`, depois no teardown da conexão. O rastro foi estreitando: o **teste passa** (`LDropped=TRUE` — a lógica de heartbeat funciona no Linux) → trava no `FBroker.Stop` → na etapa 4, o `WaitFor` das conexões → dentro do read loop, entre `DetachAllDelivery` e `FSocket.Close` → **no `FWriter.Stop`**, no `FThread.WaitFor`.
+4. **Segunda hipótese, também errada:** "dois `TThread.WaitFor` seguidos travam no Linux". Sonda de 20 linhas: três `WaitFor` em sequência funcionam nos dois sistemas. Derrubada.
+5. **A causa, lendo a RTL:** no FPC/Unix, `TThread.WaitFor` chama `WaitForThreadTerminate` → **`pthread_join` INCONDICIONAL**, sem checar se já houve join (`rtl/unix/tthread.inc:270`). No Windows é `WaitForSingleObject`, idempotente num handle sinalizado. A sonda do item 4 sobreviveu porque joinava **da mesma thread e sem reciclagem de `pthread_t`**; no broker, o segundo join vem de **outra thread** e depois de a thread já ter sido recolhida — e se o `pthread_t` foi reciclado, ele espera pela thread errada, para sempre.
+
+**Por que só estes dois testes.** `TAMQPFrameWriter.Stop` tem dois chamadores: `TAMQPServerConnection.Shutdown` e o fim do `RunReadLoop`. No caminho normal só um deles roda. Nos dois testes de heartbeat o broker **derruba** o peer: a thread **monitora** chama `Shutdown` (join #1) enquanto o read loop ainda está vivo, e o read loop, ao terminar, chama `FWriter.Stop` de novo (join #2, de outra thread). Mesma coisa em `TAMQPServerConnection.WaitFor`, chamado pelo `TAMQPServer.Stop` **e** pelo destrutor.
+
+**Correção:** join guardado por lock + flag nos dois pontos — o lock (e não só o flag) porque o segundo chamador tem de **esperar o primeiro join terminar**, não apenas pular. O cliente (`AMQP.Connection`) já era seguro por construção: ele faz `WaitFor` e em seguida `FreeAndNil`, então a segunda chamada vê `nil`. Os demais joins do projeto (`AmqpPool`, `TAMQPJournal.Stop`, `TAMQPServer.Stop` do accept) seguem o mesmo padrão de anular a referência. **A regra geral está no `CLAUDE.md`: ou anule a referência logo após o join, ou guarde o join; um comentário dizendo "seguro chamar mais de uma vez" num join é verdade só no Windows.**
+
+**Estado no Linux:** suíte do server **358/358**, 0 falhas. Regressão no Windows intacta: server 358/358 (Default) e 362/362 (`openssl`) com 0 blocos vazados, integração 28/28, aceitação 28/28, SmokeTest PASS. **Pendente: recompilar o lado Delphi na IDE** (`AMQP.Server.FrameIO` e `AMQP.Server.Connection` mudaram).
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

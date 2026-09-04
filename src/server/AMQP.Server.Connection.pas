@@ -139,6 +139,8 @@ type
 
     // --- canais ---
     FChLock: TCriticalSection;
+    FJoinLock: TCriticalSection;
+    FJoined: Boolean;
     FChannels: TDictionary<Word, TAMQPServerChannel>;
 
     procedure SetupTransport;
@@ -313,6 +315,7 @@ begin
   // handshake TLS é bloqueante e não pode rodar na thread de accept, senão um
   // cliente lento (ou hostil) trava o broker inteiro.
   FChLock := TCriticalSection.Create;
+  FJoinLock := TCriticalSection.Create;
   FChannels := TDictionary<Word, TAMQPServerChannel>.Create;
   FConnId := NativeUInt(Cardinal(AmqpAtomicInc(GConnIdSeq)));
   FThread := TAMQPServerConnThread.Create(Self);
@@ -323,7 +326,7 @@ begin
   Shutdown;
   if FThread <> nil then
   begin
-    FThread.WaitFor;
+    WaitFor; // guardado: join uma vez so'
     FThread.Free;
   end;
   FWriter.Free;   // Stop já foi chamado no Shutdown (nil-safe)
@@ -339,6 +342,7 @@ begin
   ClearChannels;
   FChannels.Free;
   FChLock.Free;
+  FJoinLock.Free;
   inherited;
 end;
 
@@ -366,8 +370,21 @@ end;
 
 procedure TAMQPServerConnection.WaitFor;
 begin
-  if FThread <> nil then
-    FThread.WaitFor;
+  if FThread = nil then
+    Exit;
+  // JOIN UMA VEZ SO' -- mesma razao do TAMQPFrameWriter.Stop: no FPC/Unix o
+  // TThread.WaitFor e' pthread_join INCONDICIONAL, e este WaitFor e' chamado
+  // pelo TAMQPServer.Stop E pelo destrutor da conexao.
+  FJoinLock.Enter;
+  try
+    if not FJoined then
+    begin
+      FThread.WaitFor;
+      FJoined := True;
+    end;
+  finally
+    FJoinLock.Leave;
+  end;
 end;
 
 function TAMQPServerConnection.LastReadTick: UInt64;
