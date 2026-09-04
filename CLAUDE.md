@@ -435,7 +435,9 @@ WS1 escrita de array no field-table (`AMQP.Wire`) (Sonnet) · WS2 política de f
     2. O teste do touch falhava com 0 em vez de 100: `PostTouch` é **assíncrono**, então rodava depois de eu avançar o relógio e lia o valor já adiantado. A barreira do projeto (um síncrono depois do assíncrono, porque a caixa é serial e FIFO) estava documentada e eu não usei. Corrigido no teste, com o porquê no comentário.
   - **As duas mutações, conferidas:** publicar passar a contar como uso → `PublicarNaoContaComoUso`; consumidor deixar de zerar a ociosidade → `ComConsumidor_OciosidadeEhZero`.
   - Fixture nova `TIdleExpiryTests` (8), de estado puro com o relógio injetável da D13.
-  - Suíte do server: **264/264 → 272/272** (Default) e **268/268 → 276/276** (`openssl`), com `0 unfreed memory blocks`. Regressão FPC: aceitação 28/28, unitária 121/121, integração 28/28 contra o RabbitMQ real, SmokeTest PASS. **Delphi a validar na IDE.**
+  - Suíte do server: **264/264 → 272/272** (Default) e **268/268 → 276/276** (`openssl`), com `0 unfreed memory blocks`. Regressão nos dois compiladores: FPC — server 272/272 e 276/276, aceitação 28/28, unitária 121/121, integração 28/28 contra o RabbitMQ real, SmokeTest PASS. Delphi (IDE) — server **272/272** no Debug e **276/276** no OpenSSL, unitária 121/121, integração 28/28 e aceitação 28/28 nos dois configs, **0 leaks**.
+
+**Toda a funcionalidade da Fase 3 está entregue** (WS1–WS8): TTL, DLX com `x-death` completo, prioridade, tetos por contagem e por bytes, os dois modos de `x-overflow`, alternate exchange e `x-expires`. Restam as duas frentes de fechamento — WS10 (aceitação: SmokeTest com TTL+DLX e prioridade contra os dois brokers) e WS11 (docs).
 
 **Mutações obrigatórias, decididas ANTES de escrever os testes** (regra da Fase 2: verde não prova cobertura; se a mutação não derruba nada, a suspeita é do teste):
 - WS4 — entregar a mensagem expirada em vez de expirá-la → tem de derrubar o teste de TTL **sem** consumidor, não só o com consumidor.
