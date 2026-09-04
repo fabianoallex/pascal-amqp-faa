@@ -478,6 +478,8 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **Suítes:** server **335 → 358** (Default) e **339 → 362** (`openssl`), com `0 unfreed memory blocks`. Regressão FPC completa e verde: unitária 121/121, integração 28/28, aceitação 28/28, SmokeTest PASS. `verifica_espelhos.py` limpo.
 
+  **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 358/358 (Debug) e 362/362 (OpenSSL), aceitação 28/28** — 0 leaked e 0 ignored em todas, números idênticos aos do FPC. **WS3 fechada nos dois compiladores.**
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**
