@@ -24,7 +24,7 @@
      varredura de corrupcao produz. Ate' descobrir isso, o comentario aqui
      afirmava que a primeira cobria o CRC; nao cobria.
 
-  2. TArquivoFalso e' a CAMADA 2 da D28. Como o segmento fala com IAMQPWalFile
+  2. TAMQPWalFileFalso e' a CAMADA 2 da D28. Como o segmento fala com IAMQPWalFile
      e nao com o sistema de arquivos, da' para contar os fsyncs e falhar na
      hora escolhida -- e assim provar (a) que o cabecalho de um segmento novo
      vai ao disco na hora e (b) que uma falha de escrita nao deixa o segmento
@@ -45,35 +45,10 @@ uses
   System.Classes,
   System.IOUtils,
   AMQP.Threading,
-  AMQP.Server.Wal;
+  AMQP.Server.Wal,
+  AMQP.ServerTestDoubles;
 
 type
-  { Arquivo em memoria: conta fsyncs, sabe falhar na escrita e deixa o teste
-    mexer nos bytes crus (para simular queda e corrupcao sem tocar em disco). }
-  TArquivoFalso = class(TInterfacedObject, IAMQPWalFile)
-  private
-    FBuf: TBytes;
-    FSyncs: Integer;
-    FSyncOk: Boolean;
-    FEscritas: Integer;
-    FFalharEscritaNa: Integer; // -1 = nunca
-  public
-    constructor Create;
-    function Append(const ABytes: TBytes): Int64;
-    function ReadAll: TBytes;
-    function Sync: Boolean;
-    function Size: Int64;
-    procedure TruncateTo(ASize: Int64);
-
-    function Bytes: TBytes;
-    procedure PoeBytes(const ABytes: TBytes);
-    property Syncs: Integer read FSyncs;
-    property Escritas: Integer read FEscritas;
-    property SyncOk: Boolean read FSyncOk write FSyncOk;
-    /// Numero da escrita (1-based) em que Append vai levantar. -1 = nunca.
-    property FalharEscritaNa: Integer read FFalharEscritaNa
-      write FFalharEscritaNa;
-  end;
 
   [TestFixture]
   TWalCrc32Tests = class
@@ -99,7 +74,7 @@ type
   [TestFixture]
   TWalSegmentTests = class
   private
-    FDuble: TArquivoFalso;
+    FDuble: TAMQPWalFileFalso;
     FArq: IAMQPWalFile;
   public
     [Setup]    procedure Setup;
@@ -120,7 +95,7 @@ type
   [TestFixture]
   TWalRecoveryTests = class
   private
-    FDuble: TArquivoFalso;
+    FDuble: TAMQPWalFileFalso;
     FArq: IAMQPWalFile;
   public
     [Setup]    procedure Setup;
@@ -139,7 +114,7 @@ type
   [TestFixture]
   TWalFileSeamTests = class
   private
-    FDuble: TArquivoFalso;
+    FDuble: TAMQPWalFileFalso;
     FArq: IAMQPWalFile;
   public
     [Setup]    procedure Setup;
@@ -202,59 +177,6 @@ begin
     Result[I + 1] := Char(B[I]);
 end;
 
-{ TArquivoFalso }
-
-constructor TArquivoFalso.Create;
-begin
-  inherited Create;
-  FSyncOk := True;
-  FFalharEscritaNa := -1;
-end;
-
-function TArquivoFalso.Append(const ABytes: TBytes): Int64;
-var
-  LAntes: Integer;
-begin
-  Inc(FEscritas);
-  if FEscritas = FFalharEscritaNa then
-    raise EAMQPWal.Create('falha de escrita injetada');
-  LAntes := Length(FBuf);
-  SetLength(FBuf, LAntes + Length(ABytes));
-  if Length(ABytes) > 0 then
-    Move(ABytes[0], FBuf[LAntes], Length(ABytes));
-  Result := LAntes;
-end;
-
-function TArquivoFalso.ReadAll: TBytes;
-begin
-  Result := Copy(FBuf, 0, Length(FBuf));
-end;
-
-function TArquivoFalso.Sync: Boolean;
-begin
-  Inc(FSyncs);
-  Result := FSyncOk;
-end;
-
-function TArquivoFalso.Size: Int64;
-begin
-  Result := Length(FBuf);
-end;
-
-procedure TArquivoFalso.TruncateTo(ASize: Int64);
-begin
-  SetLength(FBuf, Integer(ASize));
-end;
-
-function TArquivoFalso.Bytes: TBytes;
-begin
-  Result := Copy(FBuf, 0, Length(FBuf));
-end;
-
-procedure TArquivoFalso.PoeBytes(const ABytes: TBytes);
-begin
-  FBuf := Copy(ABytes, 0, Length(ABytes));
-end;
 
 { TWalCrc32Tests }
 
@@ -360,7 +282,7 @@ end;
 
 procedure TWalSegmentTests.Setup;
 begin
-  FDuble := TArquivoFalso.Create;
+  FDuble := TAMQPWalFileFalso.Create;
   FArq := FDuble;
 end;
 
@@ -601,7 +523,7 @@ end;
 
 procedure TWalRecoveryTests.Setup;
 begin
-  FDuble := TArquivoFalso.Create;
+  FDuble := TAMQPWalFileFalso.Create;
   FArq := FDuble;
 end;
 
@@ -619,7 +541,7 @@ var
   LOrig, LCortado: TBytes;
   LFim: array of Integer;
   I, LCorte, LEsperado, LN: Integer;
-  LDuble2: TArquivoFalso;
+  LDuble2: TAMQPWalFileFalso;
   LArq2: IAMQPWalFile;
 begin
   // ---- CAMADA 1 DA D28: a escrita CURTA ----
@@ -644,7 +566,7 @@ begin
   for LCorte := AMQP_WAL_SEG_HEADER_SIZE to Length(LOrig) do
   begin
     LCortado := Copy(LOrig, 0, LCorte);
-    LDuble2 := TArquivoFalso.Create;
+    LDuble2 := TAMQPWalFileFalso.Create;
     LArq2 := LDuble2;
     try
       LDuble2.PoeBytes(LCortado);
@@ -678,7 +600,7 @@ var
   LOrig, LMutado: TBytes;
   LIni, LFim: array of Integer;
   I, LPos, LEsperado, LN, K: Integer;
-  LDuble2: TArquivoFalso;
+  LDuble2: TAMQPWalFileFalso;
   LArq2: IAMQPWalFile;
 begin
   // ---- CAMADA 1 DA D28, segunda metade: o setor escrito ERRADO ----
@@ -713,7 +635,7 @@ begin
     LMutado := Copy(LOrig, 0, Length(LOrig));
     LMutado[LPos] := LMutado[LPos] xor $01;
 
-    LDuble2 := TArquivoFalso.Create;
+    LDuble2 := TAMQPWalFileFalso.Create;
     LArq2 := LDuble2;
     try
       LDuble2.PoeBytes(LMutado);
@@ -911,7 +833,7 @@ var
   LStop: TAMQPWalStop;
   LBufA, LBufB, LJunto: TBytes;
   I, LCab: Integer;
-  LDuble2: TArquivoFalso;
+  LDuble2: TAMQPWalFileFalso;
   LArq2: IAMQPWalFile;
 begin
   // Um registro INTEGRO com LSN fora de ordem so' aparece em arquivo remontado
@@ -925,7 +847,7 @@ begin
   end;
   LBufA := FDuble.Bytes;
 
-  LDuble2 := TArquivoFalso.Create;
+  LDuble2 := TAMQPWalFileFalso.Create;
   LArq2 := LDuble2;
   try
     LSeg := TAMQPWalSegment.CreateNew(LArq2, 1);
@@ -961,7 +883,7 @@ end;
 
 procedure TWalFileSeamTests.Setup;
 begin
-  FDuble := TArquivoFalso.Create;
+  FDuble := TAMQPWalFileFalso.Create;
   FArq := FDuble;
 end;
 
@@ -1013,7 +935,7 @@ begin
   LSeg := TAMQPWalSegment.CreateNew(FArq, 1);
   try
     LSeg.Append(1, 0, Bytes('a'));
-    FDuble.SyncOk := False;
+    FDuble.SetSyncOk(False);
     Assert.IsFalse(LSeg.Sync, 'Sync devolve False');
   finally
     LSeg.Free;
@@ -1036,7 +958,7 @@ begin
     LFimAntes := LSeg.EndOffset;
     LLsnAntes := LSeg.LastLsn;
 
-    FDuble.FalharEscritaNa := FDuble.Escritas + 1;
+    FDuble.SetFalharEscritaNa(FDuble.Escritas + 1);
     LLevantou := False;
     try
       LSeg.Append(2, 0, Bytes('b'));
@@ -1050,7 +972,7 @@ begin
       'LastLsn nao andou');
 
     // e o LSN 2 continua disponivel
-    FDuble.FalharEscritaNa := -1;
+    FDuble.SetFalharEscritaNa(-1);
     LSeg.Append(2, 0, Bytes('b'));
     Assert.AreEqual(Int64(2), Int64(LSeg.LastLsn),
       'LSN 2 aceito na retentativa');

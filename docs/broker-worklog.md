@@ -422,6 +422,32 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **Validação Delphi (IDE), depois dos consertos: 312/312 no Debug e 316/316 no OpenSSL, 0 leaked e 0 ignored** — os mesmos números do FPC, o que descarta o engano de auto-ignore que a WS9 da Fase 2 registrou (ali "28 Passed / 0 Ignored" no Delphi valia "27 Passed / 1 Ignored" no FPC). **WS1 fechada nos dois compiladores.**
 
+- **WS2 (thread do journal e group commit)** concluída no lado FPC, nas duas plataformas; espelho DUnitX escrito e verificado, **a compilar na IDE**.
+
+  `AMQP.Server.Journal`: numera os registros, junta o que chegou num lote, escreve, dá **um** fsync e só então avança a **marca d'água** — o número a partir do qual um confirm pode ser liberado (D24). O laço é a D25 inteira: *espera ter algo → tira tudo → escreve → um fsync → avança e avisa → repete*. Sem janela de espera nem tamanho de lote configuráveis.
+
+  **O número que prova a D25:** 4 threads × 500 submits de 2 registros = **4.000 registros em 4 fsyncs**, lote médio 1.000, maior 2.012. Sob carga o lote cresce sozinho, porque o que chega *durante* um fsync já é o próximo lote.
+
+  **Quem pode bloquear, e quem não pode.** `Submit` bloqueia enquanto a fila de submissão estiver acima do teto — quem chama é a thread de leitura da conexão, e parar de ler aquela conexão *é* a contrapressão desejada (D24, corolário c). `SubmitNoWait` nunca bloqueia e nunca recusa: é por onde o ator da fila escreve as retiradas, e a D2 proíbe o ator de esperar I/O. O sink também não pode bloquear — roda na thread do journal, entre o fsync e o lote seguinte.
+
+  **Falha fecha a porta, mas só a falha certa.** `fsync` que falha **não** avança a marca d'água e é **recuperável**: os bytes já estão no arquivo, e um fsync posterior cobre o lote. Já **escrita** que falha é definitiva — o registro não está em lugar nenhum, e não há como repor a promessa: o journal entra em estado falho, `Submit` passa a levantar, `WaitDurable` devolve False e o sink é avisado uma vez. Os dois tratamentos têm teste próprio.
+
+  **O buraco de cobertura desta rodada: nada testava que o lote é INDIVISÍVEL.** A sonda passava, o group commit media lindamente, e uma implementação que atribuísse os LSNs sob o lock mas enfileirasse **fora** dele passaria igual. Entrou `LoteEhIndivisivel_ParesSaemAdjacentes`: quatro threads submetem o par `(aN, bN)` numa chamada cada, e o arquivo tem de mostrar os pares adjacentes e com LSNs consecutivos. A mutação correspondente é morta **em dobro** — a invariante de LSN crescente do segmento (WS1) recusa a escrita intercalada já na camada de arquivo, e os produtores recebem erro.
+
+  **Matriz de mutação contra a suíte (não só contra a sonda), cinco mutantes, todos mortos pelos testes certos:** marca d'água anda com fsync falhando → `FsyncFalho_NaoAvancaAMarcaDagua`; LSN reinicia do 1 → `Reinicio_LsnContinuaDeOndeParou`; falha de escrita não fecha a porta → os quatro de `TJournalFalhaTests`; `Stop` sai sem drenar → `Stop_DrenaOQueFoiAceito`; marca d'água nasce em zero → `Reinicio_MarcaDaguaNasceNoQueJaEstava`.
+
+  **Um teste intermitente, e ele era defeito do TESTE.** `Sink_EhAvisadoComOMaiorLsn` falhava ~1 em 8 execuções — achado rodando a suíte oito vezes, a mesma técnica que caçou o vazamento intermitente da WS7 da Fase 2. Causa: o teste exigia o aviso do sink **já na volta do `WaitDurable`**, e a marca d'água avança *antes* de o sink ser chamado. Essa ordem é deliberada — invertê-la poria um callback de fora na frente de acordar os waiters —, então são dois sinais independentes e o teste os tratava como um só. Corrigido para **esperar** o aviso; 15 execuções seguidas limpas depois.
+
+  **Decisões de implementação que valem registro:**
+  - **O LSN é atribuído no `Submit`, sob o lock**, e não na thread do journal: a D24 exige que o publicador conheça o número **antes de voltar**, porque é ele que vai no confirm pendente. De brinde, a fila fica ordenada por LSN e o lote fica indivisível **sem nenhum marcador**.
+  - **As contagens vão num `TAMQPJournalStats` lido sob o lock**, e não em propriedades soltas: o build Delphi deste projeto é **Win32**, onde `Inc()` num `Int64` é leitura-modificação-escrita não atômica. É a mesma razão de existirem os `AmqpAtomic*64`.
+  - **Não há "comando de parada" na fila.** `RodaUmLote` só devolve False quando a fila está vazia **e** a parada foi pedida — é o que faz o `Stop` não perder registro já aceito. (A fila-ator da Fase 2 chegou à mesma conclusão por outro caminho: um comando postado num pool em shutdown nunca roda.)
+  - **A recuperação de LSN no `Start` já existe aqui**, e não só na WS6: abrir o último segmento com trim e continuar de `LastLsn + 1`. Recomeçar do 1 faria o próprio `Append` da WS1 levantar.
+  - **O duble de arquivo saiu da suíte do WAL para `AMQP.ServerTestDoubles`**, protegido por lock (no journal, a thread do journal e a do teste o tocam ao mesmo tempo). Duplicar ~70 linhas de andaime em quatro arquivos é exatamente a superfície onde esta codebase já errou — corrigir um lado e esquecer o gêmeo.
+  - **Armadilha ao mover o duble:** o bloco novo caiu **depois** de uma declaração de função na `interface`, que encerra a seção `type` — `Syntax error, "IMPLEMENTATION" expected`. Inserção de tipo por script precisa do seu próprio `type`, ou de âncora que garanta estar dentro da seção.
+
+  **Suítes:** server **312 → 335** (Default) e **316 → 339** (`openssl`), com `0 unfreed memory blocks` e **15 execuções seguidas limpas**. Regressão FPC completa e verde: unitária 121/121, integração 28/28 contra o RabbitMQ real, aceitação 28/28 contra o broker embutido, SmokeTest PASS. `verifica_espelhos.py` limpo. No Linux (container) a unit compila.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

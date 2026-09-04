@@ -149,6 +149,7 @@
         <DCCReference Include="..\..\src\server\AMQP.Server.Connection.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Broker.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Wal.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Journal.pas"/>
         <DCCReference Include="..\Integration\AMQP.HandshakeIntegrationTests.pas"/>
         <DCCReference Include="..\Integration\AMQP.IntegrationConfig.pas"/>
         <DCCReference Include="..\Integration\AMQP.ChannelIntegrationTests.pas"/>
