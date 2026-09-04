@@ -448,6 +448,10 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **Suítes:** server **312 → 335** (Default) e **316 → 339** (`openssl`), com `0 unfreed memory blocks` e **15 execuções seguidas limpas**. Regressão FPC completa e verde: unitária 121/121, integração 28/28 contra o RabbitMQ real, aceitação 28/28 contra o broker embutido, SmokeTest PASS. `verifica_espelhos.py` limpo. No Linux (container) a unit compila.
 
+  **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 335/335 (Debug) e 339/339 (OpenSSL), aceitação 28/28, SmokeTest PASS nos quatro cruzamentos** (Debug plain, Debug `--tls` via SChannel, OpenSSL plain, OpenSSL `--tls` via OpenSSL 3.5.2) — 0 leaked e 0 ignored em todas. Os números batem com os do FPC teste a teste. **WS2 fechada nos dois compiladores.**
+
+  Nota de leitura do relatório, que é a lição da WS9 da Fase 2 em ação: na aceitação em **Debug** o logger de tempo marcou os 5 testes de TLS como `~ IGNORADO: broker TLS (5671) indisponível ou build sem backend TLS` e imprimiu o rodapé "5 auto-ignorados (~): NAO exercitaram o alvo, apesar de contarem como Passed". É o comportamento correto — o broker embutido só tem porta TLS no build `openssl`, e nesse config os cinco rodaram de fato (0,001–0,062 s, não 0,000 s). Sem esse logger, "28 Passed" nos dois configs esconderia que um deles validou 23.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**
