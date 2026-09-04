@@ -38,6 +38,7 @@ uses
   AMQP.Server.Broker in '..\..\src\server\AMQP.Server.Broker.pas',
   AMQP.Server.Wal in '..\..\src\server\AMQP.Server.Wal.pas',
   AMQP.Server.Journal in '..\..\src\server\AMQP.Server.Journal.pas',
+  AMQP.Server.Records in '..\..\src\server\AMQP.Server.Records.pas',
   AMQP.ServerSkeletonTests in 'AMQP.ServerSkeletonTests.pas',
   AMQP.ServerHandshakeTests in 'AMQP.ServerHandshakeTests.pas',
   AMQP.ServerEngineTests in 'AMQP.ServerEngineTests.pas',
@@ -47,7 +48,8 @@ uses
   AMQP.ServerDeliveryTests in 'AMQP.ServerDeliveryTests.pas',
   AMQP.ServerEngineDispatchTests in 'AMQP.ServerEngineDispatchTests.pas',
   AMQP.ServerWalTests in 'AMQP.ServerWalTests.pas',
-  AMQP.ServerJournalTests in 'AMQP.ServerJournalTests.pas';
+  AMQP.ServerJournalTests in 'AMQP.ServerJournalTests.pas',
+  AMQP.ServerTopologyTests in 'AMQP.ServerTopologyTests.pas';
 
 var
   runner: ITestRunner;

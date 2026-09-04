@@ -991,6 +991,14 @@ var
 begin
   if ARes = amqerOk then
     Exit;
+  // Erro de CONEXAO, e nao de canal, e por isso fora do case: um broker que
+  // nao consegue mais registrar topologia duravel esta' quebrado como um todo
+  // (Fase 4, WS3). Continuar respondendo Declare-Ok seria mentir sobre
+  // durabilidade; 541 diz a verdade e derruba a conexao.
+  if ARes = amqerSemDurabilidade then
+    raise EAMQPConnectionError.Create(AMQP_INTERNAL_ERROR,
+      'could not journal durable ' + AWhat + ': broker cannot guarantee '
+      + 'durability', AClassId, AMethodId);
   case ARes of
     amqerNaoEncontrado:
       begin

@@ -51,7 +51,9 @@ uses
   AMQP.Server.Header,
   AMQP.Server.Resources,
   AMQP.Server.Queue,
-  AMQP.Server.VHost;
+  AMQP.Server.VHost,
+  AMQP.Server.Journal,
+  AMQP.Server.Records;
 
 type
   { O que aconteceu numa operacao da engine. A FSM (WS5) mapeia para
@@ -71,7 +73,12 @@ type
     /// nome reservado ('amq.') vindo do cliente -- 403 ACCESS_REFUSED
     amqerNomeReservado,
     /// fila exclusiva de OUTRA conexao -- 405 RESOURCE_LOCKED
-    amqerExclusivaDeOutro
+    amqerExclusivaDeOutro,
+    /// A operacao mexia em topologia DURAVEL e o journal nao conseguiu
+    /// registra-la (Fase 4, WS3). Vira 541 de CONEXAO, e nao erro de canal:
+    /// um broker que nao consegue mais persistir esta' quebrado como um todo,
+    /// e continuar aceitando declare duravel seria mentir sobre durabilidade.
+    amqerSemDurabilidade
   );
 
   TAMQPEngine = class;
@@ -105,6 +112,7 @@ type
     // no TAMQPVHost; os dois sao criados e destruidos juntos.
     FQueues: TDictionary<string, TAMQPServerQueue>;
     FMaxQueueLength: Integer;
+    FJournal: TAMQPJournal;
     FPool: TAMQPThreadPool;
     FRouted: Integer;   // atomico -- publicacoes com ao menos uma rota
     FUnrouted: Integer; // atomico -- publicacoes sem rota
@@ -115,8 +123,14 @@ type
       AOwnerId: NativeUInt): Boolean;
   protected
     // IAMQPMessageSink -- refcount desligado (ver cabecalho).
-    function _AddRef: Integer; stdcall;
-    function _Release: Integer; stdcall;
+    // A CONVENCAO DE CHAMADA DO IInterface DEPENDE DA PLATAFORMA no FPC:
+    // stdcall no Windows, cdecl no Unix. Declarar stdcall fixo compila no
+    // Windows e falha no Linux com "No matching implementation for interface
+    // method _AddRef:LongInt; CDecl" -- e foi assim, desde a WS5 da Fase 2, ate'
+    // a WS3 da Fase 4 compilar o broker no container pela primeira vez. As
+    // validacoes Linux anteriores eram todas do CLIENTE.
+    function _AddRef: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
+    function _Release: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
   public
     constructor Create;
     destructor Destroy; override;
@@ -176,6 +190,20 @@ type
     /// Stats e' comando sincrono e a caixa da fila e' FIFO, a leitura aqui ja
     /// enxerga a remocao que acabou de ser postada. No-op se a fila nao
     /// existe ou nao e' auto-delete.
+    /// True se esta operacao tem de ir para o disco: ha journal (D19) e o
+    /// recurso e' duravel (D20). Exchange predefinido ('' e 'amq.*') NUNCA vai
+    /// -- o EnsureVHost o recria a cada boot, e grava-lo so' encheria o log de
+    /// registro que a recuperacao teria de ignorar.
+    function PersisteExchange(const AName: string; ADurable: Boolean): Boolean;
+    function PersisteFila(ADurable, AExclusive: Boolean): Boolean;
+    /// Duravel de verdade: o descritor existe E esta' marcado duravel. Usado
+    /// nos bindings, que so' sao persistidos quando as DUAS pontas sao
+    /// duraveis -- um binding e' tao duravel quanto o mais fragil dos lados.
+    function ExchangeEhDuravel(AVHost: TAMQPVHost; const AName: string): Boolean;
+    function FilaEhDuravel(AVHost: TAMQPVHost; const AName: string): Boolean;
+    /// Grava um registro de topologia e ESPERA ele ficar duravel. False = nao
+    /// deu, e o chamador devolve amqerSemDurabilidade.
+    function GravaTopo(AKind: Byte; const APayload: TBytes): Boolean;
     procedure MaybeAutoDeleteQueue(const AVHost, AQueue: string);
     /// Apaga o exchange se ele for `auto-delete` e nao for mais origem de
     /// binding nenhum. Chamar depois de todo unbind (inclusive os implicitos,
@@ -220,6 +248,11 @@ type
 
     /// Teto de mensagens prontas por fila (decisao D7). 0 = ilimitado. Vale
     /// para as filas criadas DEPOIS de atribuido.
+    /// Journal de durabilidade (Fase 4). nil = broker sem DataDir, e entao
+    /// NADA de topologia vai para o disco (D19) -- o caminho fica identico ao
+    /// da Fase 3. Injetado pelo TAMQPServer no Start; a engine nao e' dona.
+    property Journal: TAMQPJournal read FJournal write FJournal;
+
     property MaxQueueLength: Integer read FMaxQueueLength
       write FMaxQueueLength;
     /// Pool onde os atores das filas sao agendados (nil = AmqpPool global).
@@ -279,12 +312,12 @@ begin
   inherited;
 end;
 
-function TAMQPEngine._AddRef: Integer; stdcall;
+function TAMQPEngine._AddRef: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
 begin
   Result := -1; // sem refcount: o dono e' o TAMQPServer
 end;
 
-function TAMQPEngine._Release: Integer; stdcall;
+function TAMQPEngine._Release: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
 begin
   Result := -1;
 end;
@@ -333,6 +366,8 @@ function TAMQPEngine.DeclareExchange(const AVHost, AName, AType: string;
 var
   LVHost: TAMQPVHost;
   LRes: TAMQPTopologyResult;
+  LDef: TAMQPExchangeDef;
+  LRec: TAMQPRecExchange;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   if APassive then
@@ -355,14 +390,44 @@ begin
   else
     Result := amqerNaoEncontrado;
   end;
+
+  // So' o declare que de fato CRIOU vai para o disco: amqtrEquivalente e'
+  // redeclare idempotente, e grava-lo encheria o log de registros que a
+  // recuperacao so' teria trabalho de reaplicar por cima de si mesmos.
+  if (LRes = amqtrOk) and PersisteExchange(AName, ADurable) then
+  begin
+    LDef := LVHost.ExchangeDef(AName);
+    if LDef <> nil then
+    begin
+      // Os argumentos vem do DESCRITOR, e nao de AArguments: a posse ja passou
+      // para o vhost, e o descritor e' a fonte da verdade.
+      LRec.VHost := AVHost;
+      LRec.Name := LDef.Name;
+      LRec.ExchangeType := LDef.ExchangeType;
+      LRec.Durable := LDef.Durable;
+      LRec.AutoDelete := LDef.AutoDelete;
+      LRec.Internal := LDef.Internal;
+      LRec.Arguments := LDef.Arguments;
+      if not GravaTopo(AMQP_REC_EXCHANGE_DECLARE,
+        AmqpEncodeRecExchange(LRec)) then
+        Result := amqerSemDurabilidade;
+    end;
+  end;
 end;
 
 function TAMQPEngine.DeleteExchange(const AVHost, AName: string;
   AIfUnused: Boolean): TAMQPEngineResult;
 var
   LRes: TAMQPTopologyResult;
+  LVHost: TAMQPVHost;
+  LEraDuravel: Boolean;
+  LNome: TAMQPRecName;
 begin
-  LRes := FVHosts.GetOrCreate(AVHost).DeleteExchange(AName, AIfUnused);
+  LVHost := FVHosts.GetOrCreate(AVHost);
+  // ANTES de apagar: depois o descritor nao existe mais e nao ha como saber se
+  // era duravel.
+  LEraDuravel := (FJournal <> nil) and ExchangeEhDuravel(LVHost, AName);
+  LRes := LVHost.DeleteExchange(AName, AIfUnused);
   case LRes of
     amqtrOk: Result := amqerOk;
     amqtrEmUso: Result := amqerEmUso;
@@ -373,14 +438,40 @@ begin
   else
     Result := amqerOk;
   end;
+
+  if (LRes = amqtrOk) and LEraDuravel then
+  begin
+    LNome.VHost := AVHost;
+    LNome.Name := AName;
+    if not GravaTopo(AMQP_REC_EXCHANGE_DELETE, AmqpEncodeRecName(LNome)) then
+      Result := amqerSemDurabilidade;
+  end;
 end;
 
 function TAMQPEngine.BindExchange(const AVHost, ADestination, ASource,
   ARoutingKey: string; AArguments: TAMQPFieldTable): TAMQPEngineResult;
 var
   LRes: TAMQPTopologyResult;
+  LVHost: TAMQPVHost;
+  LPersiste: Boolean;
+  LPayload: TBytes;
+  LRec: TAMQPRecBinding;
 begin
-  LRes := FVHosts.GetOrCreate(AVHost).BindExchange(ADestination, ASource,
+  LVHost := FVHosts.GetOrCreate(AVHost);
+  // As DUAS pontas duraveis, e a codificacao feita ANTES do bind: depois o
+  // vhost e' dono de AArguments.
+  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, ASource)
+    and ExchangeEhDuravel(LVHost, ADestination);
+  if LPersiste then
+  begin
+    LRec.VHost := AVHost;
+    LRec.Source := ASource;
+    LRec.Destination := ADestination;
+    LRec.RoutingKey := ARoutingKey;
+    LRec.Arguments := AArguments;
+    LPayload := AmqpEncodeRecBinding(LRec);
+  end;
+  LRes := LVHost.BindExchange(ADestination, ASource,
     ARoutingKey, AArguments);
   case LRes of
     amqtrOk, amqtrEquivalente: Result := amqerOk;
@@ -388,19 +479,41 @@ begin
   else
     Result := amqerNaoEncontrado;
   end;
+  if (LRes = amqtrOk) and LPersiste then
+    if not GravaTopo(AMQP_REC_EXCHANGE_BIND, LPayload) then
+      Result := amqerSemDurabilidade;
 end;
 
 function TAMQPEngine.UnbindExchange(const AVHost, ADestination, ASource,
   ARoutingKey: string; AArguments: TAMQPFieldTable): TAMQPEngineResult;
 var
   LRes: TAMQPTopologyResult;
+  LVHost: TAMQPVHost;
+  LPersiste: Boolean;
+  LPayload: TBytes;
+  LRec: TAMQPRecBinding;
 begin
-  LRes := FVHosts.GetOrCreate(AVHost).UnbindExchange(ADestination, ASource,
+  LVHost := FVHosts.GetOrCreate(AVHost);
+  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, ASource)
+    and ExchangeEhDuravel(LVHost, ADestination);
+  if LPersiste then
+  begin
+    LRec.VHost := AVHost;
+    LRec.Source := ASource;
+    LRec.Destination := ADestination;
+    LRec.RoutingKey := ARoutingKey;
+    LRec.Arguments := AArguments;
+    LPayload := AmqpEncodeRecBinding(LRec);
+  end;
+  LRes := LVHost.UnbindExchange(ADestination, ASource,
     ARoutingKey, AArguments);
   if LRes in [amqtrOk, amqtrEquivalente] then
     Result := amqerOk
   else
     Result := amqerNaoEncontrado;
+  if (LRes = amqtrOk) and LPersiste then
+    if not GravaTopo(AMQP_REC_EXCHANGE_UNBIND, LPayload) then
+      Result := amqerSemDurabilidade;
 end;
 
 function TAMQPEngine.ExchangeExists(const AVHost, AName: string): Boolean;
@@ -420,9 +533,12 @@ var
   LQueue: TAMQPServerQueue;
   LStats: TAMQPQueueStats;
   LDef: TAMQPQueueDef;
+  LRecQ: TAMQPRecQueue;
+  LSemDurab: Boolean;
 begin
   AMessageCount := 0;
   AConsumerCount := 0;
+  LSemDurab := False;
   LVHost := FVHosts.GetOrCreate(AVHost);
 
   if APassive then
@@ -450,6 +566,26 @@ begin
       amqtrDivergente: Exit(amqerDivergente);
     else
       Exit(amqerNaoEncontrado);
+    end;
+
+    // So' o declare que de fato CRIOU vai para o disco (redeclare idempotente
+    // nao gera registro). Repare que o resultado NAO sai por Exit aqui: a fila
+    // viva ainda tem de nascer abaixo, senao o descritor ficaria sem ator. Se
+    // o journal falhou, a conexao cai com 541 -- e a divergencia entre memoria
+    // e disco ate' o restart e' exatamente o que esse 541 comunica.
+    if (LRes = amqtrOk) and PersisteFila(ADurable, AExclusive) then
+    begin
+      LDef := LVHost.QueueDef(AName);
+      if LDef <> nil then
+      begin
+        LRecQ.VHost := AVHost;
+        LRecQ.Name := LDef.Name;
+        LRecQ.Durable := LDef.Durable;
+        LRecQ.AutoDelete := LDef.AutoDelete;
+        LRecQ.Arguments := LDef.Arguments;
+        if not GravaTopo(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LRecQ)) then
+          LSemDurab := True;
+      end;
     end;
   end;
 
@@ -488,6 +624,8 @@ begin
     AMessageCount := LStats.MessageCount;
     AConsumerCount := LStats.ConsumerCount;
   end;
+  if LSemDurab then
+    Result := amqerSemDurabilidade;
 end;
 
 function TAMQPEngine.DeleteQueue(const AVHost, AName: string;
@@ -497,11 +635,18 @@ var
   LVHost: TAMQPVHost;
   LQueue: TAMQPServerQueue;
   LDel: TAMQPQueueDeleteResult;
+  LEraDuravel: Boolean;
+  LNome: TAMQPRecName;
 begin
   AMessageCount := 0;
   LVHost := FVHosts.GetOrCreate(AVHost);
   if not CheckExclusive(LVHost.QueueDef(AName), AOwnerId) then
     Exit(amqerExclusivaDeOutro);
+  // ANTES de apagar: depois o descritor nao existe e nao ha como saber se era
+  // duravel. Vale para o delete explicito E para o auto-delete, que chega aqui
+  // pelo MaybeAutoDeleteQueue -- uma fila auto-delete DURAVEL que sumiu tem de
+  // registrar o sumico, senao a recuperacao a ressuscita.
+  LEraDuravel := (FJournal <> nil) and FilaEhDuravel(LVHost, AName);
 
   FLock.Enter;
   try
@@ -538,6 +683,17 @@ begin
   // exchange auto-delete.
   SweepAutoDeleteExchanges(AVHost);
   Result := amqerOk;
+
+  // Um unico registro de delete: os bindings da fila somem junto com ela na
+  // recuperacao, do mesmo jeito que somem aqui, entao gravar um unbind para
+  // cada seria escrever o que ja' esta' implicito.
+  if LEraDuravel then
+  begin
+    LNome.VHost := AVHost;
+    LNome.Name := AName;
+    if not GravaTopo(AMQP_REC_QUEUE_DELETE, AmqpEncodeRecName(LNome)) then
+      Result := amqerSemDurabilidade;
+  end;
 end;
 
 function TAMQPEngine.PurgeQueue(const AVHost, AName: string;
@@ -562,12 +718,27 @@ function TAMQPEngine.BindQueue(const AVHost, AQueue, AExchange,
 var
   LVHost: TAMQPVHost;
   LRes: TAMQPTopologyResult;
+  LPersiste: Boolean;
+  LPayload: TBytes;
+  LRec: TAMQPRecBinding;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   if not CheckExclusive(LVHost.QueueDef(AQueue), AOwnerId) then
   begin
     AArguments.Free;
     Exit(amqerExclusivaDeOutro);
+  end;
+  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, AExchange)
+    and FilaEhDuravel(LVHost, AQueue);
+  if LPersiste then
+  begin
+    // Codificado ANTES do bind: depois o vhost e' dono de AArguments.
+    LRec.VHost := AVHost;
+    LRec.Source := AExchange;
+    LRec.Destination := AQueue;
+    LRec.RoutingKey := ARoutingKey;
+    LRec.Arguments := AArguments;
+    LPayload := AmqpEncodeRecBinding(LRec);
   end;
   LRes := LVHost.BindQueue(AExchange, AQueue, ARoutingKey, AArguments);
   case LRes of
@@ -576,6 +747,9 @@ begin
   else
     Result := amqerNaoEncontrado;
   end;
+  if (LRes = amqtrOk) and LPersiste then
+    if not GravaTopo(AMQP_REC_QUEUE_BIND, LPayload) then
+      Result := amqerSemDurabilidade;
 end;
 
 function TAMQPEngine.UnbindQueue(const AVHost, AQueue, AExchange,
@@ -584,6 +758,9 @@ function TAMQPEngine.UnbindQueue(const AVHost, AQueue, AExchange,
 var
   LVHost: TAMQPVHost;
   LRes: TAMQPTopologyResult;
+  LPersiste: Boolean;
+  LPayload: TBytes;
+  LRec: TAMQPRecBinding;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   if not CheckExclusive(LVHost.QueueDef(AQueue), AOwnerId) then
@@ -591,11 +768,25 @@ begin
     AArguments.Free;
     Exit(amqerExclusivaDeOutro);
   end;
+  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, AExchange)
+    and FilaEhDuravel(LVHost, AQueue);
+  if LPersiste then
+  begin
+    LRec.VHost := AVHost;
+    LRec.Source := AExchange;
+    LRec.Destination := AQueue;
+    LRec.RoutingKey := ARoutingKey;
+    LRec.Arguments := AArguments;
+    LPayload := AmqpEncodeRecBinding(LRec);
+  end;
   LRes := LVHost.UnbindQueue(AExchange, AQueue, ARoutingKey, AArguments);
   if LRes in [amqtrOk, amqtrEquivalente] then
     Result := amqerOk
   else
     Result := amqerNaoEncontrado;
+  if (LRes = amqtrOk) and LPersiste then
+    if not GravaTopo(AMQP_REC_QUEUE_UNBIND, LPayload) then
+      Result := amqerSemDurabilidade;
 end;
 
 function TAMQPEngine.QueueExists(const AVHost, AName: string): Boolean;
@@ -661,6 +852,63 @@ end;
 
 { --- ciclo de vida automatico (WS7) --- }
 
+function TAMQPEngine.PersisteExchange(const AName: string;
+  ADurable: Boolean): Boolean;
+begin
+  Result := (FJournal <> nil) and ADurable and (AName <> '')
+    and (not SameText(Copy(AName, 1, 4), 'amq.'));
+end;
+
+function TAMQPEngine.PersisteFila(ADurable, AExclusive: Boolean): Boolean;
+begin
+  // D20: fila exclusiva NUNCA e' persistida -- ela morre com a conexao dona, e
+  // depois de um restart nao existe conexao dona.
+  Result := (FJournal <> nil) and ADurable and (not AExclusive);
+end;
+
+function TAMQPEngine.ExchangeEhDuravel(AVHost: TAMQPVHost;
+  const AName: string): Boolean;
+var
+  LDef: TAMQPExchangeDef;
+begin
+  LDef := AVHost.ExchangeDef(AName);
+  Result := (LDef <> nil) and LDef.Durable
+    and (AName <> '') and (not SameText(Copy(AName, 1, 4), 'amq.'));
+end;
+
+function TAMQPEngine.FilaEhDuravel(AVHost: TAMQPVHost;
+  const AName: string): Boolean;
+var
+  LDef: TAMQPQueueDef;
+begin
+  LDef := AVHost.QueueDef(AName);
+  Result := (LDef <> nil) and LDef.Durable and (not LDef.Exclusive);
+end;
+
+function TAMQPEngine.GravaTopo(AKind: Byte; const APayload: TBytes): Boolean;
+var
+  LRecs: TAMQPJournalRecords;
+  LLsn: UInt64;
+begin
+  if FJournal = nil then
+    Exit(True); // sem journal nao ha o que gravar, e isso nao e' falha
+  Result := False;
+  SetLength(LRecs, 1);
+  LRecs[0].Kind := AKind;
+  LRecs[0].Payload := APayload;
+  try
+    // ESPERA o fsync antes de o *-Ok sair. Operacao de topologia e' rara e
+    // fora do caminho quente, e um cliente que recebeu Declare-Ok de uma fila
+    // DURAVEL tem direito de supor que ela sobreviveu -- responder antes do
+    // fsync seria uma mentira de meio milissegundo que so' aparece no restart.
+    LLsn := FJournal.Submit(LRecs);
+    Result := FJournal.WaitDurable(LLsn, AMQP_JOURNAL_SUBMIT_TIMEOUT_MS);
+  except
+    on E: EAMQPJournal do
+      Result := False;
+  end;
+end;
+
 procedure TAMQPEngine.MaybeAutoDeleteQueue(const AVHost, AQueue: string);
 var
   LDef: TAMQPQueueDef;
@@ -696,7 +944,16 @@ begin
     Exit;
   if LVHost.HasBindingsFrom(AExchange) then
     Exit;
-  LVHost.DeleteExchange(AExchange, False);
+  // Pelo metodo da ENGINE, e nao pelo do vhost: e' o da engine que grava o
+  // registro de delete (Fase 4, WS3). Um exchange auto-delete DURAVEL que
+  // sumiu tem de registrar o sumico, senao a recuperacao o ressuscita -- e
+  // chamar o vhost direto aqui era exatamente esse buraco.
+  //
+  // O resultado nao tem para onde ir (este caminho e' automatico, sem cliente
+  // esperando): se o journal estiver em falha, o exchange some da memoria e
+  // volta no restart. E' consequencia conhecida de journal quebrado, e o
+  // proximo declare duravel derruba a conexao com 541 de qualquer forma.
+  DeleteExchange(AVHost, AExchange, False);
 end;
 
 procedure TAMQPEngine.SweepAutoDeleteExchanges(const AVHost: string);

@@ -34,6 +34,7 @@ uses
   AMQP.Server.Auth,
   AMQP.Server.Types,
   AMQP.Server.Engine,
+  AMQP.Server.Journal,
   AMQP.Server.Connection;
 
 // TAMQPVirtualHostRegistry mudou-se para AMQP.Server.Types no WS4 (a FSM de
@@ -79,6 +80,8 @@ type
     FAuthorizer: IAMQPAuthorizer;
     FSink: IAMQPMessageSink;
     FEngine: TAMQPEngine; // WS5: a engine de verdade; tambem e' o Sink
+    FJournal: TAMQPJournal; // Fase 4: nil enquanto DataDir estiver vazio
+    FDataDir: string;
     FMaxQueueLength: Integer;
     FVHosts: TAMQPVirtualHostRegistry;
     FBindAddress: string;
@@ -101,6 +104,7 @@ type
     procedure HandleConnClosed(AConn: TAMQPServerConnection);
     procedure ReapDead;
     procedure SetMaxQueueLength(AValue: Integer);
+    procedure SetDataDir(const AValue: string);
   public
     constructor Create;
     destructor Destroy; override;
@@ -119,6 +123,19 @@ type
     /// A engine de roteamento (Fase 2). Criada pelo broker e usada como
     /// MessageSink; exposta para testes e diagnóstico.
     property Engine: TAMQPEngine read FEngine;
+    /// Journal de durabilidade, ou nil quando DataDir esta' vazio. Existe so'
+    /// entre o Start e o Stop.
+    property Journal: TAMQPJournal read FJournal;
+
+    /// Diretorio de dados. VAZIO (default) = broker exatamente igual ao da
+    /// Fase 3: `durable` e `delivery-mode 2` continuam aceitos e ignorados, e
+    /// nada e' escrito em disco. Preenchido = durabilidade ligada (decisao
+    /// D19).
+    ///
+    /// E' opt-in pela mesma razao do UseTls: o broker roda DENTRO da app do
+    /// usuario, e ninguem deve ganhar arquivos em disco por ter chamado Start.
+    /// So' pode mudar com o broker parado.
+    property DataDir: string read FDataDir write SetDataDir;
     /// Teto de mensagens prontas POR FILA (decisão D7 do CLAUDE.md).
     /// 0 (default) = ilimitado. O broker roda dentro da app do usuário: uma
     /// fila sem consumidor não pode derrubar o processo hospedeiro. Vale para
@@ -245,8 +262,17 @@ begin
   FSink := nil;
   // Depois do Stop: nenhuma conexao viva, entao nenhum ator de fila esta'
   // sendo alimentado. O destrutor da engine para os atores antes de liberar.
+  FreeAndNil(FJournal);
   FEngine.Free;
   inherited;
+end;
+
+procedure TAMQPServer.SetDataDir(const AValue: string);
+begin
+  if FRunning then
+    raise EAMQPServerAbort.Create(
+      'DataDir nao pode mudar com o broker no ar');
+  FDataDir := AValue;
 end;
 
 procedure TAMQPServer.Start;
@@ -255,6 +281,22 @@ begin
     Exit;
   FStopping := False;
   FTotalAccepted := 0;
+
+  // O journal sobe ANTES do socket de escuta: nenhum cliente pode chegar num
+  // broker meio recuperado (a recuperacao propriamente dita e' a WS6, e vai
+  // entrar exatamente aqui). Se ele nao subir -- diretorio ja tem dono, disco
+  // sem permissao --, o Start levanta e nada foi prometido a ninguem.
+  if FDataDir <> '' then
+  begin
+    FJournal := TAMQPJournal.Create(FDataDir);
+    try
+      FJournal.Start;
+    except
+      FreeAndNil(FJournal);
+      raise;
+    end;
+    FEngine.Journal := FJournal;
+  end;
   FListener := TAMQPTcpListener.Create;
   FListener.Listen(FBindAddress, FPort, FBacklog);
   FPort := FListener.Port; // efetiva (relevante se veio 0)
@@ -321,6 +363,18 @@ begin
     FLock.Leave;
   end;
   ReapDead;
+
+  // O journal desce por ULTIMO: as conexoes ja' morreram, entao ninguem mais
+  // submete, e o Stop dele drena o que ja' foi aceito antes de fechar.
+  if FJournal <> nil then
+  begin
+    FEngine.Journal := nil;
+    try
+      FJournal.Stop;
+    except
+    end;
+    FreeAndNil(FJournal);
+  end;
 
   FRunning := False;
 end;

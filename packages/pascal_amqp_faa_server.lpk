@@ -81,6 +81,10 @@
         <Filename Value="..\src\server\AMQP.Server.Journal.pas"/>
         <UnitName Value="AMQP.Server.Journal"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.Records.pas"/>
+        <UnitName Value="AMQP.Server.Records"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>
