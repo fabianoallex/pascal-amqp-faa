@@ -48,6 +48,7 @@ uses
   AMQP.Threading,
   AMQP.Server.Types,
   AMQP.Server.Message,
+  AMQP.Server.Header,
   AMQP.Server.Resources,
   AMQP.Server.Queue,
   AMQP.Server.VHost;
@@ -72,6 +73,29 @@ type
     /// fila exclusiva de OUTRA conexao -- 405 RESOURCE_LOCKED
     amqerExclusivaDeOutro
   );
+
+  TAMQPEngine = class;
+
+  { Liga uma fila ao dead-lettering da engine.
+
+    Existe porque a IAMQPDeadLetterSink nao carrega vhost -- e nao deveria: a
+    fila nao sabe em que vhost mora, e alargar a interface so' para carregar um
+    dado que o ADAPTADOR pode fixar seria piorar o contrato para todo mundo.
+    Um adaptador por vhost fixa o nome e a interface fica com o que interessa.
+
+    Tempo de vida: e' TInterfacedObject e a fila segura a referencia, entao o
+    adaptador vive enquanto a fila viver. O ponteiro para a engine e cru de
+    propriedade -- a engine e' dona das filas e as para no proprio destrutor,
+    entao nao ha janela em que uma fila viva veja uma engine morta. }
+  TAMQPDeadLetterAdapter = class(TInterfacedObject, IAMQPDeadLetterSink)
+  private
+    FEngine: TAMQPEngine;
+    FVHost: string;
+  public
+    constructor Create(AEngine: TAMQPEngine; const AVHost: string);
+    procedure DeadLetter(const ADlx, ARoutingKey: string;
+      AMessage: TAMQPMessage; APriority: Byte);
+  end;
 
   TAMQPEngine = class(TInterfacedObject, IAMQPMessageSink)
   private
@@ -175,6 +199,12 @@ type
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage): Boolean;
 
+    /// Republica uma mensagem ja' montada (usada pelo dead-lettering). Roda na
+    /// thread do ATOR da fila de origem: le a topologia sob RWLock e posta na
+    /// caixa das filas de destino, sem I/O e sem espera (D17).
+    procedure RepublishTo(const AVHost, AExchange, ARoutingKey: string;
+      AMessage: TAMQPMessage; APriority: Byte);
+
     /// Cutuca todas as filas (caso degradado da D3 -- ver
     /// TAMQPServerQueue.PostDeliverTick). Chamado pela thread monitora.
     procedure DeliverTick;
@@ -191,6 +221,22 @@ type
   end;
 
 implementation
+
+{ TAMQPDeadLetterAdapter }
+
+constructor TAMQPDeadLetterAdapter.Create(AEngine: TAMQPEngine;
+  const AVHost: string);
+begin
+  inherited Create;
+  FEngine := AEngine;
+  FVHost := AVHost;
+end;
+
+procedure TAMQPDeadLetterAdapter.DeadLetter(const ADlx, ARoutingKey: string;
+  AMessage: TAMQPMessage; APriority: Byte);
+begin
+  FEngine.RepublishTo(FVHost, ADlx, ARoutingKey, AMessage, APriority);
+end;
 
 { TAMQPEngine }
 
@@ -410,6 +456,9 @@ begin
           FPool)
       else
         LQueue := TAMQPServerQueue.Create(AName, FMaxQueueLength, FPool);
+      // WS5: e' por aqui que a fila alcanca a topologia para republicar as
+      // mortas. Sem sink, uma morte vira simples descarte.
+      LQueue.DeadLetterSink := TAMQPDeadLetterAdapter.Create(Self, AVHost);
       FQueues.Add(Key(AVHost, AName), LQueue);
     end;
   finally
@@ -706,6 +755,53 @@ begin
     end;
   finally
     LMsg.Release; // a referencia do publicador
+  end;
+end;
+
+procedure TAMQPEngine.RepublishTo(const AVHost, AExchange,
+  ARoutingKey: string; AMessage: TAMQPMessage; APriority: Byte);
+var
+  LVHost: TAMQPVHost;
+  LDestinos: TArray<string>;
+  LQueue: TAMQPServerQueue;
+  LEd: TAMQPHeaderEditor;
+  I: Integer;
+begin
+  LVHost := FVHosts.GetOrCreate(AVHost);
+  // Um DLX do tipo headers precisa da tabela decodificada para casar. Decodar
+  // aqui e' CPU na thread do ator, o que a D17 permite -- e' o caminho FRIO
+  // (uma mensagem morre uma vez), nao o do publish.
+  LEd := nil;
+  try
+    try
+      LEd := TAMQPHeaderEditor.Create(AMessage.HeaderPayload);
+      LDestinos := LVHost.Route(AExchange, ARoutingKey, LEd.Headers);
+    except
+      // Header ilegivel nao pode derrubar o ator da fila de origem.
+      on E: Exception do
+        Exit;
+    end;
+  finally
+    LEd.Free;
+  end;
+
+  if Length(LDestinos) = 0 then
+  begin
+    // DLX sem rota: a mensagem morre de vez. E' o mesmo destino que teria sem
+    // DLX nenhum, e por isso nao e' erro -- so' nao ha para onde mandar.
+    AmqpAtomicInc(FUnrouted);
+    Exit;
+  end;
+  AmqpAtomicInc(FRouted);
+
+  for I := 0 to High(LDestinos) do
+  begin
+    LQueue := FindQueue(AVHost, LDestinos[I]);
+    if LQueue <> nil then
+      // TTL da mensagem vai como -1: o 'expiration' original foi retirado pelo
+      // dead-lettering (senao ela morreria de novo no ato na DLQ), e o prazo
+      // que passa a valer e' o da fila de DESTINO.
+      LQueue.PostMessage(AMessage, APriority, -1);
   end;
 end;
 

@@ -24,6 +24,9 @@ uses
   AMQP.Threading,
   AMQP.Server.Message,
   AMQP.Server.Resources,
+  AMQP.Server.Header,
+  System.Rtti,
+  AMQP.Basic.Methods,
   AMQP.Server.Queue,
   AMQP.ServerTestDoubles;
 
@@ -71,6 +74,22 @@ type
     [Test] procedure Ttl_MenorEntreFilaEMensagemVence;
     [Test] procedure Ttl_GetNaoDevolveVencida;
     [Test] procedure Ttl_RequeuePreservaOPrazo;
+  end;
+
+  [TestFixture]
+  TDeadLetterTests = class
+  public
+    [Test] procedure Rejeitada_VaiParaODlx;
+    [Test] procedure Ack_NaoVaiParaODlx;
+    [Test] procedure NackComRequeue_NaoVaiParaODlx;
+    [Test] procedure Expirada_VaiParaODlxComRazaoExpired;
+    [Test] procedure EstourouOTeto_VaiParaODlxComRazaoMaxlen;
+    [Test] procedure SemRoutingKeyPropria_MantemAOriginal;
+    [Test] procedure MesmaFilaEMesmaRazao_ColapsaNoCount;
+    [Test] procedure ExpirationEhRetiradaEVaiParaOriginalExpiration;
+    [Test] procedure PrimeiraMorte_RegistraXFirstDeath;
+    [Test] procedure GuardaDeCiclo_ParaDepoisDoTeto;
+    [Test] procedure SemDlx_MorteEhDescarte;
   end;
 
 implementation
@@ -1250,8 +1269,537 @@ begin
   end;
 end;
 
+{ TDeadLetterTests }
+
+// Sink duble: guarda o que foi republicado, para o teste inspecionar o
+// x-death sem precisar de broker nenhum.
+//
+// ATENCAO ao usar: e' TInterfacedObject, e a fila guarda a referencia como
+// INTERFACE. Se o teste segurar so' o ponteiro de objeto, liberar a fila
+// derruba o refcount a zero e destroi o duble -- o teste do ciclo, que reusa o
+// mesmo sink em varias filas, morreu com Access violation exatamente assim.
+// Por isso todo teste aqui guarda tambem um LSinkRef de interface.
+type
+  TMortaRegistrada = record
+    Dlx: string;
+    RoutingKey: string;
+    HeaderPayload: TBytes;
+    Corpo: string;
+    Priority: Byte;
+  end;
+
+  TSinkEspia = class(TInterfacedObject, IAMQPDeadLetterSink)
+  private
+    FMortas: array of TMortaRegistrada;
+  public
+    procedure DeadLetter(const ADlx, ARoutingKey: string;
+      AMessage: TAMQPMessage; APriority: Byte);
+    function Count: Integer;
+    function Item(AIdx: Integer): TMortaRegistrada;
+  end;
+
+procedure TSinkEspia.DeadLetter(const ADlx, ARoutingKey: string;
+  AMessage: TAMQPMessage; APriority: Byte);
+var
+  N: Integer;
+begin
+  N := Length(FMortas);
+  SetLength(FMortas, N + 1);
+  FMortas[N].Dlx := ADlx;
+  FMortas[N].RoutingKey := ARoutingKey;
+  // COPIA: o contrato diz que a referencia continua sendo do chamador, entao
+  // guardar o objeto seria errado -- e guardar so' o buffer prova, de quebra,
+  // que a mensagem derivada esta completa no momento da chamada.
+  FMortas[N].HeaderPayload := Copy(AMessage.HeaderPayload, 0,
+    Length(AMessage.HeaderPayload));
+  FMortas[N].Corpo := CorpoDe(AMessage);
+  FMortas[N].Priority := APriority;
+end;
+
+function TSinkEspia.Count: Integer;
+begin
+  Result := Length(FMortas);
+end;
+
+function TSinkEspia.Item(AIdx: Integer): TMortaRegistrada;
+begin
+  Result := FMortas[AIdx];
+end;
+
+function PolDlx(const ADlx: string; ATtlMs: Int64 = -1): TAMQPQueuePolicy;
+begin
+  Result := TAMQPQueuePolicy.Empty;
+  Result.DeadLetterExchange := ADlx;
+  Result.HasDeadLetterExchange := True;
+  Result.MessageTtlMs := ATtlMs;
+end;
+
+// Le uma entrada do x-death do payload registrado pelo sink.
+function LeMorte(const APayload: TBytes; AIdx: Integer;
+  const ACampo: string): string;
+var
+  LEd: TAMQPHeaderEditor;
+  LArr, LElem, LVal: TValue;
+  LTab: TAMQPFieldTable;
+begin
+  Result := '';
+  LEd := TAMQPHeaderEditor.Create(APayload);
+  try
+    if not LEd.Headers.TryGetValue('x-death', LArr) then
+      Exit;
+    LArr := AmqpUnwrapValue(LArr);
+    if (not LArr.IsArray) or (AIdx >= LArr.GetArrayLength) then
+      Exit;
+    LElem := AmqpUnwrapValue(LArr.GetArrayElement(AIdx));
+    if not (LElem.IsObject and (LElem.AsObject is TAMQPFieldTable)) then
+      Exit;
+    LTab := TAMQPFieldTable(LElem.AsObject);
+    if LTab.TryGetValue(ACampo, LVal) then
+    begin
+      LVal := AmqpUnwrapValue(LVal);
+      if LVal.Kind = tkInt64 then
+        Result := IntToStr(LVal.AsInt64)
+      else if LVal.Kind = tkInteger then
+        Result := IntToStr(LVal.AsInteger)
+      else if not LVal.IsObject then
+        Result := LVal.AsString;
+    end;
+  finally
+    LEd.Free;
+  end;
+end;
+
+function ContaMortes(const APayload: TBytes): Integer;
+var
+  LEd: TAMQPHeaderEditor;
+  LArr: TValue;
+begin
+  Result := 0;
+  LEd := TAMQPHeaderEditor.Create(APayload);
+  try
+    if not LEd.Headers.TryGetValue('x-death', LArr) then
+      Exit;
+    LArr := AmqpUnwrapValue(LArr);
+    if LArr.IsArray then
+      Result := LArr.GetArrayLength;
+  finally
+    LEd.Free;
+  end;
+end;
+
+// Publica com um content-header de verdade (o dead-lettering reescreve o
+// header, entao um payload vazio nao serviria).
+procedure PublicaComHeader(AQ: TAMQPServerQueue; const ATexto: string;
+  const AExpiration: string = ''; APrio: Byte = 0);
+var
+  LProps: TAMQPBasicProperties;
+  LMsg: TAMQPMessage;
+  LCorpo, LHdr: TBytes;
+begin
+  LCorpo := AmqpUtf8Encode(ATexto);
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('text/plain');
+  if AExpiration <> '' then
+    LProps.SetExpiration(AExpiration);
+  LHdr := BuildContentHeader(Length(LCorpo), LProps);
+  LMsg := TAMQPMessage.Create('ex.origem', 'rk.origem', 'guest', LHdr, LCorpo);
+  try
+    // No caminho real quem le 'expiration' e' a engine, na thread do
+    // publicador (D1). Aqui o teste e' de nivel de fila, entao passa na mao.
+    if AExpiration <> '' then
+      AQ.PostMessage(LMsg, APrio, StrToInt64(AExpiration))
+    else
+      AQ.PostMessage(LMsg, APrio, -1);
+  finally
+    LMsg.Release;
+  end;
+end;
+
+procedure TDeadLetterTests.Rejeitada_VaiParaODlx;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+  LStats: TAMQPQueueStats;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q.origem', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    ChecaBool('tirou em modo ack', True, LQ.Get(1, 5, False, LMsg, LRedel));
+    LMsg.Release;
+    LQ.PostNack(1, 5, False, False); // reject sem requeue = morte
+    LStats := Estabiliza(LQ);
+    ChecaInt('uma republicada', 1, LSink.Count);
+    ChecaInt('contada', 1, LStats.DeadLetteredCount);
+    ChecaStr('foi para o dlx', 'dlx', LSink.Item(0).Dlx);
+    ChecaStr('corpo intacto', 'm', LSink.Item(0).Corpo);
+    ChecaStr('razao', 'rejected',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    ChecaStr('fila de origem', 'q.origem',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'queue'));
+    ChecaStr('exchange original', 'ex.origem',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'exchange'));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O ACK nao pode virar morte. Os dois chegam ao ResolveUnacked com
+// requeue=false, e confundi-los mandaria TODA mensagem confirmada para o DLX.
+procedure TDeadLetterTests.Ack_NaoVaiParaODlx;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    ChecaBool('tirou', True, LQ.Get(1, 5, False, LMsg, LRedel));
+    LMsg.Release;
+    LQ.PostAck(1, 5, False);
+    Estabiliza(LQ);
+    ChecaInt('ack nao republica nada', 0, LSink.Count);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Nack COM requeue tambem nao e' morte: volta para a fila.
+procedure TDeadLetterTests.NackComRequeue_NaoVaiParaODlx;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+  LStats: TAMQPQueueStats;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    ChecaBool('tirou', True, LQ.Get(1, 5, False, LMsg, LRedel));
+    LMsg.Release;
+    LQ.PostNack(1, 5, False, True);
+    LStats := Estabiliza(LQ);
+    ChecaInt('nada republicado', 0, LSink.Count);
+    ChecaInt('voltou para a fila', 1, LStats.MessageCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TDeadLetterTests.Expirada_VaiParaODlxComRazaoExpired;
+var
+  LQ: TQueueRelogio;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TQueueRelogio.Create('q.ttl', PolDlx('dlx', 500));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    Estabiliza(LQ);
+    LQ.Avanca(501);
+    LQ.PostDeliverTick;
+    Estabiliza(LQ);
+    ChecaInt('uma republicada', 1, LSink.Count);
+    ChecaStr('razao', 'expired',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TDeadLetterTests.EstourouOTeto_VaiParaODlxComRazaoMaxlen;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'), 1);
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'primeira');
+    PublicaComHeader(LQ, 'segunda'); // estoura o teto de 1
+    Estabiliza(LQ);
+    ChecaInt('a que saiu foi republicada', 1, LSink.Count);
+    ChecaStr('razao', 'maxlen',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    ChecaStr('foi a mais velha', 'primeira', LSink.Item(0).Corpo);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Sem x-dead-letter-routing-key, a chave ORIGINAL e mantida -- e' o que faz um
+// DLX topic continuar roteando pelo mesmo criterio.
+procedure TDeadLetterTests.SemRoutingKeyPropria_MantemAOriginal;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LPol: TAMQPQueuePolicy;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    LQ.Get(1, 5, False, LMsg, LRedel);
+    LMsg.Release;
+    LQ.PostNack(1, 5, False, False);
+    Estabiliza(LQ);
+    ChecaStr('chave original preservada', 'rk.origem', LSink.Item(0).RoutingKey);
+  finally
+    LQ.Free;
+  end;
+
+  // Com chave propria, ela substitui.
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LPol := PolDlx('dlx');
+  LPol.DeadLetterRoutingKey := 'rk.morta';
+  LPol.HasDeadLetterRoutingKey := True;
+  LQ := TAMQPServerQueue.Create('q', LPol);
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    LQ.Get(1, 5, False, LMsg, LRedel);
+    LMsg.Release;
+    LQ.PostNack(1, 5, False, False);
+    Estabiliza(LQ);
+    ChecaStr('chave trocada', 'rk.morta', LSink.Item(0).RoutingKey);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Morrer DUAS VEZES na mesma fila pela mesma razao nao pode criar duas
+// entradas: o campo count existe justamente para isso, e sem o colapso um laco
+// de retry infla o header a cada volta ate' estourar o frame-max.
+procedure TDeadLetterTests.MesmaFilaEMesmaRazao_ColapsaNoCount;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+  LPayload: TBytes;
+  I: Integer;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q.retry', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    // Primeira morte.
+    PublicaComHeader(LQ, 'm');
+    LQ.Get(1, 1, False, LMsg, LRedel);
+    LMsg.Release;
+    LQ.PostNack(1, 1, False, False);
+    Estabiliza(LQ);
+    ChecaInt('uma entrada apos a 1a morte', 1,
+      ContaMortes(LSink.Item(0).HeaderPayload));
+    ChecaStr('count 1', '1', LeMorte(LSink.Item(0).HeaderPayload, 0, 'count'));
+
+    // Devolve a MESMA mensagem morta para a fila e mata de novo, simulando a
+    // volta do laco de retry.
+    LPayload := LSink.Item(0).HeaderPayload;
+    for I := 2 to 3 do
+    begin
+      LMsg := TAMQPMessage.Create('ex.origem', 'rk.origem', 'guest', LPayload,
+        AmqpUtf8Encode('m'));
+      try
+        LQ.PostMessage(LMsg, 0, -1);
+      finally
+        LMsg.Release;
+      end;
+      LQ.Get(1, UInt64(I), False, LMsg, LRedel);
+      LMsg.Release;
+      LQ.PostNack(1, UInt64(I), False, False);
+      Estabiliza(LQ);
+      LPayload := LSink.Item(LSink.Count - 1).HeaderPayload;
+      ChecaInt('continua UMA entrada', 1, ContaMortes(LPayload));
+      ChecaStr('count acumulou', IntToStr(I),
+        LeMorte(LPayload, 0, 'count'));
+    end;
+  finally
+    LQ.Free;
+  end;
+end;
+
+// A mensagem morta por TTL nao pode levar o MESMO 'expiration' para a DLQ:
+// morreria no ato e o retry-com-espera nao funcionaria. O valor antigo vira
+// 'original-expiration' na entrada.
+procedure TDeadLetterTests.ExpirationEhRetiradaEVaiParaOriginalExpiration;
+var
+  LQ: TQueueRelogio;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LEd: TAMQPHeaderEditor;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TQueueRelogio.Create('q', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm', '300');
+    Estabiliza(LQ);
+    LQ.Avanca(301);
+    LQ.PostDeliverTick;
+    Estabiliza(LQ);
+    ChecaInt('republicada', 1, LSink.Count);
+    ChecaStr('registrada na entrada', '300',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'original-expiration'));
+    LEd := TAMQPHeaderEditor.Create(LSink.Item(0).HeaderPayload);
+    try
+      ChecaBool('propriedade expiration removida', False,
+        LEd.Properties.Has(bpExpiration));
+    finally
+      LEd.Free;
+    end;
+  finally
+    LQ.Free;
+  end;
+end;
+
+// x-first-death-* registra a PRIMEIRA morte e nunca e' sobrescrito.
+procedure TDeadLetterTests.PrimeiraMorte_RegistraXFirstDeath;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LEd: TAMQPHeaderEditor;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+  LVal: TValue;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LQ := TAMQPServerQueue.Create('q.primeira', PolDlx('dlx'));
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'm');
+    LQ.Get(1, 1, False, LMsg, LRedel);
+    LMsg.Release;
+    LQ.PostNack(1, 1, False, False);
+    Estabiliza(LQ);
+    LEd := TAMQPHeaderEditor.Create(LSink.Item(0).HeaderPayload);
+    try
+      ChecaBool('tem x-first-death-queue', True,
+        LEd.Headers.TryGetValue('x-first-death-queue', LVal));
+      ChecaStr('fila da primeira morte', 'q.primeira', LVal.AsString);
+      ChecaBool('tem x-first-death-reason', True,
+        LEd.Headers.TryGetValue('x-first-death-reason', LVal));
+      ChecaStr('razao da primeira morte', 'rejected', LVal.AsString);
+    finally
+      LEd.Free;
+    end;
+  finally
+    LQ.Free;
+  end;
+end;
+
+// D14: o grafo de DLX pode ter ciclo. Depois do teto de saltos a mensagem
+// morre de vez, em vez de circular para sempre.
+procedure TDeadLetterTests.GuardaDeCiclo_ParaDepoisDoTeto;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+  LPayload: TBytes;
+  I, LAntes: Integer;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  // Cada volta usa uma fila de nome DIFERENTE, senao o colapso por (fila,
+  // razao) manteria uma entrada so' e o teto (que soma os counts) seria o
+  // mesmo -- mas o teste ficaria menos claro sobre o que esta contando.
+  LPayload := nil;
+  for I := 1 to AMQP_MAX_DEADLETTER_HOPS + 2 do
+  begin
+    LQ := TAMQPServerQueue.Create('q' + IntToStr(I), PolDlx('dlx'));
+    try
+      LQ.DeadLetterSink := LSink;
+      if LPayload = nil then
+        PublicaComHeader(LQ, 'm')
+      else
+      begin
+        LMsg := TAMQPMessage.Create('ex.origem', 'rk.origem', 'guest',
+          LPayload, AmqpUtf8Encode('m'));
+        try
+          LQ.PostMessage(LMsg, 0, -1);
+        finally
+          LMsg.Release;
+        end;
+      end;
+      LAntes := LSink.Count;
+      LQ.Get(1, 1, False, LMsg, LRedel);
+      LMsg.Release;
+      LQ.PostNack(1, 1, False, False);
+      Estabiliza(LQ);
+      if LSink.Count = LAntes then
+      begin
+        // Parou de republicar: e' a guarda agindo.
+        ChecaBool('parou no teto, nao antes', True,
+          I > AMQP_MAX_DEADLETTER_HOPS);
+        Exit;
+      end;
+      LPayload := LSink.Item(LSink.Count - 1).HeaderPayload;
+    finally
+      LQ.Free;
+    end;
+  end;
+  ChecaBool('a guarda de ciclo tinha de ter agido', False, True);
+end;
+
+// Sem DLX configurado, morte e simples descarte -- o comportamento da WS4.
+procedure TDeadLetterTests.SemDlx_MorteEhDescarte;
+var
+  LQ: TQueueRelogio;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TQueueRelogio.Create('q', PolTtl(100));
+  try
+    PublicaComHeader(LQ, 'm');
+    Estabiliza(LQ);
+    LQ.Avanca(101);
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('sumiu', 0, LStats.MessageCount);
+    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
+    ChecaInt('nao contada como republicada', 0, LStats.DeadLetteredCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TQueueActorTests);
   TDUnitX.RegisterTestFixture(TQueuePriorityTtlTests);
+  TDUnitX.RegisterTestFixture(TDeadLetterTests);
 
 end.

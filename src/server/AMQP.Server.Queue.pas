@@ -75,6 +75,7 @@ uses
   Generics.Collections,
   AMQP.Threading,
   AMQP.Server.Message,
+  AMQP.Server.Header,
   AMQP.Server.Resources;
 
 const
@@ -90,6 +91,13 @@ const
 
   /// Quanto o Stop espera o ator sair do laco antes de desistir.
   AMQP_QUEUE_STOP_TIMEOUT_MS = 15000;
+
+  /// Teto de saltos de dead-letter (decisao D14). Mesmo espirito do
+  /// AMQP_MAX_EXCHANGE_HOP_DEPTH que o Route ja' usa: o grafo de DLX pode ter
+  /// ciclo, e cortar por PROFUNDIDADE e' mais barato que carregar o conjunto
+  /// de filas visitadas, com o mesmo efeito pratico. Ao estourar, a mensagem
+  /// e' descartada e contada -- nao ha caminho em que ela circule para sempre.
+  AMQP_MAX_DEADLETTER_HOPS = 16;
 
 type
   { Falha de uso do ator: sincrono postado de dentro do proprio ator, comando
@@ -114,6 +122,9 @@ type
     DroppedCount: Int64;
     /// Entregues a consumidores desde a criacao (nao conta Basic.Get).
     DeliveredCount: Int64;
+    /// Mortas que foram republicadas num DLX. Nao se soma a ExpiredCount nem
+    /// a DroppedCount: aquelas contam o MOTIVO, esta conta o DESTINO.
+    DeadLetteredCount: Int64;
     /// Vencidas por TTL (x-message-ttl da fila ou 'expiration' da mensagem).
     /// Metrica OBRIGATORIA pela mesma razao de DroppedCount: sem ela, mensagem
     /// some sem ninguem saber. Na WS5 estas passam a ir para o DLX em vez de
@@ -123,6 +134,24 @@ type
     /// "auto-delete que perdeu o ultimo consumidor" (some) de "auto-delete
     /// que nunca teve nenhum" (fica) -- mesma regra do RabbitMQ.
     EverHadConsumer: Boolean;
+  end;
+
+  { Costura do dead-lettering (WS5). Quem implementa e' a engine, que e' a
+    unica que enxerga a topologia; a fila so' guarda a referencia.
+
+    Existe como interface pela mesma razao do IAMQPDeliveryTarget: sem ela,
+    AMQP.Server.Queue teria de enxergar AMQP.Server.Engine, que ja' enxerga a
+    fila -- ciclo de units.
+
+    NAO PODE BLOQUEAR NEM FAZER I/O (D17): republicar e' ler a topologia sob
+    RWLock e postar na caixa de outras filas, as duas coisas rapidas e sem
+    espera. Se um dia precisar esperar alguma coisa, o dead-letter sai do ator. }
+  IAMQPDeadLetterSink = interface
+    ['{2B9F1C74-5E30-4A88-9D61-7C0E3F5A82B4}']
+    /// Republica AMessage em ADlx com ARoutingKey. A referencia continua sendo
+    /// do CHAMADOR (a implementacao da AddRef se quiser guardar).
+    procedure DeadLetter(const ADlx, ARoutingKey: string;
+      AMessage: TAMQPMessage; APriority: Byte);
   end;
 
   { Costura da entrega (WS4). O canal/conexao implementa; a fila so' guarda a
@@ -312,6 +341,8 @@ type
     FDropped: Int64;
     FDelivered: Int64;
     FExpired: Int64;
+    FDeadLettered: Int64;
+    FDeadLetterSink: IAMQPDeadLetterSink;
     /// Trava de mao unica: vira True no primeiro enqueue com prazo e nunca
     /// volta. Serve so' para a fila SEM nenhuma mensagem expiravel pular o
     /// laco de expiracao a cada rodada (D13: a varredura so' custa em fila que
@@ -333,6 +364,10 @@ type
     /// Ponto unico por onde uma mensagem vencida sai. Na WS4 so' larga a
     /// referencia e conta; a WS5 troca o corpo disto por "manda para o DLX".
     procedure DescartaExpirada(AEntry: TAMQPQueueEntry);
+    /// Manda a entrada para o DLX da fila, se houver um; senao so' larga a
+    /// referencia. Devolve True se de fato republicou. SEMPRE consome a
+    /// referencia da entrada -- quem chama nao larga de novo.
+    function MorreCom(AEntry: TAMQPQueueEntry; const ARazao: string): Boolean;
     /// Prazo absoluto de uma mensagem, combinando o TTL da FILA com o TTL da
     /// MENSAGEM (o menor vence). 0 = nunca.
     function CalculaPrazo(AMessageTtlMs: Int64): UInt64;
@@ -343,8 +378,11 @@ type
     procedure RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
       AExpiraEm: UInt64);
     procedure EnforceMaxLength;
+    /// ARejeitada separa ACK de NACK/REJECT-sem-requeue: os dois chegam aqui
+    /// com ARequeue=False, mas so' o segundo e' morte (razao 'rejected').
+    /// Confundir os dois mandaria toda mensagem confirmada para o DLX.
     procedure ResolveUnacked(AChannelId: NativeUInt; ADeliveryTag: UInt64;
-      AMultiple, ARequeue: Boolean);
+      AMultiple, ARequeue, ARejeitada: Boolean);
     function CurrentStats: TAMQPQueueStats;
     procedure DrainState;
   protected
@@ -445,6 +483,10 @@ type
     property MaxLength: Integer read FMaxLength;
     /// Teto de prioridade em vigor (0 = fila sem prioridade).
     property MaxPriority: Integer read FMaxPriority;
+    /// Quem republica as mortas. nil = sem dead-letter (a mensagem e'
+    /// simplesmente descartada, como na WS4). A engine injeta na criacao.
+    property DeadLetterSink: IAMQPDeadLetterSink read FDeadLetterSink
+      write FDeadLetterSink;
     property Policy: TAMQPQueuePolicy read FPolicy;
   end;
 
@@ -1038,8 +1080,78 @@ end;
 // essa troca ser local.
 procedure TAMQPServerQueue.DescartaExpirada(AEntry: TAMQPQueueEntry);
 begin
-  AEntry.Msg.Release;
   Inc(FExpired);
+  MorreCom(AEntry, AMQP_DEATH_EXPIRED);
+end;
+
+// Roda NA THREAD DO ATOR, e por isso e' so' CPU (reescrever o header) mais um
+// post na caixa de outra fila (D17). Nada aqui espera I/O.
+function TAMQPServerQueue.MorreCom(AEntry: TAMQPQueueEntry;
+  const ARazao: string): Boolean;
+var
+  LEd: TAMQPHeaderEditor;
+  LNova: TAMQPMessage;
+  LDlx, LChave, LExpOriginal: string;
+  LPayload: TBytes;
+begin
+  Result := False;
+  // O try/FINALLY externo existe por uma razao especifica: `Exit` dentro de um
+  // try/EXCEPT sai da FUNCAO e pula o codigo depois do bloco. A primeira
+  // versao daqui liberava a referencia DEPOIS de um try/except que tinha Exit
+  // no caminho "sem DLX" -- e nesse caminho o Release nunca rodava. Um teste
+  // da WS3 pegou (Nack_SemRequeue_Descarta) e o heaptrc confirmou com 21
+  // blocos vazados.
+  try
+    try
+      if (FDeadLetterSink = nil) or (not FPolicy.HasDeadLetterExchange) then
+        Exit;
+
+      LEd := nil;
+      LNova := nil;
+      try
+        LEd := TAMQPHeaderEditor.Create(AEntry.Msg.HeaderPayload);
+
+        // Guarda de ciclo (D14) ANTES de mexer em qualquer coisa: se ja' deu
+        // voltas demais, a mensagem morre aqui e nao vira trafego novo.
+        if AmqpDeathHops(LEd.Headers) >= AMQP_MAX_DEADLETTER_HOPS then
+          Exit;
+
+        // A mensagem morta por TTL nao pode levar o MESMO prazo para a DLQ:
+        // morreria no ato e o padrao retry-com-espera nao funcionaria. O valor
+        // antigo fica registrado na entrada de x-death.
+        LExpOriginal := LEd.TakeExpiration;
+        AmqpAddDeath(LEd, FName, ARazao, AEntry.Msg.Exchange,
+          AEntry.Msg.RoutingKey, LExpOriginal);
+        LPayload := LEd.BuildPayload(AEntry.Msg.BodySize);
+
+        LDlx := FPolicy.DeadLetterExchange;
+        // Sem x-dead-letter-routing-key, a chave ORIGINAL e' mantida -- e' o
+        // que faz um DLX topic continuar roteando pelo mesmo criterio.
+        if FPolicy.HasDeadLetterRoutingKey then
+          LChave := FPolicy.DeadLetterRoutingKey
+        else
+          LChave := AEntry.Msg.RoutingKey;
+
+        LNova := AmqpDeriveMessage(AEntry.Msg, LPayload, LDlx, LChave);
+        FDeadLetterSink.DeadLetter(LDlx, LChave, LNova, AEntry.Priority);
+        Inc(FDeadLettered);
+        Result := True;
+      finally
+        if LNova <> nil then
+          LNova.Release; // a referencia do derivador; o sink tirou a dele
+        LEd.Free;
+      end;
+    except
+      // Header malformado, DLX que sumiu, o que for: uma morte que nao
+      // consegue ser republicada vira descarte. NAO pode derrubar o ator --
+      // levantar aqui mataria a rodada e deixaria a fila meio processada.
+      on E: Exception do
+        Result := False;
+    end;
+  finally
+    // A referencia da entrada e' SEMPRE consumida, tenha republicado ou nao.
+    AEntry.Msg.Release;
+  end;
 end;
 
 // Vence o que passou do prazo, DA CABECA de cada balde para tras.
@@ -1209,8 +1321,10 @@ begin
         LEntry := FStock[I].Dequeue
       else
         Continue;
-      LEntry.Msg.Release;
       Inc(FDropped);
+      // 'maxlen': o descarte por teto tambem e' morte, e vai para o DLX como
+      // as outras. MorreCom consome a referencia.
+      MorreCom(LEntry, AMQP_DEATH_MAXLEN);
       LTirou := True;
       Break;
     end;
@@ -1222,10 +1336,11 @@ end;
 // Ack (ARequeue=False), Nack/Reject com ou sem requeue. AMultiple: todas as
 // tags <= ADeliveryTag DAQUELE canal.
 procedure TAMQPServerQueue.ResolveUnacked(AChannelId: NativeUInt;
-  ADeliveryTag: UInt64; AMultiple, ARequeue: Boolean);
+  ADeliveryTag: UInt64; AMultiple, ARequeue, ARejeitada: Boolean);
 var
   I: Integer;
   LEntry: TAMQPUnackedEntry;
+  LQueueEntry: TAMQPQueueEntry;
   LCasou: Boolean;
 begin
   I := 0;
@@ -1243,8 +1358,18 @@ begin
       FUnacked.Delete(I);
       if ARequeue then
         RequeueFront(LEntry.Msg, LEntry.Priority, LEntry.ExpiraEm)
+      else if ARejeitada then
+      begin
+        // 'rejected': nack/reject SEM requeue. O ack cai no else abaixo --
+        // confundir os dois mandaria toda mensagem confirmada para o DLX.
+        LQueueEntry.Msg := LEntry.Msg;
+        LQueueEntry.Redelivered := True;
+        LQueueEntry.Priority := LEntry.Priority;
+        LQueueEntry.ExpiraEm := LEntry.ExpiraEm;
+        MorreCom(LQueueEntry, AMQP_DEATH_REJECTED);
+      end
       else
-        LEntry.Msg.Release; // ack, ou nack/reject sem requeue (DLX e' Fase 3)
+        LEntry.Msg.Release; // ack: fim de linha, sem dead-letter
     end
     else
       Inc(I);
@@ -1261,6 +1386,7 @@ begin
   Result.DroppedCount := FDropped;
   Result.DeliveredCount := FDelivered;
   Result.ExpiredCount := FExpired;
+  Result.DeadLetteredCount := FDeadLettered;
   Result.EverHadConsumer := FEverHadConsumer;
 end;
 
@@ -1324,15 +1450,17 @@ begin
         EnforceMaxLength;
       end;
 
-    amqqcAck:
-      ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, ACmd.Multiple, False);
+    amqqcAck: // ack NAO e' morte: ARejeitada=False
+      ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, ACmd.Multiple,
+        False, False);
 
     amqqcNack:
       ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, ACmd.Multiple,
-        ACmd.Requeue);
+        ACmd.Requeue, not ACmd.Requeue);
 
     amqqcReject: // Basic.Reject nao tem 'multiple'
-      ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, False, ACmd.Requeue);
+      ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, False, ACmd.Requeue,
+        not ACmd.Requeue);
 
     amqqcGet:
       begin
