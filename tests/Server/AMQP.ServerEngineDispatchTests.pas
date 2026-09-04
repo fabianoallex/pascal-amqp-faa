@@ -99,6 +99,7 @@ type
     [Test] procedure Erro406_OverflowDesconhecido;
     [Test] procedure ArgsValidos_DeclareAceito;
     [Test] procedure Erro406_AlternateExchangeComTipoErrado;
+    [Test] procedure DeleteIdempotente_FilaInexistente;
     [Test] procedure ErroDeCanal_NaoDerrubaAConexao;
   end;
 
@@ -1780,10 +1781,46 @@ begin
   end;
 end;
 
+// DELETE E' IDEMPOTENTE: apagar fila que nao existe devolve Delete-Ok com
+// contagem zero, e nao 404. A letra da spec manda levantar; o RabbitMQ deixou
+// idempotente ha muito tempo e e' com isso que o ecossistema conta -- inclusive
+// o sample RetryDlqVcl deste repo, que apaga antes de redeclarar com argumentos
+// novos.
+//
+// Achado pela WS10: o SmokeTest com os passos de TTL+DLX passava contra o
+// RabbitMQ e batia 404 contra o broker embutido. Este teste existe para que um
+// refactor futuro nao reverta a decisao em silencio.
+//
+// O lado do EXCHANGE tem a mesma regra na engine, mas nao da' para exercitar
+// por aqui: a lib CLIENTE nao expoe Exchange.Delete (mesma limitacao ja
+// registrada para o Queue.Purge).
+procedure TErrorTableTests.DeleteIdempotente_FilaInexistente;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LDel: TAMQPQueueDelete;
+begin
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LDel := Default(TAMQPQueueDelete);
+    LDel.QueueName := 'q.que.nunca.existiu';
+    Assert.AreEqual(Cardinal(0), LCh.DeleteQueue(LDel),
+      'delete de fila inexistente devolve 0, sem erro');
+    Assert.IsTrue(LConn.IsOpen, 'e o canal continua vivo');
+    LCh.Close;
+    LCh.Free;
+  finally
+    LConn.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TEngineDispatchTests);
   TDUnitX.RegisterTestFixture(TErrorTableTests);
   TDUnitX.RegisterTestFixture(TConfirmTests);
   TDUnitX.RegisterTestFixture(TLifecycleTests);
+
 
 end.

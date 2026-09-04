@@ -366,9 +366,12 @@ begin
   case LRes of
     amqtrOk: Result := amqerOk;
     amqtrEmUso: Result := amqerEmUso;
-    amqtrNaoEncontrado: Result := amqerNaoEncontrado;
+    // Idempotente pela mesma razao do DeleteQueue acima -- ver o comentario
+    // la'. Manter os dois iguais importa: um setup que apaga antes de
+    // redeclarar mexe nos dois.
+    amqtrNaoEncontrado: Result := amqerOk;
   else
-    Result := amqerNaoEncontrado;
+    Result := amqerOk;
   end;
 end;
 
@@ -504,7 +507,18 @@ begin
   try
     LQueue := FindQueueLocked(AVHost, AName);
     if LQueue = nil then
-      Exit(amqerNaoEncontrado);
+      // DELETE E' IDEMPOTENTE: apagar fila que nao existe devolve Delete-Ok
+      // com contagem zero, e nao 404. A letra da spec manda levantar, mas o
+      // RabbitMQ deixou idempotente ha muito tempo e e' com isso que o
+      // ecossistema conta -- inclusive o sample RetryDlqVcl deste repo, que
+      // apaga antes de redeclarar com argumentos novos ("redeclarar com args
+      // diferentes seria PRECONDITION_FAILED").
+      //
+      // Achado pela WS10: o SmokeTest com os passos de TTL+DLX passava contra
+      // o RabbitMQ e batia 404 contra o broker embutido. E' exatamente o tipo
+      // de divergencia que rodar os MESMOS passos contra os dois brokers
+      // existe para pegar. Desvio deliberado da letra da spec, documentado.
+      Exit(amqerOk);
 
     // O ator decide: if-unused/if-empty sao estado DELE.
     LDel := LQueue.Delete(AIfUnused, AIfEmpty, AMessageCount);
