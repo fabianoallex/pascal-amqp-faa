@@ -423,6 +423,20 @@ WS1 escrita de array no field-table (`AMQP.Wire`) (Sonnet) · WS2 política de f
   - Seis testes novos de AE + o do grafo denso, em `TVHostTests` (rota pura, sem broker).
   - Suíte do server: **257/257 → 264/264** (Default) e **261/261 → 268/268** (`openssl`), com `0 unfreed memory blocks`. Regressão nos dois compiladores: FPC — server 264/264 e 268/268, aceitação 28/28, unitária 121/121, integração 28/28 contra o RabbitMQ real, SmokeTest PASS. Delphi (IDE) — server **264/264** no Debug e **268/268** no OpenSSL, unitária 121/121, integração 28/28 e aceitação 28/28 nos dois configs, **0 leaks**, SmokeTest PASS nos quatro cruzamentos.
 
+- **WS8 (`x-expires`, fila ociosa)** concluída — a última frente de funcionalidade da Fase 3.
+  - **"Uso" é consumidor, `Basic.Get` e redeclare. PUBLICAR NÃO CONTA** — regra do RabbitMQ, e a razão dela é o propósito do argumento: uma fila que só recebe e ninguém lê é exatamente a que se quer recolher. É o ponto que distingue esta frente, e tem mutação própria.
+  - **Com consumidor a ociosidade é ZERO por definição**, por mais tempo que passe: o relógio do `x-expires` só começa quando o **último** consumidor sai — não do instante em que ele entrou.
+  - **Quem detecta é a thread monitora; quem executa é o `DeleteQueue` de sempre.** Mesmo lugar do `DeliverTick`, e pelo mesmo motivo: a thread da conexão está bloqueada no read, então quem acorda para olhar o relógio tem de ser externo. **Duplicar o teardown aqui seria a receita do double-free que a Fase 1 já pagou uma vez** — a varredura só decide, e delega a execução ao caminho que já para o ator antes de liberar.
+  - `TAMQPQueueStats.IdleMs` é calculado **pelo ator** (regra de ouro: nenhum campo de estado é lido de fora). O `ExpireIdleQueues` tira o snapshot sob o lock da engine e **decide fora dele** — segurar o lock enquanto se espera um comando síncrono seria convidar travamento, porque o ator pode estar republicando um dead-letter, que volta a pedir `FindQueue`.
+  - **Só fila que pediu `x-expires` paga o comando síncrono** da varredura; as outras nem são consultadas.
+  - `x-expires` apaga **mesmo com mensagem dentro** — o argumento fala de **uso**, não de vazio. Sem `if-unused`/`if-empty`, como no RabbitMQ.
+  - **Dois defeitos meus, os dois instrutivos:**
+    1. Ao inserir o `PostTouch` do redeclare, o `FQueues.Add` foi parar no ramo `else` — **fila nova nunca seria registrada**. Compilou sem reclamar. Só apareceu porque li o trecho resultante em vez de confiar no "compilou".
+    2. O teste do touch falhava com 0 em vez de 100: `PostTouch` é **assíncrono**, então rodava depois de eu avançar o relógio e lia o valor já adiantado. A barreira do projeto (um síncrono depois do assíncrono, porque a caixa é serial e FIFO) estava documentada e eu não usei. Corrigido no teste, com o porquê no comentário.
+  - **As duas mutações, conferidas:** publicar passar a contar como uso → `PublicarNaoContaComoUso`; consumidor deixar de zerar a ociosidade → `ComConsumidor_OciosidadeEhZero`.
+  - Fixture nova `TIdleExpiryTests` (8), de estado puro com o relógio injetável da D13.
+  - Suíte do server: **264/264 → 272/272** (Default) e **268/268 → 276/276** (`openssl`), com `0 unfreed memory blocks`. Regressão FPC: aceitação 28/28, unitária 121/121, integração 28/28 contra o RabbitMQ real, SmokeTest PASS. **Delphi a validar na IDE.**
+
 **Mutações obrigatórias, decididas ANTES de escrever os testes** (regra da Fase 2: verde não prova cobertura; se a mutação não derruba nada, a suspeita é do teste):
 - WS4 — entregar a mensagem expirada em vez de expirá-la → tem de derrubar o teste de TTL **sem** consumidor, não só o com consumidor.
 - WS4 — requeue voltando à cabeça absoluta em vez da cabeça do balde → derruba o FIFO-dentro-do-nível após nack.

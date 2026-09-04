@@ -396,6 +396,16 @@ begin
       except
       end;
 
+    // WS8: fila com x-expires que passou do prazo sem uso e' recolhida aqui.
+    // Mesmo lugar do DeliverTick porque e' o mesmo papel: a thread da conexao
+    // esta' bloqueada no read, entao quem tem de acordar para olhar o relogio
+    // e' esta monitora.
+    if FEngine <> nil then
+      try
+        FEngine.ExpireIdleQueues;
+      except
+      end;
+
     ReapDead;
   end;
 end;

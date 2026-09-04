@@ -122,6 +122,14 @@ type
     DroppedCount: Int64;
     /// Entregues a consumidores desde a criacao (nao conta Basic.Get).
     DeliveredCount: Int64;
+    /// Ha quanto tempo a fila esta' SEM USO (WS8 da Fase 3), em ms. Zero
+    /// enquanto houver consumidor: fila com consumidor esta' em uso por
+    /// definicao, e o relogio de x-expires so' comeca quando o ultimo sai.
+    ///
+    /// "Uso" e' consumidor, Basic.Get e redeclare -- PUBLICAR NAO CONTA. E' a
+    /// regra do RabbitMQ, e a razao dela e' o proposito do argumento: uma fila
+    /// que so' recebe e ninguem le e' exatamente a que se quer recolher.
+    IdleMs: Int64;
     /// Mortas que foram republicadas num DLX. Nao se soma a ExpiredCount nem
     /// a DroppedCount: aquelas contam o MOTIVO, esta conta o DESTINO.
     DeadLetteredCount: Int64;
@@ -255,7 +263,8 @@ type
   TAMQPQueueCmdKind = (
     amqqcEnqueue, amqqcAddConsumer, amqqcRemoveConsumer, amqqcRemoveChannel,
     amqqcAck, amqqcNack, amqqcReject, amqqcDeliverTick,
-    amqqcEnqueueSync, amqqcGet, amqqcPurge, amqqcDelete, amqqcStats);
+    amqqcEnqueueSync, amqqcTouch, amqqcGet, amqqcPurge, amqqcDelete,
+    amqqcStats);
 
   { Um comando na caixa. Campos publicos de proposito: e' um registro de
     passagem entre o postador e o ator, nao um objeto de dominio.
@@ -351,6 +360,8 @@ type
     /// tem TTL). Superestimar e' inofensivo -- no maximo varre uma fila que
     /// ja' nao tem mais nada com prazo.
     FTemPrazo: Boolean;
+    /// Instante do ultimo USO (ver Stats.IdleMs). So' do ator.
+    FUltimoUso: UInt64;
 
     procedure ScheduleLocked;
     procedure Post(ACmd: TAMQPQueueCommand);
@@ -459,6 +470,9 @@ type
     /// monitora do broker cutuca as filas periodicamente. No caminho normal a
     /// entrega sai do proprio enqueue/ack, sem depender deste tick.
     procedure PostDeliverTick;
+    /// Marca a fila como USADA agora (WS8). O declare/redeclare chama isto --
+    /// e' um dos tres eventos que reiniciam o relogio do x-expires.
+    procedure PostTouch;
     procedure PostAck(AChannelId: NativeUInt; ADeliveryTag: UInt64;
       AMultiple: Boolean);
     procedure PostNack(AChannelId: NativeUInt; ADeliveryTag: UInt64;
@@ -642,6 +656,7 @@ begin
     FPool := AmqpPool;
   FMon := TAMQPMonitor.Create;
   FMailbox := TQueue<TAMQPQueueCommand>.Create;
+  FUltimoUso := NowTick; // a fila nasce "usada agora"
   SetLength(FStock, FMaxPriority + 1);
   SetLength(FRequeued, FMaxPriority + 1);
   for I := 0 to FMaxPriority do
@@ -934,6 +949,11 @@ begin
   LCmd := TAMQPQueueCommand.Create(amqqcRemoveChannel, False);
   LCmd.ChannelId := AChannelId;
   Post(LCmd);
+end;
+
+procedure TAMQPServerQueue.PostTouch;
+begin
+  Post(TAMQPQueueCommand.Create(amqqcTouch, False));
 end;
 
 procedure TAMQPServerQueue.PostDeliverTick;
@@ -1471,6 +1491,10 @@ begin
   Result.DeliveredCount := FDelivered;
   Result.ExpiredCount := FExpired;
   Result.DeadLetteredCount := FDeadLettered;
+  if FConsumers.Count > 0 then
+    Result.IdleMs := 0
+  else
+    Result.IdleMs := Int64(NowTick - FUltimoUso);
   Result.EverHadConsumer := FEverHadConsumer;
 end;
 
@@ -1523,18 +1547,27 @@ begin
         end;
       end;
 
+    amqqcTouch:
+      FUltimoUso := NowTick;
+
     amqqcAddConsumer:
       begin
+        FUltimoUso := NowTick;
         FConsumers.Add(ACmd.Consumer);
         ACmd.Consumer := nil; // a fila e' dona agora
         FEverHadConsumer := True;
       end;
 
     amqqcRemoveConsumer:
-      for I := FConsumers.Count - 1 downto 0 do
-        if (FConsumers[I].ChannelId = ACmd.ChannelId)
-          and (FConsumers[I].ConsumerTag = ACmd.ConsumerTag) then
-          FConsumers.Delete(I);
+      begin
+        // Sair TAMBEM e' uso: e' daqui que o relogio do x-expires comeca a
+        // contar, e nao do instante em que o consumidor entrou.
+        FUltimoUso := NowTick;
+        for I := FConsumers.Count - 1 downto 0 do
+          if (FConsumers[I].ChannelId = ACmd.ChannelId)
+            and (FConsumers[I].ConsumerTag = ACmd.ConsumerTag) then
+            FConsumers.Delete(I);
+      end;
 
     amqqcRemoveChannel:
       begin
@@ -1572,6 +1605,7 @@ begin
 
     amqqcGet:
       begin
+      FUltimoUso := NowTick; // Basic.Get e' uso (spec de fato do RabbitMQ)
       // Um Basic.Get nao pode devolver mensagem ja vencida -- a expiracao
       // preguicosa roda no caminho de entrega, e o Get e' o outro caminho.
       ExpiraVencidas;

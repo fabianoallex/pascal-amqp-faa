@@ -209,6 +209,15 @@ type
     /// TAMQPServerQueue.PostDeliverTick). Chamado pela thread monitora.
     procedure DeliverTick;
 
+    /// Apaga as filas com x-expires que passaram do prazo SEM USO (WS8).
+    /// Chamado pela thread monitora, como o DeliverTick.
+    ///
+    /// Quem DETECTA e' esta varredura; quem EXECUTA e' o DeleteQueue de
+    /// sempre -- o mesmo caminho do Queue.Delete vindo do cliente, com o
+    /// mesmo cuidado de parar o ator antes de liberar. Duplicar o teardown
+    /// aqui seria a receita do double-free que a Fase 1 ja pagou uma vez.
+    procedure ExpireIdleQueues;
+
     /// Teto de mensagens prontas por fila (decisao D7). 0 = ilimitado. Vale
     /// para as filas criadas DEPOIS de atribuido.
     property MaxQueueLength: Integer read FMaxQueueLength
@@ -460,7 +469,12 @@ begin
       // mortas. Sem sink, uma morte vira simples descarte.
       LQueue.DeadLetterSink := TAMQPDeadLetterAdapter.Create(Self, AVHost);
       FQueues.Add(Key(AVHost, AName), LQueue);
-    end;
+    end
+    else if LQueue <> nil then
+      // WS8: REDECLARE conta como uso e reinicia o relogio do x-expires --
+      // e' um dos tres eventos da regra (os outros sao consumidor e
+      // Basic.Get; publicar nao conta).
+      LQueue.PostTouch();
   finally
     FLock.Leave;
   end;
@@ -813,6 +827,68 @@ begin
       // que passa a valer e' o da fila de DESTINO.
       LQueue.PostMessage(AMessage, APriority, -1);
   end;
+end;
+
+procedure TAMQPEngine.ExpireIdleQueues;
+var
+  LPares: TArray<TPair<string, TAMQPServerQueue>>;
+  LNomes: TArray<string>;
+  LVHosts: TArray<string>;
+  I, N, LBarra: Integer;
+  LStats: TAMQPQueueStats;
+  LMsgs: Integer;
+  LChave: string;
+begin
+  // Snapshot sob o lock, decisao FORA dele: ler Stats e' comando SINCRONO no
+  // ator, e segurar o lock da engine enquanto se espera um ator seria
+  // convidar um travamento (o ator pode estar republicando um dead-letter,
+  // que volta a pedir FindQueue).
+  FLock.Enter;
+  try
+    LPares := FQueues.ToArray;
+  finally
+    FLock.Leave;
+  end;
+
+  SetLength(LNomes, 0);
+  SetLength(LVHosts, 0);
+  for I := 0 to High(LPares) do
+  begin
+    // So' fila que PEDIU x-expires paga o comando sincrono.
+    if LPares[I].Value.Policy.ExpiresMs < 0 then
+      Continue;
+    try
+      LStats := LPares[I].Value.Stats;
+    except
+      // Fila parando debaixo da varredura: nao e' erro, e' corrida normal.
+      Continue;
+    end;
+    if LStats.IdleMs < LPares[I].Value.Policy.ExpiresMs then
+      Continue;
+
+    // A chave e' 'vhost/nome'; o nome pode conter barra, o vhost nao comeca
+    // com uma, entao a PRIMEIRA barra e' o separador.
+    LChave := LPares[I].Key;
+    LBarra := Pos('/', LChave);
+    if LBarra <= 0 then
+      Continue;
+    N := Length(LNomes);
+    SetLength(LNomes, N + 1);
+    SetLength(LVHosts, N + 1);
+    LVHosts[N] := Copy(LChave, 1, LBarra - 1);
+    LNomes[N] := Copy(LChave, LBarra + 1, MaxInt);
+  end;
+
+  for I := 0 to High(LNomes) do
+    try
+      // AOwnerId=0: chamador interno, passa pelo CheckExclusive. Sem
+      // if-unused/if-empty: x-expires apaga mesmo com mensagem dentro, que e'
+      // o comportamento do RabbitMQ -- o argumento fala de USO, nao de vazio.
+      DeleteQueue(LVHosts[I], LNomes[I], False, False, 0, LMsgs);
+    except
+      // Outra thread pode ter apagado a fila entre a decisao e a execucao.
+      ;
+    end;
 end;
 
 procedure TAMQPEngine.DeliverTick;

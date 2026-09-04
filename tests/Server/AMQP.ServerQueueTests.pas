@@ -105,6 +105,19 @@ type
     [Test] procedure DropHead_ContinuaIndoParaODlx;
   end;
 
+  [TestFixture]
+  TIdleExpiryTests = class
+  public
+    [Test] procedure NasceUsadaAgora;
+    [Test] procedure OciosidadeCresceComORelogio;
+    [Test] procedure PublicarNaoContaComoUso;
+    [Test] procedure GetContaComoUso;
+    [Test] procedure ComConsumidor_OciosidadeEhZero;
+    [Test] procedure RelogioComecaQuandoOUltimoConsumidorSai;
+    [Test] procedure TouchReiniciaORelogio;
+    [Test] procedure SemXExpires_NaoEhCandidata;
+  end;
+
 implementation
 
 { --- helpers --- }
@@ -2051,10 +2064,168 @@ begin
   end;
 end;
 
+{ TIdleExpiryTests }
+
+function PolExpires(AMs: Int64): TAMQPQueuePolicy;
+begin
+  Result := TAMQPQueuePolicy.Empty;
+  Result.ExpiresMs := AMs;
+end;
+
+// Fila recem-criada nasce "usada agora": nao pode estar ociosa de saida.
+procedure TIdleExpiryTests.NasceUsadaAgora;
+var
+  LQ: TQueueRelogio;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  try
+    ChecaInt('ociosidade zero ao nascer', 0, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TIdleExpiryTests.OciosidadeCresceComORelogio;
+var
+  LQ: TQueueRelogio;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  try
+    Estabiliza(LQ);
+    LQ.Avanca(700);
+    ChecaInt('700 ms sem uso', 700, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// PUBLICAR NAO E USO -- e' a regra do RabbitMQ, e a razao dela e' o proposito
+// do argumento: uma fila que so' recebe e ninguem le e' exatamente a que se
+// quer recolher.
+procedure TIdleExpiryTests.PublicarNaoContaComoUso;
+var
+  LQ: TQueueRelogio;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  try
+    Estabiliza(LQ);
+    LQ.Avanca(500);
+    Publica(LQ, 'm');
+    LQ.Avanca(300);
+    ChecaInt('o publish nao reiniciou o relogio', 800, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Basic.Get E' uso.
+procedure TIdleExpiryTests.GetContaComoUso;
+var
+  LQ: TQueueRelogio;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  try
+    Publica(LQ, 'm');
+    Estabiliza(LQ);
+    LQ.Avanca(500);
+    TiraCorpo(LQ, 1);
+    LQ.Avanca(200);
+    ChecaInt('o Get reiniciou o relogio', 200, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Com consumidor a fila esta em uso POR DEFINICAO: a ociosidade e' zero, por
+// mais tempo que passe.
+procedure TIdleExpiryTests.ComConsumidor_OciosidadeEhZero;
+var
+  LQ: TQueueRelogio;
+  LAlvo: TAlvoFalso;
+  LAlvoRef: IAMQPDeliveryTarget;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LAlvo := TAlvoFalso.Create(1);
+  LAlvoRef := LAlvo; // o teste segura a referencia (licao da WS5)
+  try
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LAlvo));
+    Estabiliza(LQ);
+    LQ.Avanca(999999);
+    ChecaInt('consumidor mantem a fila em uso', 0, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O relogio comeca quando o ULTIMO consumidor sai -- nao do instante em que
+// ele entrou.
+procedure TIdleExpiryTests.RelogioComecaQuandoOUltimoConsumidorSai;
+var
+  LQ: TQueueRelogio;
+  LAlvo: TAlvoFalso;
+  LAlvoRef: IAMQPDeliveryTarget;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LAlvo := TAlvoFalso.Create(1);
+  LAlvoRef := LAlvo; // o teste segura a referencia (licao da WS5)
+  try
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LAlvo));
+    Estabiliza(LQ);
+    LQ.Avanca(5000); // muito tempo COM consumidor
+    LQ.PostRemoveConsumer(1, 'ct');
+    Estabiliza(LQ);
+    ChecaInt('zera na saida do consumidor', 0, Estabiliza(LQ).IdleMs);
+    LQ.Avanca(300);
+    ChecaInt('e passa a contar dali', 300, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Redeclare conta como uso (o PostTouch da engine).
+procedure TIdleExpiryTests.TouchReiniciaORelogio;
+var
+  LQ: TQueueRelogio;
+begin
+  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  try
+    Estabiliza(LQ);
+    LQ.Avanca(800);
+    LQ.PostTouch;
+    // PostTouch e' ASSINCRONO: sem a barreira, ele rodaria depois do Avanca
+    // abaixo e leria o relogio ja adiantado. Um sincrono posto depois de um
+    // assincrono e' a barreira do projeto -- a caixa e' serial e FIFO.
+    Estabiliza(LQ);
+    LQ.Avanca(100);
+    ChecaInt('o touch reiniciou', 100, Estabiliza(LQ).IdleMs);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Fila SEM x-expires nao paga nada: a varredura da engine nem pede Stats dela,
+// e o IdleMs continua sendo so' informativo.
+procedure TIdleExpiryTests.SemXExpires_NaoEhCandidata;
+var
+  LQ: TQueueRelogio;
+begin
+  LQ := TQueueRelogio.Create('q', TAMQPQueuePolicy.Empty);
+  try
+    ChecaInt('sem x-expires', -1, LQ.Policy.ExpiresMs);
+    Estabiliza(LQ);
+    LQ.Avanca(999999);
+    // O IdleMs continua sendo calculado, mas ninguem age sobre ele.
+    ChecaBool('ociosidade so informativa', True, Estabiliza(LQ).IdleMs > 0);
+  finally
+    LQ.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TQueueActorTests);
   TDUnitX.RegisterTestFixture(TQueuePriorityTtlTests);
   TDUnitX.RegisterTestFixture(TDeadLetterTests);
   TDUnitX.RegisterTestFixture(TOverflowTests);
+  TDUnitX.RegisterTestFixture(TIdleExpiryTests);
 
 end.
