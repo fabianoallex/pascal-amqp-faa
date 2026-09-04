@@ -19,7 +19,12 @@ defeitos que motivaram este script apareceram na WS2 da Fase 3:
    menos, que e exatamente o verde falso que o CLAUDE.md ja documenta da WS9
    da Fase 2.
 
-Nenhum dos dois precisa de compilador para ser detectado. Rode isto antes de
+Depois entrou uma terceira, da mesma familia (WS5): unit nova de src/server
+listada num projeto Delphi e esquecida no outro. O FPC nao pega porque la as
+units vem do PACOTE; no Delphi cada .dpr/.dproj lista uma a uma, e esquecer
+custa "F2613 Unit not found" -- outro round-trip pela IDE.
+
+Nenhum dos tres precisa de compilador para ser detectado. Rode isto antes de
 mandar a suite para o IDE.
 
 USO
@@ -242,6 +247,46 @@ def verifica_paridade():
     return problemas
 
 
+def projetos_delphi_com_server():
+    """.dpr que compilam src/server (listam as units uma a uma)."""
+    for p in arquivos_pascal(['tests', 'samples']):
+        if not p.lower().endswith('.dpr'):
+            continue
+        s = le(p)
+        if ('src' + os.sep + 'server') in s or 'src/server/' in s:
+            yield p, s
+
+
+def verifica_units_do_server():
+    """Toda unit de src/server tem de estar em TODO .dpr que usa o sub-modulo.
+
+    O FPC nao pega isto: la as units do server vem do pacote
+    pascal_amqp_faa_server.lpk, entao basta acrescentar ao .lpk. No Delphi cada
+    projeto lista as units uma a uma, e a que faltar so' aparece como
+    "F2613 Unit not found" na IDE.
+    """
+    problemas = []
+    srv = os.path.join(RAIZ, 'src', 'server')
+    if not os.path.isdir(srv):
+        return problemas
+    units = sorted(n[:-4] for n in os.listdir(srv) if n.lower().endswith('.pas'))
+    projs = list(projetos_delphi_com_server())
+    for caminho, texto in projs:
+        faltando = [u for u in units if u not in texto]
+        if faltando:
+            problemas.append((rel(caminho),
+                              'unit de src/server nao listada: ' + ', '.join(faltando)))
+        # o .dproj irmao tem de listar as mesmas
+        dproj = caminho[:-4] + '.dproj'
+        if os.path.exists(dproj):
+            td = le(dproj)
+            faltam2 = [u for u in units if u in texto and u not in td]
+            if faltam2:
+                problemas.append((rel(dproj),
+                                  'unit no .dpr mas nao no .dproj: ' + ', '.join(faltam2)))
+    return problemas
+
+
 def main():
     falhou = False
 
@@ -259,6 +304,15 @@ def main():
     if probs:
         falhou = True
         for arq, msg in probs:
+            print('    FALHA  %s: %s' % (arq, msg))
+    else:
+        print('    ok')
+
+    print('[3] units de src/server listadas em todo projeto Delphi')
+    su = verifica_units_do_server()
+    if su:
+        falhou = True
+        for arq, msg in su:
             print('    FALHA  %s: %s' % (arq, msg))
     else:
         print('    ok')
