@@ -681,6 +681,7 @@ var
   LBind: TAMQPBinding;
   LMode: TAMQPHeadersMatch;
   LMatches: Boolean;
+  LCasouAlgum: Boolean;
 begin
   if ADepth > AMQP_MAX_EXCHANGE_HOP_DEPTH then
     Exit; // cadeia longa demais -- para em silencio, sem levantar
@@ -692,6 +693,7 @@ begin
   if not FExchanges.TryGetValue(AExchange, LExDef) then
     Exit; // exchange nao existe (ex.: deletado entre o bind e este publish)
 
+  LCasouAlgum := False;
   for LBind in FBindings do
   begin
     if LBind.Source <> AExchange then
@@ -713,6 +715,12 @@ begin
 
     if not LMatches then
       Continue;
+    // O alternate-exchange dispara quando NENHUM BINDING DESTE EXCHANGE casou
+    // -- nao quando o resultado final ficou vazio. Um binding que casou e
+    // levou a um exchange sem rota JA' roteou: quem deixa de rotear e' aquele
+    // exchange, e o AE dele (se tiver) e' que responde por isso. Marcar aqui,
+    // e nao depois de olhar o AResultSet, e' o que separa as duas coisas.
+    LCasouAlgum := True;
 
     if LBind.Kind = amqbkQueue then
     begin
@@ -723,6 +731,16 @@ begin
       RouteInto(LBind.Destination, ARoutingKey, AHeaders, ADepth + 1,
         AVisited, AResultSet);
   end;
+
+  // WS7 da Fase 3: nada casou aqui -- se este exchange tem alternate-exchange,
+  // a mensagem desce por ele. O conjunto de visitados e o teto de profundidade
+  // sao os MESMOS do caminho exchange->exchange, entao um AE que aponta para si
+  // mesmo, ou um ciclo X->AE->X, para sozinho. AE inexistente tambem para
+  // sozinho, no TryGetValue la' de cima -- e' o que faz declarar um AE antes de
+  // o exchange existir nao ser erro.
+  if (not LCasouAlgum) and LExDef.HasAlternateExchange then
+    RouteInto(LExDef.AlternateExchange, ARoutingKey, AHeaders, ADepth + 1,
+      AVisited, AResultSet);
 end;
 
 function TAMQPVHost.Route(const AExchange, ARoutingKey: string;

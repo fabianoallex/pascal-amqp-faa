@@ -19,6 +19,7 @@ interface
 uses
   DUnitX.TestFramework,
   System.SysUtils,
+  System.Rtti,
   AMQP.Wire,
   AMQP.Exchange.Methods,
   AMQP.Threading,
@@ -77,6 +78,13 @@ type
     [Test] procedure Route_FilaEmNBindings_RecebeUmaVezSo;
     [Test] procedure Route_SemRota_ArrayVazio;
     [Test] procedure Route_ExchangeParaExchange_Entrega;
+    [Test] procedure Ae_RecebeOQueNaoCasou;
+    [Test] procedure Ae_NaoDisparaSeUmBindingCasou;
+    [Test] procedure Ae_EmCadeia;
+    [Test] procedure Ae_CicloNaoTrava;
+    [Test] procedure Ae_Inexistente_SemRota;
+    [Test] procedure Ae_PodeSerDeOutroTipo;
+    [Test] procedure Route_GrafoDenso_NaoExplode;
     [Test] procedure Route_Ciclo_NaoTravaNaoDuplica;
     [Test] procedure DeleteQueue_RemoveOsBindings;
     [Test] procedure DeleteExchange_RemoveBindingsPendurados;
@@ -906,6 +914,216 @@ begin
     // em exA nao pode dar erro nem "achar" q1 mais.
     LResult := LVHost.Route('exA', 'rk', nil);
     Assert.AreEqual(0, Length(LResult), 'binding pendurado para exB sumiu');
+  finally
+    LVHost.Free;
+  end;
+end;
+
+// --- alternate exchange (WS7 da Fase 3) ------------------------------------
+
+// Monta os argumentos de declare com alternate-exchange.
+function ArgsAe(const ANome: string): TAMQPFieldTable;
+var
+  LVal: TValue;
+begin
+  Result := TAMQPFieldTable.Create;
+  LVal := TValue.From<string>(ANome);
+  Result.Put('alternate-exchange', LVal);
+end;
+
+procedure TVHostTests.Ae_RecebeOQueNaoCasou;
+var
+  LVHost: TAMQPVHost;
+  LResult: TArray<string>;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    LVHost.DeclareExchange('ae', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
+      False, nil);
+    LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('ae'));
+    LVHost.DeclareQueue('q.normal', True, False, False, nil);
+    LVHost.DeclareQueue('q.ae', True, False, False, nil);
+    LVHost.BindQueue('ex', 'q.normal', 'certa', nil);
+    LVHost.BindQueue('ae', 'q.ae', '', nil);
+
+    LResult := LVHost.Route('ex', 'certa', nil);
+    Assert.AreEqual(1, Length(LResult), 'casou: vai pela rota normal');
+    Assert.AreEqual('q.normal', LResult[0]);
+
+    LResult := LVHost.Route('ex', 'nao-casa-nada', nil);
+    Assert.AreEqual(1, Length(LResult), 'nao casou: vai para o AE');
+    Assert.AreEqual('q.ae', LResult[0]);
+  finally
+    LVHost.Free;
+  end;
+end;
+
+// O AE dispara quando NENHUM BINDING DESTE exchange casou -- nao quando o
+// resultado final ficou vazio. Aqui um binding de 'ex' CASA e leva a 'meio',
+// que nao tem binding nenhum: o resultado e' vazio, mas o AE de 'ex' NAO pode
+// disparar, porque 'ex' roteou. Quem deixou de rotear foi 'meio'.
+procedure TVHostTests.Ae_NaoDisparaSeUmBindingCasou;
+var
+  LVHost: TAMQPVHost;
+  LResult: TArray<string>;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    LVHost.DeclareExchange('ae', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
+      False, nil);
+    LVHost.DeclareExchange('meio', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
+      False, nil);
+    LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
+      False, ArgsAe('ae'));
+    LVHost.DeclareQueue('q.ae', True, False, False, nil);
+    LVHost.BindQueue('ae', 'q.ae', '', nil);
+    // Exchange.Bind e' (DESTINO, ORIGEM): mensagens de 'ex' vao para 'meio'.
+    LVHost.BindExchange('meio', 'ex', '', nil);
+
+    LResult := LVHost.Route('ex', 'qualquer', nil);
+    Assert.AreEqual(0, Length(LResult), 'binding casou, entao o AE de ex nao entra');
+  finally
+    LVHost.Free;
+  end;
+end;
+
+// AE de AE: a cadeia desce enquanto ninguem casar.
+procedure TVHostTests.Ae_EmCadeia;
+var
+  LVHost: TAMQPVHost;
+  LResult: TArray<string>;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    LVHost.DeclareExchange('ae2', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
+      False, nil);
+    LVHost.DeclareExchange('ae1', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('ae2'));
+    LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('ae1'));
+    LVHost.DeclareQueue('q.fim', True, False, False, nil);
+    LVHost.BindQueue('ae2', 'q.fim', '', nil);
+
+    LResult := LVHost.Route('ex', 'nada-casa', nil);
+    Assert.AreEqual(1, Length(LResult), 'desceu dois niveis de AE');
+    Assert.AreEqual('q.fim', LResult[0]);
+  finally
+    LVHost.Free;
+  end;
+end;
+
+// Ciclo por AE (ex -> ae -> ex) nao pode travar nem duplicar: o conjunto de
+// visitados e o mesmo do caminho exchange->exchange.
+procedure TVHostTests.Ae_CicloNaoTrava;
+var
+  LVHost: TAMQPVHost;
+  LResult: TArray<string>;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    LVHost.DeclareExchange('a', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('b'));
+    LVHost.DeclareExchange('b', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('a'));
+
+    LResult := LVHost.Route('a', 'nada', nil);
+    Assert.AreEqual(0, Length(LResult), 'ciclo de AE termina, sem rota');
+  finally
+    LVHost.Free;
+  end;
+end;
+
+// AE apontando para exchange inexistente nao e' erro: declarar o AE antes de
+// ele existir e' legitimo, e no publish a mensagem simplesmente nao tem rota.
+procedure TVHostTests.Ae_Inexistente_SemRota;
+var
+  LVHost: TAMQPVHost;
+  LResult: TArray<string>;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('nao-existe'));
+    LResult := LVHost.Route('ex', 'nada', nil);
+    Assert.AreEqual(0, Length(LResult), 'sem rota, e sem travar');
+  finally
+    LVHost.Free;
+  end;
+end;
+
+// O AE pode ser de qualquer tipo -- inclusive headers, que casa pela tabela.
+procedure TVHostTests.Ae_PodeSerDeOutroTipo;
+var
+  LVHost: TAMQPVHost;
+  LArgs, LHeaders: TAMQPFieldTable;
+  LResult: TArray<string>;
+  LVal: TValue;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    LVHost.DeclareExchange('ae', AMQP_EXCHANGE_TYPE_HEADERS, True, False,
+      False, nil);
+    LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
+      False, ArgsAe('ae'));
+    LVHost.DeclareQueue('q.ae', True, False, False, nil);
+    LArgs := TAMQPFieldTable.Create;
+    LVal := TValue.From<string>('sul');
+    LArgs.Put('regiao', LVal);
+    LVHost.BindQueue('ae', 'q.ae', '', LArgs); // o vhost toma posse
+
+    LHeaders := TAMQPFieldTable.Create;
+    try
+      LVal := TValue.From<string>('sul');
+      LHeaders.Put('regiao', LVal);
+      LResult := LVHost.Route('ex', 'nada-casa', LHeaders);
+      Assert.AreEqual(1, Length(LResult), 'o AE headers casou');
+      Assert.AreEqual('q.ae', LResult[0]);
+    finally
+      LHeaders.Free;
+    end;
+  finally
+    LVHost.Free;
+  end;
+end;
+
+
+// O conjunto de visitados NAO existe so' para cortar ciclo -- o teto de
+// profundidade sozinho ja' faria o ciclo terminar. Ele existe para o grafo
+// DENSO nao explodir: com N caminhos distintos por nivel e profundidade D, uma
+// travessia sem memoria de visitados custa N^D. Medido: sem o visitados este
+// teste leva segundos; com ele, milissegundos.
+//
+// E' a mesma familia do MuitosHash_NaoExplode do matcher de topic: o match
+// roda na thread do PUBLICADOR e com o RWLock de leitura na mao, entao um
+// declare hostil viraria travamento do broker inteiro.
+procedure TVHostTests.Route_GrafoDenso_NaoExplode;
+var
+  LVHost: TAMQPVHost;
+  LResult: TArray<string>;
+  I: Integer;
+  LIni: UInt64;
+begin
+  LVHost := TAMQPVHost.Create;
+  try
+    for I := 0 to 15 do
+      LVHost.DeclareExchange('e' + IntToStr(I), AMQP_EXCHANGE_TYPE_FANOUT,
+        True, False, False, nil);
+    // Tres caminhos distintos de cada nivel para o seguinte: 3^15 travessias
+    // se nao houver memoria de por onde ja' se passou.
+    for I := 0 to 14 do
+    begin
+      LVHost.BindExchange('e' + IntToStr(I + 1), 'e' + IntToStr(I), 'a', nil);
+      LVHost.BindExchange('e' + IntToStr(I + 1), 'e' + IntToStr(I), 'b', nil);
+      LVHost.BindExchange('e' + IntToStr(I + 1), 'e' + IntToStr(I), 'c', nil);
+    end;
+    LVHost.DeclareQueue('q.fim', True, False, False, nil);
+    LVHost.BindQueue('e15', 'q.fim', '', nil);
+
+    LIni := AmqpTickMs;
+    LResult := LVHost.Route('e0', 'qualquer', nil);
+    Assert.AreEqual(1, Length(LResult), 'chegou ao fim');
+    Assert.IsTrue((AmqpTickMs - LIni) < 500, 'travessia tem de ser linear, nao exponencial (levou ' + IntToStr(AmqpTickMs - LIni) + ' ms)');
   finally
     LVHost.Free;
   end;
