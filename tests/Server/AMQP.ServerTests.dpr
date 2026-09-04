@@ -26,6 +26,7 @@ uses
   AMQP.Server.Types in '..\..\src\server\AMQP.Server.Types.pas',
   AMQP.Server.Channel in '..\..\src\server\AMQP.Server.Channel.pas',
   AMQP.Server.Message in '..\..\src\server\AMQP.Server.Message.pas',
+  AMQP.Server.Header in '..\..\src\server\AMQP.Server.Header.pas',
   AMQP.Server.Resources in '..\..\src\server\AMQP.Server.Resources.pas',
   AMQP.Server.Routing in '..\..\src\server\AMQP.Server.Routing.pas',
   AMQP.Server.VHost in '..\..\src\server\AMQP.Server.VHost.pas',

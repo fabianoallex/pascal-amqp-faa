@@ -30,6 +30,10 @@
         <UnitName Value="AMQP.Server.Channel"/>
       </Item>
       <Item>
+        <Filename Value="..\src\server\AMQP.Server.Header.pas"/>
+        <UnitName Value="AMQP.Server.Header"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\server\AMQP.Server.Message.pas"/>
         <UnitName Value="AMQP.Server.Message"/>
       </Item>

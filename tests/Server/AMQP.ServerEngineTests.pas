@@ -18,9 +18,11 @@ uses
   System.Rtti,
   AMQP.Wire,
   AMQP.Exchange.Methods,
+  AMQP.Basic.Methods,
   AMQP.Server.Types,
   AMQP.Server.Message,
-  AMQP.Server.Resources;
+  AMQP.Server.Resources,
+  AMQP.Server.Header;
 
 type
   [TestFixture]
@@ -69,6 +71,20 @@ type
     [Test] procedure AlternateExchange_LeEValida;
     [Test] procedure QueueDef_DerivaPolitica;
     [Test] procedure ExchangeDef_DerivaAlternate;
+  end;
+
+  [TestFixture]
+  THeaderRewriteTests = class
+  public
+    [Test] procedure RoundTripSemMexer_BytesIdenticos;
+    [Test] procedure TodasAsCatorzePropriedades_Preservadas;
+    [Test] procedure AcrescentaHeader_RestoIntacto;
+    [Test] procedure SemHeaders_GanhaTabelaSobDemanda;
+    [Test] procedure ArrayDeTabelas_AtravessaAReescrita;
+    [Test] procedure Derive_CompartilhaOCorpoSemCopiar;
+    [Test] procedure Derive_NaoTocaNaOrigem;
+    [Test] procedure Derive_BodySizeBateComOCorpo;
+    [Test] procedure PayloadMalformado_Levanta;
   end;
 
 implementation
@@ -859,9 +875,388 @@ begin
   end;
 end;
 
+{ THeaderRewriteTests }
+
+// Hex de um TBytes: comparar buffers inteiros numa assercao so', com os dois
+// lados visiveis na mensagem de falha.
+function HexDe(const ABytes: TBytes): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(ABytes) do
+    Result := Result + IntToHex(ABytes[I], 2);
+end;
+
+// Preenche as CATORZE propriedades da classe Basic. O teste de fidelidade tem
+// de cobrir todas, nao uma amostra: DecodeContentHeader descarta as palavras
+// de continuacao do property-flags, e so' exercitando o conjunto inteiro da
+// para afirmar que a reescrita e' fiel ao que a classe define.
+function PropsCompletas: TAMQPBasicProperties;
+var
+  LTab: TAMQPFieldTable;
+  LVal: TValue;
+begin
+  Result := TAMQPBasicProperties.Empty;
+  Result.SetContentType('application/json');       //  1
+  Result.SetContentEncoding('gzip');               //  2
+  LTab := TAMQPFieldTable.Create;                  //  3
+  LVal := TValue.From<string>('sul');
+  LTab.Put('regiao', LVal);
+  LVal := TValue.From<Int64>(7);
+  LTab.Put('tentativa', LVal);
+  Result.SetHeaders(LTab);
+  Result.SetDeliveryMode(2);                       //  4
+  Result.SetPriority(5);                           //  5
+  Result.SetCorrelationId('corr-123');             //  6
+  Result.SetReplyTo('fila.resposta');              //  7
+  Result.SetExpiration('60000');                   //  8
+  Result.SetMessageId('msg-1');                    //  9
+  Result.SetTimestamp(1756900000);                 // 10
+  Result.SetMsgType('nota.emitida');               // 11
+  Result.SetUserId('guest');                       // 12
+  Result.SetAppId('retaguarda');                   // 13
+  Result.SetClusterId('cluster-a');                // 14
+end;
+
+// A propriedade central desta frente: reescrever SEM MEXER devolve os MESMOS
+// bytes. E' o que garante que o dead-lettering so' muda o que mudou de fato,
+// e o que sustenta a decisao D10 (a D1 continua valendo porque a reescrita
+// deriva, nao clona no caminho quente).
+procedure THeaderRewriteTests.RoundTripSemMexer_BytesIdenticos;
+var
+  LProps: TAMQPBasicProperties;
+  LEd: TAMQPHeaderEditor;
+  B1, B2: TBytes;
+begin
+  LProps := PropsCompletas;
+  try
+    B1 := BuildContentHeader(4321, LProps);
+  finally
+    LProps.Headers.Free;
+  end;
+
+  LEd := TAMQPHeaderEditor.Create(B1);
+  try
+    ChecaInt('body-size lido do payload', 4321, Int64(LEd.BodySizeOriginal));
+    B2 := LEd.BuildPayload(LEd.BodySizeOriginal);
+  finally
+    LEd.Free;
+  end;
+
+  ChecaStr('bytes identicos apos ida e volta', HexDe(B1), HexDe(B2));
+end;
+
+// Complementa o teste de bytes: se algum dia ele falhar, este diz QUAL
+// propriedade se perdeu, em vez de mostrar dois hexdumps.
+procedure THeaderRewriteTests.TodasAsCatorzePropriedades_Preservadas;
+var
+  LProps: TAMQPBasicProperties;
+  LEd: TAMQPHeaderEditor;
+  LP: TAMQPBasicProperties;
+  B: TBytes;
+  LVal: TValue;
+begin
+  LProps := PropsCompletas;
+  try
+    B := BuildContentHeader(10, LProps);
+  finally
+    LProps.Headers.Free;
+  end;
+
+  // ATENCAO: a assercao tem de rodar sobre o payload RE-ENCODADO, nao sobre o
+  // decode do original. Descoberto por mutacao: com a versao anterior deste
+  // teste (que lia LEd.Properties direto), remover uma propriedade do
+  // BuildPayload passava incolume aqui e so' o teste de bytes acusava -- ou
+  // seja, o teste que existe para dizer QUAL propriedade se perdeu nao
+  // exercitava o caminho onde a perda acontece.
+  LEd := TAMQPHeaderEditor.Create(B);
+  try
+    B := LEd.BuildPayload(10);
+  finally
+    LEd.Free;
+  end;
+
+  LEd := TAMQPHeaderEditor.Create(B);
+  try
+    LP := LEd.Properties;
+    ChecaStr('content-type', 'application/json', LP.ContentType);
+    ChecaStr('content-encoding', 'gzip', LP.ContentEncoding);
+    ChecaBool('headers presente', True, LP.Has(bpHeaders));
+    ChecaBool('headers tem regiao', True,
+      LEd.Headers.TryGetValue('regiao', LVal));
+    ChecaStr('headers.regiao', 'sul', LVal.AsString);
+    ChecaInt('delivery-mode', 2, LP.DeliveryMode);
+    ChecaInt('priority', 5, LP.Priority);
+    ChecaStr('correlation-id', 'corr-123', LP.CorrelationId);
+    ChecaStr('reply-to', 'fila.resposta', LP.ReplyTo);
+    ChecaStr('expiration', '60000', LP.Expiration);
+    ChecaStr('message-id', 'msg-1', LP.MessageId);
+    ChecaInt('timestamp', 1756900000, Int64(LP.Timestamp));
+    ChecaStr('type', 'nota.emitida', LP.MsgType);
+    ChecaStr('user-id', 'guest', LP.UserId);
+    ChecaStr('app-id', 'retaguarda', LP.AppId);
+    ChecaStr('cluster-id', 'cluster-a', LP.ClusterId);
+    ChecaInt('body-size', 10, Int64(LEd.BodySizeOriginal));
+  finally
+    LEd.Free;
+  end;
+end;
+
+// Acrescentar um header nao pode danificar o resto -- e' exatamente o que o
+// dead-lettering faz com o x-death.
+procedure THeaderRewriteTests.AcrescentaHeader_RestoIntacto;
+var
+  LProps: TAMQPBasicProperties;
+  LEd: TAMQPHeaderEditor;
+  B, B2: TBytes;
+  LVal: TValue;
+begin
+  LProps := PropsCompletas;
+  try
+    B := BuildContentHeader(10, LProps);
+  finally
+    LProps.Headers.Free;
+  end;
+
+  LEd := TAMQPHeaderEditor.Create(B);
+  try
+    LVal := TValue.From<string>('expired');
+    LEd.Headers.Put('x-motivo', LVal);
+    B2 := LEd.BuildPayload(10);
+  finally
+    LEd.Free;
+  end;
+
+  ChecaBool('o header mudou', True, HexDe(B) <> HexDe(B2));
+
+  LEd := TAMQPHeaderEditor.Create(B2);
+  try
+    ChecaBool('chave nova presente', True,
+      LEd.Headers.TryGetValue('x-motivo', LVal));
+    ChecaStr('valor da chave nova', 'expired', LVal.AsString);
+    ChecaBool('chave antiga sobreviveu', True,
+      LEd.Headers.TryGetValue('regiao', LVal));
+    ChecaStr('valor antigo', 'sul', LVal.AsString);
+    ChecaStr('correlation-id intacto', 'corr-123', LEd.Properties.CorrelationId);
+    ChecaInt('priority intacta', 5, LEd.Properties.Priority);
+  finally
+    LEd.Free;
+  end;
+end;
+
+// Mensagem publicada sem headers: o editor cria a tabela sob demanda, senao
+// nao haveria como acrescentar x-death nela.
+procedure THeaderRewriteTests.SemHeaders_GanhaTabelaSobDemanda;
+var
+  LProps: TAMQPBasicProperties;
+  LEd: TAMQPHeaderEditor;
+  B, B2: TBytes;
+  LVal: TValue;
+begin
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('text/plain');
+  B := BuildContentHeader(3, LProps);
+
+  LEd := TAMQPHeaderEditor.Create(B);
+  try
+    ChecaBool('original nao tinha headers', False, LEd.TinhaHeaders);
+    LVal := TValue.From<Int64>(1);
+    LEd.Headers.Put('x-death-count', LVal);
+    B2 := LEd.BuildPayload(3);
+  finally
+    LEd.Free;
+  end;
+
+  LEd := TAMQPHeaderEditor.Create(B2);
+  try
+    ChecaBool('agora tem headers', True, LEd.TinhaHeaders);
+    ChecaBool('chave presente', True,
+      LEd.Headers.TryGetValue('x-death-count', LVal));
+    ChecaInt('valor', 1, LVal.AsInt64);
+    ChecaStr('content-type intacto', 'text/plain', LEd.Properties.ContentType);
+  finally
+    LEd.Free;
+  end;
+end;
+
+// A forma exata do x-death (array de tabelas) atravessando a reescrita. Este
+// teste cruza a WS1 (escrita de array no field-table) com a WS3: sem aquela,
+// o BuildPayload aqui levantaria EAMQPWire.
+procedure THeaderRewriteTests.ArrayDeTabelas_AtravessaAReescrita;
+var
+  LEd: TAMQPHeaderEditor;
+  LProps: TAMQPBasicProperties;
+  LEntrada: TAMQPFieldTable;
+  LArr: TAMQPValueArray;
+  LVal, LElem, LCampo: TValue;
+  B, B2: TBytes;
+begin
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('text/plain');
+  B := BuildContentHeader(0, LProps);
+
+  LEd := TAMQPHeaderEditor.Create(B);
+  try
+    LEntrada := TAMQPFieldTable.Create;
+    LEntrada.Put('queue', 'fila-origem');
+    LEntrada.Put('reason', 'expired');
+    LEntrada.Put('count', Int64(1));
+    SetLength(LArr, 1);
+    LArr[0] := TValue.From<TObject>(LEntrada);
+    LVal := TValue.From<TAMQPValueArray>(LArr);
+    LEd.Headers.Put('x-death', LVal);
+    B2 := LEd.BuildPayload(0);
+  finally
+    LEd.Free; // dono da tabela, e ela e' dona da entrada dentro do array
+  end;
+
+  LEd := TAMQPHeaderEditor.Create(B2);
+  try
+    ChecaBool('x-death presente', True,
+      LEd.Headers.TryGetValue('x-death', LVal));
+    LVal := AmqpUnwrapValue(LVal);
+    ChecaBool('e array', True, LVal.IsArray);
+    ChecaInt('uma entrada', 1, LVal.GetArrayLength);
+    LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
+    ChecaBool('entrada e tabela', True,
+      LElem.IsObject and (LElem.AsObject is TAMQPFieldTable));
+    TAMQPFieldTable(LElem.AsObject).TryGetValue('reason', LCampo);
+    ChecaStr('reason', 'expired', LCampo.AsString);
+  finally
+    LEd.Free;
+  end;
+end;
+
+// D10: o corpo e' COMPARTILHADO, nunca copiado. E' o que torna a reescrita
+// barata mesmo com payload grande.
+procedure THeaderRewriteTests.Derive_CompartilhaOCorpoSemCopiar;
+var
+  LOrig, LNova: TAMQPMessage;
+  LCorpo, LHdr: TBytes;
+  LProps: TAMQPBasicProperties;
+begin
+  SetLength(LCorpo, 64);
+  LCorpo[0] := 42;
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('text/plain');
+  LHdr := BuildContentHeader(64, LProps);
+
+  LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LCorpo);
+  try
+    LNova := AmqpDeriveMessage(LOrig, LHdr, 'dlx', 'morta');
+    try
+      ChecaBool('mesmo buffer de corpo, sem copia', True,
+        Pointer(LNova.Body) = Pointer(LOrig.Body));
+      ChecaInt('tamanho do corpo', 64, Length(LNova.Body));
+    finally
+      LNova.Release;
+    end;
+  finally
+    LOrig.Release;
+  end;
+end;
+
+// A origem nao pode ser tocada: outras filas podem estar segurando a MESMA
+// TAMQPMessage, e so' uma delas esta dead-letterando.
+procedure THeaderRewriteTests.Derive_NaoTocaNaOrigem;
+var
+  LOrig, LNova: TAMQPMessage;
+  LCorpo, LHdr, LHdr2: TBytes;
+  LProps: TAMQPBasicProperties;
+  LEd: TAMQPHeaderEditor;
+  LVal: TValue;
+begin
+  SetLength(LCorpo, 4);
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetContentType('text/plain');
+  LHdr := BuildContentHeader(4, LProps);
+  LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LCorpo);
+  try
+    LEd := TAMQPHeaderEditor.Create(LOrig.HeaderPayload);
+    try
+      LVal := TValue.From<Int64>(1);
+      LEd.Headers.Put('x-novo', LVal);
+      LHdr2 := LEd.BuildPayload(4);
+    finally
+      LEd.Free;
+    end;
+
+    LNova := AmqpDeriveMessage(LOrig, LHdr2, 'dlx', 'morta');
+    try
+      ChecaStr('header da origem intacto', HexDe(LHdr),
+        HexDe(LOrig.HeaderPayload));
+      ChecaBool('header da nova e diferente', True,
+        HexDe(LNova.HeaderPayload) <> HexDe(LOrig.HeaderPayload));
+      ChecaInt('refcount da origem inalterado', 1, LOrig.RefCount);
+      ChecaStr('exchange novo', 'dlx', LNova.Exchange);
+      ChecaStr('routing key nova', 'morta', LNova.RoutingKey);
+      ChecaStr('user-id herdado da origem', 'guest', LNova.UserId);
+    finally
+      LNova.Release;
+    end;
+  finally
+    LOrig.Release;
+  end;
+end;
+
+// Body-size divergente faria o consumidor esperar body frames que nunca
+// chegam -- por isso AmqpDeriveMessage o preenche a partir do corpo real.
+procedure THeaderRewriteTests.Derive_BodySizeBateComOCorpo;
+var
+  LOrig, LNova: TAMQPMessage;
+  LCorpo, LHdr: TBytes;
+  LProps: TAMQPBasicProperties;
+  LEd: TAMQPHeaderEditor;
+begin
+  SetLength(LCorpo, 300);
+  LProps := TAMQPBasicProperties.Empty;
+  LHdr := BuildContentHeader(300, LProps);
+  LOrig := TAMQPMessage.Create('ex', 'rk', '', LHdr, LCorpo);
+  try
+    LEd := TAMQPHeaderEditor.Create(LOrig.HeaderPayload);
+    try
+      LNova := AmqpDeriveMessage(LOrig, LEd.BuildPayload(LOrig.BodySize),
+        'dlx', 'morta');
+    finally
+      LEd.Free;
+    end;
+    try
+      LEd := TAMQPHeaderEditor.Create(LNova.HeaderPayload);
+      try
+        ChecaInt('body-size do header bate com o corpo',
+          Int64(Length(LNova.Body)), Int64(LEd.BodySizeOriginal));
+      finally
+        LEd.Free;
+      end;
+    finally
+      LNova.Release;
+    end;
+  finally
+    LOrig.Release;
+  end;
+end;
+
+procedure THeaderRewriteTests.PayloadMalformado_Levanta;
+var
+  B: TBytes;
+  LOk: Boolean;
+begin
+  SetLength(B, 3); // curto demais para um content-header
+  LOk := False;
+  try
+    TAMQPHeaderEditor.Create(B).Free;
+  except
+    on E: Exception do
+      LOk := True;
+  end;
+  ChecaBool('payload truncado tem de levantar', True, LOk);
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TMessageTests);
   TDUnitX.RegisterTestFixture(TResourceTests);
   TDUnitX.RegisterTestFixture(TQueuePolicyTests);
+  RegisterTestFixture(THeaderRewriteTests);
 
 end.
