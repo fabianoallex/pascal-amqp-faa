@@ -74,7 +74,8 @@ uses
   SyncObjs,
   Generics.Collections,
   AMQP.Threading,
-  AMQP.Server.Message;
+  AMQP.Server.Message,
+  AMQP.Server.Resources;
 
 const
   /// Quantos comandos o ator executa por rodada antes de reagendar. Sem teto,
@@ -113,6 +114,11 @@ type
     DroppedCount: Int64;
     /// Entregues a consumidores desde a criacao (nao conta Basic.Get).
     DeliveredCount: Int64;
+    /// Vencidas por TTL (x-message-ttl da fila ou 'expiration' da mensagem).
+    /// Metrica OBRIGATORIA pela mesma razao de DroppedCount: sem ela, mensagem
+    /// some sem ninguem saber. Na WS5 estas passam a ir para o DLX em vez de
+    /// serem descartadas -- a contagem continua valendo.
+    ExpiredCount: Int64;
     /// True se esta fila JA TEVE ao menos um consumidor. E' o que separa
     /// "auto-delete que perdeu o ultimo consumidor" (some) de "auto-delete
     /// que nunca teve nenhum" (fica) -- mesma regra do RabbitMQ.
@@ -195,6 +201,14 @@ type
   TAMQPQueueEntry = record
     Msg: TAMQPMessage;
     Redelivered: Boolean;
+    /// Nivel de prioridade JA' LIMITADO ao teto da fila. Quem le a propriedade
+    /// 'priority' da mensagem e' a thread do publicador (invariante da Fase 2:
+    /// a mensagem guarda o header CRU, decisao D1) -- o ator so' recebe o
+    /// numero pronto.
+    Priority: Byte;
+    /// Instante absoluto (mesma base do NowTick) em que a mensagem vence.
+    /// 0 = nunca vence.
+    ExpiraEm: UInt64;
   end;
 
   { Uma entrega aguardando confirmacao, chaveada por (canal, delivery-tag). }
@@ -202,6 +216,11 @@ type
     ChannelId: NativeUInt;
     DeliveryTag: UInt64;
     Msg: TAMQPMessage;
+    /// Guardados porque o requeue tem de devolver a mensagem A' CABECA DO SEU
+    /// PROPRIO BALDE, com o prazo original -- nao a' cabeca absoluta nem com o
+    /// relogio zerado.
+    Priority: Byte;
+    ExpiraEm: UInt64;
   end;
 
   TAMQPQueueCmdKind = (
@@ -227,6 +246,8 @@ type
     ChannelId: NativeUInt;
     DeliveryTag: UInt64;
     NoAck: Boolean;
+    Priority: Byte;        // amqqcEnqueue
+    MessageTtlMs: Int64;   // amqqcEnqueue (-1 = sem 'expiration')
     Multiple: Boolean;
     Requeue: Boolean;
     IfUnused: Boolean;
@@ -276,15 +297,27 @@ type
     FStopping: Boolean;
     FStopped: Boolean;
     FActorThread: TThreadID;
+    FPolicy: TAMQPQueuePolicy;
+    FMaxPriority: Integer; // 0 = fila sem prioridade (um balde so')
     // --- estado, SO' do ator ---
-    FStock: TQueue<TAMQPQueueEntry>;
-    FRequeued: TQueue<TAMQPQueueEntry>; // cabeca logica da fila
+    // UM BALDE POR NIVEL de prioridade (decisao D12: baldes, nao heap). Fila
+    // sem x-max-priority tem FMaxPriority=0, logo um balde so' e o mesmo
+    // caminho de codigo de antes -- sem ramo condicional espalhado.
+    FStock: array of TQueue<TAMQPQueueEntry>;
+    FRequeued: array of TQueue<TAMQPQueueEntry>; // cabeca logica de cada balde
     FUnacked: TList<TAMQPUnackedEntry>;
     FConsumers: TObjectList<TAMQPServerConsumer>;
     FRoundRobin: Integer; // proximo consumidor a atender (rodizio)
     FEverHadConsumer: Boolean;
     FDropped: Int64;
     FDelivered: Int64;
+    FExpired: Int64;
+    /// Trava de mao unica: vira True no primeiro enqueue com prazo e nunca
+    /// volta. Serve so' para a fila SEM nenhuma mensagem expiravel pular o
+    /// laco de expiracao a cada rodada (D13: a varredura so' custa em fila que
+    /// tem TTL). Superestimar e' inofensivo -- no maximo varre uma fila que
+    /// ja' nao tem mais nada com prazo.
+    FTemPrazo: Boolean;
 
     procedure ScheduleLocked;
     procedure Post(ACmd: TAMQPQueueCommand);
@@ -293,9 +326,22 @@ type
     function ReadyCount: Integer;
     function TakeReady(out AEntry: TAMQPQueueEntry): Boolean;
     function PeekReady(out AEntry: TAMQPQueueEntry): Boolean;
+    /// Vence o que passou do prazo, DA CABECA de cada balde para tras. Ver o
+    /// comentario da implementacao para a limitacao (deliberada, e a mesma do
+    /// RabbitMQ) de mensagem com prazo proprio no meio da fila.
+    procedure ExpiraVencidas;
+    /// Ponto unico por onde uma mensagem vencida sai. Na WS4 so' larga a
+    /// referencia e conta; a WS5 troca o corpo disto por "manda para o DLX".
+    procedure DescartaExpirada(AEntry: TAMQPQueueEntry);
+    /// Prazo absoluto de uma mensagem, combinando o TTL da FILA com o TTL da
+    /// MENSAGEM (o menor vence). 0 = nunca.
+    function CalculaPrazo(AMessageTtlMs: Int64): UInt64;
+    /// Limita a prioridade pedida ao teto da fila.
+    function LimitaPrioridade(APriority: Byte): Byte;
     function NextEligible: TAMQPServerConsumer;
     procedure DeliverPending;
-    procedure RequeueFront(AMsg: TAMQPMessage);
+    procedure RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
+      AExpiraEm: UInt64);
     procedure EnforceMaxLength;
     procedure ResolveUnacked(AChannelId: NativeUInt; ADeliveryTag: UInt64;
       AMultiple, ARequeue: Boolean);
@@ -311,6 +357,11 @@ type
     /// antes da ociosidade). O teste sobrescreve isto para postar de outra
     /// thread exatamente aqui. NAO PODE LEVANTAR.
     procedure ActorRoundEnding; virtual;
+    /// Relogio do ator (decisao D13). Virtual porque teste de TTL nao pode
+    /// depender de Sleep: a suite sobrescreve isto e faz o tempo andar na mao,
+    /// o que torna a expiracao deterministica e instantanea. Em producao e'
+    /// AmqpTickMs.
+    function NowTick: UInt64; virtual;
     /// Uma rodada do ator. Publico so' para o work item; nunca chame de fora.
     procedure RunActor;
     /// Executa UM comando, sempre na thread do ator e fora do lock. Virtual
@@ -325,7 +376,12 @@ type
     /// estrutura, se a inanicao aparecer (o AmqpPool tem teto e e'
     /// compartilhado com os callbacks de consumer do cliente).
     constructor Create(const AName: string; AMaxLength: Integer = 0;
-      APool: TAMQPThreadPool = nil);
+      APool: TAMQPThreadPool = nil); overload;
+    /// Com os x-arguments ja' lidos (WS2). E' por aqui que a engine cria a
+    /// fila; a sobrecarga acima existe para quem nao tem politica nenhuma
+    /// (testes de estado puro) e equivale a passar TAMQPQueuePolicy.Empty.
+    constructor Create(const AName: string; const APolicy: TAMQPQueuePolicy;
+      AMaxLength: Integer = 0; APool: TAMQPThreadPool = nil); overload;
     destructor Destroy; override;
 
     // --- comandos assincronos ---
@@ -334,7 +390,13 @@ type
     /// Numa fila ja parada, a mensagem e' descartada e contada em
     /// DroppedCount (nao levanta -- publish nao falha por corrida de
     /// teardown).
-    procedure PostMessage(AMessage: TAMQPMessage);
+    /// APriority e AMessageTtlMs vem DECODIFICADOS pela thread do publicador
+    /// (a mensagem guarda o header cru -- decisao D1 --, entao quem le as
+    /// propriedades e' quem ainda tem a tabela viva do canal na mao). A fila
+    /// limita a prioridade ao proprio teto e combina o TTL da mensagem com o
+    /// da fila. AMessageTtlMs < 0 = a mensagem nao trouxe 'expiration'.
+    procedure PostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
+      AMessageTtlMs: Int64 = -1);
     /// A fila passa a ser dona de AConsumer.
     procedure PostAddConsumer(AConsumer: TAMQPServerConsumer);
     procedure PostRemoveConsumer(AChannelId: NativeUInt;
@@ -381,6 +443,9 @@ type
 
     property Name: string read FName;
     property MaxLength: Integer read FMaxLength;
+    /// Teto de prioridade em vigor (0 = fila sem prioridade).
+    property MaxPriority: Integer read FMaxPriority;
+    property Policy: TAMQPQueuePolicy read FPolicy;
   end;
 
 implementation
@@ -472,8 +537,23 @@ end;
 constructor TAMQPServerQueue.Create(const AName: string; AMaxLength: Integer;
   APool: TAMQPThreadPool);
 begin
+  Create(AName, TAMQPQueuePolicy.Empty, AMaxLength, APool);
+end;
+
+constructor TAMQPServerQueue.Create(const AName: string;
+  const APolicy: TAMQPQueuePolicy; AMaxLength: Integer;
+  APool: TAMQPThreadPool);
+var
+  I: Integer;
+begin
   inherited Create;
   FName := AName;
+  FPolicy := APolicy;
+  // MaxPriority ausente (-1) vira 0: um balde so', que e' a fila de sempre.
+  if APolicy.MaxPriority > 0 then
+    FMaxPriority := APolicy.MaxPriority
+  else
+    FMaxPriority := 0;
   if AMaxLength < 0 then
     AMaxLength := 0;
   FMaxLength := AMaxLength;
@@ -483,13 +563,20 @@ begin
     FPool := AmqpPool;
   FMon := TAMQPMonitor.Create;
   FMailbox := TQueue<TAMQPQueueCommand>.Create;
-  FStock := TQueue<TAMQPQueueEntry>.Create;
-  FRequeued := TQueue<TAMQPQueueEntry>.Create;
+  SetLength(FStock, FMaxPriority + 1);
+  SetLength(FRequeued, FMaxPriority + 1);
+  for I := 0 to FMaxPriority do
+  begin
+    FStock[I] := TQueue<TAMQPQueueEntry>.Create;
+    FRequeued[I] := TQueue<TAMQPQueueEntry>.Create;
+  end;
   FUnacked := TList<TAMQPUnackedEntry>.Create;
   FConsumers := TObjectList<TAMQPServerConsumer>.Create(True);
 end;
 
 destructor TAMQPServerQueue.Destroy;
+var
+  I: Integer;
 begin
   try
     Stop;
@@ -502,8 +589,11 @@ begin
       ;
   end;
   FMailbox.Free;
-  FStock.Free;
-  FRequeued.Free;
+  for I := 0 to High(FStock) do
+  begin
+    FStock[I].Free;
+    FRequeued[I].Free;
+  end;
   FUnacked.Free;
   FConsumers.Free;
   FMon.Free;
@@ -683,15 +773,18 @@ begin
     LCmd.Signal; // solta quem estiver esperando (vai ver ResOk=False)
     LCmd.Release;
   end;
-  while FRequeued.Count > 0 do
+  for I := 0 to High(FStock) do
   begin
-    LEntry := FRequeued.Dequeue;
-    LEntry.Msg.Release;
-  end;
-  while FStock.Count > 0 do
-  begin
-    LEntry := FStock.Dequeue;
-    LEntry.Msg.Release;
+    while FRequeued[I].Count > 0 do
+    begin
+      LEntry := FRequeued[I].Dequeue;
+      LEntry.Msg.Release;
+    end;
+    while FStock[I].Count > 0 do
+    begin
+      LEntry := FStock[I].Dequeue;
+      LEntry.Msg.Release;
+    end;
   end;
   for I := 0 to FUnacked.Count - 1 do
     FUnacked[I].Msg.Release;
@@ -701,13 +794,16 @@ end;
 
 { --- API assincrona --- }
 
-procedure TAMQPServerQueue.PostMessage(AMessage: TAMQPMessage);
+procedure TAMQPServerQueue.PostMessage(AMessage: TAMQPMessage;
+  APriority: Byte; AMessageTtlMs: Int64);
 var
   LCmd: TAMQPQueueCommand;
 begin
   LCmd := TAMQPQueueCommand.Create(amqqcEnqueue, False);
   AMessage.AddRef; // a referencia da FILA; o publicador continua com a dele
   LCmd.Msg := AMessage;
+  LCmd.Priority := APriority;
+  LCmd.MessageTtlMs := AMessageTtlMs;
   Post(LCmd);
 end;
 
@@ -856,40 +952,134 @@ end;
 { --- estado: helpers do ator --- }
 
 function TAMQPServerQueue.ReadyCount: Integer;
+var
+  I: Integer;
 begin
-  Result := FRequeued.Count + FStock.Count;
+  Result := 0;
+  for I := 0 to High(FStock) do
+    Inc(Result, FRequeued[I].Count + FStock[I].Count);
 end;
 
-// Tira a proxima pronta: as devolvidas (requeue) vem antes, na ordem original.
+// Tira a proxima pronta: do balde de MAIOR prioridade que tenha algo, e
+// dentro dele as devolvidas (requeue) antes, na ordem original. FIFO dentro do
+// nivel e' invariante testada -- prioridade reordena entre niveis, nunca
+// dentro de um.
 function TAMQPServerQueue.TakeReady(out AEntry: TAMQPQueueEntry): Boolean;
+var
+  I: Integer;
 begin
-  if FRequeued.Count > 0 then
-    AEntry := FRequeued.Dequeue
-  else if FStock.Count > 0 then
-    AEntry := FStock.Dequeue
-  else
+  for I := High(FStock) downto 0 do
   begin
-    Result := False;
-    Exit;
+    if FRequeued[I].Count > 0 then
+      AEntry := FRequeued[I].Dequeue
+    else if FStock[I].Count > 0 then
+      AEntry := FStock[I].Dequeue
+    else
+      Continue;
+    Exit(True);
   end;
-  Result := True;
+  Result := False;
 end;
 
 // Espia a proxima pronta SEM tirar do estoque -- a entrega so' tira depois
 // de o alvo aceitar o lote de frames; se ele recusar, a mensagem tem de
-// continuar exatamente onde estava.
+// continuar exatamente onde estava. Mesma ordem do TakeReady.
 function TAMQPServerQueue.PeekReady(out AEntry: TAMQPQueueEntry): Boolean;
+var
+  I: Integer;
 begin
-  if FRequeued.Count > 0 then
-    AEntry := FRequeued.Peek
-  else if FStock.Count > 0 then
-    AEntry := FStock.Peek
-  else
+  for I := High(FStock) downto 0 do
   begin
-    Result := False;
-    Exit;
+    if FRequeued[I].Count > 0 then
+      AEntry := FRequeued[I].Peek
+    else if FStock[I].Count > 0 then
+      AEntry := FStock[I].Peek
+    else
+      Continue;
+    Exit(True);
   end;
-  Result := True;
+  Result := False;
+end;
+
+function TAMQPServerQueue.NowTick: UInt64;
+begin
+  Result := AmqpTickMs;
+end;
+
+function TAMQPServerQueue.LimitaPrioridade(APriority: Byte): Byte;
+begin
+  if APriority > FMaxPriority then
+    Result := Byte(FMaxPriority)
+  else
+    Result := APriority;
+end;
+
+// Combina o TTL da FILA (x-message-ttl) com o da MENSAGEM ('expiration'): o
+// MENOR vence, que e' o que a spec de fato do RabbitMQ faz. Ausentes os dois,
+// a mensagem nao vence nunca (0).
+function TAMQPServerQueue.CalculaPrazo(AMessageTtlMs: Int64): UInt64;
+var
+  LTtl: Int64;
+begin
+  LTtl := -1;
+  if FPolicy.MessageTtlMs >= 0 then
+    LTtl := FPolicy.MessageTtlMs;
+  if AMessageTtlMs >= 0 then
+    if (LTtl < 0) or (AMessageTtlMs < LTtl) then
+      LTtl := AMessageTtlMs;
+  if LTtl < 0 then
+    Exit(0);
+  Result := NowTick + UInt64(LTtl);
+end;
+
+// Ponto UNICO de saida de uma mensagem vencida. Na WS4 so' larga a referencia
+// e conta; a WS5 (dead-lettering) troca o corpo daqui por "reescreve o header
+// com x-death e republica no DLX". Existe como metodo proprio justamente para
+// essa troca ser local.
+procedure TAMQPServerQueue.DescartaExpirada(AEntry: TAMQPQueueEntry);
+begin
+  AEntry.Msg.Release;
+  Inc(FExpired);
+end;
+
+// Vence o que passou do prazo, DA CABECA de cada balde para tras.
+//
+// LIMITACAO DELIBERADA, a mesma do RabbitMQ: com 'expiration' POR MENSAGEM as
+// entradas nao ficam em ordem de vencimento, entao uma mensagem de prazo curto
+// atras de uma de prazo longo so' e' recolhida quando chega a' cabeca. Varrer
+// a fila inteira a cada tick seria O(n) por tick para consertar um caso raro.
+// Com x-message-ttl da FILA (o caso comum) nao ha problema nenhum: todas tem o
+// mesmo TTL e a ordem FIFO ja' e' a ordem de vencimento.
+procedure TAMQPServerQueue.ExpiraVencidas;
+var
+  I: Integer;
+  LAgora: UInt64;
+  LEntry: TAMQPQueueEntry;
+
+  function VenceCabeca(AFila: TQueue<TAMQPQueueEntry>): Boolean;
+  begin
+    Result := (AFila.Count > 0) and (AFila.Peek.ExpiraEm > 0)
+      and (AFila.Peek.ExpiraEm <= LAgora);
+  end;
+
+begin
+  // D13: fila que nunca recebeu mensagem com prazo nao paga nada por isto.
+  if not FTemPrazo then
+    Exit;
+  LAgora := NowTick;
+  for I := 0 to High(FStock) do
+  begin
+    while VenceCabeca(FRequeued[I]) do
+    begin
+      LEntry := FRequeued[I].Dequeue;
+      DescartaExpirada(LEntry);
+    end;
+    while VenceCabeca(FStock[I]) do
+    begin
+      LEntry := FStock[I].Dequeue;
+      DescartaExpirada(LEntry);
+    end;
+  end;
 end;
 
 // Proximo consumidor do rodizio que ainda nao recusou nesta rodada.
@@ -930,6 +1120,11 @@ var
   LUnacked: TAMQPUnackedEntry;
   LTag: UInt64;
 begin
+  // ANTES de qualquer coisa, e ANTES do early-exit por falta de consumidor:
+  // uma fila sem consumidor nenhum tambem tem de vencer no prazo (D13), e e'
+  // o tick da thread monitora que a acorda.
+  ExpiraVencidas;
+
   // Canal/conexao que ja morreu nao volta: o consumidor sai aqui. As
   // nao-confirmadas dele sao devolvidas pelo amqqcRemoveChannel, que o
   // teardown da conexao posta (WS7).
@@ -973,13 +1168,19 @@ end;
 
 // Devolve para a CABECA da fila, marcada como reentregue (spec: Basic.Nack/
 // Reject com requeue devolvem a mensagem a' sua posicao original).
-procedure TAMQPServerQueue.RequeueFront(AMsg: TAMQPMessage);
+// Devolve a' CABECA DO PROPRIO BALDE, com o prazo original. Voltar para a
+// cabeca absoluta faria uma mensagem de prioridade baixa furar a fila das
+// altas; zerar o prazo daria sobrevida a quem ja' devia ter morrido.
+procedure TAMQPServerQueue.RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
+  AExpiraEm: UInt64);
 var
   LEntry: TAMQPQueueEntry;
 begin
   LEntry.Msg := AMsg;
   LEntry.Redelivered := True;
-  FRequeued.Enqueue(LEntry);
+  LEntry.Priority := LimitaPrioridade(APriority);
+  LEntry.ExpiraEm := AExpiraEm;
+  FRequeued[LEntry.Priority].Enqueue(LEntry);
 end;
 
 // D7: teto global de memoria. Descarta da CABECA (a mais velha) -- o broker
@@ -989,13 +1190,32 @@ end;
 procedure TAMQPServerQueue.EnforceMaxLength;
 var
   LEntry: TAMQPQueueEntry;
+  I: Integer;
+  LTirou: Boolean;
 begin
   if FMaxLength <= 0 then
     Exit;
-  while (ReadyCount > FMaxLength) and TakeReady(LEntry) do
+  while ReadyCount > FMaxLength do
   begin
-    LEntry.Msg.Release;
-    Inc(FDropped);
+    // D12: comeca pelo balde de MENOR prioridade. Descartar da cabeca absoluta
+    // (que e' a de MAIOR prioridade) jogaria fora justamente o que o cliente
+    // marcou como mais importante. Dentro do balde, a cabeca -- a mais velha.
+    LTirou := False;
+    for I := 0 to High(FStock) do
+    begin
+      if FRequeued[I].Count > 0 then
+        LEntry := FRequeued[I].Dequeue
+      else if FStock[I].Count > 0 then
+        LEntry := FStock[I].Dequeue
+      else
+        Continue;
+      LEntry.Msg.Release;
+      Inc(FDropped);
+      LTirou := True;
+      Break;
+    end;
+    if not LTirou then
+      Break; // nao ha o que descartar (so' nao-confirmadas)
   end;
 end;
 
@@ -1022,7 +1242,7 @@ begin
     begin
       FUnacked.Delete(I);
       if ARequeue then
-        RequeueFront(LEntry.Msg)
+        RequeueFront(LEntry.Msg, LEntry.Priority, LEntry.ExpiraEm)
       else
         LEntry.Msg.Release; // ack, ou nack/reject sem requeue (DLX e' Fase 3)
     end
@@ -1040,6 +1260,7 @@ begin
   Result.UnackedCount := FUnacked.Count;
   Result.DroppedCount := FDropped;
   Result.DeliveredCount := FDelivered;
+  Result.ExpiredCount := FExpired;
   Result.EverHadConsumer := FEverHadConsumer;
 end;
 
@@ -1056,8 +1277,15 @@ begin
       begin
         LEntry.Msg := ACmd.Msg;
         LEntry.Redelivered := False;
+        LEntry.Priority := LimitaPrioridade(ACmd.Priority);
+        LEntry.ExpiraEm := CalculaPrazo(ACmd.MessageTtlMs);
+        if LEntry.ExpiraEm > 0 then
+          FTemPrazo := True;
         ACmd.Msg := nil; // a referencia passou para o estoque
-        FStock.Enqueue(LEntry);
+        FStock[LEntry.Priority].Enqueue(LEntry);
+        // A ORDEM importa: expira antes de aplicar o teto, senao uma mensagem
+        // ja vencida ocuparia vaga e faria descartar uma viva.
+        ExpiraVencidas;
         EnforceMaxLength;
       end;
 
@@ -1088,7 +1316,7 @@ begin
           if LUnacked.ChannelId = ACmd.ChannelId then
           begin
             FUnacked.Delete(I);
-            RequeueFront(LUnacked.Msg);
+            RequeueFront(LUnacked.Msg, LUnacked.Priority, LUnacked.ExpiraEm);
           end
           else
             Inc(I);
@@ -1107,6 +1335,10 @@ begin
       ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, False, ACmd.Requeue);
 
     amqqcGet:
+      begin
+      // Um Basic.Get nao pode devolver mensagem ja vencida -- a expiracao
+      // preguicosa roda no caminho de entrega, e o Get e' o outro caminho.
+      ExpiraVencidas;
       if TakeReady(LEntry) then
       begin
         ACmd.ResOk := True;
@@ -1120,12 +1352,15 @@ begin
           LUnacked.ChannelId := ACmd.ChannelId;
           LUnacked.DeliveryTag := ACmd.DeliveryTag;
           LUnacked.Msg := LEntry.Msg;
+          LUnacked.Priority := LEntry.Priority;
+          LUnacked.ExpiraEm := LEntry.ExpiraEm;
           FUnacked.Add(LUnacked);
         end;
         // Com no-ack a referencia do estoque simplesmente passa ao chamador.
       end
       else
         ACmd.ResOk := False;
+      end;
 
     amqqcPurge:
       begin

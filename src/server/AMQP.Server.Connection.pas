@@ -1634,6 +1634,7 @@ var
   LMsg: TAMQPServerMessage;
   LSeq: UInt64;
   LRoteada: Boolean;
+  LTtlMs: Int64;
 begin
   try
     LMsg := AChannel.CurrentMessage(FUserId);
@@ -1643,6 +1644,19 @@ begin
       raise EAMQPChannelError.Create(AChannel.Id, AMQP_ACCESS_REFUSED,
         'user-id property does not match authenticated user',
         AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH);
+
+    // WS4 da Fase 3: 'expiration' e' TTL em ms como STRING decimal (assim a
+    // spec define). Malformada e' recusada com 406, e nao ignorada: uma
+    // mensagem que o cliente mandou expirar e que vivesse para sempre seria um
+    // erro silencioso, e ele nao teria como descobrir. Mesma linha do 406 de
+    // x-argument invalido da WS2.
+    if LMsg.Properties.Has(bpExpiration) then
+      if not AmqpParseExpirationMs(LMsg.Properties.Expiration, LTtlMs) then
+        raise EAMQPChannelError.Create(AChannel.Id, AMQP_PRECONDITION_FAILED,
+          Format('invalid expiration ''%s'': must be a non-negative integer '
+            + 'number of milliseconds, as a decimal string',
+            [LMsg.Properties.Expiration]),
+          AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH);
 
     // WS6: o seq-no e' consumido por TODO publish em confirm mode -- roteado
     // ou nao. E' assim que o cliente correlaciona o ack com o publish que ele

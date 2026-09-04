@@ -401,7 +401,15 @@ begin
     LQueue := FindQueueLocked(AVHost, AName);
     if (LQueue = nil) and (not APassive) then
     begin
-      LQueue := TAMQPServerQueue.Create(AName, FMaxQueueLength, FPool);
+      // A fila viva nasce com a MESMA politica do descritor (WS2/WS4): o
+      // descritor ja e' a fonte da verdade dos x-arguments, e re-parsear aqui
+      // abriria espaco para os dois divergirem.
+      LDef := LVHost.QueueDef(AName);
+      if LDef <> nil then
+        LQueue := TAMQPServerQueue.Create(AName, LDef.Policy, FMaxQueueLength,
+          FPool)
+      else
+        LQueue := TAMQPServerQueue.Create(AName, FMaxQueueLength, FPool);
       FQueues.Add(Key(AVHost, AName), LQueue);
     end;
   finally
@@ -652,6 +660,8 @@ var
   LQueue: TAMQPServerQueue;
   I: Integer;
   LHeaders: TAMQPFieldTable;
+  LPriority: Byte;
+  LTtlMs: Int64;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   // Headers vivos do canal: o match roda AQUI, na thread do publicador
@@ -671,13 +681,28 @@ begin
 
   // UMA mensagem para N filas: corpo e header cru compartilhados sem copia,
   // cada fila tirando a referencia dela (decisao de arquitetura da Fase 2).
+  // Prioridade e 'expiration' sao lidas AQUI, na thread do publicador, pelo
+  // mesmo motivo do match de headers: a TAMQPMessage guarda o header CRU
+  // (decisao D1) e quem ainda tem as propriedades decodificadas e' quem
+  // publicou. O ator recebe os dois numeros prontos.
+  LPriority := 0;
+  if AMessage.Properties.Has(bpPriority) then
+    LPriority := AMessage.Properties.Priority;
+  LTtlMs := -1;
+  if AMessage.Properties.Has(bpExpiration) then
+    // Malformada nao chega aqui (a FSM recusa com 406 antes de rotear); o
+    // False so' aconteceria se este sink fosse chamado por outro caminho, e
+    // ai' "sem TTL" e' o comportamento seguro.
+    if not AmqpParseExpirationMs(AMessage.Properties.Expiration, LTtlMs) then
+      LTtlMs := -1;
+
   LMsg := TAMQPMessage.FromServerMessage(AMessage);
   try
     for I := 0 to High(LDestinos) do
     begin
       LQueue := FindQueue(AVHost, LDestinos[I]);
       if LQueue <> nil then
-        LQueue.PostMessage(LMsg); // faz o proprio AddRef
+        LQueue.PostMessage(LMsg, LPriority, LTtlMs); // faz o proprio AddRef
     end;
   finally
     LMsg.Release; // a referencia do publicador

@@ -212,6 +212,17 @@ function AmqpParseQueuePolicy(AArgs: TAMQPFieldTable;
 function AmqpParseAlternateExchange(AArgs: TAMQPFieldTable;
   out AName: string; out AHas: Boolean; out AErro: string): Boolean;
 
+/// Le a propriedade 'expiration' do Basic: TTL da MENSAGEM em milissegundos,
+/// que a spec define como STRING decimal e nao como numero (por isso o
+/// TAMQPBasicProperties.Expiration e' string).
+///
+/// AValue vazio = ausente: devolve True com AMs = -1 (sem TTL proprio).
+/// Malformada (nao-digito, negativa, estouro) devolve False -- e a FSM
+/// transforma isso em 406, do mesmo jeito que faz com x-argument invalido.
+/// Ignorar em silencio seria pior que recusar: a mensagem que o cliente
+/// mandou expirar viveria para sempre, e ele nao teria como saber.
+function AmqpParseExpirationMs(const AValue: string; out AMs: Int64): Boolean;
+
 implementation
 
 { TAMQPQueuePolicy }
@@ -416,6 +427,29 @@ begin
     Exit(False);
   end;
   AHas := True;
+end;
+
+function AmqpParseExpirationMs(const AValue: string; out AMs: Int64): Boolean;
+var
+  I: Integer;
+  LAcc: Int64;
+begin
+  AMs := -1;
+  if AValue = '' then
+    Exit(True); // ausente
+  LAcc := 0;
+  for I := 1 to Length(AValue) do
+  begin
+    if (AValue[I] < '0') or (AValue[I] > '9') then
+      Exit(False);
+    // Teto generoso mas finito: 'expiration' com 19 digitos e' erro do
+    // cliente, e deixar estourar o Int64 daria um prazo negativo silencioso.
+    if LAcc > (High(Int64) - 9) div 10 then
+      Exit(False);
+    LAcc := LAcc * 10 + (Ord(AValue[I]) - Ord('0'));
+  end;
+  AMs := LAcc;
+  Result := True;
 end;
 
 function AmqpArgsEqual(A, B: TAMQPFieldTable): Boolean;

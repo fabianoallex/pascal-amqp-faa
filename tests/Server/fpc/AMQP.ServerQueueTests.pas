@@ -23,6 +23,7 @@ uses
   AMQP.Wire,
   AMQP.Threading,
   AMQP.Server.Message,
+  AMQP.Server.Resources,
   AMQP.Server.Queue,
   AMQP.ServerTestDoubles;
 
@@ -54,6 +55,20 @@ type
     procedure Delete_AvisaConsumidoresComCancel;
     procedure EverHadConsumer_SoViraVerdadeComConsumidor;
     procedure CaixaSerial_PostNaJanelaDoFimDeRodada_NaoPerdeWakeup;
+  end;
+
+  TQueuePriorityTtlTests = class(TTestCase)
+  published
+    procedure Prioridade_MaiorSaiPrimeiro;
+    procedure Prioridade_FifoDentroDoNivel;
+    procedure Prioridade_AcimaDoTetoEhLimitada;
+    procedure Prioridade_RequeueVoltaAoProprioBalde;
+    procedure MaxLength_DescartaDoBaldeMenosPrioritario;
+    procedure Ttl_DaFila_VenceNoPrazo;
+    procedure Ttl_NaoVenceAntesDoPrazo;
+    procedure Ttl_MenorEntreFilaEMensagemVence;
+    procedure Ttl_GetNaoDevolveVencida;
+    procedure Ttl_RequeuePreservaOPrazo;
   end;
 
 implementation
@@ -918,7 +933,326 @@ begin
   end;
 end;
 
+// Wrappers de assercao: mantem o CORPO da fixture identico nos dois arquivos.
+procedure ChecaInt(const AMsg: string; AEsperado, AReal: Int64);
+begin
+  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+end;
+
+procedure ChecaBool(const AMsg: string; AEsperado, AReal: Boolean);
+begin
+  TAssert.AssertTrue(AMsg, AReal = AEsperado);
+end;
+
+procedure ChecaStr(const AMsg, AEsperado, AReal: string);
+begin
+  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+end;
+
+{ TQueuePriorityTtlTests }
+
+// Fila com relogio na mao: o teste faz o tempo andar em vez de dormir (D13).
+// Sem isto, testar TTL significaria Sleep de verdade -- lento e instavel sob
+// carga, que e' o defeito que a suite de integracao ja pagou uma vez.
+type
+  TQueueRelogio = class(TAMQPServerQueue)
+  private
+    FAgora: UInt64;
+  protected
+    function NowTick: UInt64; override;
+  public
+    procedure Avanca(AMs: UInt64);
+  end;
+
+function TQueueRelogio.NowTick: UInt64;
+begin
+  Result := FAgora;
+end;
+
+procedure TQueueRelogio.Avanca(AMs: UInt64);
+begin
+  // Escrita de fora do ator, mas segura: o campo e' lido so' pelo ator e o
+  // teste nao tem comando em voo quando mexe no relogio (todo Post anterior
+  // ja foi drenado por um comando SINCRONO -- ver o comentario de Estabiliza).
+  Inc(FAgora, AMs);
+end;
+
+// A caixa e' serial e FIFO, entao um comando SINCRONO posto depois de um
+// assincrono so volta quando o assincrono ja rodou. E' a barreira do projeto
+// para nao precisar de Sleep em teste.
+function Estabiliza(AQ: TAMQPServerQueue): TAMQPQueueStats;
+begin
+  Result := AQ.Stats;
+end;
+
+function PolPrioridade(AMax: Integer): TAMQPQueuePolicy;
+begin
+  Result := TAMQPQueuePolicy.Empty;
+  Result.MaxPriority := AMax;
+end;
+
+function PolTtl(AMs: Int64): TAMQPQueuePolicy;
+begin
+  Result := TAMQPQueuePolicy.Empty;
+  Result.MessageTtlMs := AMs;
+end;
+
+// Publica com prioridade e TTL proprio, soltando a referencia do publicador.
+procedure Publica(AQ: TAMQPServerQueue; const ATexto: string;
+  APrio: Byte = 0; ATtlMs: Int64 = -1);
+var
+  LMsg: TAMQPMessage;
+begin
+  LMsg := NovaMensagem(ATexto);
+  try
+    AQ.PostMessage(LMsg, APrio, ATtlMs);
+  finally
+    LMsg.Release;
+  end;
+end;
+
+// Tira em no-ack e devolve o corpo ('' se a fila estava vazia).
+function TiraCorpo(AQ: TAMQPServerQueue; ATag: UInt64): string;
+var
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+begin
+  if not AQ.Get(1, ATag, True, LMsg, LRedel) then
+    Exit('');
+  try
+    Result := CorpoDe(LMsg);
+  finally
+    LMsg.Release;
+  end;
+end;
+
+procedure TQueuePriorityTtlTests.Prioridade_MaiorSaiPrimeiro;
+var
+  LQ: TAMQPServerQueue;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  try
+    Publica(LQ, 'baixa', 0);
+    Publica(LQ, 'alta', 5);
+    Publica(LQ, 'media', 2);
+    ChecaStr('maior prioridade primeiro', 'alta', TiraCorpo(LQ, 1));
+    ChecaStr('depois a media', 'media', TiraCorpo(LQ, 2));
+    ChecaStr('a baixa por ultimo', 'baixa', TiraCorpo(LQ, 3));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Prioridade reordena ENTRE niveis, nunca DENTRO de um.
+procedure TQueuePriorityTtlTests.Prioridade_FifoDentroDoNivel;
+var
+  LQ: TAMQPServerQueue;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  try
+    Publica(LQ, 'a', 3);
+    Publica(LQ, 'b', 3);
+    Publica(LQ, 'c', 3);
+    ChecaStr('1a', 'a', TiraCorpo(LQ, 1));
+    ChecaStr('2a', 'b', TiraCorpo(LQ, 2));
+    ChecaStr('3a', 'c', TiraCorpo(LQ, 3));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Publicar acima do teto da fila nao cria balde novo nem estoura indice: a
+// prioridade e limitada ao teto e a mensagem entra no balde de cima.
+procedure TQueuePriorityTtlTests.Prioridade_AcimaDoTetoEhLimitada;
+var
+  LQ: TAMQPServerQueue;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolPrioridade(2));
+  try
+    Publica(LQ, 'teto', 2);
+    Publica(LQ, 'acima', 9);   // vira 2
+    Publica(LQ, 'baixa', 0);
+    ChecaInt('teto em vigor', 2, LQ.MaxPriority);
+    // 'teto' e 'acima' estao no MESMO balde, entao valem FIFO entre si.
+    ChecaStr('1a', 'teto', TiraCorpo(LQ, 1));
+    ChecaStr('2a', 'acima', TiraCorpo(LQ, 2));
+    ChecaStr('3a', 'baixa', TiraCorpo(LQ, 3));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O requeue devolve a mensagem a' cabeca do PROPRIO BALDE. Se voltasse a'
+// cabeca absoluta, uma mensagem de prioridade baixa devolvida furaria a fila
+// das altas -- e o teste abaixo e montado exatamente para pegar isso: depois
+// de devolver uma p0, uma p5 NOVA tem de sair na frente dela.
+procedure TQueuePriorityTtlTests.Prioridade_RequeueVoltaAoProprioBalde;
+var
+  LQ: TAMQPServerQueue;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  try
+    Publica(LQ, 'baixa', 0);
+    // Tira a baixa em modo ACK, para poder devolve-la.
+    ChecaBool('tirou a baixa', True, LQ.Get(1, 10, False, LMsg, LRedel));
+    LMsg.Release;
+    LQ.PostNack(1, 10, False, True); // requeue
+    Publica(LQ, 'alta', 5);
+    Estabiliza(LQ);
+    ChecaStr('a alta nova passa na frente da baixa devolvida', 'alta',
+      TiraCorpo(LQ, 2));
+    ChecaStr('so entao a baixa', 'baixa', TiraCorpo(LQ, 3));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// D12: o teto de memoria descarta do balde MENOS prioritario. Descartar da
+// cabeca absoluta jogaria fora justamente o que o cliente marcou como mais
+// importante.
+procedure TQueuePriorityTtlTests.MaxLength_DescartaDoBaldeMenosPrioritario;
+var
+  LQ: TAMQPServerQueue;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9), 2);
+  try
+    Publica(LQ, 'alta1', 9);
+    Publica(LQ, 'baixa', 0);
+    Publica(LQ, 'alta2', 9); // estoura o teto: a BAIXA e que tem de sair
+    LStats := Estabiliza(LQ);
+    ChecaInt('duas restantes', 2, LStats.MessageCount);
+    ChecaInt('uma descartada', 1, LStats.DroppedCount);
+    ChecaStr('sobrou alta1', 'alta1', TiraCorpo(LQ, 1));
+    ChecaStr('sobrou alta2', 'alta2', TiraCorpo(LQ, 2));
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueuePriorityTtlTests.Ttl_DaFila_VenceNoPrazo;
+var
+  LQ: TQueueRelogio;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  try
+    Publica(LQ, 'm');
+    Estabiliza(LQ);
+    LQ.Avanca(1001);
+    // Nenhum consumidor: e o tick da monitora que acorda a fila (D13).
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('venceu', 0, LStats.MessageCount);
+    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
+    ChecaInt('nao conta como descartada por limite', 0, LStats.DroppedCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueuePriorityTtlTests.Ttl_NaoVenceAntesDoPrazo;
+var
+  LQ: TQueueRelogio;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  try
+    Publica(LQ, 'm');
+    Estabiliza(LQ);
+    LQ.Avanca(999);
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('ainda viva', 1, LStats.MessageCount);
+    ChecaInt('nada expirado', 0, LStats.ExpiredCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O MENOR dos dois TTL vence, venha ele da fila ou da mensagem.
+procedure TQueuePriorityTtlTests.Ttl_MenorEntreFilaEMensagemVence;
+var
+  LQ: TQueueRelogio;
+  LStats: TAMQPQueueStats;
+begin
+  // TTL da MENSAGEM menor que o da fila.
+  LQ := TQueueRelogio.Create('q', PolTtl(10000));
+  try
+    Publica(LQ, 'curta', 0, 100);
+    Estabiliza(LQ);
+    LQ.Avanca(200);
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('a da mensagem venceu', 0, LStats.MessageCount);
+  finally
+    LQ.Free;
+  end;
+
+  // TTL da FILA menor que o da mensagem.
+  LQ := TQueueRelogio.Create('q', PolTtl(100));
+  try
+    Publica(LQ, 'longa', 0, 10000);
+    Estabiliza(LQ);
+    LQ.Avanca(200);
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('a da fila venceu', 0, LStats.MessageCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O Basic.Get e o outro caminho de saida: nao pode devolver mensagem vencida.
+procedure TQueuePriorityTtlTests.Ttl_GetNaoDevolveVencida;
+var
+  LQ: TQueueRelogio;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+begin
+  LQ := TQueueRelogio.Create('q', PolTtl(500));
+  try
+    Publica(LQ, 'm');
+    Estabiliza(LQ);
+    LQ.Avanca(501);
+    ChecaBool('Get nao devolve vencida', False,
+      LQ.Get(1, 1, True, LMsg, LRedel));
+    ChecaInt('e ela foi contada', 1, LQ.Stats.ExpiredCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Devolver ao estoque nao pode dar sobrevida: o prazo e o ORIGINAL, nao um
+// novo contado a partir do requeue.
+procedure TQueuePriorityTtlTests.Ttl_RequeuePreservaOPrazo;
+var
+  LQ: TQueueRelogio;
+  LMsg: TAMQPMessage;
+  LRedel: Boolean;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  try
+    Publica(LQ, 'm');
+    Estabiliza(LQ);
+    ChecaBool('tirou em modo ack', True, LQ.Get(1, 7, False, LMsg, LRedel));
+    LMsg.Release;
+    LQ.Avanca(1500);                 // o prazo passou enquanto estava em voo
+    LQ.PostNack(1, 7, False, True);  // devolve
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('devolvida ja vencida, nao ressuscitada', 0, LStats.MessageCount);
+    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
 initialization
   RegisterTest(TQueueActorTests);
+  RegisterTest(TQueuePriorityTtlTests);
 
 end.
