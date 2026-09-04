@@ -420,7 +420,7 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   E um defeito meu de edição no meio do conserto, que vale registrar porque a causa se repete: o corpo do `AmqpLastOsError` foi parar na seção **interface**, porque o `replace` de script casou a primeira ocorrência de `function AmqpWalRecordSize(...)` — que é a **declaração**, não a implementação. O FPC pegou na hora (`Function is already declared Public/Forward`). **Substituição por texto numa unit Pascal precisa de âncora que exista uma vez só; assinatura de função aparece duas.**
 
-  **Pendente:** recompilar e rodar o espelho DUnitX na IDE depois destes consertos. O verificador garante que os 38 nomes de teste batem e que as fixtures estão registradas; ele não garante que compila.
+  **Validação Delphi (IDE), depois dos consertos: 312/312 no Debug e 316/316 no OpenSSL, 0 leaked e 0 ignored** — os mesmos números do FPC, o que descarta o engano de auto-ignore que a WS9 da Fase 2 registrou (ali "28 Passed / 0 Ignored" no Delphi valia "27 Passed / 1 Ignored" no FPC). **WS1 fechada nos dois compiladores.**
 
 ## Verificador de espelhos
 
