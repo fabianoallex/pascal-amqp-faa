@@ -1257,6 +1257,6 @@ initialization
   TDUnitX.RegisterTestFixture(TMessageTests);
   TDUnitX.RegisterTestFixture(TResourceTests);
   TDUnitX.RegisterTestFixture(TQueuePolicyTests);
-  RegisterTestFixture(THeaderRewriteTests);
+  TDUnitX.RegisterTestFixture(THeaderRewriteTests);
 
 end.

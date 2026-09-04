@@ -203,9 +203,17 @@ def analisa(caminho):
         if meus:
             com_testes.add(nome)
 
-    registradas = set()
-    for a, b in re.findall(r'RegisterTestFixture\((\w+)\)|RegisterTest\((\w+)\)', s):
-        registradas.add(a or b)
+    # A FORMA da chamada importa, nao so' o nome da fixture: no DUnitX o
+    # registro e' um metodo de classe e precisa do `TDUnitX.` na frente --
+    # `RegisterTestFixture(X)` solto nao compila (E2003, identificador nao
+    # declarado). A primeira versao deste script casava os dois jeitos e por
+    # isso deu a fixture como registrada num arquivo que nao compilava; foi
+    # falso-negativo dele, achado quando o dcc32 recusou o arquivo.
+    if dunitx:
+        padrao = r'TDUnitX\s*\.\s*RegisterTestFixture\s*\(\s*(\w+)\s*\)'
+    else:
+        padrao = r'\bRegisterTest\s*\(\s*(\w+)\s*\)'
+    registradas = set(re.findall(padrao, s))
     return testes, com_testes, registradas
 
 
