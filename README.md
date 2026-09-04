@@ -9,7 +9,7 @@
 
 Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa) (mesmo autor, MIT), que era exclusiva de Delphi/Windows e só tinha o cliente.
 
-> A prova de que as duas pontas conversam: **a suíte de integração do cliente roda contra o broker embutido sem um único teste reescrito** — 27 dos 28 passam, e o único que não passa depende de um recurso ainda não implementado ([veja abaixo](#o-que-o-broker-ainda-não-faz)).
+> A prova de que as duas pontas conversam: **a suíte de integração do cliente roda inteira contra o broker embutido, sem um único teste reescrito** — os 28 passam, sem nada ignorado por recurso faltante. O `SmokeTest` vai além e executa os mesmos 9 passos contra o RabbitMQ **e** contra o broker embutido, TTL, dead-letter e prioridade inclusos.
 
 ## Recursos
 
@@ -31,6 +31,12 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 - **Filas em memória** com entrega a consumidores em rodízio, `Basic.Get`, `Ack`/`Nack`/`Reject` com requeue e flag `redelivered`, e **prefetch por canal** (`Basic.Qos`).
 - **Publisher confirms** e `mandatory` → `Basic.Return`.
 - Fila `exclusive` (morre com a conexão dona), `auto-delete` de fila e de exchange, e `Basic.Cancel` avisando os consumidores de uma fila apagada.
+- **TTL**: `x-message-ttl` por fila e a propriedade `expiration` por mensagem (o menor vence).
+- **Dead-lettering**: `x-dead-letter-exchange` e `x-dead-letter-routing-key`, com o header `x-death` completo — razões `rejected`/`expired`/`maxlen`, `count` acumulado por (fila, razão), `x-first-death-*` e `original-expiration`.
+- **Prioridade**: `x-max-priority` (0–9), com FIFO preservado dentro de cada nível.
+- **Tetos por fila**: `x-max-length` e `x-max-length-bytes`, com `x-overflow` em `drop-head` (descarta a mais velha) ou `reject-publish` (recusa o publish, que em confirm mode volta como `Basic.Nack`).
+- **`alternate-exchange`**: o que não casa binding nenhum desce para o AE antes de virar `Basic.Return`.
+- **`x-expires`**: fila sem uso pelo prazo é recolhida (uso = consumidor, `Basic.Get` ou redeclare; publicar não conta).
 - **TLS de servidor** via OpenSSL (`-dAMQP_OPENSSL`), em porta dedicada tipo 5671.
 - Pacote **separado** (`pascal_amqp_faa_server`): quem só usa o cliente não linka nada do servidor.
 
@@ -38,7 +44,7 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 
 | Compilador | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suítes FPCUnit (117 unitários + 28 integração + 201 do broker + 28 de aceitação) e os samples passam contra RabbitMQ real |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suítes FPCUnit (121 unitários + 28 integração + 273 do broker + 28 de aceitação) e os samples passam contra RabbitMQ real |
 | Delphi (testado na base 12 / Athens) | Mesma codebase; suítes DUnitX (mesmos números) e os samples validados via IDE (Community Edition não compila por linha de comando) |
 | FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 27 integração, TLS incluso via OpenSSL) e os 4 samples (console e GUI/LCL-GTK2) passam contra RabbitMQ real |
 | FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Mesma cobertura do x86_64: smoke test plain e `--tls` (OpenSSL aarch64) e suíte FPCUnit 80 + 27 passam contra RabbitMQ real |
@@ -270,12 +276,14 @@ Tudo em memória — **não há persistência**. `durable` e `delivery-mode 2` s
 **ignorados**: recusá-los quebraria clientes que sempre declaram durável, mas nada
 sobrevive ao fim do processo.
 
-Também não implementados (o broker aceita os argumentos e os ignora, em vez de recusar):
-`x-message-ttl`, dead-lettering (`x-dead-letter-exchange`, `x-death`), `x-max-priority`,
-`x-max-length`/`x-overflow` por fila e alternate exchange. Se você usa esses recursos,
-teste contra um RabbitMQ de verdade — é exatamente a diferença que a suíte de aceitação
-mede (o único teste dela que não passa contra o broker embutido é o que depende de
-`x-max-length` + `x-overflow: reject-publish`).
+TTL, dead-lettering, prioridade, tetos por fila, alternate exchange e `x-expires`
+**funcionam de verdade** — o que torna mais fácil supor que durabilidade também funciona.
+Não funciona: reinicie o processo e a topologia e as mensagens somem.
+
+A suíte de aceitação roda a suíte de integração do cliente contra o broker embutido, e
+hoje **os 28 testes passam sem nenhum ignorado por recurso faltante** (o `SmokeTest`
+executa os mesmos 9 passos contra o RabbitMQ e contra o broker embutido, TTL+DLX e
+prioridade inclusos).
 
 Fora de escopo por decisão, em qualquer versão: cluster, HTTP management API,
 federation/shovel, AMQP 1.0, STOMP/MQTT, quorum queues e streams.
@@ -290,6 +298,16 @@ Documentados de propósito — não são bugs:
 - **Tipo de exchange desconhecido é `406` de canal**, não `503` de conexão como no
   RabbitMQ — config errada num declare não precisa levar a conexão junto.
 - **`Basic.Recover` só com `requeue=true`**; com `false`, `540`.
+- **`x-max-priority` vai até 9**, não até 255. Acima disso é `406` — recusa explícita, não
+  clamp silencioso. O RabbitMQ recomenda ≤ 5; acima de 9 o custo de memória por fila (um
+  balde de prontas por nível) deixa de valer o que entrega.
+- **`x-overflow` aceita só `drop-head` e `reject-publish`.** `reject-publish-dlx` do
+  RabbitMQ não entra: dead-letter no overflow já é a razão `maxlen`, pelo caminho normal.
+- **Argumento de fila inválido é `406` nomeando o argumento** (`invalid arg
+  'x-max-priority' for queue: ...`), inclusive `expiration` malformada no publish.
+- **O teto global `MaxQueueLength` e o `x-max-length` da fila compõem pelo MENOR.** O
+  global é rede de segurança do processo hospedeiro, e um argumento vindo do cliente não
+  pode afrouxá-la.
 - **Sem TLS de servidor no backend SChannel** — o SChannel desta lib implementa só o lado
   cliente. Para porta cifrada no broker, compile com `-dAMQP_OPENSSL`.
 
@@ -450,7 +468,9 @@ fpc -Fu..\..\src -Fi..\..\src SmokeTest.dpr
 SmokeTest.exe
 ```
 
-Exercita handshake, topologia, confirms, `Basic.Get`, consume concorrente com ack e reconexão automática com recovery. Sai com código 0 em sucesso.
+Exercita, em 9 passos: handshake, topologia, confirms, `Basic.Get`, consume concorrente com ack, **TTL + dead-letter** (a mensagem vence na fila de espera e reaparece na do DLX, com `x-death`), **fila com prioridade** (lote misturado drenado em ordem decrescente), teardown e reconexão automática com recovery. Sai com código 0 em sucesso.
+
+Os passos de TTL+DLX e prioridade rodam **iguais contra o RabbitMQ e contra o broker embutido** — é a prova dupla de que a semântica implementada é a da spec, e não a nossa. Foi ela que pegou, por exemplo, que o broker embutido devolvia `404` ao apagar fila inexistente onde o RabbitMQ é idempotente.
 
 Com o argumento `--tls`, roda os mesmos passos sobre TLS (precisa do broker com o overlay `docker-compose.tls.yml`, ver seção TLS acima):
 
@@ -493,10 +513,10 @@ Em ambos:
 |---|---|---|
 | `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 117 | nada — encode/decode de frames, métodos, content header, negociação de tune |
 | `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 28 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
-| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 201 (205 com `-dAMQP_OPENSSL`) | nada — sobe o **broker embutido** in-process em porta efêmera |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 273 (277 com `-dAMQP_OPENSSL`) | nada — sobe o **broker embutido** in-process em porta efêmera |
 | `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 28 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
 
-A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. 27 dos 28 passam; o único que não passa depende de `x-max-length` + `x-overflow` e se auto-ignora dizendo o motivo. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
+A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. **Os 28 passam, sem nenhum ignorado por recurso faltante** — o último que faltava (`x-max-length` + `x-overflow: reject-publish`) entrou junto com o resto do ciclo de vida de mensagem. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
 
 O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console. Rodando pela IDE do Lazarus, o chaveamento é em `Run → Run Parameters → Command line parameters` — os `.lpi` vêm com `--all --format=plain` salvo (modo console); limpe o campo para o F9 abrir a GUI. No modo console via F9 a janela fecha ao terminar: ou marque *Use launching application* com `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, ou rode o executável direto num terminal.
 
@@ -531,7 +551,8 @@ Assim a fila é temporária com nome **estável e conhecido**, e a recuperação
 
 - ~~Validação em Linux~~ — concluída: x86_64 e ARM64, TLS/OpenSSL incluso, samples GUI validados em LCL/GTK2 (ver tabela de compatibilidade).
 - ~~Broker embutível — protocolo completo~~ e ~~engine de roteamento em memória~~ — concluídos: handshake, canais, todos os métodos com o `*-Ok` correto, TLS de servidor, roteamento nos quatro tipos de exchange, entrega com prefetch e ack, confirms, `mandatory`/`Return` e ciclo de vida (`exclusive`/`auto-delete`).
-- **Broker — durabilidade e recursos de fila**: persistência, `x-message-ttl`, dead-lettering (`x-dead-letter-exchange`/`x-death`), `x-max-priority`, `x-max-length`/`x-overflow` por fila e alternate exchange.
+- ~~Broker — ciclo de vida da mensagem~~ — concluído: `x-message-ttl` e `expiration`, dead-lettering com `x-death` completo, `x-max-priority`, `x-max-length`/`x-max-length-bytes`/`x-overflow`, `alternate-exchange` e `x-expires`.
+- **Broker — durabilidade**: WAL append-only com fsync por lote, recovery no start. É o que falta para `durable` e `delivery-mode 2` significarem alguma coisa. O `Basic.Ack` de confirm passa a ser assíncrono (emitido após o flush, como prefixo com `multiple=true`).
 - Validação do backend OpenSSL compilado pelo Delphi em Linux (a Community Edition não tem o target; o mesmo fonte é validado pelo FPC/Linux).
 - TLS de servidor no backend SChannel (hoje só OpenSSL).
 - mTLS/client-cert.
