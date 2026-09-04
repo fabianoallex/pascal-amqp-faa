@@ -21,7 +21,16 @@ interface
 uses
   DUnitX.TestFramework,
   System.SysUtils,
-  AMQP.Server.Records;
+  System.Classes,
+  System.Rtti,
+  System.IOUtils,
+  AMQP.Wire,
+  AMQP.Exchange.Methods,
+  AMQP.Queue.Methods,
+  AMQP.Connection,
+  AMQP.Server.Wal,
+  AMQP.Server.Records,
+  AMQP.Server.Broker;
 
 type
   [TestFixture]
@@ -36,6 +45,39 @@ type
     [Test] procedure Enqueue_HeaderBinarioSobreviveIntacto;
     [Test] procedure Dequeue_RoundTrip;
     [Test] procedure KindsDeDados_SaoReconhecidos;
+  end;
+
+
+  { Sobe um broker com DataDir proprio, publica com o cliente de verdade e
+    depois le' o WAL. E' o unico jeito honesto de testar a fiacao: os registros
+    so' aparecem se o publish REAL atravessou a engine, a fila e o journal. }
+  TPersistFixture = class(TObject)
+  protected
+    FBroker: TAMQPServer;
+    FConn: TAMQPConnection;
+    FChan: TAMQPChannel;
+    FDir: string;
+    [Setup]    procedure SetUp;
+    [TearDown] procedure TearDown;
+    function DeclaraFila(const ANome: string; ADurable: Boolean;
+      AArgs: TAMQPFieldTable = nil): string;
+    /// Fecha o cliente, para o broker e devolve um resumo do WAL.
+    function FechaELeWal: TStringList;
+    function Conta(L: TStringList; const APrefixo: string): Integer;
+    /// Indice da primeira linha que comeca com APrefixo, ou -1.
+    function Indice(L: TStringList; const APrefixo: string): Integer;
+  end;
+
+  [TestFixture]
+  TPersistWiringTests = class(TPersistFixture)
+  public
+    [Test] procedure Persistente_EmFilaDuravel_GravaConteudoEColocacao;
+    [Test] procedure Transiente_EmFilaDuravel_NaoGravaNada;
+    [Test] procedure Persistente_EmFilaTransiente_NaoGravaNada;
+    [Test] procedure DuasFilasDuraveis_UmConteudoDuasColocacoes;
+    [Test] procedure Ack_AposentaAColocacao;
+    [Test] procedure GetSemAck_AposentaNaHora;
+    [Test] procedure DeadLetter_ColocacaoNovaAntesDeAposentarAVelha;
   end;
 
 implementation
@@ -253,7 +295,337 @@ begin
   Assert.IsFalse(AmqpIsTopoRecord(AMQP_REC_ENQUEUE), 'dado nao e topologia');
 end;
 
+
+var
+  GSeq: Integer = 0;
+
+procedure LimpaDir(const ADir: string);
+var
+  LRec: TSearchRec;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, LRec) = 0 then
+  begin
+    try
+      repeat
+        if (LRec.Attr and faDirectory) = 0 then
+          System.SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+      until FindNext(LRec) <> 0;
+    finally
+      System.SysUtils.FindClose(LRec);
+    end;
+  end;
+end;
+
+// Uma linha por registro, legivel, para a falha dizer o que apareceu.
+function LinhaDe(const ARec: TAMQPWalRecord): string;
+var
+  LC: TAMQPRecContent;
+  LE: TAMQPRecEnqueue;
+  LD: TAMQPRecDequeue;
+begin
+  case ARec.Kind of
+    AMQP_REC_CONTENT:
+      begin
+        LC := AmqpDecodeRecContent(ARec.Payload);
+        Result := 'content:' + IntToStr(LC.ContentId) + ':corpo='
+          + IntToStr(Length(LC.Body));
+      end;
+    AMQP_REC_ENQUEUE:
+      begin
+        LE := AmqpDecodeRecEnqueue(ARec.Payload);
+        Result := 'enqueue:' + LE.Queue + ':entry=' + IntToStr(LE.EntryId)
+          + ':content=' + IntToStr(LE.ContentId)
+          + ':prio=' + IntToStr(LE.Priority) + ':ttl=' + IntToStr(LE.TtlMs);
+      end;
+    AMQP_REC_DEQUEUE:
+      begin
+        LD := AmqpDecodeRecDequeue(ARec.Payload);
+        Result := 'dequeue:' + LD.Queue + ':entry=' + IntToStr(LD.EntryId);
+      end;
+  else
+    Result := AmqpRecordKindName(ARec.Kind);
+  end;
+end;
+
+function LeWal(const ADir: string): TStringList;
+var
+  LArq: IAMQPWalFile;
+  LSeg: TAMQPWalSegment;
+  LRegs: TAMQPWalRecords;
+  LStop: TAMQPWalStop;
+  LSegs: TArray<Cardinal>;
+  I, LN: Integer;
+begin
+  Result := TStringList.Create;
+  LSegs := AmqpWalListSegments(ADir);
+  if Length(LSegs) = 0 then
+    Exit;
+  LArq := TAMQPWalOsFile.Create(
+    IncludeTrailingPathDelimiter(ADir) + AmqpWalSegmentName(LSegs[0]), False);
+  LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+  try
+    LN := LSeg.ReadPrefix(LRegs, LStop);
+    for I := 0 to LN - 1 do
+      Result.Add(LinhaDe(LRegs[I]));
+  finally
+    LSeg.Free;
+    LArq := nil;
+  end;
+end;
+
+{ TPersistFixture }
+
+procedure TPersistFixture.SetUp;
+var
+  LParams: TAMQPConnectionParams;
+begin
+  
+  Inc(GSeq);
+  FDir := IncludeTrailingPathDelimiter(TPath.GetTempPath) + 'amqppersist-'
+    + IntToStr(GSeq);
+  ForceDirectories(FDir);
+  LimpaDir(FDir);
+  FBroker := TAMQPServer.Create;
+  FBroker.BindAddress := '127.0.0.1';
+  FBroker.Port := 0;
+  FBroker.DataDir := FDir;
+  FBroker.Start;
+  LParams := TAMQPConnectionParams.Localhost;
+  LParams.Host := '127.0.0.1';
+  LParams.Port := FBroker.Port;
+  FConn := TAMQPConnection.Create(LParams);
+  FConn.Open;
+  FChan := FConn.CreateChannel;
+end;
+
+procedure TPersistFixture.TearDown;
+begin
+  if FConn <> nil then
+  begin
+    try
+      FConn.Close;
+    except
+    end;
+    FreeAndNil(FConn);
+  end;
+  if FBroker <> nil then
+  begin
+    try
+      FBroker.Stop;
+    except
+    end;
+    FreeAndNil(FBroker);
+  end;
+  LimpaDir(FDir);
+  
+end;
+
+function TPersistFixture.DeclaraFila(const ANome: string; ADurable: Boolean;
+  AArgs: TAMQPFieldTable): string;
+var
+  LDecl: TAMQPQueueDeclare;
+begin
+  LDecl := TAMQPQueueDeclare.Create(ANome, ADurable);
+  LDecl.Arguments := AArgs;
+  Result := FChan.DeclareQueue(LDecl).QueueName;
+end;
+
+function TPersistFixture.FechaELeWal: TStringList;
+begin
+  FConn.Close;
+  FreeAndNil(FConn);
+  FBroker.Stop;
+  FreeAndNil(FBroker);
+  Result := LeWal(FDir);
+end;
+
+function TPersistFixture.Conta(L: TStringList;
+  const APrefixo: string): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to L.Count - 1 do
+    if Pos(APrefixo, L[I]) = 1 then
+      Inc(Result);
+end;
+
+function TPersistFixture.Indice(L: TStringList;
+  const APrefixo: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := 0 to L.Count - 1 do
+    if Pos(APrefixo, L[I]) = 1 then
+      Exit(I);
+end;
+
+{ TPersistWiringTests }
+
+procedure TPersistWiringTests.Persistente_EmFilaDuravel_GravaConteudoEColocacao;
+var
+  L: TStringList;
+begin
+  // A regra dos tres da D20, no caso em que ela diz SIM.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'carga', True);
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(1, Conta(L, 'content:'), 'um conteudo');
+    Assert.AreEqual(1, Conta(L, 'enqueue:q.dur:'), 'uma colocacao na fila');
+    Assert.AreEqual(0, Conta(L, 'dequeue:'), 'e nada foi aposentado');
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TPersistWiringTests.Transiente_EmFilaDuravel_NaoGravaNada;
+var
+  L: TStringList;
+begin
+  // delivery-mode 1 numa fila DURAVEL: a fila e' duravel, a mensagem nao.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'carga', False);
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(0, Conta(L, 'content:'), 'nenhum conteudo');
+    Assert.AreEqual(0, Conta(L, 'enqueue:'), 'nenhuma colocacao');
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TPersistWiringTests.Persistente_EmFilaTransiente_NaoGravaNada;
+var
+  L: TStringList;
+begin
+  // O contrario: a MENSAGEM e' persistente, a fila nao. Fila transiente nao
+  // toca o journal, e o caminho quente dela fica identico ao da Fase 3.
+  DeclaraFila('q.tra', False);
+  FChan.PublishText('', 'q.tra', 'carga', True);
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(0, Conta(L, 'content:'), 'nenhum conteudo');
+    Assert.AreEqual(0, Conta(L, 'enqueue:'), 'nenhuma colocacao');
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TPersistWiringTests.DuasFilasDuraveis_UmConteudoDuasColocacoes;
+var
+  L: TStringList;
+  LBind: TAMQPQueueBind;
+begin
+  // O PAGAMENTO da D22: o corpo vai UMA vez, a colocacao vai por fila. E' o
+  // que impede um fan-out de N filas de multiplicar o corpo por N no disco.
+  DeclaraFila('q.a', True);
+  DeclaraFila('q.b', True);
+  FChan.DeclareExchange(TAMQPExchangeDeclare.Create('ex.fan', 'fanout', True));
+  LBind.ExchangeName := 'ex.fan';
+  LBind.RoutingKey := '';
+  LBind.NoWait := False;
+  LBind.Arguments := nil;
+  LBind.QueueName := 'q.a';
+  FChan.BindQueue(LBind);
+  LBind.QueueName := 'q.b';
+  FChan.BindQueue(LBind);
+
+  FChan.PublishText('ex.fan', '', 'carga', True);
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(1, Conta(L, 'content:'), 'UM conteudo para as duas filas');
+    Assert.AreEqual(1, Conta(L, 'enqueue:q.a:'), 'colocacao na q.a');
+    Assert.AreEqual(1, Conta(L, 'enqueue:q.b:'), 'colocacao na q.b');
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TPersistWiringTests.Ack_AposentaAColocacao;
+var
+  L: TStringList;
+  LGet: TAMQPGetResult;
+begin
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'carga', True);
+  LGet := FChan.BasicGet('q.dur', False); // modo ack
+  Assert.IsTrue(LGet.Found,
+      'achou a mensagem');
+  FChan.Ack(LGet.DeliveryTag);
+  Sleep(300); // o ack viaja e o ator ainda tem de processa-lo
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(1, Conta(L, 'enqueue:q.dur:'), 'a colocacao existiu');
+    Assert.AreEqual(1, Conta(L, 'dequeue:q.dur:'), 'e foi aposentada no ack');
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TPersistWiringTests.GetSemAck_AposentaNaHora;
+var
+  L: TStringList;
+  LGet: TAMQPGetResult;
+begin
+  // Sem ack nao ha volta: a colocacao acaba no ato, no disco tambem.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'carga', True);
+  LGet := FChan.BasicGet('q.dur', True); // no-ack
+  Assert.IsTrue(LGet.Found,
+      'achou a mensagem');
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(1, Conta(L, 'dequeue:q.dur:'), 'aposentada sem precisar de ack');
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TPersistWiringTests.DeadLetter_ColocacaoNovaAntesDeAposentarAVelha;
+var
+  L: TStringList;
+  LArgs: TAMQPFieldTable;
+  LIdxNova, LIdxVelha: Integer;
+begin
+  // A D23 VIRANDO TESTE. O dead-letter escreve a colocacao NOVA antes de
+  // aposentar a velha, para que falhar no meio produza duplicata e nunca
+  // perda. A ordem no arquivo e' a prova -- e e' verificavel exatamente
+  // porque o log e' append-only.
+  DeclaraFila('q.dlq', True);
+  LArgs := TAMQPFieldTable.Create;
+  try
+    LArgs.Put('x-message-ttl', TValue.From<Integer>(150));
+    LArgs.Put('x-dead-letter-exchange', TValue.From<string>(''));
+    LArgs.Put('x-dead-letter-routing-key', TValue.From<string>('q.dlq'));
+    DeclaraFila('q.src', True, LArgs);
+  finally
+    LArgs.Free;
+  end;
+
+  FChan.PublishText('', 'q.src', 'carga', True);
+  Sleep(1200); // TTL de 150 ms + a monitora passando (tick de 200 ms)
+
+  L := FechaELeWal;
+  try
+    Assert.AreEqual(1, Conta(L, 'enqueue:q.src:'), 'a colocacao original');
+    Assert.AreEqual(1, Conta(L, 'enqueue:q.dlq:'), 'a colocacao na fila morta');
+    Assert.AreEqual(1, Conta(L, 'content:'), 'o corpo NAO foi reescrito');
+    Assert.AreEqual(1, Conta(L, 'dequeue:q.src:'), 'a original foi aposentada');
+
+    LIdxNova := Indice(L, 'enqueue:q.dlq:');
+    LIdxVelha := Indice(L, 'dequeue:q.src:');
+    ASSERTTRUE('a colocacao nova aparece ANTES da aposentadoria da velha '
+      + '(D23: falhar no meio da duplicata, nunca perda)',
+      (LIdxNova >= 0) and (LIdxVelha >= 0) and (LIdxNova < LIdxVelha));
+  finally
+    L.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TDataRecordTests);
+  TDUnitX.RegisterTestFixture(TPersistWiringTests);
 
 end.

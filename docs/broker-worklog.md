@@ -496,6 +496,24 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   Suíte do server: **358 → 367** (Default) e **362 → 371** (`openssl`), com `0 unfreed memory blocks`. Aceitação 28/28. `verifica_espelhos.py` limpo. **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 367/367 e 371/371, aceitação 28/28, SmokeTest PASS nos quatro cruzamentos, 0 leaked em todas.** **Falta a fiação** (a fila e a engine gravando `CONTENT`/`ENQ`/`DEQ`), que é o resto da WS4.
 
+- **WS4 completa: a fiação.** O `delivery-mode` é lido na thread do publicador (mesma razão da prioridade e do `expiration`: quem tem as propriedades decodificadas na mão é quem publicou), e daí em diante a D24 é literal — **quem escreve o lote do publish é a thread do publicador**, porque só quem já roteou sabe quais colocações precisam estar duráveis. O ator escreve apenas as **retiradas** que ele mesmo decide.
+
+  **Os cinco pontos de saída do estoque passam por um funil só** (`TAMQPServerQueue.Aposenta`, com `SubmitNoWait` porque a D2 proíbe o ator de esperar I/O): ack, entrega em no-ack, `Basic.Get` em no-ack, purge e morte. Os três motivos de morte — expirada, teto, rejeitada — já convergiam no `MorreCom`, então o funil pegou os três de graça.
+
+  **Uma sutileza que só apareceu escrevendo:** a fila com `x-overflow: reject-publish` pode **recusar** um publish cuja colocação o publicador já gravou (a D24 grava antes de postar). A recusa passou a escrever um **DEQ compensatório** — sem ele, a recuperação ressuscitaria uma mensagem que o broker recusou. Compensar é mais simples e mais seguro que adiar o ENQ: adiar abriria a janela de a mensagem ser consumida e aposentada *antes de existir no log*.
+
+  **Uma regra, uma implementação.** O registro precisa gravar a prioridade e o TTL **efetivos** — os mesmos que o ator vai guardar. Em vez de repetir as regras na engine, a fila passou a expô-las como funções puras (`PrioridadeEfetiva`, `TtlEfetivo`), e o `CalculaPrazo` do ator usa a mesma. Duas cópias da regra seriam duas chances de divergir — é o mesmo raciocínio que fez a política da fila viva vir do descritor, na Fase 2.
+
+  **Sete testes de ponta a ponta**, broker e cliente de verdade, lendo o WAL depois. Metade das asserções é **negativa**, porque a regra dos três da D20 é tanto sobre o que vai quanto sobre o que **não** vai: mensagem transiente em fila durável não grava nada, mensagem persistente em fila transiente também não. E dois testes carregam o peso do desenho:
+  - `DuasFilasDuraveis_UmConteudoDuasColocacoes` — o pagamento da D22: um fan-out para N filas grava **um** corpo e N colocações, em vez de multiplicar o corpo por N.
+  - `DeadLetter_ColocacaoNovaAntesDeAposentarAVelha` — **a D23 virando teste**. A ordem no arquivo é a prova de que falhar no meio produz duplicata e nunca perda, e é verificável justamente porque o log é append-only.
+
+  **Mutação, cinco mutantes, todos mortos pelos testes certos:** ignorar o `delivery-mode`; persistir em fila transiente; reescrever o corpo a cada colocação; inverter a ordem da D23; e não aposentar no ack.
+
+  **Estado:** server **369 → 376** (Default) e **373 → 380** (`openssl`), com `0 unfreed memory blocks`. Aceitação 28/28, integração 28/28, SmokeTest PASS, `verifica_espelhos.py` limpo, e o broker segue compilando no Linux.
+
+  **O que a WS4 NÃO faz, de propósito:** o confirm continua saindo inline, como na Fase 3 — amarrá-lo à marca d'água é a WS5. Até lá, um publish persistente pode ser confirmado antes de estar durável. E os caminhos de purge e de teto não têm teste de ponta a ponta (o cliente não expõe `Queue.Purge`), embora passem pelo mesmo funil já coberto.
+
 ### Defeito das Fases 2/3 achado ao fiar a WS4: requeue de entrega a consumidor perdia prioridade e prazo
 
 Encontrado **lendo o código** para saber onde encaixar o `DEQ` da WS4, não por um teste que falhou.

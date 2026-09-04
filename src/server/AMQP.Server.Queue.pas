@@ -76,7 +76,9 @@ uses
   AMQP.Threading,
   AMQP.Server.Message,
   AMQP.Server.Header,
-  AMQP.Server.Resources;
+  AMQP.Server.Resources,
+  AMQP.Server.Journal,
+  AMQP.Server.Records;
 
 const
   /// Quantos comandos o ator executa por rodada antes de reagendar. Sem teto,
@@ -158,8 +160,11 @@ type
     ['{2B9F1C74-5E30-4A88-9D61-7C0E3F5A82B4}']
     /// Republica AMessage em ADlx com ARoutingKey. A referencia continua sendo
     /// do CHAMADOR (a implementacao da AddRef se quiser guardar).
+    /// AContentId identifica o CORPO ja' gravado: a colocacao nova reusa o
+    /// mesmo (D22), e por isso o corpo nunca e' reescrito num dead-letter.
+    /// Zero = a mensagem nao estava persistida.
     procedure DeadLetter(const ADlx, ARoutingKey: string;
-      AMessage: TAMQPMessage; APriority: Byte);
+      AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
   end;
 
   { Costura da entrega (WS4). O canal/conexao implementa; a fila so' guarda a
@@ -246,6 +251,14 @@ type
     /// Instante absoluto (mesma base do NowTick) em que a mensagem vence.
     /// 0 = nunca vence.
     ExpiraEm: UInt64;
+    /// Identidade desta COLOCACAO no journal (Fase 4, D22). 0 = a mensagem nao
+    /// foi persistida -- fila nao duravel, mensagem nao persistente, ou broker
+    /// sem DataDir. Quando e' 0, nenhum registro de aposentadoria e' escrito.
+    JournalId: UInt64;
+    /// Identidade do CORPO no journal. Varias colocacoes (e a derivada do
+    /// dead-letter) compartilham o mesmo -- e' o que faz o corpo ser gravado
+    /// uma vez so'.
+    ContentId: UInt64;
   end;
 
   { Uma entrega aguardando confirmacao, chaveada por (canal, delivery-tag). }
@@ -258,6 +271,11 @@ type
     /// relogio zerado.
     Priority: Byte;
     ExpiraEm: UInt64;
+    /// Os mesmos da entrada no estoque: a colocacao continua VIVA no journal
+    /// enquanto estiver aqui (uma entrega nao confirmada nao e' aposentada --
+    /// e' o que faz a D27 sair de graca no replay).
+    JournalId: UInt64;
+    ContentId: UInt64;
   end;
 
   TAMQPQueueCmdKind = (
@@ -286,6 +304,8 @@ type
     NoAck: Boolean;
     Priority: Byte;        // amqqcEnqueue
     MessageTtlMs: Int64;   // amqqcEnqueue (-1 = sem 'expiration')
+    JournalId: UInt64;     // amqqcEnqueue (0 = nao persistida)
+    ContentId: UInt64;     // amqqcEnqueue
     Multiple: Boolean;
     Requeue: Boolean;
     IfUnused: Boolean;
@@ -354,6 +374,9 @@ type
     FExpired: Int64;
     FDeadLettered: Int64;
     FDeadLetterSink: IAMQPDeadLetterSink;
+    FJournal: TAMQPJournal;
+    FVHostName: string;
+    FDurable: Boolean;
     /// Trava de mao unica: vira True no primeiro enqueue com prazo e nunca
     /// volta. Serve so' para a fila SEM nenhuma mensagem expiravel pular o
     /// laco de expiracao a cada rodada (D13: a varredura so' custa em fila que
@@ -389,12 +412,21 @@ type
     function NextEligible: TAMQPServerConsumer;
     procedure DeliverPending;
     procedure RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
-      AExpiraEm: UInt64);
+      AExpiraEm: UInt64; AJournalId: UInt64 = 0; AContentId: UInt64 = 0);
     procedure EnforceMaxLength;
     /// Soma/subtrai o corpo de uma entrada no acumulador de bytes prontos.
     /// Toda entrada que ENTRA ou SAI do estoque passa por aqui -- se um
     /// caminho esquecer, o acumulador vira lixo e o teto de bytes deixa de
     /// valer (sem nenhum sintoma imediato).
+    /// UNICO ponto por onde uma colocacao e' aposentada no disco. Chamado de
+    /// dentro do ator, com SubmitNoWait: a D2 proibe o ator de esperar I/O, e
+    /// registro de retirada nunca pode ser recusado (D24, corolario c).
+    ///
+    /// Nao ha aposentadoria quando a fila INTEIRA e' apagada: o registro de
+    /// delete da topologia ja' leva as colocacoes dela junto, do mesmo jeito
+    /// que leva os bindings -- gravar um DEQ por entrada seria escrever o que
+    /// ja' esta' implicito.
+    procedure Aposenta(AJournalId: UInt64);
     procedure ContaBytes(const AEntry: TAMQPQueueEntry; ASinal: Integer);
     /// True se a fila esta' cheia AGORA (por contagem ou por bytes). So' faz
     /// sentido em fila com x-overflow reject-publish.
@@ -454,8 +486,12 @@ type
     /// propriedades e' quem ainda tem a tabela viva do canal na mao). A fila
     /// limita a prioridade ao proprio teto e combina o TTL da mensagem com o
     /// da fila. AMessageTtlMs < 0 = a mensagem nao trouxe 'expiration'.
+    /// AJournalId/AContentId vem de quem ESCREVEU o registro de colocacao --
+    /// a thread do publicador (D24) --, e nao sao gerados aqui: a fila e' o
+    /// ultimo elo, nao o primeiro. Zero = nada foi persistido.
     procedure PostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
-      AMessageTtlMs: Int64 = -1);
+      AMessageTtlMs: Int64 = -1; AJournalId: UInt64 = 0;
+      AContentId: UInt64 = 0);
     /// A fila passa a ser dona de AConsumer.
     procedure PostAddConsumer(AConsumer: TAMQPServerConsumer);
     procedure PostRemoveConsumer(AChannelId: NativeUInt;
@@ -495,7 +531,8 @@ type
     /// E' o UNICO ponto da Fase 3 desenhado para ser substituido: quando a
     /// Fase 4 tiver o registro de confirms pendentes, isto vira assincrono.
     function TryPostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
-      AMessageTtlMs: Int64 = -1): Boolean;
+      AMessageTtlMs: Int64 = -1; AJournalId: UInt64 = 0;
+      AContentId: UInt64 = 0): Boolean;
 
     /// Basic.Get. ADeliveryTag e' a tag que o CANAL vai usar (a fila nao
     /// gera tags -- elas sao monotonicas por canal). Com ANoAck=False a
@@ -522,11 +559,31 @@ type
     property MaxLength: Integer read FMaxLength;
     /// Teto de prioridade em vigor (0 = fila sem prioridade).
     property MaxPriority: Integer read FMaxPriority;
+
+    /// Prioridade efetiva desta mensagem NESTA fila (limitada ao teto) e TTL
+    /// efetivo em ms (o menor entre o da fila e o da mensagem; -1 = sem prazo).
+    ///
+    /// Sao leituras PURAS da politica, que e' imutavel depois da criacao, e por
+    /// isso podem ser chamadas de FORA do ator -- e precisam ser: quem escreve
+    /// o registro de colocacao e' a thread do publicador (D24), e ela tem de
+    /// gravar os mesmos numeros que o ator vai guardar.
+    function PrioridadeEfetiva(APriority: Byte): Byte;
+    function TtlEfetivo(AMessageTtlMs: Int64): Int64;
     /// Quem republica as mortas. nil = sem dead-letter (a mensagem e'
     /// simplesmente descartada, como na WS4). A engine injeta na criacao.
     property DeadLetterSink: IAMQPDeadLetterSink read FDeadLetterSink
       write FDeadLetterSink;
     property Policy: TAMQPQueuePolicy read FPolicy;
+
+    /// Journal de durabilidade (Fase 4). nil = nada desta fila vai ao disco.
+    /// A fila NAO e' dona; quem injeta e' a engine, na criacao.
+    property Journal: TAMQPJournal read FJournal write FJournal;
+    /// vhost em que esta fila mora -- entra nos registros de colocacao, porque
+    /// a fila sozinha nao e' identidade (dois vhosts podem ter 'q').
+    property VHostName: string read FVHostName write FVHostName;
+    /// D20: so' fila DURAVEL escreve. Fila transiente nao toca o journal, e o
+    /// caminho quente dela fica identico ao da Fase 3.
+    property Durable: Boolean read FDurable write FDurable;
   end;
 
 implementation
@@ -890,7 +947,7 @@ end;
 { --- API assincrona --- }
 
 procedure TAMQPServerQueue.PostMessage(AMessage: TAMQPMessage;
-  APriority: Byte; AMessageTtlMs: Int64);
+  APriority: Byte; AMessageTtlMs: Int64; AJournalId, AContentId: UInt64);
 var
   LCmd: TAMQPQueueCommand;
 begin
@@ -899,11 +956,14 @@ begin
   LCmd.Msg := AMessage;
   LCmd.Priority := APriority;
   LCmd.MessageTtlMs := AMessageTtlMs;
+  LCmd.JournalId := AJournalId;
+  LCmd.ContentId := AContentId;
   Post(LCmd);
 end;
 
 function TAMQPServerQueue.TryPostMessage(AMessage: TAMQPMessage;
-  APriority: Byte; AMessageTtlMs: Int64): Boolean;
+  APriority: Byte; AMessageTtlMs: Int64;
+  AJournalId, AContentId: UInt64): Boolean;
 var
   LCmd: TAMQPQueueCommand;
 begin
@@ -913,6 +973,8 @@ begin
     LCmd.Msg := AMessage;
     LCmd.Priority := APriority;
     LCmd.MessageTtlMs := AMessageTtlMs;
+    LCmd.JournalId := AJournalId;
+    LCmd.ContentId := AContentId;
     PostSync(LCmd);
     Result := LCmd.ResOk;
   finally
@@ -1138,16 +1200,29 @@ end;
 // Combina o TTL da FILA (x-message-ttl) com o da MENSAGEM ('expiration'): o
 // MENOR vence, que e' o que a spec de fato do RabbitMQ faz. Ausentes os dois,
 // a mensagem nao vence nunca (0).
+function TAMQPServerQueue.TtlEfetivo(AMessageTtlMs: Int64): Int64;
+begin
+  Result := -1;
+  if FPolicy.MessageTtlMs >= 0 then
+    Result := FPolicy.MessageTtlMs;
+  if AMessageTtlMs >= 0 then
+    if (Result < 0) or (AMessageTtlMs < Result) then
+      Result := AMessageTtlMs;
+end;
+
+function TAMQPServerQueue.PrioridadeEfetiva(APriority: Byte): Byte;
+begin
+  Result := LimitaPrioridade(APriority);
+end;
+
 function TAMQPServerQueue.CalculaPrazo(AMessageTtlMs: Int64): UInt64;
 var
   LTtl: Int64;
 begin
-  LTtl := -1;
-  if FPolicy.MessageTtlMs >= 0 then
-    LTtl := FPolicy.MessageTtlMs;
-  if AMessageTtlMs >= 0 then
-    if (LTtl < 0) or (AMessageTtlMs < LTtl) then
-      LTtl := AMessageTtlMs;
+  // Uma implementacao so' da regra do "menor vence": o registro que a thread do
+  // publicador grava tem de dizer EXATAMENTE o que o ator vai guardar, e duas
+  // copias da regra seriam duas chances de divergir.
+  LTtl := TtlEfetivo(AMessageTtlMs);
   if LTtl < 0 then
     Exit(0);
   Result := NowTick + UInt64(LTtl);
@@ -1212,7 +1287,8 @@ begin
           LChave := AEntry.Msg.RoutingKey;
 
         LNova := AmqpDeriveMessage(AEntry.Msg, LPayload, LDlx, LChave);
-        FDeadLetterSink.DeadLetter(LDlx, LChave, LNova, AEntry.Priority);
+        FDeadLetterSink.DeadLetter(LDlx, LChave, LNova, AEntry.Priority,
+          AEntry.ContentId);
         Inc(FDeadLettered);
         Result := True;
       finally
@@ -1228,6 +1304,11 @@ begin
         Result := False;
     end;
   finally
+    // D23, ORDEM: a colocacao nova ja' foi escrita la' dentro (pelo sink, que
+    // roda nesta mesma thread), e so' AGORA a velha e' aposentada. Falhar no
+    // meio produz DUPLICATA, nunca perda -- e duplicata o at-least-once ja'
+    // admite. Vale para os tres motivos de morte, porque todos passam por aqui.
+    Aposenta(AEntry.JournalId);
     // A referencia da entrada e' SEMPRE consumida, tenha republicado ou nao.
     AEntry.Msg.Release;
   end;
@@ -1344,7 +1425,11 @@ begin
       TakeReady(LEntry); // so' sai do estoque depois de o lote ser aceito
       Inc(FDelivered);
       if LCons.NoAck then
-        LEntry.Msg.Release // sem ack: a fila larga a referencia dela agora
+      begin
+        // Sem ack nao ha volta: a colocacao acaba aqui, no disco tambem.
+        Aposenta(LEntry.JournalId);
+        LEntry.Msg.Release; // a fila larga a referencia dela agora
+      end
       else
       begin
         // A referencia do estoque passa para as nao-confirmadas.
@@ -1363,6 +1448,8 @@ begin
         LUnacked.Msg := LEntry.Msg;
         LUnacked.Priority := LEntry.Priority;
         LUnacked.ExpiraEm := LEntry.ExpiraEm;
+        LUnacked.JournalId := LEntry.JournalId;
+        LUnacked.ContentId := LEntry.ContentId;
         FUnacked.Add(LUnacked);
       end;
     end
@@ -1377,7 +1464,7 @@ end;
 // cabeca absoluta faria uma mensagem de prioridade baixa furar a fila das
 // altas; zerar o prazo daria sobrevida a quem ja' devia ter morrido.
 procedure TAMQPServerQueue.RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
-  AExpiraEm: UInt64);
+  AExpiraEm: UInt64; AJournalId, AContentId: UInt64);
 var
   LEntry: TAMQPQueueEntry;
 begin
@@ -1385,6 +1472,11 @@ begin
   LEntry.Redelivered := True;
   LEntry.Priority := LimitaPrioridade(APriority);
   LEntry.ExpiraEm := AExpiraEm;
+  // A colocacao NAO e' aposentada num requeue: ela continua a mesma no disco,
+  // so' voltou para o estoque. E' o que faz a D27 ("nao-confirmada volta
+  // pronta") sair de graca no replay -- nao ha registro nenhum a escrever.
+  LEntry.JournalId := AJournalId;
+  LEntry.ContentId := AContentId;
   ContaBytes(LEntry, +1);
   FRequeued[LEntry.Priority].Enqueue(LEntry);
 end;
@@ -1397,6 +1489,30 @@ end;
 // O(n) por publish. O preco e' que TODA entrada e saida do estoque tem de
 // passar por aqui -- um caminho esquecido nao da sintoma nenhum na hora, so'
 // um teto que para de valer.
+procedure TAMQPServerQueue.Aposenta(AJournalId: UInt64);
+var
+  LRecs: TAMQPJournalRecords;
+  LDeq: TAMQPRecDequeue;
+begin
+  if (AJournalId = 0) or (FJournal = nil) or (not FDurable) then
+    Exit;
+  LDeq.VHost := FVHostName;
+  LDeq.Queue := FName;
+  LDeq.EntryId := AJournalId;
+  SetLength(LRecs, 1);
+  LRecs[0].Kind := AMQP_REC_DEQUEUE;
+  LRecs[0].Payload := AmqpEncodeRecDequeue(LDeq);
+  try
+    // SubmitNoWait, nunca Submit: estamos NA thread do ator.
+    FJournal.SubmitNoWait(LRecs);
+  except
+    // Journal em falha ja' avisou quem precisava (o sink da WS5). O ator nao
+    // pode morrer por causa disso -- a fila em memoria continua correta.
+    on E: Exception do
+      ;
+  end;
+end;
+
 procedure TAMQPServerQueue.ContaBytes(const AEntry: TAMQPQueueEntry;
   ASinal: Integer);
 begin
@@ -1473,7 +1589,8 @@ begin
     begin
       FUnacked.Delete(I);
       if ARequeue then
-        RequeueFront(LEntry.Msg, LEntry.Priority, LEntry.ExpiraEm)
+        RequeueFront(LEntry.Msg, LEntry.Priority, LEntry.ExpiraEm,
+          LEntry.JournalId, LEntry.ContentId)
       else if ARejeitada then
       begin
         // 'rejected': nack/reject SEM requeue. O ack cai no else abaixo --
@@ -1482,10 +1599,17 @@ begin
         LQueueEntry.Redelivered := True;
         LQueueEntry.Priority := LEntry.Priority;
         LQueueEntry.ExpiraEm := LEntry.ExpiraEm;
+        LQueueEntry.JournalId := LEntry.JournalId;
+        LQueueEntry.ContentId := LEntry.ContentId;
         MorreCom(LQueueEntry, AMQP_DEATH_REJECTED);
       end
       else
-        LEntry.Msg.Release; // ack: fim de linha, sem dead-letter
+      begin
+        // ACK: fim de linha. A colocacao sai do disco aqui -- e' o caso comum,
+        // e o unico em que a mensagem some sem ter morrido.
+        Aposenta(LEntry.JournalId);
+        LEntry.Msg.Release;
+      end;
     end
     else
       Inc(I);
@@ -1525,6 +1649,8 @@ begin
         LEntry.Redelivered := False;
         LEntry.Priority := LimitaPrioridade(ACmd.Priority);
         LEntry.ExpiraEm := CalculaPrazo(ACmd.MessageTtlMs);
+        LEntry.JournalId := ACmd.JournalId;
+        LEntry.ContentId := ACmd.ContentId;
         if LEntry.ExpiraEm > 0 then
           FTemPrazo := True;
         ACmd.Msg := nil; // a referencia passou para o estoque
@@ -1542,14 +1668,26 @@ begin
         // publish vivo -- mesmo motivo da ordem no enqueue assincrono.
         ExpiraVencidas;
         if EstaCheia then
+        begin
           // A referencia fica no comando e sai no destrutor dele.
-          ACmd.ResOk := False
+          ACmd.ResOk := False;
+          // COMPENSACAO. O registro de colocacao ja' foi escrito pela thread do
+          // publicador ANTES de chegar aqui (D24) -- e' ela quem conhece o LSN.
+          // Se a fila recusa (x-overflow reject-publish, D15), a colocacao
+          // precisa ser aposentada, senao a recuperacao ressuscitaria uma
+          // mensagem que o broker RECUSOU. Escrever o DEQ e' mais simples e mais
+          // seguro que adiar o ENQ: adiar abriria a janela de a mensagem ser
+          // consumida e aposentada ANTES de existir no log.
+          Aposenta(ACmd.JournalId);
+        end
         else
         begin
           LEntry.Msg := ACmd.Msg;
           LEntry.Redelivered := False;
           LEntry.Priority := LimitaPrioridade(ACmd.Priority);
           LEntry.ExpiraEm := CalculaPrazo(ACmd.MessageTtlMs);
+          LEntry.JournalId := ACmd.JournalId;
+          LEntry.ContentId := ACmd.ContentId;
           if LEntry.ExpiraEm > 0 then
             FTemPrazo := True;
           ACmd.Msg := nil;
@@ -1595,7 +1733,8 @@ begin
           if LUnacked.ChannelId = ACmd.ChannelId then
           begin
             FUnacked.Delete(I);
-            RequeueFront(LUnacked.Msg, LUnacked.Priority, LUnacked.ExpiraEm);
+            RequeueFront(LUnacked.Msg, LUnacked.Priority, LUnacked.ExpiraEm,
+              LUnacked.JournalId, LUnacked.ContentId);
           end
           else
             Inc(I);
@@ -1636,8 +1775,13 @@ begin
           LUnacked.Msg := LEntry.Msg;
           LUnacked.Priority := LEntry.Priority;
           LUnacked.ExpiraEm := LEntry.ExpiraEm;
+          LUnacked.JournalId := LEntry.JournalId;
+          LUnacked.ContentId := LEntry.ContentId;
           FUnacked.Add(LUnacked);
-        end;
+        end
+        else
+          // Get em no-ack: a colocacao acaba aqui, como na entrega sem ack.
+          Aposenta(LEntry.JournalId);
         // Com no-ack a referencia do estoque simplesmente passa ao chamador.
       end
       else
@@ -1649,6 +1793,7 @@ begin
         LCount := 0;
         while TakeReady(LEntry) do
         begin
+          Aposenta(LEntry.JournalId);
           LEntry.Msg.Release; // purge nao e' descarte por limite: nao conta
           Inc(LCount);
         end;

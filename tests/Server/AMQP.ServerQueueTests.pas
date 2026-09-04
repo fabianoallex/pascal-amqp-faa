@@ -1420,13 +1420,13 @@ type
     FMortas: array of TMortaRegistrada;
   public
     procedure DeadLetter(const ADlx, ARoutingKey: string;
-      AMessage: TAMQPMessage; APriority: Byte);
+      AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
     function Count: Integer;
     function Item(AIdx: Integer): TMortaRegistrada;
   end;
 
 procedure TSinkEspia.DeadLetter(const ADlx, ARoutingKey: string;
-  AMessage: TAMQPMessage; APriority: Byte);
+  AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
 var
   N: Integer;
 begin

@@ -101,7 +101,7 @@ type
   public
     constructor Create(AEngine: TAMQPEngine; const AVHost: string);
     procedure DeadLetter(const ADlx, ARoutingKey: string;
-      AMessage: TAMQPMessage; APriority: Byte);
+      AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
   end;
 
   TAMQPEngine = class(TInterfacedObject, IAMQPMessageSink)
@@ -113,6 +113,7 @@ type
     FQueues: TDictionary<string, TAMQPServerQueue>;
     FMaxQueueLength: Integer;
     FJournal: TAMQPJournal;
+    FProximoId: UInt64;
     FPool: TAMQPThreadPool;
     FRouted: Integer;   // atomico -- publicacoes com ao menos uma rota
     FUnrouted: Integer; // atomico -- publicacoes sem rota
@@ -204,6 +205,16 @@ type
     /// Grava um registro de topologia e ESPERA ele ficar duravel. False = nao
     /// deu, e o chamador devolve amqerSemDurabilidade.
     function GravaTopo(AKind: Byte; const APayload: TBytes): Boolean;
+    /// Proximo identificador de conteudo/colocacao. Monotonico e unico no
+    /// broker; sob o mesmo lock que ja' guarda as filas vivas, porque nao ha
+    /// incremento atomico de 64 bits portavel na AMQP.Threading e um contador
+    /// de 32 bits daria a volta num broker de vida longa.
+    function ProximoId: UInt64;
+    function GravaColocacao(AQueue: TAMQPServerQueue; const AVHost: string;
+      AMessage: TAMQPMessage; APriority: Byte; AMessageTtlMs: Int64;
+      var AContentId: UInt64; AEsperarVaga: Boolean): UInt64;
+    /// True se esta fila viva vai persistir alguma coisa (D20).
+    function FilaPersiste(AQueue: TAMQPServerQueue): Boolean;
     procedure MaybeAutoDeleteQueue(const AVHost, AQueue: string);
     /// Apaga o exchange se ele for `auto-delete` e nao for mais origem de
     /// binding nenhum. Chamar depois de todo unbind (inclusive os implicitos,
@@ -231,7 +242,7 @@ type
     /// thread do ATOR da fila de origem: le a topologia sob RWLock e posta na
     /// caixa das filas de destino, sem I/O e sem espera (D17).
     procedure RepublishTo(const AVHost, AExchange, ARoutingKey: string;
-      AMessage: TAMQPMessage; APriority: Byte);
+      AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
 
     /// Cutuca todas as filas (caso degradado da D3 -- ver
     /// TAMQPServerQueue.PostDeliverTick). Chamado pela thread monitora.
@@ -275,9 +286,10 @@ begin
 end;
 
 procedure TAMQPDeadLetterAdapter.DeadLetter(const ADlx, ARoutingKey: string;
-  AMessage: TAMQPMessage; APriority: Byte);
+  AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
 begin
-  FEngine.RepublishTo(FVHost, ADlx, ARoutingKey, AMessage, APriority);
+  FEngine.RepublishTo(FVHost, ADlx, ARoutingKey, AMessage, APriority,
+    AContentId);
 end;
 
 { TAMQPEngine }
@@ -604,6 +616,16 @@ begin
           FPool)
       else
         LQueue := TAMQPServerQueue.Create(AName, FMaxQueueLength, FPool);
+      // Fase 4: a fila viva precisa saber ONDE mora e SE persiste. Durable e
+      // Exclusive vem do descritor, que ja' e' a fonte da verdade -- reler os
+      // flags do declare aqui abriria espaco para os dois divergirem (a mesma
+      // razao pela qual a politica vem de la').
+      LQueue.VHostName := AVHost;
+      LQueue.Journal := FJournal;
+      if LDef <> nil then
+        LQueue.Durable := LDef.Durable and (not LDef.Exclusive)
+      else
+        LQueue.Durable := False;
       // WS5: e' por aqui que a fila alcanca a topologia para republicar as
       // mortas. Sem sink, uma morte vira simples descarte.
       LQueue.DeadLetterSink := TAMQPDeadLetterAdapter.Create(Self, AVHost);
@@ -885,6 +907,89 @@ begin
   Result := (LDef <> nil) and LDef.Durable and (not LDef.Exclusive);
 end;
 
+// Grava a colocacao (e, se pedido, o CONTEUDO junto no MESMO lote) e devolve
+// o identificador da colocacao. Zero = nada foi gravado.
+//
+// Roda na thread de QUEM PUBLICA -- a do publicador no publish, a do ator da
+// fila de origem no dead-letter. E' a D24: so' quem ja' roteou sabe quais
+// colocacoes precisam estar duraveis, e por isso e' quem escreve o lote.
+function TAMQPEngine.GravaColocacao(AQueue: TAMQPServerQueue;
+  const AVHost: string; AMessage: TAMQPMessage; APriority: Byte;
+  AMessageTtlMs: Int64; var AContentId: UInt64; AEsperarVaga: Boolean): UInt64;
+var
+  LRecs: TAMQPJournalRecords;
+  LConteudo: TAMQPRecContent;
+  LEnq: TAMQPRecEnqueue;
+  LN: Integer;
+begin
+  Result := 0;
+  if not FilaPersiste(AQueue) then
+    Exit;
+
+  LN := 0;
+  SetLength(LRecs, 2);
+  if AContentId = 0 then
+  begin
+    // Primeira colocacao desta mensagem: o corpo vai UMA vez (D22). As demais
+    // -- outras filas do mesmo publish, ou a derivada do dead-letter --
+    // reaproveitam este identificador e nao reescrevem o corpo.
+    AContentId := ProximoId;
+    LConteudo.ContentId := AContentId;
+    LConteudo.UserId := AMessage.UserId;
+    LConteudo.Body := AMessage.Body;
+    LRecs[0].Kind := AMQP_REC_CONTENT;
+    LRecs[0].Payload := AmqpEncodeRecContent(LConteudo);
+    LN := 1;
+  end;
+
+  Result := ProximoId;
+  LEnq.VHost := AVHost;
+  LEnq.Queue := AQueue.Name;
+  LEnq.EntryId := Result;
+  LEnq.ContentId := AContentId;
+  LEnq.Exchange := AMessage.Exchange;
+  LEnq.RoutingKey := AMessage.RoutingKey;
+  // Os numeros EFETIVOS, os mesmos que o ator vai guardar -- a fila e' quem os
+  // calcula, para nao haver duas copias da regra.
+  LEnq.Priority := AQueue.PrioridadeEfetiva(APriority);
+  LEnq.EnqueuedAtWall := AmqpWallMs; // D21: parede no disco, nunca monotonico
+  LEnq.TtlMs := AQueue.TtlEfetivo(AMessageTtlMs);
+  LEnq.HeaderPayload := AMessage.HeaderPayload;
+  LRecs[LN].Kind := AMQP_REC_ENQUEUE;
+  LRecs[LN].Payload := AmqpEncodeRecEnqueue(LEnq);
+  SetLength(LRecs, LN + 1);
+
+  try
+    if AEsperarVaga then
+      // Thread do publicador: PODE bloquear na contrapressao (D24, corolario c).
+      FJournal.Submit(LRecs)
+    else
+      // Thread do ATOR (dead-letter): a D2 proibe esperar I/O.
+      FJournal.SubmitNoWait(LRecs);
+  except
+    on E: EAMQPJournal do
+      // Journal em falha: nada foi gravado, entao a colocacao nao tem
+      // identidade e nenhuma aposentadoria sera escrita por ela depois.
+      Result := 0;
+  end;
+end;
+
+function TAMQPEngine.ProximoId: UInt64;
+begin
+  FLock.Enter;
+  try
+    Inc(FProximoId);
+    Result := FProximoId;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TAMQPEngine.FilaPersiste(AQueue: TAMQPServerQueue): Boolean;
+begin
+  Result := (FJournal <> nil) and (AQueue <> nil) and AQueue.Durable;
+end;
+
 function TAMQPEngine.GravaTopo(AKind: Byte; const APayload: TBytes): Boolean;
 var
   LRecs: TAMQPJournalRecords;
@@ -996,6 +1101,8 @@ var
   LHeaders: TAMQPFieldTable;
   LPriority: Byte;
   LTtlMs: Int64;
+  LPersistente: Boolean;
+  LContentId, LEntryId: UInt64;
 begin
   ARejeitada := False;
   LVHost := FVHosts.GetOrCreate(AVHost);
@@ -1031,22 +1138,36 @@ begin
     if not AmqpParseExpirationMs(AMessage.Properties.Expiration, LTtlMs) then
       LTtlMs := -1;
 
+  // D20: so' mensagem com delivery-mode 2 vai para o disco, e so' nas filas
+  // duraveis. Lido AQUI, na thread do publicador, pela mesma razao da
+  // prioridade e do 'expiration' (decisao D1): quem tem as propriedades
+  // decodificadas na mao e' quem publicou.
+  LPersistente := AMessage.Properties.Has(bpDeliveryMode)
+    and (AMessage.Properties.DeliveryMode = 2); // 2 = persistente (spec)
+
   LMsg := TAMQPMessage.FromServerMessage(AMessage);
   try
+    LContentId := 0;
     for I := 0 to High(LDestinos) do
     begin
       LQueue := FindQueue(AVHost, LDestinos[I]);
       if LQueue = nil then
         Continue;
+      LEntryId := 0;
+      if LPersistente then
+        LEntryId := GravaColocacao(LQueue, AVHost, LMsg, LPriority, LTtlMs,
+          LContentId, True);
       // D15: so' a fila declarada com reject-publish paga o enqueue SINCRONO.
       // As outras seguem pelo caminho assincrono de sempre.
       if LQueue.Policy.Overflow = amqovRejectPublish then
       begin
-        if not LQueue.TryPostMessage(LMsg, LPriority, LTtlMs) then
+        if not LQueue.TryPostMessage(LMsg, LPriority, LTtlMs, LEntryId,
+          LContentId) then
           ARejeitada := True;
       end
       else
-        LQueue.PostMessage(LMsg, LPriority, LTtlMs); // faz o proprio AddRef
+        // faz o proprio AddRef
+        LQueue.PostMessage(LMsg, LPriority, LTtlMs, LEntryId, LContentId);
     end;
   finally
     LMsg.Release; // a referencia do publicador
@@ -1054,8 +1175,10 @@ begin
 end;
 
 procedure TAMQPEngine.RepublishTo(const AVHost, AExchange,
-  ARoutingKey: string; AMessage: TAMQPMessage; APriority: Byte);
+  ARoutingKey: string; AMessage: TAMQPMessage; APriority: Byte;
+  AContentId: UInt64);
 var
+  LEntryId: UInt64;
   LVHost: TAMQPVHost;
   LDestinos: TArray<string>;
   LQueue: TAMQPServerQueue;
@@ -1092,11 +1215,20 @@ begin
   for I := 0 to High(LDestinos) do
   begin
     LQueue := FindQueue(AVHost, LDestinos[I]);
-    if LQueue <> nil then
-      // TTL da mensagem vai como -1: o 'expiration' original foi retirado pelo
-      // dead-lettering (senao ela morreria de novo no ato na DLQ), e o prazo
-      // que passa a valer e' o da fila de DESTINO.
-      LQueue.PostMessage(AMessage, APriority, -1);
+    if LQueue = nil then
+      Continue;
+    // D23: a colocacao NOVA e' escrita AQUI, e a velha so' e' aposentada
+    // depois, la' no MorreCom que nos chamou. Falhar no meio produz duplicata,
+    // nunca perda. O corpo NAO e' reescrito -- AContentId ja' identifica o que
+    // esta' no disco.
+    LEntryId := 0;
+    if AContentId <> 0 then
+      LEntryId := GravaColocacao(LQueue, AVHost, AMessage, APriority, -1,
+        AContentId, False); // no ator: sem esperar vaga (D2)
+    // TTL da mensagem vai como -1: o 'expiration' original foi retirado pelo
+    // dead-lettering (senao ela morreria de novo no ato na DLQ), e o prazo
+    // que passa a valer e' o da fila de DESTINO.
+    LQueue.PostMessage(AMessage, APriority, -1, LEntryId, AContentId);
   end;
 end;
 
