@@ -359,6 +359,39 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
 **A previsão que a medição desmentiu:** a memória do projeto registrava a D15 (enqueue síncrono do `x-overflow: reject-publish`) como "o único ponto da Fase 3 desenhado para ser substituído". Lida contra o desenho da D24, ela **não precisa ser substituída**: `TryPostMessage` é síncrono mas não faz I/O, então a recusa é conhecida antes de o pendente de confirm ser registrado. O que muda é só quando o ack sai.
 
+### Progresso
+
+- **WS0 (sondas)** concluída nos **dois compiladores** e nas duas plataformas. Sondas parqueadas em `build\sondas-ws0\` (diretório ignorado pelo git).
+
+  **1 · O group commit vale muito mais do que se supunha, e vale mais quanto pior o disco.** Registros de 256 B, cronometragem por `QueryPerformanceCounter`:
+
+  | plataforma | fsync 1:1 | fsync 1:100 | ganho |
+  |---|---|---|---|
+  | FPC 3.2.2 / Win64, NTFS local | 329–674 µs → 1,5k–2,2k reg/s | 530–1278 µs → 78k–188k reg/s | **35×–50×** |
+  | FPC 3.2.2 / Linux, overlay da VM do Docker | 5593–6124 µs → ~170 reg/s | 2405–2560 µs → ~40k reg/s | **~250×** |
+
+  O ganho **escala com o custo do fsync**, que é exatamente a propriedade desejada num lote que se ajusta sozinho (D25). Os números de Linux vêm de uma VM do Docker Desktop, não de metal — servem para decidir o desenho, não para citar como desempenho.
+
+  **2 · O ramo FPC não precisa de nenhuma condicional de plataforma.** Medido contra a RTL: `SysUtils.FileFlush` **é** `FlushFileBuffers` no Windows e `fpfsync` no Unix (`rtl/unix/sysutils.pp:492`), com tempos indistinguíveis do `fpfsync` chamado na mão; e `FileOpen`/`FileCreate` com `fmShareExclusive` **já dá exclusão real nas duas** — share mode no Windows, `fpflock(LOCK_EX or LOCK_NB)` no Unix (`rtl/unix/sysutils.pp:407..425`). Nos dois SOs o segundo dono é recusado e o lock é liberado no `FileClose`. Só o Delphi precisa de código próprio (não tem `FileFlush`).
+
+  **3 · O relógio de parede tinha um bug que só aparece fora de UTC — e a primeira sonda o tinha.** `DateTimeToUnix(LocalTimeToUniversal(Now), False)` converte **duas vezes**: o `False` diz "a entrada é local, converta", e a entrada já tinha sido convertida na mão. Fechado contra referência externa (`[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()`):
+
+  ```
+  A  DateTimeToUnix(UTC,   True)  + ms  = 1788533217385   correto
+  B  DateTimeToUnix(local, False) + ms  = 1788533217385   correto
+  C  DateTimeToUnix(UTC,   False) + ms  = 1788547617385   ERRADO (+4 h)
+  D  Round((UTC - UnixDateDelta) * 86400000) = 1788533217385   correto
+  referência PowerShell                 = 1788533217206
+  ```
+
+  **O que faz esse defeito ser perigoso é onde ele NÃO aparece:** numa máquina com fuso UTC — todo container e a maioria dos servidores Linux — `LocalTimeToUniversal` é no-op e a conta dupla soma zero. A sonda Linux passou com a fórmula errada e só a sonda Windows a pegou. Escolhida a forma **D** para o `AmqpWallMs`, que não depende da semântica do flag do `DateTimeToUnix` (que é o que difere entre os compiladores): converter para UTC (`LocalTimeToUniversal` no FPC, `TTimeZone.Local.ToUniversalTime` no Delphi) e subtrair `UnixDateDelta`.
+
+  **4 · Duas armadilhas de sonda, ambas do mesmo tipo — caminho de erro silencioso parecendo desempenho.** (a) Nomear os arquivos de teste `flush/1`, `flush/100`: a barra é separador de caminho no Windows, o `FileCreate` falhou, e `FlushFileBuffers` de handle inválido voltava em **0,3 µs** — a tabela dizia que gravar *com* fsync era 30× mais rápido que sem. (b) Medir o fsync do Linux em `/work`, que é o bind mount do diretório Windows: 24 ms por fsync em vez dos 2,4 ms do sistema de arquivos local do container. **Regra da fase: num benchmark de I/O, conferir o caminho antes do número.**
+
+  **5 · O lado Delphi fechou, e bate com o FPC.** `SondaWS0Delphi.dpr` na IDE (Delphi 12 CE, console): lock por share mode exclui o segundo dono e libera no close; `FlushFileBuffers` custa **626 µs** a 1:1 (1.597 reg/s) e **843 µs** a 1:100 (**118.635 reg/s**) — ganho de **74×**, dentro da faixa medida no FPC. `TTimeZone.Local.ToUniversalTime` confere: a corrida FPC deu `1788533217385` às 14:46:57 UTC e a Delphi `1788537058309` às 15:50:58 UTC — 64 min 1 s de diferença, exatamente os 3.841.000 ms esperados. A sonda foi escrita com a **API Win32 direta** de propósito, para o ramo Windows ser o mesmo texto nos dois compiladores — é a família de dívida que rendeu os quatro defeitos do `System.Net.Socket` na Fase 1.
+
+  **6 · Por que a forma D, e não a A, mesmo com as duas medidas corretas.** A forma A (`DateTimeToUnix(utc, True) * 1000 + MilliSecondOf(utc)`) soma o componente de milissegundos a um valor de segundos produzido por `Round()`. Se a RTL arredondasse para cima um horário com `ms >= 500`, a soma erraria em **até 1 segundo** — e 1 s num prazo de TTL é exatamente a classe de defeito que a D21 existe para evitar. No FPC isso não acontece porque `DateTimeToUnix` faz `RecodeMillisecond(T, 0)` antes do `Round` (`packages/rtl-objpas/src/inc/dateutil.inc:2274`), e a varredura confirma: **0 divergências entre A e D** nos 1000 valores de milissegundo do mesmo segundo e em 2001 instantes com `ms=500` espalhados por ~1,6 ano. Mas essa exatidão é **detalhe de implementação de uma RTL**, não contrato — e não foi verificada na outra. A forma D (`Round((utc - UnixDateDelta) * 86400000)`) não chama `DateTimeToUnix`, não depende da semântica do flag nem do zeramento de ms, e `UnixDateDelta` vale 25569 nos dois. **Escolhida por não ter nada que possa divergir**, não por ser mais rápida.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**
