@@ -1348,9 +1348,21 @@ begin
       else
       begin
         // A referencia do estoque passa para as nao-confirmadas.
+        //
+        // Priority e ExpiraEm TEM de vir junto: e' com eles que o requeue
+        // devolve a mensagem ao balde certo e com o prazo original (D12/D13).
+        // Faltavam aqui -- o caminho do Basic.Get ja' os copiava, este nao --,
+        // e o registro local ficava com lixo de pilha. Efeito: toda mensagem
+        // entregue a um CONSUMIDOR e depois devolvida (Nack/Reject com
+        // requeue, ou queda do canal) voltava para um balde arbitrario e com um
+        // prazo arbitrario. Ficou invisivel porque os testes de requeue usavam
+        // Basic.Get, e porque fila sem prioridade tem um balde so' e fila sem
+        // TTL nem varre prazo.
         LUnacked.ChannelId := LCons.Target.ChannelId;
         LUnacked.DeliveryTag := LTag;
         LUnacked.Msg := LEntry.Msg;
+        LUnacked.Priority := LEntry.Priority;
+        LUnacked.ExpiraEm := LEntry.ExpiraEm;
         FUnacked.Add(LUnacked);
       end;
     end

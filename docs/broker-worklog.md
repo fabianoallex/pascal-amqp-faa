@@ -496,6 +496,29 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   Suíte do server: **358 → 367** (Default) e **362 → 371** (`openssl`), com `0 unfreed memory blocks`. Aceitação 28/28. `verifica_espelhos.py` limpo. **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 367/367 e 371/371, aceitação 28/28, SmokeTest PASS nos quatro cruzamentos, 0 leaked em todas.** **Falta a fiação** (a fila e a engine gravando `CONTENT`/`ENQ`/`DEQ`), que é o resto da WS4.
 
+### Defeito das Fases 2/3 achado ao fiar a WS4: requeue de entrega a consumidor perdia prioridade e prazo
+
+Encontrado **lendo o código** para saber onde encaixar o `DEQ` da WS4, não por um teste que falhou.
+
+Em `TAMQPServerQueue.DeliverPending`, o registro de não-confirmada era preenchido com `ChannelId`, `DeliveryTag` e `Msg` — e **só**. `Priority` e `ExpiraEm` ficavam com lixo de pilha. O caminho do `Basic.Get` sempre copiou os dois; o da entrega a **consumidor** não.
+
+**Efeito:** toda mensagem entregue a um consumidor e depois devolvida — `Basic.Nack`/`Reject` com `requeue`, ou queda do canal — voltava para um **balde de prioridade arbitrário** e com um **prazo de TTL arbitrário**. E o mesmo lixo ia para o `x-death` quando a rejeitada seguia para o DLX.
+
+**Por que atravessou duas fases sem aparecer:**
+- todo teste de requeue usava `Basic.Get`, que é justamente o caminho correto;
+- fila sem `x-max-priority` tem **um balde só**, então prioridade errada é invisível;
+- fila sem TTL nem varre prazo (`FTemPrazo` fica falso), então `ExpiraEm` errado nunca é lido.
+
+Ou seja: o defeito só se manifesta em fila **com prioridade ou com TTL**, entregando a **consumidor**, e com **devolução** — as três coisas ao mesmo tempo, e nenhuma combinação estava coberta.
+
+**Dois testes novos**, os dois pelo caminho do consumidor:
+- `Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo` — meia-vida e vida inteira: com prazo lixo **pequeno** a mensagem morre cedo e a primeira metade cai; com prazo lixo **grande** (ou zero, que aqui significa "nunca vence") ela não morre nunca e a segunda metade cai. É o que fecha o cerco sobre um valor indeterminado.
+- `Prioridade_RequeueAposEntregaAConsumidor_VoltaAoProprioBalde` — o `'media'`, publicado **depois** da devolução, é o que torna o teste discriminante: sem um terceiro nível, devolver à *cabeça do balde errado* ainda pareceria certo.
+
+**Mutação, três mutantes, cada um morto pelo teste certo:** o bug original restaurado, `Priority := 0` e `ExpiraEm := 0`. Vale registrar que a primeira versão do teste de prioridade **falhou por premissa errada minha**: com um consumidor já anexado, o próprio enqueue entrega, então a primeira mensagem publicada sai primeiro independentemente da prioridade — e a `tag 1` era a `baixa`, não a `alta`. O teste passou a publicar as duas **antes** do consumidor e a usar a tag que o alvo de fato registrou, em vez de supor o número.
+
+Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blocos vazados. Aceitação 28/28, integração 28/28, SmokeTest PASS.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

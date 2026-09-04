@@ -74,6 +74,8 @@ type
     [Test] procedure Ttl_MenorEntreFilaEMensagemVence;
     [Test] procedure Ttl_GetNaoDevolveVencida;
     [Test] procedure Ttl_RequeuePreservaOPrazo;
+    [Test] procedure Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo;
+    [Test] procedure Prioridade_RequeueAposEntregaAConsumidor_VoltaAoProprioBalde;
   end;
 
   [TestFixture]
@@ -1271,6 +1273,105 @@ end;
 
 // Devolver ao estoque nao pode dar sobrevida: o prazo e o ORIGINAL, nao um
 // novo contado a partir do requeue.
+procedure TQueuePriorityTtlTests.Prioridade_RequeueAposEntregaAConsumidor_VoltaAoProprioBalde;
+var
+  LQ: TAMQPServerQueue;
+  LAlvo: TAlvoFalso;
+  LAlvoRef: IAMQPDeliveryTarget;
+begin
+  // A METADE DE PRIORIDADE do mesmo defeito do
+  // Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo: sem copiar Priority para
+  // a nao-confirmada, a devolucao cai num balde arbitrario.
+  //
+  // O 'media', publicado DEPOIS da devolucao, e' o que torna o teste
+  // discriminante: se a 'alta' voltasse para o balde 0, ela sairia atras dele.
+  // Sem esse terceiro nivel, a devolucao a' CABECA do balde errado ainda
+  // pareceria certa.
+  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  LAlvo := TAlvoFalso.Create(1);
+  LAlvoRef := LAlvo;
+  try
+    // As duas ANTES do consumidor: com consumidor ja' anexado, o proprio
+    // enqueue entrega na hora, e a primeira publicada sairia primeiro
+    // independentemente da prioridade. (A primeira versao deste teste supos o
+    // contrario e falhou -- a premissa errada era do TESTE, nao do codigo.)
+    Publica(LQ, 'baixa', 0);
+    Publica(LQ, 'alta', 5);
+    Estabiliza(LQ);
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
+      LAlvoRef));
+    LQ.PostDeliverTick;
+    Estabiliza(LQ);
+    ChecaInt('as duas foram entregues', 2, LAlvo.Count);
+    ChecaStr('a de maior prioridade saiu primeiro', 'alta',
+      LAlvo.Entrega(0).Corpo);
+
+    LQ.PostRemoveConsumer(1, 'ct');
+    Estabiliza(LQ);
+
+    // Devolve a 'alta' pela tag que ELA recebeu -- nada de supor numero.
+    LQ.PostNack(1, LAlvo.Entrega(0).DeliveryTag, False, True);
+    Estabiliza(LQ);
+    Publica(LQ, 'media', 3);
+    Estabiliza(LQ);
+
+    ChecaStr('a devolvida volta ao balde 5 e sai primeiro', 'alta',
+      TiraCorpo(LQ, 10));
+    ChecaStr('depois a media do balde 3', 'media', TiraCorpo(LQ, 11));
+  finally
+    LQ.Free;
+  end;
+end;
+
+procedure TQueuePriorityTtlTests.Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo;
+var
+  LQ: TQueueRelogio;
+  LAlvo: TAlvoFalso;
+  LAlvoRef: IAMQPDeliveryTarget;
+  LStats: TAMQPQueueStats;
+begin
+  // O irmao do Ttl_RequeuePreservaOPrazo, mas pelo caminho do CONSUMIDOR em
+  // vez do Basic.Get -- e e' esse o ponto. O caminho do Get sempre copiou
+  // Priority/ExpiraEm para a nao-confirmada; o da entrega a consumidor NAO
+  // copiava, e o registro ficava com lixo de pilha. Como todo teste de requeue
+  // usava Get, o defeito atravessou as Fases 2 e 3 sem aparecer.
+  //
+  // As duas metades do teste sao o que fecha o cerco: com prazo lixo PEQUENO a
+  // mensagem morre cedo e a primeira metade cai; com prazo lixo GRANDE (ou
+  // zero, que aqui significa "nunca vence") ela nao morre nunca e a segunda
+  // metade cai.
+  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  LAlvo := TAlvoFalso.Create(1);
+  LAlvoRef := LAlvo; // o teste segura a referencia (licao da WS5)
+  try
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
+      LAlvoRef));
+    Publica(LQ, 'm');
+    LQ.PostDeliverTick;
+    Estabiliza(LQ);
+    ChecaInt('entregue ao consumidor', 1, LAlvo.Count);
+
+    // Tira o consumidor para a devolucao nao ser reentregue na hora.
+    LQ.PostRemoveConsumer(1, 'ct');
+    Estabiliza(LQ);
+
+    LQ.Avanca(500);
+    LQ.PostNack(1, 1, False, True); // requeue da tag 1
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('a meio prazo continua viva', 1, LStats.MessageCount);
+    ChecaInt('e nao foi contada como expirada', 0, LStats.ExpiredCount);
+
+    LQ.Avanca(600); // 1100 no total, acima do TTL de 1000
+    LQ.PostDeliverTick;
+    LStats := Estabiliza(LQ);
+    ChecaInt('passado o prazo ORIGINAL, vence', 0, LStats.MessageCount);
+    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
 procedure TQueuePriorityTtlTests.Ttl_RequeuePreservaOPrazo;
 var
   LQ: TQueueRelogio;
