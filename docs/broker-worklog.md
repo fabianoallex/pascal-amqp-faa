@@ -494,7 +494,7 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **A lição, que vale para toda a fase:** o runner de teste é um ambiente com configuração própria, e um teste pode estar medindo essa configuração em vez do código. Quando uma mutação sobrevive, a pergunta seguinte não é só "o teste alcança a janela?" — é também "**o teste está herdando alguma coisa do runner que a produção não terá?**".
 
-  Suíte do server: **358 → 367** (Default) e **362 → 371** (`openssl`), com `0 unfreed memory blocks`. Aceitação 28/28. `verifica_espelhos.py` limpo. **Falta a fiação** (a fila e a engine gravando `CONTENT`/`ENQ`/`DEQ`), que é o resto da WS4.
+  Suíte do server: **358 → 367** (Default) e **362 → 371** (`openssl`), com `0 unfreed memory blocks`. Aceitação 28/28. `verifica_espelhos.py` limpo. **Validação Delphi (IDE), os dois configs: unitária 121/121, integração 28/28, server 367/367 e 371/371, aceitação 28/28, SmokeTest PASS nos quatro cruzamentos, 0 leaked em todas.** **Falta a fiação** (a fila e a engine gravando `CONTENT`/`ENQ`/`DEQ`), que é o resto da WS4.
 
 ### O travamento no Linux, investigado e corrigido
 
