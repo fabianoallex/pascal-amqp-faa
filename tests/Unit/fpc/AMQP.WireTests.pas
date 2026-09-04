@@ -49,6 +49,10 @@ type
     procedure Decode_Boolean;
     procedure Decode_LongStr;
     procedure Decode_ArrayDeTabelas_EstiloXDeath;
+    procedure Encode_ArrayDeTabelas_EstiloXDeath;
+    procedure RoundTrip_ArrayDeEscalares;
+    procedure Encode_ArrayVazio;
+    procedure Encode_TBytes_SaiComoTagX_NaoComoArray;
     procedure PropriedadesDeCliente_Tipicas;
   end;
 
@@ -60,6 +64,18 @@ implementation
 procedure EqualByte(AExpected: Integer; AActual: Byte);
 begin
   TAssert.AssertEquals(AExpected, Integer(AActual));
+end;
+
+// Hex de um TBytes, para comparar buffers inteiros numa assercao so' (a
+// mensagem de falha mostra os dois lados, o que um AssertEquals byte a byte
+// nao daria).
+function BytesHex(const ABytes: TBytes): string;
+var
+  I: Integer;
+begin
+  Result := '';
+  for I := 0 to High(ABytes) do
+    Result := Result + IntToHex(ABytes[I], 2);
 end;
 
 { TAMQPWriterTests }
@@ -616,6 +632,240 @@ begin
       // Tambem exercita o destrutor: a tabela aninhada DENTRO do array deve
       // ser liberada (fazia leak no FPC antes do AmqpUnwrapValue no Destroy).
       LOut.Free;
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+// O caminho de ESCRITA do mesmo x-death que o teste acima le'. Ate' a Fase 3
+// o codec era assimetrico: lia arrays 'A' e nao os escrevia (o
+// WriteFieldValue nao tratava tkDynArray), entao esta forma -- array de
+// tabelas, que e' exatamente o header x-death do dead-lettering -- levantava
+// EAMQPWire. Vale para as duas pontas: sem isto, nem o broker emite x-death
+// nem uma aplicacao cliente publica header de array.
+procedure TAMQPFieldTableTests.Encode_ArrayDeTabelas_EstiloXDeath;
+var
+  W: TAMQPWriter;
+  R: TAMQPReader;
+  LEntrada, LOut, LTab: TAMQPFieldTable;
+  LArr: TAMQPValueArray;
+  LVal, LElem, LCampo: TValue;
+  LBytes: TBytes;
+  LTexto: string;
+begin
+  LEntrada := TAMQPFieldTable.Create;
+  LEntrada.Put('queue', 'fila-trab');
+  LEntrada.Put('reason', 'expired');
+  LEntrada.Put('count', Int64(3));
+
+  SetLength(LArr, 1);
+  LArr[0] := TValue.From<TObject>(LEntrada);
+
+  LOut := TAMQPFieldTable.Create;
+  try
+    // TValue.From<T> numa variavel antes do Put: encadear a especializacao
+    // inline num Put trava o FPC 3.2 com erro interno (gotcha do CLAUDE.md).
+    LVal := TValue.From<TAMQPValueArray>(LArr);
+    LOut.Put('x-death', LVal);
+
+    W := TAMQPWriter.Create;
+    try
+      W.WriteFieldTable(LOut);
+      LBytes := W.ToBytes;
+    finally
+      W.Free;
+    end;
+  finally
+    LOut.Free; // dona da entrada aninhada dentro do array
+  end;
+
+  AssertTrue('deve ter escrito bytes', Length(LBytes) > 0);
+
+  R := TAMQPReader.Create(LBytes);
+  try
+    LOut := R.ReadFieldTable;
+    try
+      AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
+      LVal := AmqpUnwrapValue(LVal);
+      AssertTrue('valor deve ser array', LVal.IsArray);
+      AssertEquals('um elemento', 1, LVal.GetArrayLength);
+      LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
+      AssertTrue('elemento deve ser objeto', LElem.IsObject);
+      AssertTrue('elemento deve ser tabela', LElem.AsObject is TAMQPFieldTable);
+      LTab := TAMQPFieldTable(LElem.AsObject);
+      AssertTrue('deve ter queue', LTab.TryGetValue('queue', LCampo));
+      LTexto := LCampo.AsString;
+      AssertEquals('queue', 'fila-trab', LTexto);
+      AssertTrue('deve ter reason', LTab.TryGetValue('reason', LCampo));
+      LTexto := LCampo.AsString;
+      AssertEquals('reason', 'expired', LTexto);
+      AssertTrue('deve ter count', LTab.TryGetValue('count', LCampo));
+      AssertEquals('count', 3, Integer(LCampo.AsInt64));
+    finally
+      LOut.Free;
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+// Escrever -> ler -> escrever tem de dar os MESMOS bytes. E' a propriedade que
+// o dead-lettering depende: reescrever um header so' pode mudar o que mudou de
+// fato. Cobre tres tipos de elemento no mesmo array.
+procedure TAMQPFieldTableTests.RoundTrip_ArrayDeEscalares;
+var
+  W: TAMQPWriter;
+  R: TAMQPReader;
+  LT1, LT2: TAMQPFieldTable;
+  LArr: TAMQPValueArray;
+  LVal, LElem: TValue;
+  B1, B2: TBytes;
+  LTexto: string;
+begin
+  SetLength(LArr, 3);
+  LArr[0] := TValue.From<string>('um');
+  LArr[1] := TValue.From<Int64>(42);
+  LArr[2] := TValue.From<Boolean>(True);
+
+  LT1 := TAMQPFieldTable.Create;
+  try
+    LVal := TValue.From<TAMQPValueArray>(LArr);
+    LT1.Put('lista', LVal);
+    W := TAMQPWriter.Create;
+    try
+      W.WriteFieldTable(LT1);
+      B1 := W.ToBytes;
+    finally
+      W.Free;
+    end;
+  finally
+    LT1.Free;
+  end;
+
+  R := TAMQPReader.Create(B1);
+  try
+    LT2 := R.ReadFieldTable;
+  finally
+    R.Free;
+  end;
+  try
+    AssertTrue('deve ter lista', LT2.TryGetValue('lista', LVal));
+    LVal := AmqpUnwrapValue(LVal);
+    AssertEquals('tres elementos', 3, LVal.GetArrayLength);
+    LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
+    LTexto := LElem.AsString;
+    AssertEquals('elemento 0', 'um', LTexto);
+    LElem := AmqpUnwrapValue(LVal.GetArrayElement(1));
+    AssertEquals('elemento 1', 42, Integer(LElem.AsInt64));
+    LElem := AmqpUnwrapValue(LVal.GetArrayElement(2));
+    AssertTrue('elemento 2', LElem.AsBoolean);
+
+    W := TAMQPWriter.Create;
+    try
+      W.WriteFieldTable(LT2);
+      B2 := W.ToBytes;
+    finally
+      W.Free;
+    end;
+  finally
+    LT2.Free;
+  end;
+
+  AssertEquals('os bytes tem de ser estaveis na segunda passada',
+    BytesHex(B1), BytesHex(B2));
+end;
+
+procedure TAMQPFieldTableTests.Encode_ArrayVazio;
+var
+  W: TAMQPWriter;
+  R: TAMQPReader;
+  LT1, LT2: TAMQPFieldTable;
+  LArr: TAMQPValueArray;
+  LVal: TValue;
+  LBytes: TBytes;
+begin
+  SetLength(LArr, 0);
+  LT1 := TAMQPFieldTable.Create;
+  try
+    LVal := TValue.From<TAMQPValueArray>(LArr);
+    LT1.Put('nada', LVal);
+    W := TAMQPWriter.Create;
+    try
+      W.WriteFieldTable(LT1);
+      LBytes := W.ToBytes;
+    finally
+      W.Free;
+    end;
+  finally
+    LT1.Free;
+  end;
+
+  R := TAMQPReader.Create(LBytes);
+  try
+    LT2 := R.ReadFieldTable;
+    try
+      AssertTrue('deve ter a chave', LT2.TryGetValue('nada', LVal));
+      LVal := AmqpUnwrapValue(LVal);
+      AssertTrue('deve ser array', LVal.IsArray);
+      AssertEquals('sem elementos', 0, LVal.GetArrayLength);
+    finally
+      LT2.Free;
+    end;
+  finally
+    R.Free;
+  end;
+end;
+
+// TBytes TAMBEM e' dynamic array, mas o wire dele e' 'x' (FV_BYTES), nao 'A'.
+// Sem essa distincao no WriteFieldValue, um valor de bytes relido do wire
+// seria reescrito como array de inteiros -- o tipo mudaria em silencio no
+// round-trip.
+procedure TAMQPFieldTableTests.Encode_TBytes_SaiComoTagX_NaoComoArray;
+var
+  W: TAMQPWriter;
+  R: TAMQPReader;
+  LT1, LT2: TAMQPFieldTable;
+  LVal: TValue;
+  LOrig, LVolta, LBytes: TBytes;
+  I: Integer;
+begin
+  SetLength(LOrig, 4);
+  LOrig[0] := 1; LOrig[1] := 255; LOrig[2] := 0; LOrig[3] := 128;
+
+  LT1 := TAMQPFieldTable.Create;
+  try
+    LVal := TValue.From<TBytes>(LOrig);
+    LT1.Put('blob', LVal);
+    W := TAMQPWriter.Create;
+    try
+      W.WriteFieldTable(LT1);
+      LBytes := W.ToBytes;
+    finally
+      W.Free;
+    end;
+  finally
+    LT1.Free;
+  end;
+
+  // 4 (tamanho da tabela) + 1 (tamanho do nome) + 4 ('blob') = offset do tag.
+  AssertEquals('tag do valor tem de ser x (FV_BYTES), nao A',
+    Ord('x'), Integer(LBytes[9]));
+
+  R := TAMQPReader.Create(LBytes);
+  try
+    LT2 := R.ReadFieldTable;
+    try
+      AssertTrue('deve ter blob', LT2.TryGetValue('blob', LVal));
+      // AsType<T> nao existe no FPC 3.2 -- extrai elemento a elemento, que
+      // funciona nos dois compiladores.
+      SetLength(LVolta, LVal.GetArrayLength);
+      for I := 0 to High(LVolta) do
+        LVolta[I] := Byte(LVal.GetArrayElement(I).AsInteger);
+      AssertEquals('quatro bytes de volta', 4, Length(LVolta));
+      AssertEquals('conteudo intacto', BytesHex(LOrig), BytesHex(LVolta));
+    finally
+      LT2.Free;
     end;
   finally
     R.Free;

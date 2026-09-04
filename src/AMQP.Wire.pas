@@ -77,6 +77,7 @@ type
     FBitCount: Integer;
     procedure FlushBits;
     procedure WriteFieldValue(const AValue: TValue);
+    procedure WriteFieldArray(const AValue: TValue);
   public
     constructor Create;
     destructor Destroy; override;
@@ -361,6 +362,8 @@ var
   LObj: TObject;
   LSingle: Single;
   LDouble: Double;
+  LRaw: TBytes;
+  I: Integer;
 begin
   case AValue.Kind of
     // No FPC, Boolean tem Kind proprio (tkBool); no Delphi cai em tkEnumeration.
@@ -430,9 +433,58 @@ begin
         else
           raise EAMQPWire.Create('field-table: objeto nao suportado (apenas TAMQPFieldTable)');
       end;
+
+    // Dynamic array. TBytes ('x') e' um caso a' parte porque TAMQPReader
+    // produz TValue.From<TBytes> para FV_BYTES e TBytes TAMBEM e' dynamic
+    // array -- sem esta distincao, um valor de bytes relido do wire seria
+    // reescrito como array de inteiros. Qualquer outro dynamic array vira
+    // field-array ('A'), cada elemento com o proprio octeto de tipo.
+    tkDynArray:
+      if AValue.TypeInfo = TypeInfo(TBytes) then
+      begin
+        WriteOctet(FV_BYTES);
+        SetLength(LRaw, AValue.GetArrayLength);
+        for I := 0 to High(LRaw) do
+          LRaw[I] := Byte(AValue.GetArrayElement(I).AsInteger);
+        WriteLongUInt(Cardinal(Length(LRaw)));
+        WriteRaw(LRaw);
+      end
+      else
+      begin
+        WriteOctet(FV_ARRAY);
+        WriteFieldArray(AValue);
+      end;
   else
     raise EAMQPWire.CreateFmt('field-table: TValue.Kind nao suportado (%d)', [Ord(AValue.Kind)]);
   end;
+end;
+
+// Corpo de um field-array ('A'): long-uint com o tamanho em bytes, seguido dos
+// field-values concatenados -- cada um com o proprio octeto de tipo, exatamente
+// o que TAMQPReader.ReadFieldValue consome no ramo FV_ARRAY. O octeto 'A' e' do
+// chamador (WriteFieldValue), como em WriteFieldTable.
+//
+// AmqpUnwrapValue em CADA elemento: no FPC 3.2, GetArrayElement sobre um
+// TArray<TValue> devolve o elemento re-embrulhado (um TValue de Kind=tkRecord
+// contendo o TValue interno) -- sem desembrulhar, todo elemento cairia no
+// "Kind nao suportado". E' no-op no Delphi e em array cujo elemento nao seja
+// TValue, entao pode ser aplicado sem condicional.
+procedure TAMQPWriter.WriteFieldArray(const AValue: TValue);
+var
+  LInner: TAMQPWriter;
+  LBytes: TBytes;
+  I: Integer;
+begin
+  LInner := TAMQPWriter.Create;
+  try
+    for I := 0 to AValue.GetArrayLength - 1 do
+      LInner.WriteFieldValue(AmqpUnwrapValue(AValue.GetArrayElement(I)));
+    LBytes := LInner.ToBytes;
+  finally
+    LInner.Free;
+  end;
+  WriteLongUInt(Cardinal(Length(LBytes)));
+  WriteRaw(LBytes);
 end;
 
 procedure TAMQPWriter.WriteFieldTable(ATable: TAMQPFieldTable);
