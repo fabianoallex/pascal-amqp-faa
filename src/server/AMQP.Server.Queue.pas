@@ -255,7 +255,7 @@ type
   TAMQPQueueCmdKind = (
     amqqcEnqueue, amqqcAddConsumer, amqqcRemoveConsumer, amqqcRemoveChannel,
     amqqcAck, amqqcNack, amqqcReject, amqqcDeliverTick,
-    amqqcGet, amqqcPurge, amqqcDelete, amqqcStats);
+    amqqcEnqueueSync, amqqcGet, amqqcPurge, amqqcDelete, amqqcStats);
 
   { Um comando na caixa. Campos publicos de proposito: e' um registro de
     passagem entre o postador e o ator, nao um objeto de dominio.
@@ -317,7 +317,9 @@ type
   TAMQPServerQueue = class
   private
     FName: string;
-    FMaxLength: Integer;
+    FMaxLength: Integer;      // teto EFETIVO de contagem (global + fila)
+    FMaxBytes: Int64;         // teto EFETIVO de bytes (-1 = sem teto)
+    FBytesProntos: Int64;     // soma dos corpos das PRONTAS (so' do ator)
     FPool: TAMQPThreadPool;
     // --- caixa (sob FMon) ---
     FMon: TAMQPMonitor;
@@ -378,6 +380,14 @@ type
     procedure RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
       AExpiraEm: UInt64);
     procedure EnforceMaxLength;
+    /// Soma/subtrai o corpo de uma entrada no acumulador de bytes prontos.
+    /// Toda entrada que ENTRA ou SAI do estoque passa por aqui -- se um
+    /// caminho esquecer, o acumulador vira lixo e o teto de bytes deixa de
+    /// valer (sem nenhum sintoma imediato).
+    procedure ContaBytes(const AEntry: TAMQPQueueEntry; ASinal: Integer);
+    /// True se a fila esta' cheia AGORA (por contagem ou por bytes). So' faz
+    /// sentido em fila com x-overflow reject-publish.
+    function EstaCheia: Boolean;
     /// ARejeitada separa ACK de NACK/REJECT-sem-requeue: os dois chegam aqui
     /// com ARequeue=False, mas so' o segundo e' morte (razao 'rejected').
     /// Confundir os dois mandaria toda mensagem confirmada para o DLX.
@@ -458,6 +468,21 @@ type
 
     // --- comandos sincronos (levantam EAMQPQueueActor se a fila ja parou,
     //     se forem postados de dentro do proprio ator, ou no timeout) ---
+    /// Enqueue SINCRONO, para fila declarada com x-overflow reject-publish
+    /// (decisao D15). Devolve False quando a fila esta' cheia e a mensagem foi
+    /// RECUSADA -- e' o unico caminho em que uma fila diz nao a um publish.
+    ///
+    /// Por que sincrono: o publicador precisa da resposta ANTES do Basic.Ack, e
+    /// o PostMessage e' assincrono e nao devolve nada. Bloquear o publicador
+    /// aqui nao e' efeito colateral -- e' literalmente a semantica que
+    /// reject-publish pede. O comando nao faz I/O, entao o teto de 15 s e' rede
+    /// contra bug nosso, nao contra peer lento.
+    ///
+    /// E' o UNICO ponto da Fase 3 desenhado para ser substituido: quando a
+    /// Fase 4 tiver o registro de confirms pendentes, isto vira assincrono.
+    function TryPostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
+      AMessageTtlMs: Int64 = -1): Boolean;
+
     /// Basic.Get. ADeliveryTag e' a tag que o CANAL vai usar (a fila nao
     /// gera tags -- elas sao monotonicas por canal). Com ANoAck=False a
     /// mensagem vai para as nao-confirmadas. A referencia devolvida em
@@ -596,9 +621,21 @@ begin
     FMaxPriority := APolicy.MaxPriority
   else
     FMaxPriority := 0;
+  // COMPOSICAO DOS TETOS (WS6): o teto global do broker
+  // (TAMQPServer.MaxQueueLength, decisao D7) e o x-max-length da FILA sao os
+  // dois um limite superior, entao o MENOR vence. A razao e' de papel, nao de
+  // aritmetica: o global e' uma rede de seguranca do PROCESSO HOSPEDEIRO -- o
+  // broker roda dentro da app do usuario --, e um argumento vindo do cliente
+  // nao pode afrouxar uma rede de seguranca. 0/ausente = sem teto daquele
+  // lado, e ai' vale o outro.
   if AMaxLength < 0 then
     AMaxLength := 0;
   FMaxLength := AMaxLength;
+  if APolicy.MaxLength >= 0 then
+    if (FMaxLength = 0) or (APolicy.MaxLength < FMaxLength) then
+      FMaxLength := Integer(APolicy.MaxLength);
+  // Nao ha teto global de BYTES: x-max-length-bytes so' vem da fila.
+  FMaxBytes := APolicy.MaxLengthBytes;
   if APool <> nil then
     FPool := APool
   else
@@ -828,6 +865,7 @@ begin
       LEntry.Msg.Release;
     end;
   end;
+  FBytesProntos := 0;
   for I := 0 to FUnacked.Count - 1 do
     FUnacked[I].Msg.Release;
   FUnacked.Clear;
@@ -847,6 +885,26 @@ begin
   LCmd.Priority := APriority;
   LCmd.MessageTtlMs := AMessageTtlMs;
   Post(LCmd);
+end;
+
+function TAMQPServerQueue.TryPostMessage(AMessage: TAMQPMessage;
+  APriority: Byte; AMessageTtlMs: Int64): Boolean;
+var
+  LCmd: TAMQPQueueCommand;
+begin
+  LCmd := TAMQPQueueCommand.Create(amqqcEnqueueSync, True);
+  try
+    AMessage.AddRef; // a referencia da FILA, como no PostMessage
+    LCmd.Msg := AMessage;
+    LCmd.Priority := APriority;
+    LCmd.MessageTtlMs := AMessageTtlMs;
+    PostSync(LCmd);
+    Result := LCmd.ResOk;
+  finally
+    // Se o ator recusou, a referencia que este comando carregava continua nele
+    // e sai no destrutor -- por isso o Release do comando basta.
+    LCmd.Release;
+  end;
 end;
 
 procedure TAMQPServerQueue.PostAddConsumer(AConsumer: TAMQPServerConsumer);
@@ -1018,6 +1076,7 @@ begin
       AEntry := FStock[I].Dequeue
     else
       Continue;
+    ContaBytes(AEntry, -1); // TakeReady e' o caminho comum de saida
     Exit(True);
   end;
   Result := False;
@@ -1184,11 +1243,13 @@ begin
     while VenceCabeca(FRequeued[I]) do
     begin
       LEntry := FRequeued[I].Dequeue;
+      ContaBytes(LEntry, -1);
       DescartaExpirada(LEntry);
     end;
     while VenceCabeca(FStock[I]) do
     begin
       LEntry := FStock[I].Dequeue;
+      ContaBytes(LEntry, -1);
       DescartaExpirada(LEntry);
     end;
   end;
@@ -1292,6 +1353,7 @@ begin
   LEntry.Redelivered := True;
   LEntry.Priority := LimitaPrioridade(APriority);
   LEntry.ExpiraEm := AExpiraEm;
+  ContaBytes(LEntry, +1);
   FRequeued[LEntry.Priority].Enqueue(LEntry);
 end;
 
@@ -1299,15 +1361,36 @@ end;
 // roda DENTRO da app do usuario e uma fila sem consumidor nao pode derrubar o
 // processo hospedeiro. Conta so' as prontas (as nao-confirmadas ja estao com
 // um consumidor).
+// O acumulador de bytes existe porque somar os corpos a cada checagem seria
+// O(n) por publish. O preco e' que TODA entrada e saida do estoque tem de
+// passar por aqui -- um caminho esquecido nao da sintoma nenhum na hora, so'
+// um teto que para de valer.
+procedure TAMQPServerQueue.ContaBytes(const AEntry: TAMQPQueueEntry;
+  ASinal: Integer);
+begin
+  if AEntry.Msg <> nil then
+    Inc(FBytesProntos, Int64(ASinal) * AEntry.Msg.BodySize);
+end;
+
+function TAMQPServerQueue.EstaCheia: Boolean;
+begin
+  Result := ((FMaxLength > 0) and (ReadyCount >= FMaxLength))
+    or ((FMaxBytes >= 0) and (FBytesProntos >= FMaxBytes));
+end;
+
 procedure TAMQPServerQueue.EnforceMaxLength;
 var
   LEntry: TAMQPQueueEntry;
   I: Integer;
   LTirou: Boolean;
 begin
-  if FMaxLength <= 0 then
+  if (FMaxLength <= 0) and (FMaxBytes < 0) then
     Exit;
-  while ReadyCount > FMaxLength do
+  // Sai enquanto QUALQUER um dos dois tetos estiver estourado. O teste e' por
+  // ">" e nao ">=": o teto e' o que a fila PODE guardar, entao ela so' descarta
+  // depois de passar dele.
+  while ((FMaxLength > 0) and (ReadyCount > FMaxLength))
+    or ((FMaxBytes >= 0) and (FBytesProntos > FMaxBytes)) do
   begin
     // D12: comeca pelo balde de MENOR prioridade. Descartar da cabeca absoluta
     // (que e' a de MAIOR prioridade) jogaria fora justamente o que o cliente
@@ -1321,6 +1404,7 @@ begin
         LEntry := FStock[I].Dequeue
       else
         Continue;
+      ContaBytes(LEntry, -1);
       Inc(FDropped);
       // 'maxlen': o descarte por teto tambem e' morte, e vai para o DLX como
       // as outras. MorreCom consome a referencia.
@@ -1408,11 +1492,35 @@ begin
         if LEntry.ExpiraEm > 0 then
           FTemPrazo := True;
         ACmd.Msg := nil; // a referencia passou para o estoque
+        ContaBytes(LEntry, +1);
         FStock[LEntry.Priority].Enqueue(LEntry);
         // A ORDEM importa: expira antes de aplicar o teto, senao uma mensagem
         // ja vencida ocuparia vaga e faria descartar uma viva.
         ExpiraVencidas;
         EnforceMaxLength;
+      end;
+
+    amqqcEnqueueSync:
+      begin
+        // Expira ANTES de decidir: uma vencida ocupando vaga faria recusar um
+        // publish vivo -- mesmo motivo da ordem no enqueue assincrono.
+        ExpiraVencidas;
+        if EstaCheia then
+          // A referencia fica no comando e sai no destrutor dele.
+          ACmd.ResOk := False
+        else
+        begin
+          LEntry.Msg := ACmd.Msg;
+          LEntry.Redelivered := False;
+          LEntry.Priority := LimitaPrioridade(ACmd.Priority);
+          LEntry.ExpiraEm := CalculaPrazo(ACmd.MessageTtlMs);
+          if LEntry.ExpiraEm > 0 then
+            FTemPrazo := True;
+          ACmd.Msg := nil;
+          ContaBytes(LEntry, +1);
+          FStock[LEntry.Priority].Enqueue(LEntry);
+          ACmd.ResOk := True;
+        end;
       end;
 
     amqqcAddConsumer:
@@ -1544,7 +1652,7 @@ begin
   // prefetch ou devolve mensagem) e o tick do caso degradado da D3. Get,
   // Purge, Stats, Delete e a saida de um consumidor nunca criam oportunidade
   // de entrega, entao nem tentam.
-  if ACmd.Kind in [amqqcEnqueue, amqqcAddConsumer, amqqcAck, amqqcNack,
+  if ACmd.Kind in [amqqcEnqueue, amqqcEnqueueSync, amqqcAddConsumer, amqqcAck, amqqcNack,
     amqqcReject, amqqcRemoveChannel, amqqcDeliverTick] then
     DeliverPending;
 end;

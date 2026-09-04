@@ -89,6 +89,18 @@ type
     procedure SemDlx_MorteEhDescarte;
   end;
 
+  TOverflowTests = class(TTestCase)
+  published
+    procedure DropHead_DescartaAMaisVelha;
+    procedure MaxLengthBytes_ContaOCorpo;
+    procedure MaxLengthBytes_AcumuladorVoltaAoConsumir;
+    procedure RejectPublish_RecusaQuandoCheia;
+    procedure RejectPublish_VoltaAAceitarAoEsvaziar;
+    procedure RejectPublish_VencidaNaoOcupaVaga;
+    procedure TetoGlobalEDaFila_OMenorVence;
+    procedure DropHead_ContinuaIndoParaODlx;
+  end;
+
 implementation
 
 { --- helpers --- }
@@ -1797,9 +1809,251 @@ begin
   end;
 end;
 
+{ TOverflowTests }
+
+function PolMaxLen(AMax: Int64; AOverflow: TAMQPOverflow = amqovDropHead;
+  AMaxBytes: Int64 = -1): TAMQPQueuePolicy;
+begin
+  Result := TAMQPQueuePolicy.Empty;
+  Result.MaxLength := AMax;
+  Result.MaxLengthBytes := AMaxBytes;
+  Result.Overflow := AOverflow;
+end;
+
+// drop-head e o default: ao estourar, a MAIS VELHA sai.
+procedure TOverflowTests.DropHead_DescartaAMaisVelha;
+var
+  LQ: TAMQPServerQueue;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(2));
+  try
+    Publica(LQ, 'a');
+    Publica(LQ, 'b');
+    Publica(LQ, 'c');
+    LStats := Estabiliza(LQ);
+    ChecaInt('teto respeitado', 2, LStats.MessageCount);
+    ChecaInt('uma descartada', 1, LStats.DroppedCount);
+    ChecaStr('a mais velha saiu', 'b', TiraCorpo(LQ, 1));
+    ChecaStr('e a seguinte', 'c', TiraCorpo(LQ, 2));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// x-max-length-bytes conta o CORPO, nao a quantidade.
+procedure TOverflowTests.MaxLengthBytes_ContaOCorpo;
+var
+  LQ: TAMQPServerQueue;
+  LStats: TAMQPQueueStats;
+begin
+  // Teto de 10 bytes; cada corpo abaixo tem 4.
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(-1, amqovDropHead, 10));
+  try
+    Publica(LQ, 'aaaa');
+    Publica(LQ, 'bbbb');
+    LStats := Estabiliza(LQ);
+    ChecaInt('8 bytes cabem', 2, LStats.MessageCount);
+    Publica(LQ, 'cccc'); // 12 bytes: estoura
+    LStats := Estabiliza(LQ);
+    ChecaInt('estourou, uma saiu', 2, LStats.MessageCount);
+    ChecaInt('contada', 1, LStats.DroppedCount);
+    ChecaStr('a mais velha saiu', 'bbbb', TiraCorpo(LQ, 1));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O acumulador de bytes tem de VOLTAR ao tirar mensagem -- senao a fila fica
+// "cheia" para sempre depois de um pico. E' o risco real de manter um total
+// incremental em vez de somar na hora.
+procedure TOverflowTests.MaxLengthBytes_AcumuladorVoltaAoConsumir;
+var
+  LQ: TAMQPServerQueue;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(-1, amqovDropHead, 10));
+  try
+    Publica(LQ, 'aaaa');
+    Publica(LQ, 'bbbb');
+    ChecaStr('consome uma', 'aaaa', TiraCorpo(LQ, 1));
+    // Sobraram 4 bytes; se o acumulador nao tivesse voltado, esta publicacao
+    // pareceria estourar o teto e derrubaria a anterior.
+    Publica(LQ, 'cccc');
+    LStats := Estabiliza(LQ);
+    ChecaInt('as duas cabem', 2, LStats.MessageCount);
+    ChecaInt('nada descartado', 0, LStats.DroppedCount);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// D15: com reject-publish, o enqueue e SINCRONO e devolve False quando cheia.
+procedure TOverflowTests.RejectPublish_RecusaQuandoCheia;
+var
+  LQ: TAMQPServerQueue;
+  LMsg: TAMQPMessage;
+  LStats: TAMQPQueueStats;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(1, amqovRejectPublish));
+  try
+    LMsg := NovaMensagem('primeira');
+    try
+      ChecaBool('a primeira entra', True, LQ.TryPostMessage(LMsg));
+    finally
+      LMsg.Release;
+    end;
+    LMsg := NovaMensagem('segunda');
+    try
+      ChecaBool('a segunda e RECUSADA', False, LQ.TryPostMessage(LMsg));
+    finally
+      LMsg.Release;
+    end;
+    LStats := Estabiliza(LQ);
+    ChecaInt('so a primeira ficou', 1, LStats.MessageCount);
+    // Recusar NAO e descartar: a mensagem nunca entrou, entao nao conta como
+    // dropped -- quem foi avisado foi o publicador.
+    ChecaInt('recusa nao conta como descarte', 0, LStats.DroppedCount);
+    ChecaStr('e e a primeira', 'primeira', TiraCorpo(LQ, 1));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Depois de esvaziar, a fila volta a aceitar.
+procedure TOverflowTests.RejectPublish_VoltaAAceitarAoEsvaziar;
+var
+  LQ: TAMQPServerQueue;
+  LMsg: TAMQPMessage;
+begin
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(1, amqovRejectPublish));
+  try
+    LMsg := NovaMensagem('a');
+    try
+      LQ.TryPostMessage(LMsg);
+    finally
+      LMsg.Release;
+    end;
+    LMsg := NovaMensagem('b');
+    try
+      ChecaBool('cheia recusa', False, LQ.TryPostMessage(LMsg));
+    finally
+      LMsg.Release;
+    end;
+    ChecaStr('esvazia', 'a', TiraCorpo(LQ, 1));
+    LMsg := NovaMensagem('c');
+    try
+      ChecaBool('vazia aceita de novo', True, LQ.TryPostMessage(LMsg));
+    finally
+      LMsg.Release;
+    end;
+  finally
+    LQ.Free;
+  end;
+end;
+
+// Uma mensagem VENCIDA nao pode ocupar vaga e fazer recusar um publish vivo.
+procedure TOverflowTests.RejectPublish_VencidaNaoOcupaVaga;
+var
+  LQ: TQueueRelogio;
+  LPol: TAMQPQueuePolicy;
+  LMsg: TAMQPMessage;
+begin
+  LPol := PolMaxLen(1, amqovRejectPublish);
+  LPol.MessageTtlMs := 100;
+  LQ := TQueueRelogio.Create('q', LPol);
+  try
+    LMsg := NovaMensagem('velha');
+    try
+      ChecaBool('entra', True, LQ.TryPostMessage(LMsg));
+    finally
+      LMsg.Release;
+    end;
+    LQ.Avanca(101); // a velha venceu
+    LMsg := NovaMensagem('nova');
+    try
+      ChecaBool('a vaga da vencida e liberada', True, LQ.TryPostMessage(LMsg));
+    finally
+      LMsg.Release;
+    end;
+    ChecaStr('e a nova esta la', 'nova', TiraCorpo(LQ, 1));
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O teto GLOBAL (D7) e o x-max-length da fila sao os dois um limite superior,
+// entao o MENOR vence -- e o global e uma rede de seguranca do processo
+// hospedeiro, que um argumento do cliente nao pode afrouxar.
+procedure TOverflowTests.TetoGlobalEDaFila_OMenorVence;
+var
+  LQ: TAMQPServerQueue;
+begin
+  // Global 2, fila pede 5: vale 2.
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(5), 2);
+  try
+    ChecaInt('o global aperta', 2, LQ.MaxLength);
+  finally
+    LQ.Free;
+  end;
+
+  // Global 5, fila pede 2: vale 2.
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(2), 5);
+  try
+    ChecaInt('a fila aperta', 2, LQ.MaxLength);
+  finally
+    LQ.Free;
+  end;
+
+  // Sem global (0 = ilimitado), vale o da fila.
+  LQ := TAMQPServerQueue.Create('q', PolMaxLen(3), 0);
+  try
+    ChecaInt('so a fila', 3, LQ.MaxLength);
+  finally
+    LQ.Free;
+  end;
+
+  // Sem nenhum dos dois: ilimitado.
+  LQ := TAMQPServerQueue.Create('q', TAMQPQueuePolicy.Empty, 0);
+  try
+    ChecaInt('ilimitado', 0, LQ.MaxLength);
+  finally
+    LQ.Free;
+  end;
+end;
+
+// O descarte por teto continua sendo morte com razao 'maxlen' (WS5).
+procedure TOverflowTests.DropHead_ContinuaIndoParaODlx;
+var
+  LQ: TAMQPServerQueue;
+  LSink: TSinkEspia;
+  LSinkRef: IAMQPDeadLetterSink;
+  LPol: TAMQPQueuePolicy;
+begin
+  LSink := TSinkEspia.Create;
+  LSinkRef := LSink;
+  LPol := PolMaxLen(1);
+  LPol.DeadLetterExchange := 'dlx';
+  LPol.HasDeadLetterExchange := True;
+  LQ := TAMQPServerQueue.Create('q', LPol);
+  try
+    LQ.DeadLetterSink := LSink;
+    PublicaComHeader(LQ, 'velha');
+    PublicaComHeader(LQ, 'nova');
+    Estabiliza(LQ);
+    ChecaInt('a descartada foi republicada', 1, LSink.Count);
+    ChecaStr('razao', 'maxlen',
+      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    ChecaStr('e foi a mais velha', 'velha', LSink.Item(0).Corpo);
+  finally
+    LQ.Free;
+  end;
+end;
+
 initialization
   RegisterTest(TQueueActorTests);
   RegisterTest(TQueuePriorityTtlTests);
   RegisterTest(TDeadLetterTests);
+  RegisterTest(TOverflowTests);
 
 end.

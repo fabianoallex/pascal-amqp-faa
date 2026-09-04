@@ -197,7 +197,7 @@ type
 
     // --- publicacao (IAMQPMessageSink) ---
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage): Boolean;
+      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
 
     /// Republica uma mensagem ja' montada (usada pelo dead-lettering). Roda na
     /// thread do ATOR da fila de origem: le a topologia sob RWLock e posta na
@@ -701,7 +701,7 @@ end;
 { --- publicacao --- }
 
 function TAMQPEngine.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage): Boolean;
+  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
 var
   LVHost: TAMQPVHost;
   LDestinos: TArray<string>;
@@ -712,6 +712,7 @@ var
   LPriority: Byte;
   LTtlMs: Int64;
 begin
+  ARejeitada := False;
   LVHost := FVHosts.GetOrCreate(AVHost);
   // Headers vivos do canal: o match roda AQUI, na thread do publicador
   // (invariante da Fase 2), nao depois do enqueue.
@@ -750,7 +751,16 @@ begin
     for I := 0 to High(LDestinos) do
     begin
       LQueue := FindQueue(AVHost, LDestinos[I]);
-      if LQueue <> nil then
+      if LQueue = nil then
+        Continue;
+      // D15: so' a fila declarada com reject-publish paga o enqueue SINCRONO.
+      // As outras seguem pelo caminho assincrono de sempre.
+      if LQueue.Policy.Overflow = amqovRejectPublish then
+      begin
+        if not LQueue.TryPostMessage(LMsg, LPriority, LTtlMs) then
+          ARejeitada := True;
+      end
+      else
         LQueue.PostMessage(LMsg, LPriority, LTtlMs); // faz o proprio AddRef
     end;
   finally

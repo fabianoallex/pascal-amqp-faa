@@ -342,17 +342,12 @@ begin
   // Fila que REJEITA publishes quando cheia: x-max-length=1 + x-overflow=reject-publish.
   // Em confirm mode, o publish que estoura o limite volta como Basic.Nack.
   //
-  // WS9 / decisao D8: este e' o UNICO teste da suite que depende de recurso
-  // de Fase 3 (x-max-length por fila + x-overflow). Contra o broker embutido
-  // ele nao tem como passar -- e ficar mascarado como falha generica seria
-  // pior que dizer o motivo. Vira item do backlog da Fase 3, nao teste
-  // silenciosamente pulado (ver CLAUDE.md, backlog da Fase 3).
-  if AmqpUsingEmbeddedBroker then
-  begin
-    Ignore('depende de x-max-length + x-overflow=reject-publish (Fase 3) -- '
-      + 'backlog: o broker embutido aceita os argumentos e os ignora');
-    Exit;
-  end;
+  // Era o ÚNICO teste da suíte que dependia de recurso de Fase 3 (x-max-length
+  // por fila + x-overflow), e por isso se auto-ignorava contra o broker
+  // embutido desde a WS9 da Fase 2 — item de backlog, não teste pulado em
+  // silêncio. A WS6 da Fase 3 implementou os dois, e o auto-ignore SAIU: o
+  // teste agora roda igual contra o RabbitMQ e contra o broker embutido, que é
+  // o que a decisão D8 pedia desde o começo.
 
   LArgs := TAMQPFieldTable.Create;
   try

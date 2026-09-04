@@ -95,8 +95,15 @@ type
     ['{2A0F6E31-1C5D-4E8B-9F27-6D3B0A5C4E19}']
     /// True se a mensagem foi roteada para ao menos uma fila. False com
     /// Mandatory=True é o que dispara o Basic.Return na Fase 2.
+    ///
+    /// ARejeitada (WS6 da Fase 3) sai True quando ao menos uma fila de destino
+    /// estava cheia e declarada com `x-overflow: reject-publish` — nesse caso
+    /// o publish leva `Basic.Nack` em vez de `Basic.Ack`. É um resultado
+    /// SEPARADO de "não roteou": uma mensagem pode ter sido aceita por duas
+    /// filas e recusada pela terceira, e o publicador precisa saber disso.
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage): Boolean;
+      const AMessage: TAMQPServerMessage;
+      out ARejeitada: Boolean): Boolean;
   end;
 
   { Descarta tudo (broker "nulo" da Fase 1). Conta o que passou, para os testes
@@ -106,7 +113,8 @@ type
     FCount: Integer; // atômico
   public
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage): Boolean;
+      const AMessage: TAMQPServerMessage;
+      out ARejeitada: Boolean): Boolean;
     /// Quantas mensagens foram descartadas desde a criação.
     function Count: Integer;
   end;
@@ -291,8 +299,9 @@ end;
 { TAMQPNullMessageSink }
 
 function TAMQPNullMessageSink.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage): Boolean;
+  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
 begin
+  ARejeitada := False; // sink nulo nunca recusa: nao ha fila para encher
   AmqpAtomicInc(FCount);
   // Fase 1: nenhuma fila existe, então nada foi roteado. Devolver False é o
   // que a Fase 2 usará para disparar o Basic.Return de um publish mandatory.

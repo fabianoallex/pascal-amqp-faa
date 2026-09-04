@@ -1634,6 +1634,7 @@ var
   LMsg: TAMQPServerMessage;
   LSeq: UInt64;
   LRoteada: Boolean;
+  LRejeitada: Boolean;
   LTtlMs: Int64;
 begin
   try
@@ -1666,9 +1667,10 @@ begin
       LSeq := AChannel.NextPublishSeq;
 
     LRoteada := False;
+    LRejeitada := False;
     try
       if FConfig.Sink <> nil then
-        LRoteada := FConfig.Sink.RouteMessage(FVirtualHost, LMsg);
+        LRoteada := FConfig.Sink.RouteMessage(FVirtualHost, LMsg, LRejeitada);
     except
       // Basic.Nack e' reservado a FALHA INTERNA do broker (spec da extensao:
       // "the broker could not handle the message"). Nao e' o caso de mensagem
@@ -1689,7 +1691,19 @@ begin
       SendBasicReturn(AChannel, LMsg);
 
     if AChannel.ConfirmMode then
-      PostMethod(AChannel.Id, BuildBasicAck(LSeq, False));
+      // WS6: fila cheia declarada com x-overflow reject-publish e' o UNICO
+      // caso, alem de falha interna, em que um publish leva Nack em vez de
+      // Ack. Mensagem sem rota continua sendo sucesso.
+      //
+      // Se a mensagem ia para varias filas e so' uma recusou, o publish e'
+      // nack-ado mesmo assim -- e as outras JA' RECEBERAM. E' o comportamento
+      // do RabbitMQ, e a alternativa (desfazer o que ja entrou) nao existe sem
+      // transacao. O publicador tem de tratar o nack como "pode ter entregue
+      // em parte", que e' o contrato de confirms de qualquer jeito.
+      if LRejeitada then
+        PostMethod(AChannel.Id, BuildBasicNack(LSeq, False, False))
+      else
+        PostMethod(AChannel.Id, BuildBasicAck(LSeq, False));
   finally
     AChannel.ResetContent;
   end;
