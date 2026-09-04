@@ -517,7 +517,7 @@ Ou seja: o defeito só se manifesta em fila **com prioridade ou com TTL**, entre
 
 **Mutação, três mutantes, cada um morto pelo teste certo:** o bug original restaurado, `Priority := 0` e `ExpiraEm := 0`. Vale registrar que a primeira versão do teste de prioridade **falhou por premissa errada minha**: com um consumidor já anexado, o próprio enqueue entrega, então a primeira mensagem publicada sai primeiro independentemente da prioridade — e a `tag 1` era a `baixa`, não a `alta`. O teste passou a publicar as duas **antes** do consumidor e a usar a tag que o alvo de fato registrou, em vez de supor o número.
 
-Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blocos vazados. Aceitação 28/28, integração 28/28, SmokeTest PASS.
+Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blocos vazados. Aceitação 28/28, integração 28/28, SmokeTest PASS. **Validação Delphi (IDE): 369/369 no Debug e 373/373 no OpenSSL, 0 leaked.**
 
 ### O travamento no Linux, investigado e corrigido
 
