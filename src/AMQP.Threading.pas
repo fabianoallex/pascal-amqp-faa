@@ -33,6 +33,7 @@ interface
 uses
   SysUtils,
   Classes,
+  DateUtils,
   SyncObjs,
   Generics.Collections;
 
@@ -55,8 +56,33 @@ function AmqpAtomicCompareExchange(var ATarget: Integer; ANew, AComparand: Integ
 function AmqpAtomicRead64(var ATarget: UInt64): UInt64;
 procedure AmqpAtomicWrite64(var ATarget: UInt64; AValue: UInt64);
 
-/// Milissegundos monotonicos (GetTickCount64).
+/// Milissegundos monotonicos (GetTickCount64). E' o relogio de TODO prazo que
+/// o broker guarda em memoria -- imune a acerto de relogio, e por isso mesmo
+/// SEM SIGNIFICADO fora deste processo: a origem e' o boot da maquina.
 function AmqpTickMs: UInt64;
+
+/// Milissegundos de RELOGIO DE PAREDE desde a epoch Unix, em UTC.
+///
+/// Existe para a UNICA fronteira em que um instante precisa sobreviver ao
+/// processo: o journal de durabilidade (decisao D21 da Fase 4 do broker).
+/// Monotonico na memoria, parede no disco -- gravar AmqpTickMs seria gravar
+/// coordenada de um referencial que nao existe depois de um restart, e ler o
+/// relogio de parede em regime normal exporia todo prazo vivo a um acerto de
+/// NTP.
+///
+/// A FORMA IMPORTA, e foi medida (WS0 da Fase 4). O caminho obvio --
+/// DateTimeToUnix(LocalTimeToUniversal(Now), False) -- converte DUAS vezes: o
+/// False significa "a entrada e' local, converta", e a entrada ja' tinha sido
+/// convertida na mao. Erra em uma hora inteira por fuso... e some numa maquina
+/// com fuso UTC, que e' todo container e a maioria dos servidores Linux, entao
+/// o defeito nao aparece justamente onde a suite roda.
+///
+/// Daqui sai a escolha desta expressao: ela nao chama DateTimeToUnix, entao
+/// nao depende da semantica do flag (que difere entre os compiladores) nem de
+/// a RTL zerar os milissegundos antes do Round interno (o FPC zera, via
+/// RecodeMillisecond; o Delphi nao foi verificado). UnixDateDelta vale 25569
+/// nos dois.
+function AmqpWallMs: Int64;
 
 // --- Monitor (lock + variavel de condicao) ----------------------------------
 
@@ -211,6 +237,18 @@ begin
   {$ELSE}
   Result := TThread.GetTickCount64;
   {$ENDIF}
+end;
+
+function AmqpWallMs: Int64;
+var
+  LUtc: TDateTime;
+begin
+  {$IFDEF FPC}
+  LUtc := LocalTimeToUniversal(Now);
+  {$ELSE}
+  LUtc := TTimeZone.Local.ToUniversalTime(Now);
+  {$ENDIF}
+  Result := Round((LUtc - UnixDateDelta) * Int64(86400000));
 end;
 
 { TAMQPCondGen }

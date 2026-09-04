@@ -23,7 +23,8 @@ uses
   AMQP.ServerTestDoubles,
   AMQP.ServerQueueTests,
   AMQP.ServerDeliveryTests,
-  AMQP.ServerEngineDispatchTests;
+  AMQP.ServerEngineDispatchTests,
+  AMQP.ServerWalTests;
 
 var
   ConsoleApp: TTestRunner;

@@ -47,6 +47,7 @@ uses
   AMQP.Server.Channel in '..\..\src\server\AMQP.Server.Channel.pas',
   AMQP.Server.Connection in '..\..\src\server\AMQP.Server.Connection.pas',
   AMQP.Server.Broker in '..\..\src\server\AMQP.Server.Broker.pas',
+  AMQP.Server.Wal in '..\..\src\server\AMQP.Server.Wal.pas',
   AMQP.HandshakeIntegrationTests in '..\Integration\AMQP.HandshakeIntegrationTests.pas',
   AMQP.IntegrationConfig in '..\Integration\AMQP.IntegrationConfig.pas',
   AMQP.ChannelIntegrationTests in '..\Integration\AMQP.ChannelIntegrationTests.pas',

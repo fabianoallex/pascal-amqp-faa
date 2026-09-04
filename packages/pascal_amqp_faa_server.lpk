@@ -73,6 +73,10 @@
         <Filename Value="..\src\server\AMQP.Server.Broker.pas"/>
         <UnitName Value="AMQP.Server.Broker"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.Wal.pas"/>
+        <UnitName Value="AMQP.Server.Wal"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>
