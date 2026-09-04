@@ -290,6 +290,14 @@ function AmqpCrc32(ACrc: Cardinal; const ABytes: TBytes;
 /// fsync portavel.
 function AmqpFileSync(AHandle: THandle): Boolean;
 
+/// Codigo do ultimo erro do sistema operacional.
+///
+/// GetLastOSError existe no FPC (nas duas plataformas) e NAO existe no Delphi:
+/// la' a System.SysUtils so' oferece RaiseLastOSError, que LEVANTA em vez de
+/// devolver e por isso nao serve para compor uma mensagem nossa. O equivalente
+/// e' o GetLastError do Win32.
+function AmqpLastOsError: Integer;
+
 /// Nome canonico de um segmento: seg-00000001.wal. Zeros a' esquerda para a
 /// ordem alfabetica do diretorio coincidir com a numerica.
 function AmqpWalSegmentName(ASegNo: Cardinal): string;
@@ -350,6 +358,15 @@ begin
   Result := FileFlush(AHandle);
   {$ELSE}
   Result := FlushFileBuffers(AHandle);
+  {$ENDIF}
+end;
+
+function AmqpLastOsError: Integer;
+begin
+  {$IFDEF FPC}
+  Result := GetLastOSError;
+  {$ELSE}
+  Result := Integer(GetLastError);
   {$ENDIF}
 end;
 
@@ -417,7 +434,11 @@ begin
               LLista.Add(LNo);
         until FindNext(LRec) <> 0;
       finally
-        FindClose(LRec);
+        // QUALIFICADO: com a unit Windows em escopo (ramo Delphi), o
+        // Winapi.Windows.FindClose(THandle) sombreia o
+        // System.SysUtils.FindClose(var TSearchRec) e o erro so' aparece no
+        // dcc32. Mesma familia do DeleteFile.
+        SysUtils.FindClose(LRec);
       end;
     end;
     SetLength(Result, LLista.Count);
@@ -508,7 +529,7 @@ begin
     H := FileCreate(APath);
     if H = THandle(-1) then
       raise EAMQPWal.CreateFmt('nao consegui criar %s: %s',
-        [APath, SysErrorMessage(GetLastOSError)]);
+        [APath, SysErrorMessage(AmqpLastOsError)]);
     FileClose(H);
   end
   else
@@ -518,7 +539,7 @@ begin
   FHandle := FileOpen(APath, fmOpenReadWrite or fmShareDenyNone);
   if FHandle = THandle(-1) then
     raise EAMQPWal.CreateFmt('nao consegui abrir %s: %s',
-      [APath, SysErrorMessage(GetLastOSError)]);
+      [APath, SysErrorMessage(AmqpLastOsError)]);
 end;
 
 destructor TAMQPWalOsFile.Destroy;
@@ -543,7 +564,7 @@ begin
     LEscrito := FileWrite(FHandle, ABytes[LTotal], LResto);
     if LEscrito <= 0 then
       raise EAMQPWal.CreateFmt('escrita falhou em %s apos %d de %d bytes: %s',
-        [FPath, LTotal, Length(ABytes), SysErrorMessage(GetLastOSError)]);
+        [FPath, LTotal, Length(ABytes), SysErrorMessage(AmqpLastOsError)]);
     Inc(LTotal, LEscrito);
     Dec(LResto, LEscrito);
   end;
@@ -603,7 +624,7 @@ begin
   if not SetEndOfFile(FHandle) then
   {$ENDIF}
     raise EAMQPWal.CreateFmt('nao consegui truncar %s em %d: %s',
-      [FPath, ASize, SysErrorMessage(GetLastOSError)]);
+      [FPath, ASize, SysErrorMessage(AmqpLastOsError)]);
 end;
 
 { TAMQPWalSegment }
@@ -838,14 +859,14 @@ begin
   FHandle := THandle(-1); // ver a nota do TAMQPWalOsFile.Create
   if not ForceDirectories(ADir) then
     raise EAMQPWal.CreateFmt('nao consegui criar o diretorio de dados %s: %s',
-      [ADir, SysErrorMessage(GetLastOSError)]);
+      [ADir, SysErrorMessage(AmqpLastOsError)]);
   FPath := IncludeTrailingPathDelimiter(ADir) + AMQP_WAL_LOCK_NAME;
   if not FileExists(FPath) then
   begin
     H := FileCreate(FPath);
     if H = THandle(-1) then
       raise EAMQPWal.CreateFmt('nao consegui criar %s: %s',
-        [FPath, SysErrorMessage(GetLastOSError)]);
+        [FPath, SysErrorMessage(AmqpLastOsError)]);
     FileClose(H);
   end;
   // fmShareExclusive: share mode no Windows, fpflock advisory no Unix -- a WS0

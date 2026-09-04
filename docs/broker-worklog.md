@@ -414,7 +414,13 @@ Planejada em 2026-09-04, em sessão própria e em Opus. **As decisões D19–D28
 
   **Suítes:** server **273 → 312** (Default) e **277 → 316** (`openssl`), com `0 unfreed memory blocks`. Regressão FPC completa e verde: unitária 121/121, integração 28/28 contra o RabbitMQ real, aceitação 28/28 contra o broker embutido, SmokeTest PASS. `verifica_espelhos.py` limpo nas três checagens. No Linux (container), a unit compila e a sonda passa inteira — inclusive o lock por `fpflock` e o `fsync` via `FileFlush`.
 
-  **Pendente:** compilar e rodar o espelho DUnitX na IDE (a Community Edition não compila por linha de comando). O verificador garante que os 38 nomes de teste batem e que as fixtures estão registradas; ele não garante que compila.
+  **A primeira compilação Delphi achou dois defeitos, os dois invisíveis ao FPC — e é o mesmo tema da lição da WS8 da Fase 1** (código Delphi-específico não compilado é dívida):
+  - **`GetLastOSError` não existe no Delphi.** Conferido na fonte da RTL: `System.SysUtils` tem `RaiseLastOSError`, que **levanta** em vez de devolver e por isso não serve para compor mensagem nossa; o equivalente é o `GetLastError` do Win32. Virou `AmqpLastOsError`, com o condicional num lugar só — e entrou na tabela de proibidos do `CLAUDE.md`, porque nenhuma unit da lib tinha exercitado isso antes.
+  - **`Winapi.Windows.FindClose(THandle)` sombreia `System.SysUtils.FindClose(var TSearchRec)`** (`E2010 Incompatible types`). Só morde quando a unit importa `Windows`, que é o caso aqui por causa do `FlushFileBuffers`. Mesma família do `DeleteFile` que o arquivo de teste já qualificava. Auditados os vizinhos: `FindFirst`/`FindNext` **não** colidem (na Winapi são `FindFirstFile`/`FindNextFile`).
+
+  E um defeito meu de edição no meio do conserto, que vale registrar porque a causa se repete: o corpo do `AmqpLastOsError` foi parar na seção **interface**, porque o `replace` de script casou a primeira ocorrência de `function AmqpWalRecordSize(...)` — que é a **declaração**, não a implementação. O FPC pegou na hora (`Function is already declared Public/Forward`). **Substituição por texto numa unit Pascal precisa de âncora que exista uma vez só; assinatura de função aparece duas.**
+
+  **Pendente:** recompilar e rodar o espelho DUnitX na IDE depois destes consertos. O verificador garante que os 38 nomes de teste batem e que as fixtures estão registradas; ele não garante que compila.
 
 ## Verificador de espelhos
 
