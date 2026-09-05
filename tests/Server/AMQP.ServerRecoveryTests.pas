@@ -881,14 +881,24 @@ end;
 procedure TRecoveryReplayTests.Compacta_ApagaOsSegmentosVelhos;
 var
   I: Integer;
+  LLsn: UInt64;
   LSegsAntes, LSegsDepois: TArray<Cardinal>;
 begin
+  // UMA BARREIRA POR REGISTRO, e nao uma no fim. O group commit junta tudo o
+  // que estiver na fila num lote so', e a rotacao acontece na FRONTEIRA DO
+  // LOTE -- entao 60 submits em rajada podem virar UM lote e UMA rotacao, e o
+  // numero de segmentos passa a depender de quem corre mais rapido, o laco de
+  // teste ou a thread do journal. Foi o que aconteceu: verde no FPC, vermelho
+  // no Delphi. Esperando cada registro ficar duravel, cada um e' o seu proprio
+  // lote e a contagem de segmentos vira funcao do tamanho, nao do escalonador.
   FJournal.MaxSegmentBytes := 300;
   DeclaraFila('q.a');
-  for I := 1 to 60 do
-    Conteudo(I, 'corpo-' + IntToStr(I));
-  ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  for I := 1 to 30 do
+  begin
+    LLsn := Grava(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ConteudoDe(I, 'corpo-' + IntToStr(I))));
+    ChecaOk('registro duravel', FJournal.WaitDurable(LLsn, 5000));
+  end;
   LSegsAntes := AmqpWalListSegments(FDir);
   ChecaOk('havia varios segmentos', Length(LSegsAntes) > 2);
 
