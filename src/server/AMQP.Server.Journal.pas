@@ -57,7 +57,9 @@
 
   O QUE NAO ESTA' AQUI
   --------------------
-  Rotacao e compactacao de segmento sao a WS7: esta versao usa UM segmento
+  Compactacao de segmento e' a WS7b: esta versao ROTACIONA (fecha o segmento
+  cheio e abre o seguinte) mas ainda nao apaga nem reescreve nada. Antes disso
+  havia UM segmento
   ativo e nao o rola quando ele passa do tamanho alvo. O registro de confirms
   pendentes por canal e' a WS5 -- aqui existe so' a costura
   (IAMQPDurabilitySink) e a marca d'agua que ela consulta. }
@@ -130,6 +132,8 @@ type
     Registros: Int64;
     /// Maior lote ja' escrito numa rodada.
     MaiorLote: Integer;
+    /// Quantas vezes o segmento cheio foi fechado e outro aberto (D26).
+    Rotacoes: Int64;
     /// Bytes de payload esperando na fila de submissao AGORA.
     PendingBytes: Int64;
     DurableLsn: UInt64;
@@ -170,6 +174,8 @@ type
     FPendentes: TQueue<TAMQPJournalItem>;
     FPendingBytes: Int64;
     FMaxPendingBytes: Int64;
+    FMaxSegmentBytes: Int64;
+    FSegNo: Cardinal;
     FProximoLsn: UInt64;
     FDurableLsn: UInt64;   // atomico -- leitura fora do lock
     FRodando: Boolean;
@@ -178,6 +184,7 @@ type
     FErro: string;
     FSink: IAMQPDurabilitySink;
     FLotes: Int64;
+    FRotacoes: Int64;
     FSyncs: Int64;
     FRegistros: Int64;
     FMaiorLote: Integer;
@@ -198,6 +205,9 @@ type
     /// A costura de arquivo do segmento ativo. Virtual para o teste injetar um
     /// duble que conta fsyncs e falha na hora escolhida (camada 2 da D28).
     function CriaArquivo(const APath: string; ACriar: Boolean): IAMQPWalFile; virtual;
+    /// Fecha o segmento cheio e abre o proximo. Chamado SO' na fronteira de
+    /// lote -- ver o comentario na chamada.
+    procedure Rotaciona;
   public
     /// ADir e' o DataDir. O lock exclusivo do diretorio e' tomado no Start,
     /// nao aqui -- construir um journal nao pode roubar o diretorio de um
@@ -235,6 +245,12 @@ type
     property DurabilitySink: IAMQPDurabilitySink read FSink write FSink;
     property MaxPendingBytes: Int64 read FMaxPendingBytes
       write FMaxPendingBytes;
+    /// Quanto um segmento cresce antes de o journal fechar e abrir o proximo
+    /// (D26). Mexer nisto so' faz sentido em teste: o default e' o do WAL.
+    property MaxSegmentBytes: Int64 read FMaxSegmentBytes
+      write FMaxSegmentBytes;
+    /// Numero do segmento ATIVO. Cresce a cada rotacao.
+    function SegmentoAtivo: Cardinal;
 
     /// Contagens, lidas sob o lock (ver TAMQPJournalStats).
     function Stats: TAMQPJournalStats;
@@ -270,6 +286,7 @@ begin
   FMon := TAMQPMonitor.Create;
   FPendentes := TQueue<TAMQPJournalItem>.Create;
   FMaxPendingBytes := AMQP_JOURNAL_MAX_PENDING_BYTES;
+  FMaxSegmentBytes := AMQP_WAL_SEGMENT_BYTES;
   FProximoLsn := 1;
 end;
 
@@ -303,6 +320,7 @@ begin
     LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LNo);
     FArquivo := CriaArquivo(LPath, True);
     FSegmento := TAMQPWalSegment.CreateNew(FArquivo, LNo);
+    FSegNo := LNo;
   end
   else
   begin
@@ -312,6 +330,7 @@ begin
     LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LNo);
     FArquivo := CriaArquivo(LPath, False);
     FSegmento := TAMQPWalSegment.OpenExisting(FArquivo, True);
+    FSegNo := LNo;
   end;
   // O LSN CONTINUA DE ONDE PAROU. Recomecar do 1 depois de um restart faria o
   // proprio Append da WS1 levantar (LSN nao crescente) -- e, pior, se nao
@@ -515,6 +534,7 @@ begin
   FMon.Enter;
   try
     Result.Lotes := FLotes;
+    Result.Rotacoes := FRotacoes;
     Result.Syncs := FSyncs;
     Result.SyncsFalhos := FSyncsFalhos;
     Result.Registros := FRegistros;
@@ -530,6 +550,37 @@ end;
 procedure TAMQPJournal.LoteTomado;
 begin
   // no-op em producao -- ver a declaracao
+end;
+
+// Fecha o segmento cheio e abre o proximo. O LSN CONTINUA: a numeracao e' do
+// journal inteiro, nao do arquivo, e e' o que permite a recuperacao ler os
+// segmentos em sequencia como se fossem um log so'.
+procedure TAMQPJournal.Rotaciona;
+var
+  LPath: string;
+begin
+  FreeAndNil(FSegmento);
+  FArquivo := nil; // fecha o arquivo cheio
+  Inc(FSegNo);
+  LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(FSegNo);
+  FArquivo := CriaArquivo(LPath, True);
+  FSegmento := TAMQPWalSegment.CreateNew(FArquivo, FSegNo);
+  FMon.Enter;
+  try
+    Inc(FRotacoes);
+  finally
+    FMon.Leave;
+  end;
+end;
+
+function TAMQPJournal.SegmentoAtivo: Cardinal;
+begin
+  FMon.Enter;
+  try
+    Result := FSegNo;
+  finally
+    FMon.Leave;
+  end;
 end;
 
 function TAMQPJournal.RodaUmLote: Boolean;
@@ -598,6 +649,29 @@ begin
   LSyncOk := FSegmento.Sync;
   if LSyncOk then
     AmqpAtomicWrite64(FDurableLsn, LMaiorLsn);
+
+  // ROTACAO, e SO' AQUI: na fronteira de lote, depois do fsync. Nunca no meio
+  // de um lote -- o lote e' indivisivel (D24) e parti-lo entre dois arquivos
+  // daria uma cauda torta artificial no primeiro, que a recuperacao
+  // descartaria junto com metade de um publish ja' aceito.
+  //
+  // Depois de um fsync que FALHOU nao se rotaciona: os bytes deste lote ainda
+  // nao estao garantidos no disco, e fechar o arquivo agora tiraria a chance
+  // de um fsync posterior cobri-los.
+  if LSyncOk and (FSegmento.EndOffset >= FMaxSegmentBytes) then
+  begin
+    try
+      Rotaciona;
+    except
+      on E: Exception do
+      begin
+        // Nao conseguir abrir o proximo segmento e' falha de escrita: os
+        // proximos registros nao teriam onde ir.
+        MarcaFalho(Format('falha ao rotacionar o segmento: %s', [E.Message]));
+        Exit(False);
+      end;
+    end;
+  end;
 
   FMon.Enter;
   try

@@ -88,6 +88,12 @@ type
      procedure MaxId_EOMaiorVisto;
      procedure PrazoEPrioridade_ChegamIntactos;
      procedure CaudaTorta_ReplicaOPrefixo;
+    // --- WS7: rotacao de segmento ---
+    procedure Rotaciona_QuandoOSegmentoEnche;
+    procedure Rotaciona_NaoParteOLoteEntreDoisArquivos;
+    procedure Rotaciona_LsnContinuaEntreSegmentos;
+    procedure Rotaciona_ReplayLeTodosOsSegmentosComoUmLogSo;
+    procedure Rotaciona_ReabrirContinuaNoUltimoSegmento;
   end;
 
 implementation
@@ -131,6 +137,14 @@ end;
 procedure ChecaNao(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertFalse(AMsg, ACond);
+end;
+
+/// Monta um registro de conteudo (as duas suites de rotacao precisam do mesmo).
+function ConteudoDe(AId: UInt64; const ACorpo: string): TAMQPRecContent;
+begin
+  Result.ContentId := AId;
+  Result.UserId := 'guest';
+  Result.Body := AmqpUtf8Encode(ACorpo);
 end;
 
 function TRecoveryReplayTests.Grava(AKind: Byte;
@@ -614,6 +628,174 @@ begin
   finally
     E.Free;
   end;
+end;
+
+{ --- rotacao de segmento (WS7 da Fase 4, D26) --- }
+
+procedure TRecoveryReplayTests.Rotaciona_QuandoOSegmentoEnche;
+var
+  I: Integer;
+  LUltimo: UInt64;
+begin
+  // Teto minusculo para a rotacao acontecer com poucos registros: o valor real
+  // (16 MB) so' torna o teste lento, nao mais verdadeiro.
+  FJournal.MaxSegmentBytes := 600;
+  DeclaraFila('q.a');
+  for I := 1 to 40 do
+    LUltimo := Grava(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ConteudoDe(I, 'corpo-' + IntToStr(I))));
+  // BARREIRA: o Submit so ENFILEIRA -- quem escreve (e quem rotaciona) e a
+  // thread do journal. Sem esperar a marca d agua, o teste olharia o segmento
+  // antes de o primeiro byte ter saido.
+  ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
+  ChecaOk('o segmento ativo passou do primeiro',
+    FJournal.SegmentoAtivo > 1);
+  ChecaOk('e as rotacoes foram contadas',
+    FJournal.Stats.Rotacoes >= 1);
+end;
+
+procedure TRecoveryReplayTests.Rotaciona_NaoParteOLoteEntreDoisArquivos;
+var
+  LRecs: TAMQPJournalRecords;
+  LSegs: TArray<Cardinal>;
+  I, LAchou: Integer;
+  LRegs: TAMQPWalRecords;
+  LStop: TAMQPWalStop;
+  LArq: IAMQPWalFile;
+  LSeg: TAMQPWalSegment;
+  LN: Integer;
+begin
+  // A INVARIANTE QUE A ROTACAO NAO PODE QUEBRAR: o lote e' indivisivel (D24).
+  // Parti-lo entre dois arquivos daria uma cauda torta ARTIFICIAL no primeiro,
+  // e a recuperacao descartaria metade de um publish que ja' foi aceito.
+  //
+  // OS NUMEROS SAO ESCOLHIDOS PARA FORCAR A JANELA, e nao por acaso: uma
+  // versao anterior deste teste usava dois registros pequenos e teto de 500, e
+  // a MUTACAO "rotaciona no meio do lote" SOBREVIVIA -- com registros do mesmo
+  // tamanho o ponto de corte cai sempre no mesmo lugar, e por sorte era par.
+  // Aqui o PRIMEIRO registro do par ja' estoura o teto sozinho: se a rotacao
+  // olhasse o tamanho a cada registro, ela partiria TODO par, e a contagem de
+  // cada segmento ficaria impar.
+  //
+  // O WaitDurable entre submits mantem cada lote com exatamente dois registros
+  // (sem ele o group commit juntaria tudo num lote so').
+  FJournal.MaxSegmentBytes := 300;
+  SetLength(LRecs, 2);
+  for I := 1 to 8 do
+  begin
+    LRecs[0].Kind := AMQP_REC_CONTENT;
+    LRecs[0].Payload := AmqpEncodeRecContent(
+      ConteudoDe(I * 2 - 1, StringOfChar('a', 400)));
+    LRecs[1].Kind := AMQP_REC_CONTENT;
+    LRecs[1].Payload := AmqpEncodeRecContent(ConteudoDe(I * 2, 'b'));
+    ChecaOk('o lote ficou duravel',
+      FJournal.WaitDurable(FJournal.Submit(LRecs), 5000));
+  end;
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+
+  LSegs := AmqpWalListSegments(FDir);
+  ChecaOk('rotacionou mesmo', Length(LSegs) > 1);
+  LAchou := 0;
+  for I := 0 to High(LSegs) do
+  begin
+    LArq := TAMQPWalOsFile.Create(
+      IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]), False);
+    LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+    try
+      LN := LSeg.ReadPrefix(LRegs, LStop);
+      Inc(LAchou, LN);
+      ChecaInt('nenhum segmento termina com meio lote (segmento '
+        + IntToStr(LSegs[I]) + ')', 0, LN mod 2);
+    finally
+      LSeg.Free;
+      LArq := nil;
+    end;
+  end;
+  ChecaInt('e nenhum registro se perdeu na troca', 16, LAchou);
+end;
+
+procedure TRecoveryReplayTests.Rotaciona_LsnContinuaEntreSegmentos;
+var
+  I: Integer;
+  LUltimo, LDepois: UInt64;
+begin
+  // O LSN e' do JOURNAL, nao do arquivo. Se recomecasse a cada segmento, a
+  // invariante de LSN crescente da WS1 recusaria o primeiro append do segmento
+  // novo -- e, pior, se nao recusasse, a recuperacao leria um log em que o LSN
+  // anda para tras no meio.
+  //
+  // O SUBMIT TEM DE VIR DEPOIS DA ROTACAO. Uma versao anterior deste teste
+  // media o LSN de 40 submits feitos ANTES de a thread do journal escrever
+  // qualquer coisa -- os LSNs ja' estavam todos atribuidos, e a mutacao que
+  // zerava o contador na rotacao SOBREVIVIA. Aqui a rotacao acontece (com
+  // barreira), e so' entao se pergunta qual e' o proximo numero.
+  FJournal.MaxSegmentBytes := 600;
+  LUltimo := 0;
+  for I := 1 to 40 do
+    LUltimo := Grava(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ConteudoDe(I, 'x')));
+  ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
+  ChecaOk('rotacionou', FJournal.SegmentoAtivo > 1);
+
+  LDepois := Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(ConteudoDe(99, 'y')));
+  ChecaOk('o registro de depois da rotacao ficou duravel',
+    FJournal.WaitDurable(LDepois, 5000));
+  ChecaOk('o LSN CONTINUOU do outro lado da rotacao, em vez de reiniciar',
+    LDepois > LUltimo);
+end;
+
+procedure TRecoveryReplayTests.Rotaciona_ReplayLeTodosOsSegmentosComoUmLogSo;
+var
+  E: TAMQPRecoveredState;
+  I: Integer;
+begin
+  // A recuperacao ja' percorria a lista de segmentos (WS6); este teste e' o
+  // que amarra as duas WS: com a rotacao ligada, o estado tem de sair
+  // IDENTICO ao de um log de um arquivo so'.
+  FJournal.MaxSegmentBytes := 700;
+  DeclaraFila('q.a');
+  for I := 1 to 20 do
+  begin
+    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
+    Coloca(I * 2, I * 2 - 1, 'q.a');
+  end;
+  E := Replica;
+  try
+    ChecaOk('leu mais de um segmento', E.Stats.Segmentos > 1);
+    ChecaInt('a fila veio', 1, E.Queues.Count);
+    ChecaInt('e as 20 colocacoes tambem', 20, E.Entries.Count);
+    ChecaStr('na ordem do log, da primeira', 'corpo-1',
+      AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
+    ChecaStr('a' + ' ultima', 'corpo-20',
+      AmqpUtf8Decode(E.Contents[E.Entries[19].ContentId].Body));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Rotaciona_ReabrirContinuaNoUltimoSegmento;
+var
+  I: Integer;
+  LSegDepois: Cardinal;
+  LUltimo: UInt64;
+begin
+  // Um restart nao pode voltar a escrever no PRIMEIRO segmento: sobrescreveria
+  // registros vivos. O journal reabre no ULTIMO, que e' o ativo.
+  FJournal.MaxSegmentBytes := 600;
+  for I := 1 to 40 do
+    LUltimo := Grava(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ConteudoDe(I, 'x')));
+  ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
+  LSegDepois := FJournal.SegmentoAtivo;
+  ChecaOk('rotacionou antes de fechar', LSegDepois > 1);
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+
+  FJournal := TAMQPJournal.Create(FDir);
+  FJournal.Start;
+  ChecaInt('reabriu no ultimo segmento, nao no primeiro',
+    Integer(LSegDepois), Integer(FJournal.SegmentoAtivo));
 end;
 
 initialization

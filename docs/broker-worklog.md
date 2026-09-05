@@ -615,6 +615,20 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **O que a WS6 NÃO faz, de propósito:** o WAL ainda cresce sem limite — segmentos, compactação e teto são a WS7. E matar o processo continua **não** testando fsync (D28); o que estes testes provam é que o log escrito é suficiente para reconstruir o estado, e que o que não devia estar lá não volta.
 
+- **WS7, primeira parte: a rotação de segmento.** O journal fecha o segmento cheio e abre o seguinte, com `MaxSegmentBytes` (default os 16 MB do WAL). Sozinha ela ainda não recupera espaço nenhum — apagar e compactar são as partes seguintes —, mas é a mecânica sobre a qual as duas se apoiam.
+
+  **A rotação acontece SÓ na fronteira do lote, e depois do fsync.** Partir um lote entre dois arquivos daria uma cauda torta **artificial** no primeiro, e a recuperação descartaria metade de um publish já aceito — o lote é indivisível pela D24. E depois de um fsync que falhou não se rotaciona: os bytes ainda não estão garantidos, e fechar o arquivo agora tiraria de um fsync posterior a chance de cobri-los.
+
+  **Duas mutações sobreviveram, e as duas eram defeito do TESTE.** É a terceira vez nesta rodada que isso acontece, e as duas formas valem registro:
+  - *"rotaciona no meio do lote"* passava porque meu teste usava dois registros **do mesmo tamanho**: o ponto de corte cai sempre no mesmo lugar e, por sorte, era par. Refeito com o **primeiro registro do par estourando o teto sozinho** (400 bytes contra teto de 300), o corte deixa de ser sorte: se a rotação olhasse o tamanho a cada registro, partiria *todo* par.
+  - *"o LSN reinicia na rotação"* passava porque o teste media os LSNs de 40 submits feitos **antes** de a thread do journal escrever qualquer coisa — todos já estavam atribuídos, e zerar o contador na rotação não mudava nada. Refeito para submeter **depois** da rotação (com barreira) e perguntar aí qual é o próximo número.
+
+  **E as três primeiras versões dos testes falhavam por falta de barreira:** o `Submit` só enfileira, e quem escreve — e quem rotaciona — é a thread do journal. Sem `WaitDurable`, o teste olhava o segmento antes de o primeiro byte ter saído. É o mesmo tropeço que a WS2 já tinha documentado, numa forma nova.
+
+  **Estado:** server **415 → 420** (Default) e **419 → 424** (`openssl`), `0 unfreed memory blocks`; aceitação 28/28, `verifica_espelhos.py` limpo, broker compilando no Linux.
+
+  **O que falta na WS7:** apagar segmento cuja última colocação já foi aposentada; compactar por reescrita quando a fração viva cai abaixo do limiar (a D26 manda reusar o replay para descobrir o conjunto vivo — não há arquivo de snapshot separado); e o teto duro `MaxJournalBytes`, que **recusa** o publish persistente com `Basic.Nack` em vez de descartar (a diferença que importa em relação à D7: teto de memória descarta, teto de disco recusa).
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
