@@ -22,6 +22,11 @@ morrer e outro subir no mesmo diretorio.
 
 USO
     python tests/tools/smoke_restart.py [--porta 5674] [--n 50]
+                                       [--smoke <caminho>]
+
+--smoke aponta para OUTRO SmokeTest -- e' assim que se valida o lado Delphi:
+o host continua sendo o BrokerHostFpc (o broker so' tem build FPC por linha de
+comando), e o cliente passa a ser o executavel que a IDE gerou.
 """
 
 import os
@@ -80,9 +85,9 @@ def sobe_host(porta, datadir):
     return proc
 
 
-def roda_smoke(porta, opcao, n):
+def roda_smoke(smoke, porta, opcao, n):
     r = subprocess.run(
-        [SMOKE, '--host', '127.0.0.1', '--port', str(porta), opcao, str(n)],
+        [smoke, '--host', '127.0.0.1', '--port', str(porta), opcao, str(n)],
         capture_output=True, text=True, timeout=180)
     return r.returncode, r.stdout + r.stderr
 
@@ -90,14 +95,17 @@ def roda_smoke(porta, opcao, n):
 def main():
     porta = 5674
     n = 50
+    smoke = SMOKE
     args = sys.argv[1:]
     for i, a in enumerate(args):
         if a == '--porta' and i + 1 < len(args):
             porta = int(args[i + 1])
         elif a == '--n' and i + 1 < len(args):
             n = int(args[i + 1])
+        elif a == '--smoke' and i + 1 < len(args):
+            smoke = os.path.abspath(args[i + 1])
 
-    for caminho, nome in ((HOST, 'BrokerHostFpc'), (SMOKE, 'SmokeTest')):
+    for caminho, nome in ((HOST, 'BrokerHostFpc'), (smoke, 'SmokeTest')):
         if not os.path.exists(caminho):
             print('nao achei o %s em %s' % (nome, caminho))
             return 1
@@ -105,6 +113,7 @@ def main():
     datadir = tempfile.mkdtemp(prefix='amqpsmokerestart-')
     print('PASSO DE RESTART DO SMOKETEST')
     print('  porta: %d   mensagens: %d' % (porta, n))
+    print('  smoke: %s' % smoke)
     print('  datadir: %s' % datadir)
     print('  (lembrete: matar o processo NAO testa fsync -- ver D28)')
     print('')
@@ -113,7 +122,7 @@ def main():
     try:
         print('[1] sobe o broker com DataDir e publica %d persistentes' % n)
         proc = sobe_host(porta, datadir)
-        rc, saida = roda_smoke(porta, '--durable-publish', n)
+        rc, saida = roda_smoke(smoke, porta, '--durable-publish', n)
         if rc != 0 or 'DURABLE PUBLISH: OK' not in saida:
             print(saida)
             print('FALHA no publish')
@@ -130,7 +139,7 @@ def main():
         print('    ok  no ar de novo')
 
         print('[4] o cliente confere o que voltou')
-        rc, saida = roda_smoke(porta, '--durable-verify', n)
+        rc, saida = roda_smoke(smoke, porta, '--durable-verify', n)
         if rc != 0 or 'DURABLE VERIFY: OK' not in saida:
             print(saida)
             print('FALHA no verify')
