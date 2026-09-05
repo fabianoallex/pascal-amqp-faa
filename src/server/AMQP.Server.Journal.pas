@@ -78,6 +78,26 @@
   se perde porque o novo so' vira verdade depois do fsync, e o velho so' some
   depois disso.
 
+  QUANDO ELA PODE RODAR -- e por que NAO ha gatilho automatico
+  ------------------------------------------------------------
+  So' com o journal QUIESCENTE: nada submetido e ainda nao escrito. Hoje isso
+  quer dizer DENTRO DO Start, depois da recuperacao e antes de o socket de
+  escuta abrir, onde nao existe publicador nem ator.
+
+  A primeira versao disparava a compactacao na rotacao, no meio da operacao, e
+  ISSO ESTAVA ERRADO -- o teste pegou. O LSN e' atribuido no Submit, na thread
+  de quem publica; a compactacao roda depois, na thread do journal, e atribui
+  LSNs NOVOS para os registros que reescreve. Um publish que tenha pego o seu
+  LSN ANTES da compactacao e ainda esteja na fila e' escrito DEPOIS dela -- com
+  um LSN menor que o ultimo do arquivo. O Append recusa (a invariante de LSN
+  crescente da WS1), a escrita falha e o journal inteiro vai a estado falho.
+
+  Nao ha conserto barato: a ordem dos LSN tem de ser a ordem do arquivo, e o
+  conteudo compactado e' LOGICAMENTE MAIS VELHO que qualquer submit
+  concorrente. Compactar em voo exige quiescer a alocacao de LSN -- o que
+  esbarra na D2, que proibe o ator de esperar. Fica como trabalho proprio; o
+  que existe hoje limita o crescimento POR REINICIO, nao em voo.
+
   Antes da rotacao havia UM segmento
   ativo e nao o rola quando ele passa do tamanho alvo. O registro de confirms
   pendentes por canal e' a WS5 -- aqui existe so' a costura
@@ -305,8 +325,8 @@ type
     /// (D26). Mexer nisto so' faz sentido em teste: o default e' o do WAL.
     property MaxSegmentBytes: Int64 read FMaxSegmentBytes
       write FMaxSegmentBytes;
-    /// A partir de que tamanho total o journal se compacta sozinho. 0 desliga
-    /// a compactacao automatica (o Compacta manual continua valendo).
+    /// A partir de que tamanho total o Start compacta o log. 0 desliga.
+    /// NAO ha compactacao em voo -- ver o cabecalho da unit.
     property CompactarAcimaDe: Int64 read FCompactarAcima
       write FCompactarAcima;
     /// TETO DURO do log em bytes. 0 (default) = ilimitado, a forma da D7.
@@ -982,19 +1002,6 @@ begin
       end;
     end;
 
-    // COMPACTACAO AUTOMATICA, so' aqui: na rotacao, que ja' e' o momento em
-    // que o journal para para trocar de arquivo, e nunca no meio de um lote.
-    // Roda NESTA thread -- ela e' a unica que escreve, e e' isso que dispensa
-    // trava sobre o arquivo. O custo e' uma leitura do log inteiro, e ele
-    // aparece como uma pausa nos confirms; a alternativa (crescer sem limite)
-    // e' pior, e o fator de folga abaixo garante que a pausa e' rara.
-    if (FCompactarAcima > 0) and (TamanhoTotal >= FCompactarAcima) then
-      if Compacta then
-        // O PROXIMO limiar sai do que SOBROU: um log genuinamente vivo cresce
-        // o limiar junto e para de disparar; um log cheio de aposentadas
-        // encolhe, e o limiar encolhe com ele. E' a fracao viva da D26 sem
-        // ninguem precisar calcula-la.
-        FCompactarAcima := TamanhoTotal * AMQP_JOURNAL_COMPACT_FATOR;
   end;
 
   FMon.Enter;

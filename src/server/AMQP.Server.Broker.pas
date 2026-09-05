@@ -341,6 +341,15 @@ begin
     finally
       LEstado.Free;
     end;
+
+    // COMPACTACAO, e SO' AQUI: o journal esta' quiescente (a recuperacao ja'
+    // terminou e o socket de escuta ainda nao abriu, entao nao ha publicador
+    // nem ator submetendo). Compactar em voo exigiria quiescer a alocacao de
+    // LSN, o que esbarra na D2 -- ver o cabecalho de AMQP.Server.Journal.
+    // O efeito pratico: o log e' podado A CADA REINICIO.
+    if (FJournal.CompactarAcimaDe > 0)
+      and (FJournal.TamanhoTotal >= FJournal.CompactarAcimaDe) then
+      FJournal.Compacta;
   end;
   FListener := TAMQPTcpListener.Create;
   FListener.Listen(FBindAddress, FPort, FBacklog);

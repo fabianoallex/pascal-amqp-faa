@@ -102,7 +102,7 @@ type
     procedure Compacta_NaoDuplicaSeOsVelhosSobrarem;
     procedure Compacta_PreservaAOrdemEOsPrazos;
     procedure Compacta_LogInteiroMorto_NaoSobraColocacao;
-    procedure Compacta_Automatica_DisparaAcimaDoLimiar;
+    procedure Compacta_NoStart_QuandoOLogPassaDoLimiar;
     procedure Compacta_FsyncReprovado_NaoApagaNada;
     procedure Compacta_FanOut_GravaOCorpoUmaVezSo;
     procedure Teto_ZeroEIlimitado;
@@ -1055,42 +1055,48 @@ begin
   end;
 end;
 
-procedure TRecoveryReplayTests.Compacta_Automatica_DisparaAcimaDoLimiar;
+procedure TRecoveryReplayTests.Compacta_NoStart_QuandoOLogPassaDoLimiar;
 var
   I: Integer;
+  LLsn: UInt64;
+  LAntes, LDepois: Int64;
+  J: TAMQPJournal;
 begin
-  // O gatilho: rotacao + tamanho acima do limiar. Com quase tudo aposentado, a
-  // compactacao automatica tem de acontecer sem ninguem a pedir.
+  // A compactacao SO' roda com o journal quiescente -- hoje, dentro do Start.
+  // Nao ha gatilho em voo, e a razao esta' no cabecalho de AMQP.Server.Journal:
+  // o LSN e' atribuido no Submit, e a compactacao atribui LSNs NOVOS; um
+  // publish que pegou o seu LSN antes e ainda esta' na fila seria escrito
+  // DEPOIS, com LSN menor, e o Append recusaria. A versao anterior deste teste
+  // disparava a compactacao na rotacao e foi ela que destapou o defeito.
   //
-  // UMA BARREIRA POR REGISTRO, e a razao e' o desenho: a compactacao so' e'
-  // CONSULTADA NA ROTACAO -- de proposito, porque a rotacao ja' e' o momento
-  // em que o journal para para trocar de arquivo. Com o group commit juntando
-  // tudo num lote so', pode haver UMA rotacao apenas; e se o lote final deixar
-  // o segmento ativo abaixo do teto, nenhuma rotacao acontece DEPOIS de o
-  // tamanho passar do limiar, e a compactacao nunca e' consultada. O log fica
-  // grande, nada esta' errado no broker, e o teste falha por corrida.
-  //
-  // Foi assim que ele quebrou: verde no FPC, intermitente no Delphi (1 em ~7).
-  // Com barreira por registro cada um vira o seu proprio lote, as rotacoes
-  // ficam frequentes, e muitas delas acontecem depois de o limiar ser
-  // cruzado -- o gatilho passa a ser funcao do TAMANHO, nao do escalonador.
-  FJournal.MaxSegmentBytes := 300;
-  FJournal.CompactarAcimaDe := 1500;
+  // Aqui o equivalente do Start: escreve, fecha o journal, reabre e compacta
+  // com ninguem mais submetendo.
   DeclaraFila('q.a');
   for I := 1 to 30 do
   begin
-    ChecaOk('conteudo duravel', FJournal.WaitDurable(
-      Grava(AMQP_REC_CONTENT,
-        AmqpEncodeRecContent(ConteudoDe(I * 2 - 1, 'corpo-' + IntToStr(I)))),
-      5000));
+    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
     Coloca(I * 2, I * 2 - 1, 'q.a');
-    ChecaOk('aposentadoria duravel', FJournal.WaitDurable(
-      Grava(AMQP_REC_DEQUEUE, AmqpEncodeRecDequeue(DequeueDe(I * 2, 'q.a'))),
-      5000));
+    LLsn := Grava(AMQP_REC_DEQUEUE,
+      AmqpEncodeRecDequeue(DequeueDe(I * 2, 'q.a')));
   end;
-  ChecaOk('a compactacao automatica rodou',
-    FJournal.Stats.Compactacoes >= 1);
-  ChecaOk('e apagou segmento', FJournal.Stats.SegmentosApagados >= 1);
+  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  LAntes := FJournal.TamanhoTotal;
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+
+  J := TAMQPJournal.Create(FDir);
+  try
+    J.Start;
+    ChecaOk('o log esta acima do limiar', J.TamanhoTotal >= 1500);
+    ChecaOk('compactou', J.Compacta);
+    LDepois := J.TamanhoTotal;
+    ChecaOk('e encolheu', LDepois < LAntes);
+    ChecaOk('apagando segmento', J.Stats.SegmentosApagados >= 1);
+  finally
+    J.Stop;
+    J.Free;
+  end;
+  FJournal := nil;
 end;
 
 procedure TRecoveryReplayTests.Compacta_FsyncReprovado_NaoApagaNada;
