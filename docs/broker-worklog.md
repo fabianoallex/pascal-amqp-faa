@@ -591,6 +591,14 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **O que falta para fechar a WS6:** aplicar o estado ao broker dentro do `Start`, antes de o socket de escuta abrir — declarar a topologia com o journal **mudo** (senão cada restart reescreveria o log inteiro), reenfileirar as colocações com o prazo recomposto pela D21, e continuar o contador de ids depois do `MaxId`.
 
+- **RTL do dialeto errado, e a sexta checagem — o terceiro defeito da mesma causa.** O dcc32 recusou o espelho DUnitX do replay com `GetTempDir` (só existe no FPC; no Delphi é `TPath.GetTempPath`) e com `SysUtils.DeleteFile` qualificado sem o `System.` que o Delphi exige.
+
+  **A causa é a mesma das duas anteriores, e agora dá para nomeá-la:** um gerador que escreve os DOIS espelhos a partir de um bloco de texto só. Isso é **certo** para o corpo do teste — é o que mantém os espelhos idênticos, e foi de propósito que as funções `Checa*` existem — mas **errado para tudo que toca a RTL**, que não é neutra de dialeto. O bloco de apoio (limpar diretório, achar o temp) foi compartilhado sem que essa distinção fosse feita, e as outras suítes já tinham o idioma certo a três arquivos de distância.
+
+  Virou a **checagem [6]**: uma lista curta de identificadores que só existem de um lado, mais o qualificador `SysUtils.` vs. `System.SysUtils.`. A lista é curta de propósito — cada entrada custou um round-trip de verdade, e uma lista especulativa só produziria falso-positivo.
+
+  **E a primeira versão da checagem não pegava o defeito que a motivou.** O matcher exigia `(` depois do nome, e tanto `GetTempDir` quanto `TPath` aparecem sem parênteses (`IncludeTrailingPathDelimiter(GetTempDir)`, `TPath.GetTempPath`). Só a mutação mostrou — a checagem passava verde sobre o arquivo mutado. **Quando a mutação não derruba a verificação que deveria, o defeito é da verificação**, e é a mesma regra que este projeto já aplica a testes.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

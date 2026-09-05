@@ -39,7 +39,16 @@ e um [Test], ele some da suite em silencio, que e o verde falso de sempre. O
 FPCUnit nao tem como avisar: la a visibilidade que importa e `published`, e a
 fixture-base nem precisa dela.
 
-Nenhum dos cinco precisa de compilador para ser detectado. Rode isto antes de
+E uma sexta, na mesma rodada: chamada de RTL que so existe em UM dos
+compiladores, escrita no espelho do outro (`GetTempDir` num arquivo DUnitX;
+`SysUtils.DeleteFile` qualificado sem o `System.` que o Delphi exige). A causa
+foi sempre a mesma: um gerador que escreve OS DOIS espelhos a partir de um
+bloco de texto so'. Isso funciona para o corpo do teste -- e' bom que funcione,
+e' o que mantem os espelhos iguais --, mas NAO para o que toca a RTL, que nao
+e' neutra de dialeto. A lista abaixo e' curta de proposito: so' o que ja'
+custou um round-trip de verdade.
+
+Nenhum dos seis precisa de compilador para ser detectado. Rode isto antes de
 mandar a suite para o IDE.
 
 USO
@@ -428,6 +437,69 @@ def verifica_visibilidade_dos_atributos():
     return problemas
 
 
+# Identificadores de RTL que so' existem de um lado. Lista deliberadamente
+# CURTA: cada entrada custou um round-trip pela IDE, e uma lista especulativa
+# so' produziria falso-positivo. Ver a tabela "Proibido / Usar" do CLAUDE.md
+# para o conjunto completo, que nao cabe numa heuristica.
+SO_NO_FPC = (
+    'GetTempDir',        # no Delphi: TPath.GetTempPath (System.IOUtils)
+    'GetLastOSError',    # no Delphi: AmqpLastOsError (RaiseLastOSError LEVANTA)
+)
+SO_NO_DELPHI = (
+    'TPath',                          # System.IOUtils nao serve ao FPC 3.2
+    'ReportMemoryLeaksOnShutdown',    # nao existe no FPC
+    'RaiseLastOSError',
+)
+
+# No Delphi a unit e' System.SysUtils: qualificar como `SysUtils.Xxx` nao
+# compila (E2003). No FPC e' o contrario -- `System.SysUtils.` nao existe.
+RE_QUALIF_CURTO = re.compile(r'(?<![\w.])SysUtils\s*\.\s*[A-Za-z]')
+RE_QUALIF_LONGO = re.compile(r'(?<![\w.])System\s*\.\s*SysUtils\s*\.')
+
+
+def _identificadores(corpo, nomes):
+    """Nomes de `nomes` usados como identificador, com ou sem parenteses.
+
+    Diferente de _chamadas de proposito: `GetTempDir` e `TPath` aparecem SEM
+    parenteses logo apos (`IncludeTrailingPathDelimiter(GetTempDir)`,
+    `TPath.GetTempPath`), e exigir o `(` deixaria os dois passarem -- foi
+    exatamente o que aconteceu na primeira versao desta checagem, e a mutacao
+    que a provou foi a que pegou.
+    """
+    achados = []
+    for nome in nomes:
+        padrao = r'(?<![\w.])' + nome + r'(?![\w])'
+        for m in re.finditer(padrao, corpo, re.IGNORECASE):
+            achados.append((nome, corpo.count(chr(10), 0, m.start()) + 1))
+    return achados
+
+
+def verifica_rtl_do_dialeto():
+    """RTL de um compilador escrita no espelho do outro."""
+    problemas = []
+    for dunitx, fpcunit in pares_espelhados():
+        corpo = sem_comentarios(le(dunitx))
+        for nome, linha in _identificadores(corpo, SO_NO_FPC):
+            problemas.append((rel(dunitx),
+                              'linha %d: %s so existe no FPC' % (linha, nome)))
+        for m in RE_QUALIF_CURTO.finditer(corpo):
+            problemas.append((rel(dunitx),
+                              'linha %d: qualificador SysUtils. -- no Delphi a '
+                              'unit e System.SysUtils'
+                              % (corpo.count('\n', 0, m.start()) + 1)))
+        corpo = sem_comentarios(le(fpcunit))
+        for nome, linha in _identificadores(corpo, SO_NO_DELPHI):
+            problemas.append((rel(fpcunit),
+                              'linha %d: %s so existe no Delphi'
+                              % (linha, nome)))
+        for m in RE_QUALIF_LONGO.finditer(corpo):
+            problemas.append((rel(fpcunit),
+                              'linha %d: qualificador System.SysUtils. -- no '
+                              'FPC a unit e SysUtils'
+                              % (corpo.count('\n', 0, m.start()) + 1)))
+    return problemas
+
+
 def main():
     falhou = False
 
@@ -472,6 +544,15 @@ def main():
     if vis:
         falhou = True
         for arq, msg in vis:
+            print('    FALHA  %s: %s' % (arq, msg))
+    else:
+        print('    ok')
+
+    print('[6] RTL do dialeto certo em cada espelho')
+    rtl = verifica_rtl_do_dialeto()
+    if rtl:
+        falhou = True
+        for arq, msg in rtl:
             print('    FALHA  %s: %s' % (arq, msg))
     else:
         print('    ok')

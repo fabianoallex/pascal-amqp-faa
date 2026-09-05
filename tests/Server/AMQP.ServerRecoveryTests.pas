@@ -105,10 +105,10 @@ begin
     try
       repeat
         if (LRec.Attr and faDirectory) = 0 then
-          SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+          System.SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
       until FindNext(LRec) <> 0;
     finally
-      SysUtils.FindClose(LRec);
+      System.SysUtils.FindClose(LRec);
     end;
   end;
 end;
@@ -275,7 +275,7 @@ end;
 procedure TRecoveryReplayTests.SetUp;
 begin
   Inc(GRecSeq);
-  FDir := IncludeTrailingPathDelimiter(GetTempDir) + 'amqprec-'
+  FDir := IncludeTrailingPathDelimiter(TPath.GetTempPath) + 'amqprec-'
     + IntToStr(GRecSeq);
   ForceDirectories(FDir);
   LimpaDirRec(FDir);
