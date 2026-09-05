@@ -48,7 +48,8 @@ uses
   AMQP.Server.Wal,
   AMQP.Server.Journal,
   AMQP.Server.Records,
-  AMQP.Server.Recovery;
+  AMQP.Server.Recovery,
+  AMQP.ServerTestDoubles;
 
 type
   { Escreve um WAL a mao e le de volta. }
@@ -95,6 +96,16 @@ type
     [Test] procedure Rotaciona_LsnContinuaEntreSegmentos;
     [Test] procedure Rotaciona_ReplayLeTodosOsSegmentosComoUmLogSo;
     [Test] procedure Rotaciona_ReabrirContinuaNoUltimoSegmento;
+    // --- WS7: compactacao ---
+    [Test] procedure Compacta_EncolheOLogSemMudarOEstado;
+    [Test] procedure Compacta_ApagaOsSegmentosVelhos;
+    [Test] procedure Compacta_PreservaOsIdentificadores;
+    [Test] procedure Compacta_NaoDuplicaSeOsVelhosSobrarem;
+    [Test] procedure Compacta_PreservaAOrdemEOsPrazos;
+    [Test] procedure Compacta_LogInteiroMorto_NaoSobraColocacao;
+    [Test] procedure Compacta_Automatica_DisparaAcimaDoLimiar;
+    [Test] procedure Compacta_FsyncReprovado_NaoApagaNada;
+    [Test] procedure Compacta_FanOut_GravaOCorpoUmaVezSo;
   end;
 
 implementation
@@ -141,6 +152,37 @@ begin
 end;
 
 /// Monta um registro de conteudo (as duas suites de rotacao precisam do mesmo).
+type
+  { Journal cujo fsync pode ser reprovado, sobre arquivos DE VERDADE. }
+  TJournalComSyncFalho = class(TAMQPJournal)
+  private
+    FUltimo: TAMQPWalFileComFalha;
+    FRefUltimo: IAMQPWalFile; // mantem FUltimo vivo enquanto o teste o usa
+    FReprovando: Boolean;
+  protected
+    function CriaArquivo(const APath: string;
+      ACriar: Boolean): IAMQPWalFile; override;
+  public
+    /// A partir daqui todo fsync reprova -- inclusive o da compactacao.
+    procedure ReprovaOSync;
+  end;
+
+function TJournalComSyncFalho.CriaArquivo(const APath: string;
+  ACriar: Boolean): IAMQPWalFile;
+begin
+  FUltimo := TAMQPWalFileComFalha.Create(TAMQPWalOsFile.Create(APath, ACriar));
+  FUltimo.SetSyncOk(not FReprovando);
+  FRefUltimo := FUltimo;
+  Result := FRefUltimo;
+end;
+
+procedure TJournalComSyncFalho.ReprovaOSync;
+begin
+  FReprovando := True;
+  if FUltimo <> nil then
+    FUltimo.SetSyncOk(False);
+end;
+
 function ConteudoDe(AId: UInt64; const ACorpo: string): TAMQPRecContent;
 begin
   Result.ContentId := AId;
@@ -795,6 +837,312 @@ begin
   FJournal.Start;
   ChecaInt('reabriu no ultimo segmento, nao no primeiro',
     Integer(LSegDepois), Integer(FJournal.SegmentoAtivo));
+end;
+
+{ --- compactacao (WS7 da Fase 4, D26) --- }
+
+procedure TRecoveryReplayTests.Compacta_EncolheOLogSemMudarOEstado;
+var
+  E: TAMQPRecoveredState;
+  I: Integer;
+  LAntes, LDepois: Int64;
+begin
+  // O que a compactacao promete: MENOS BYTES, MESMO ESTADO. Publica 30 e
+  // aposenta 28 -- e' o caso que a D26 descreve, log grande e conteudo vivo
+  // pequeno.
+  DeclaraFila('q.a');
+  for I := 1 to 30 do
+  begin
+    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
+    Coloca(I * 2, I * 2 - 1, 'q.a');
+  end;
+  for I := 1 to 28 do
+    Aposenta(I * 2, 'q.a');
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  LAntes := FJournal.TamanhoTotal;
+
+  ChecaOk('compactou', FJournal.Compacta);
+  LDepois := FJournal.TamanhoTotal;
+  ChecaOk('o log encolheu', LDepois < LAntes);
+
+  E := Replica;
+  try
+    ChecaInt('a fila continua la', 1, E.Queues.Count);
+    ChecaInt('e as duas vivas tambem', 2, E.Entries.Count);
+    ChecaStr('a primeira viva e a de numero 29', 'corpo-29',
+      AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
+    ChecaInt('e o conteudo das aposentadas foi embora', 2, E.Contents.Count);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Compacta_ApagaOsSegmentosVelhos;
+var
+  I: Integer;
+  LSegsAntes, LSegsDepois: TArray<Cardinal>;
+begin
+  FJournal.MaxSegmentBytes := 300;
+  DeclaraFila('q.a');
+  for I := 1 to 60 do
+    Conteudo(I, 'corpo-' + IntToStr(I));
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  LSegsAntes := AmqpWalListSegments(FDir);
+  ChecaOk('havia varios segmentos', Length(LSegsAntes) > 2);
+
+  ChecaOk('compactou', FJournal.Compacta);
+  LSegsDepois := AmqpWalListSegments(FDir);
+  // Nenhuma colocacao viva (so' conteudo solto, que ninguem referencia): sobra
+  // o segmento novo com a topologia e mais nada.
+  ChecaInt('sobrou UM segmento', 1, Length(LSegsDepois));
+  ChecaOk('e ele e mais novo que todos os apagados',
+    LSegsDepois[0] > LSegsAntes[High(LSegsAntes)]);
+  ChecaOk('os apagados foram contados',
+    FJournal.Stats.SegmentosApagados >= Length(LSegsAntes));
+end;
+
+procedure TRecoveryReplayTests.Compacta_PreservaOsIdentificadores;
+var
+  E: TAMQPRecoveredState;
+begin
+  // OS IDENTIFICADORES SAO O QUE TORNA A REESCRITA IDEMPOTENTE. Se a
+  // compactacao renumerasse, um log com as duas copias (queda entre escrever o
+  // novo e apagar o velho) descreveria DUAS mensagens em vez de uma.
+  DeclaraFila('q.a');
+  Conteudo(7, 'x');
+  Coloca(9, 7, 'q.a');
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compacta);
+  E := Replica;
+  try
+    ChecaInt('uma colocacao', 1, E.Entries.Count);
+    ChecaInt('com o MESMO EntryId de antes', 9, Integer(E.Entries[0].EntryId));
+    ChecaInt('e o MESMO ContentId', 7, Integer(E.Entries[0].ContentId));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Compacta_NaoDuplicaSeOsVelhosSobrarem;
+var
+  E: TAMQPRecoveredState;
+  LEnq: TAMQPRecEnqueue;
+  LCont: TAMQPRecContent;
+  LLsn: UInt64;
+begin
+  // A QUEDA ENTRE O PASSO 4 E O 5, simulada: o segmento novo ja' esta' no
+  // disco e o velho ainda nao foi apagado. E' o unico ponto em que a
+  // compactacao pode ser interrompida sem que o fsync tenha decidido, e o log
+  // resultante tem de descrever UMA mensagem, nao duas.
+  //
+  // Em vez de derrubar o processo (que nao testa fsync, D28), monto a
+  // situacao a mao: escrevo a MESMA colocacao duas vezes, que e' exatamente o
+  // arquivo que uma compactacao interrompida deixaria.
+  DeclaraFila('q.a');
+  Conteudo(5, 'unica');
+  Coloca(6, 5, 'q.a');
+  LCont.ContentId := 5;
+  LCont.UserId := 'guest';
+  LCont.Body := AmqpUtf8Encode('unica');
+  LEnq.VHost := '/';
+  LEnq.Queue := 'q.a';
+  LEnq.EntryId := 6;      // O MESMO id
+  LEnq.ContentId := 5;
+  LEnq.Exchange := '';
+  LEnq.RoutingKey := 'q.a';
+  LEnq.Priority := 0;
+  LEnq.EnqueuedAtWall := 1700000000000;
+  LEnq.TtlMs := -1;
+  LEnq.HeaderPayload := nil;
+  Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(LCont));
+  LLsn := Grava(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
+  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+
+  E := Replica;
+  try
+    ChecaInt('UMA colocacao, nao duas', 1, E.Entries.Count);
+    ChecaInt('e a repetida foi contada', 1, E.Stats.Duplicadas);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Compacta_PreservaAOrdemEOsPrazos;
+var
+  E: TAMQPRecoveredState;
+begin
+  // O registro reescrito tem de sair campo a campo igual: se a compactacao
+  // perdesse o instante de parede ou o balde, a mensagem voltaria do restart
+  // com prazo renovado (D21) ou na prioridade errada (D12) -- e nenhum teste
+  // de "a mensagem sobreviveu" perceberia.
+  DeclaraFila('q.a');
+  Conteudo(1, 'primeira');
+  Coloca(2, 1, 'q.a', 3);
+  Conteudo(3, 'segunda');
+  Coloca(4, 3, 'q.a', 7);
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compacta);
+  E := Replica;
+  try
+    ChecaInt('as duas', 2, E.Entries.Count);
+    ChecaStr('na ordem do log original', 'primeira',
+      AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
+    ChecaInt('com a prioridade da primeira', 3, Integer(E.Entries[0].Priority));
+    ChecaInt('e a da segunda', 7, Integer(E.Entries[1].Priority));
+    ChecaOk('e o instante de parede intacto',
+      E.Entries[0].EnqueuedAtWall = 1700000000000);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Compacta_LogInteiroMorto_NaoSobraColocacao;
+var
+  E: TAMQPRecoveredState;
+  I: Integer;
+begin
+  DeclaraFila('q.a');
+  for I := 1 to 10 do
+  begin
+    Conteudo(I * 2 - 1, 'x');
+    Coloca(I * 2, I * 2 - 1, 'q.a');
+    Aposenta(I * 2, 'q.a');
+  end;
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compacta);
+  E := Replica;
+  try
+    ChecaInt('nenhuma colocacao', 0, E.Entries.Count);
+    ChecaInt('nenhum conteudo', 0, E.Contents.Count);
+    ChecaInt('mas a TOPOLOGIA fica -- ela nao morre com as mensagens', 1,
+      E.Queues.Count);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Compacta_Automatica_DisparaAcimaDoLimiar;
+var
+  I: Integer;
+begin
+  // O gatilho: rotacao + tamanho acima do limiar. Com quase tudo aposentado, a
+  // compactacao automatica tem de acontecer sem ninguem a pedir.
+  FJournal.MaxSegmentBytes := 400;
+  FJournal.CompactarAcimaDe := 2000;
+  DeclaraFila('q.a');
+  for I := 1 to 60 do
+  begin
+    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
+    Coloca(I * 2, I * 2 - 1, 'q.a');
+    Aposenta(I * 2, 'q.a');
+  end;
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  ChecaOk('a compactacao automatica rodou',
+    FJournal.Stats.Compactacoes >= 1);
+  ChecaOk('e apagou segmento', FJournal.Stats.SegmentosApagados >= 1);
+end;
+
+procedure TRecoveryReplayTests.Compacta_FsyncReprovado_NaoApagaNada;
+var
+  J: TJournalComSyncFalho;
+  LSegsAntes, LSegsDepois: TArray<Cardinal>;
+  LRecs: TAMQPJournalRecords;
+  I: Integer;
+begin
+  // A INVARIANTE DE SEGURANCA DA COMPACTACAO: enquanto o fsync do segmento
+  // novo nao for aceito, os velhos NAO PODEM SER APAGADOS. Errar para o lado
+  // de um log maior do que precisava e' o erro certo a cometer; errar para o
+  // outro lado apaga o unico lugar onde as mensagens existem.
+  //
+  // Uma mutacao que tirasse a checagem do Sync passava em toda a suite ate'
+  // este teste existir -- em processo, o fsync nunca falha sozinho.
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+  J := TJournalComSyncFalho.Create(FDir);
+  try
+    J.Start;
+    J.MaxSegmentBytes := 300;
+    SetLength(LRecs, 1);
+    for I := 1 to 40 do
+    begin
+      LRecs[0].Kind := AMQP_REC_CONTENT;
+      LRecs[0].Payload := AmqpEncodeRecContent(ConteudoDe(I, 'x'));
+      J.Submit(LRecs);
+    end;
+    ChecaOk('tudo duravel', J.WaitDurable(J.Stats.ProximoLsn - 1, 5000));
+    LSegsAntes := AmqpWalListSegments(FDir);
+    ChecaOk('havia varios segmentos', Length(LSegsAntes) > 1);
+
+    J.ReprovaOSync;
+    ChecaNao('a compactacao se recusa a concluir', J.Compacta);
+    LSegsDepois := AmqpWalListSegments(FDir);
+    ChecaOk('e NENHUM segmento velho foi apagado',
+      Length(LSegsDepois) >= Length(LSegsAntes));
+  finally
+    try
+      J.Stop;
+    except
+    end;
+    J.Free;
+  end;
+  // o TearDown espera FJournal <> nil ou nil; ja' foi liberado acima
+  FJournal := nil;
+end;
+
+procedure TRecoveryReplayTests.Compacta_FanOut_GravaOCorpoUmaVezSo;
+var
+  LSegs: TArray<Cardinal>;
+  LArq: IAMQPWalFile;
+  LSeg: TAMQPWalSegment;
+  LRegs: TAMQPWalRecords;
+  LStop: TAMQPWalStop;
+  LN, I, J, LConteudos, LColocacoes: Integer;
+begin
+  // O PAGAMENTO DA D22, do lado da compactacao: um fan-out para tres filas tem
+  // UM corpo e TRES colocacoes. Se a reescrita gravasse o corpo por colocacao,
+  // o estado sairia igual -- e o log tres vezes maior, que e' justamente o que
+  // a compactacao existe para evitar. Nenhum teste de estado percebe.
+  DeclaraFila('q.a');
+  DeclaraFila('q.b');
+  DeclaraFila('q.c');
+  Conteudo(1, 'compartilhado');
+  Coloca(2, 1, 'q.a');
+  Coloca(3, 1, 'q.b');
+  Coloca(4, 1, 'q.c');
+  ChecaOk('tudo duravel',
+    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compacta);
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+
+  LConteudos := 0;
+  LColocacoes := 0;
+  LSegs := AmqpWalListSegments(FDir);
+  for I := 0 to High(LSegs) do
+  begin
+    LArq := TAMQPWalOsFile.Create(
+      IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]), False);
+    LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+    try
+      LN := LSeg.ReadPrefix(LRegs, LStop);
+      for J := 0 to LN - 1 do
+        if LRegs[J].Kind = AMQP_REC_CONTENT then
+          Inc(LConteudos)
+        else if LRegs[J].Kind = AMQP_REC_ENQUEUE then
+          Inc(LColocacoes);
+    finally
+      LSeg.Free;
+      LArq := nil;
+    end;
+  end;
+  ChecaInt('UM registro de conteudo no log compactado', 1, LConteudos);
+  ChecaInt('e tres colocacoes', 3, LColocacoes);
 end;
 
 initialization

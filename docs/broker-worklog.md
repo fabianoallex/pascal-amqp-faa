@@ -629,6 +629,24 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **O que falta na WS7:** apagar segmento cuja última colocação já foi aposentada; compactar por reescrita quando a fração viva cai abaixo do limiar (a D26 manda reusar o replay para descobrir o conjunto vivo — não há arquivo de snapshot separado); e o teto duro `MaxJournalBytes`, que **recusa** o publish persistente com `Basic.Nack` em vez de descartar (a diferença que importa em relação à D7: teto de memória descarta, teto de disco recusa).
 
+- **WS7, segunda parte: a compactação.** Compactar é reescrever o que ainda está vivo e apagar o resto. A D26 pede **uma mecânica só** e **nenhum arquivo de snapshot**, e o jeito de conseguir as duas coisas foi reusar o **replay**: o conjunto vivo é exatamente o que a recuperação já sabe calcular. A compactação não tem uma segunda implementação da semântica — ela chama `AmqpReplayWal`.
+
+  **A ordem substitui a transação, como na D23:** fecha o segmento ativo → lê o log e descobre o vivo → escreve tudo num segmento novo **com os mesmos `EntryId`/`ContentId`** → fsync → só então apaga os velhos. Uma queda em qualquer ponto é segura, e a razão está no terceiro passo: como os identificadores são preservados, um log que contenha as duas cópias descreve o **mesmo** estado. **Cair entre escrever e apagar deixa o dobro dos bytes, nunca o dobro das mensagens.**
+
+  Isso obrigou uma mudança no replay: **colocação repetida é unificada por `EntryId`**. E obrigou uma segunda, menos óbvia — a unificação ingênua seria uma varredura linear em *todo* ENQ, o que levaria o replay a O(N × vivas): com 100 mil mensagens paradas numa fila, 10^10 comparações. É a mesma armadilha do matcher de topic da Fase 2 (verde nos testes, exponencial no algoritmo). Entrou um índice `EntryId → posição`, e a remoção passou a ser por **lápide** em vez de `Delete` no meio da lista — o que também tirou o O(vivas) que o DEQ já pagava.
+
+  **O gatilho não tem parâmetro de tempo, na forma da D25:** depois de cada compactação o limiar seguinte vira **quatro vezes o que sobrou**. Um log genuinamente vivo cresce o limiar junto e para de disparar; um log cheio de aposentadas encolhe, e o limiar encolhe com ele. É a fração viva de 25% da D26 sem ninguém precisar calculá-la.
+
+  **Um defeito achado pelo próprio teste: a compactação consumia LSNs e não avançava a marca d'água.** Ela escreve registros — que *estão* no disco depois do fsync — mas só `RodaUmLote` mexia em `FDurableLsn`. Quem esperasse por um desses LSNs esperaria até o próximo lote de publish, que pode nunca vir. O `Compacta` passou a avançar a marca depois do próprio fsync.
+
+  **Mutação, sete mutantes, e dois sobreviveram — os dois eram buracos de cobertura reais:**
+  - *"apaga antes do fsync"*: em processo o fsync nunca falha sozinho, então **nenhum** teste alcançava a guarda. Entrou o `TAMQPWalFileComFalha` (envolve um arquivo **de verdade** e reprova só a resposta do fsync — um dublê em memória não serviria, porque não haveria segmento no disco para apagar e o teste passaria por vacuidade) e o `Compacta_FsyncReprovado_NaoApagaNada`. A invariante que ele prende: **errar para o lado de um log maior é o erro certo; errar para o outro apaga o único lugar onde as mensagens existem.**
+  - *"reescreve o corpo por colocação"*: o **estado** sai idêntico e o log sai três vezes maior — exatamente o que a compactação existe para evitar, e nenhum teste de estado percebe. Entrou o `Compacta_FanOut_GravaOCorpoUmaVezSo`, que conta os registros **no arquivo**.
+
+  **Estado:** server **420 → 429** (Default) e **424 → 433** (`openssl`), `0 unfreed memory blocks`; aceitação 28/28, SmokeTest PASS, `verifica_espelhos.py` limpo, broker compilando no Linux.
+
+  **O que falta para fechar a WS7:** o teto duro `MaxJournalBytes` (default 0 = ilimitado), que ao estourar **recusa** o publish persistente com `Basic.Nack` em vez de descartar — a diferença que importa em relação à D7: teto de memória descarta, teto de disco recusa, porque descartar da cabeça no disco seria apagar dado já confirmado.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

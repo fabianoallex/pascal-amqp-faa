@@ -73,6 +73,12 @@ type
     Aposentadas: Integer;
     /// Colocacoes descartadas porque a fila delas foi apagada depois.
     OrfasDeFila: Integer;
+    /// Colocacoes que apareceram DUAS vezes no log e foram unificadas. Nao e'
+    /// anomalia: e' o preco -- e a prova -- de a compactacao ser segura a
+    /// queda. Ela reescreve os registros vivos com o MESMO EntryId antes de
+    /// apagar os segmentos velhos, entao uma queda no meio deixa as duas
+    /// copias, e o replay tem de trata-las como UMA.
+    Duplicadas: Integer;
     /// Colocacoes descartadas porque o conteudo nao esta' no log. Nao deveria
     /// acontecer (CONTENT e ENQ vao no MESMO lote indivisivel), e por isso e'
     /// contado em vez de ignorado: se um dia for diferente de zero, o defeito
@@ -87,7 +93,16 @@ type
     FExchanges: TList<TAMQPRecExchange>;
     FQueues: TList<TAMQPRecQueue>;
     FBindings: TList<TAMQPRecoveredBinding>;
+    // Colocacoes na ORDEM DO LOG. Uma aposentada vira LAPIDE (EntryId = 0, que
+    // nenhuma colocacao real usa -- o contador da engine comeca no 1) em vez
+    // de sair da lista: remover do meio custaria O(n) por DEQ, e o log de um
+    // broker de vida longa tem um DEQ para cada ENQ. As lapides somem numa
+    // varredura so', no fim do replay.
     FEntries: TList<TAMQPRecEnqueue>;
+    /// EntryId -> posicao em FEntries, so' das VIVAS. E' o que faz unificar
+    /// duplicada e achar o alvo de um DEQ custarem O(1) em vez de O(vivas).
+    FVivas: TDictionary<UInt64, Integer>;
+    FLapides: Integer;
     FContents: TDictionary<UInt64, TAMQPRecContent>;
     FStats: TAMQPRecoveryStats;
     FMaxId: UInt64;
@@ -98,6 +113,10 @@ type
     procedure TiraBindingsDe(const AVHost, ANome: string; AEhFila: Boolean);
     procedure Aplica(const ARec: TAMQPWalRecord);
     procedure NotaId(AId: UInt64);
+    /// Marca a colocacao da posicao AIndex como morta, sem tirar da lista.
+    procedure Lapida(AIndex: Integer);
+    /// Tira as lapides, preservando a ordem. Uma passada, no fim do replay.
+    procedure VarreLapides;
   public
     constructor Create;
     destructor Destroy; override;
@@ -137,6 +156,7 @@ begin
   FQueues := TList<TAMQPRecQueue>.Create;
   FBindings := TList<TAMQPRecoveredBinding>.Create;
   FEntries := TList<TAMQPRecEnqueue>.Create;
+  FVivas := TDictionary<UInt64, Integer>.Create;
   FContents := TDictionary<UInt64, TAMQPRecContent>.Create;
 end;
 
@@ -157,8 +177,41 @@ begin
   FQueues.Free;
   FBindings.Free;
   FEntries.Free;
+  FVivas.Free;
   FContents.Free;
   inherited;
+end;
+
+// EntryId = 0 e' a lapide: nenhuma colocacao real usa esse numero, porque o
+// contador da engine faz Inc ANTES de devolver e portanto comeca no 1.
+procedure TAMQPRecoveredState.Lapida(AIndex: Integer);
+var
+  LEnq: TAMQPRecEnqueue;
+begin
+  LEnq := FEntries[AIndex];
+  FVivas.Remove(LEnq.EntryId);
+  LEnq.EntryId := 0;
+  FEntries[AIndex] := LEnq;
+  Inc(FLapides);
+end;
+
+procedure TAMQPRecoveredState.VarreLapides;
+var
+  I, LDestino: Integer;
+begin
+  if FLapides = 0 then
+    Exit;
+  LDestino := 0;
+  for I := 0 to FEntries.Count - 1 do
+    if FEntries[I].EntryId <> 0 then
+    begin
+      if LDestino <> I then
+        FEntries[LDestino] := FEntries[I];
+      Inc(LDestino);
+    end;
+  FEntries.Count := LDestino;
+  FVivas.Clear; // as posicoes mudaram; ninguem mais consulta o indice
+  FLapides := 0;
 end;
 
 procedure TAMQPRecoveredState.NotaId(AId: UInt64);
@@ -298,10 +351,11 @@ begin
         // ...e o que pendia nela vai junto: ressuscitar mensagem de fila
         // apagada seria pior que perde-la.
         for I := FEntries.Count - 1 downto 0 do
-          if (FEntries[I].VHost = LNome.VHost)
+          if (FEntries[I].EntryId <> 0)
+            and (FEntries[I].VHost = LNome.VHost)
             and (FEntries[I].Queue = LNome.Name) then
           begin
-            FEntries.Delete(I);
+            Lapida(I);
             Inc(FStats.OrfasDeFila);
           end;
       end;
@@ -346,20 +400,34 @@ begin
       begin
         LEnq := AmqpDecodeRecEnqueue(ARec.Payload);
         NotaId(LEnq.EntryId);
-        FEntries.Add(LEnq);
+        // MESMA COLOCACAO DUAS VEZES = UMA. E' o que torna a reescrita da
+        // compactacao segura a queda: ela regrava o vivo com o MESMO EntryId
+        // e so' DEPOIS apaga os segmentos velhos, entao uma queda no meio
+        // deixa as duas copias no log. Sem isto, cada compactacao
+        // interrompida duplicaria o estoque inteiro.
+        //
+        // Fica a PRIMEIRA ocorrencia: a ordem do log e' a ordem de
+        // enfileiramento (D27), e a copia antiga e' a que esta' na posicao
+        // certa da fila. As duas sao iguais campo a campo, entao a escolha so'
+        // importa para a POSICAO.
+        if FVivas.ContainsKey(LEnq.EntryId) then
+          Inc(FStats.Duplicadas)
+        else
+        begin
+          FVivas.Add(LEnq.EntryId, FEntries.Count);
+          FEntries.Add(LEnq);
+        end;
       end;
     AMQP_REC_DEQUEUE:
       begin
         LDeq := AmqpDecodeRecDequeue(ARec.Payload);
-        for I := FEntries.Count - 1 downto 0 do
-          if (FEntries[I].EntryId = LDeq.EntryId)
-            and (FEntries[I].VHost = LDeq.VHost)
-            and (FEntries[I].Queue = LDeq.Queue) then
-          begin
-            FEntries.Delete(I);
-            Inc(FStats.Aposentadas);
-            Break;
-          end;
+        // O EntryId e' unico no broker (sai de UM contador na engine), entao
+        // ele sozinho identifica a colocacao -- vhost e fila vem de brinde.
+        if FVivas.TryGetValue(LDeq.EntryId, I) then
+        begin
+          Lapida(I);
+          Inc(FStats.Aposentadas);
+        end;
       end;
   end;
 end;
@@ -401,6 +469,10 @@ begin
       LArq := nil;
     end;
   end;
+
+  // As lapides saem AQUI, numa passada so': durante o replay elas ficam para
+  // as posicoes do indice continuarem valendo.
+  Result.VarreLapides;
 
   // Conteudo que nenhuma colocacao viva referencia nao interessa a ninguem --
   // e' o corpo de uma mensagem ja' consumida, ainda no arquivo so' porque o

@@ -117,6 +117,28 @@ type
     procedure SetFalharEscritaNa(AValue: Integer);
   end;
 
+  { Envolve um arquivo de WAL DE VERDADE e permite reprovar o fsync.
+
+    Diferente do TAMQPWalFileFalso (que vive so' na memoria e serve a um
+    segmento so'), este existe porque a compactacao precisa de ARQUIVOS REAIS:
+    o que ela apaga sao entradas de diretorio, e o teste que importa e' "fsync
+    reprovado NAO apaga nada". Com um duble puramente em memoria nao ha
+    segmento nenhum no disco para apagar, e o teste passaria por vacuidade. }
+  TAMQPWalFileComFalha = class(TInterfacedObject, IAMQPWalFile)
+  private
+    FInterno: IAMQPWalFile;
+    FSyncOk: Boolean;
+  public
+    constructor Create(const AInterno: IAMQPWalFile);
+    function Append(const ABytes: TBytes): Int64;
+    function ReadAll: TBytes;
+    function Sync: Boolean;
+    function Size: Int64;
+    procedure TruncateTo(ASize: Int64);
+    /// False faz todo fsync deste arquivo reprovar.
+    procedure SetSyncOk(AValue: Boolean);
+  end;
+
   { Stream de teste: guarda o que foi escrito e pode BLOQUEAR a escritora
     (para encher a fila de saida do writer de proposito).
 
@@ -417,6 +439,48 @@ begin
   finally
     FLock.Leave;
   end;
+end;
+
+{ TAMQPWalFileComFalha }
+
+constructor TAMQPWalFileComFalha.Create(const AInterno: IAMQPWalFile);
+begin
+  inherited Create;
+  FInterno := AInterno;
+  FSyncOk := True;
+end;
+
+function TAMQPWalFileComFalha.Append(const ABytes: TBytes): Int64;
+begin
+  Result := FInterno.Append(ABytes);
+end;
+
+function TAMQPWalFileComFalha.ReadAll: TBytes;
+begin
+  Result := FInterno.ReadAll;
+end;
+
+function TAMQPWalFileComFalha.Sync: Boolean;
+begin
+  // Os BYTES vao para o disco de verdade; so' a RESPOSTA do fsync e' reprovada.
+  // E' o que modela um disco que aceitou a escrita e nao garantiu a barreira.
+  FInterno.Sync;
+  Result := FSyncOk;
+end;
+
+function TAMQPWalFileComFalha.Size: Int64;
+begin
+  Result := FInterno.Size;
+end;
+
+procedure TAMQPWalFileComFalha.TruncateTo(ASize: Int64);
+begin
+  FInterno.TruncateTo(ASize);
+end;
+
+procedure TAMQPWalFileComFalha.SetSyncOk(AValue: Boolean);
+begin
+  FSyncOk := AValue;
 end;
 
 { TStreamGravador }

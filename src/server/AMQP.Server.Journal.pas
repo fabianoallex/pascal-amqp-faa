@@ -57,9 +57,28 @@
 
   O QUE NAO ESTA' AQUI
   --------------------
-  Compactacao de segmento e' a WS7b: esta versao ROTACIONA (fecha o segmento
-  cheio e abre o seguinte) mas ainda nao apaga nem reescreve nada. Antes disso
-  havia UM segmento
+  COMPACTACAO (WS7, D26) -- por que ela e' segura a queda sem transacao
+  --------------------------------------------------------------------
+  Compactar e' reescrever o que ainda esta' vivo e apagar o resto. A D26 pede
+  UMA mecanica so' e nenhum arquivo de snapshot, e o jeito de conseguir as
+  duas coisas e' reusar o REPLAY: o conjunto vivo e' exatamente o que a
+  recuperacao ja' sabe calcular (AMQP.Server.Recovery).
+
+  A ordem e' o que substitui a transacao, como na D23:
+    1. fecha o segmento ativo (dai' em diante nada mais e' escrito nos velhos);
+    2. le' o log inteiro e descobre o que esta' vivo;
+    3. escreve tudo isso num segmento NOVO, com os MESMOS EntryId/ContentId;
+    4. fsync;
+    5. so' entao apaga os segmentos velhos.
+
+  Uma queda em QUALQUER ponto e' segura, e a razao esta' no passo 3: como os
+  identificadores sao preservados, um log que contenha as duas copias descreve
+  o MESMO estado -- o replay unifica colocacao repetida por EntryId. Cair
+  entre o 3 e o 5 deixa o dobro dos bytes, nunca o dobro das mensagens. Nada
+  se perde porque o novo so' vira verdade depois do fsync, e o velho so' some
+  depois disso.
+
+  Antes da rotacao havia UM segmento
   ativo e nao o rola quando ele passa do tamanho alvo. O registro de confirms
   pendentes por canal e' a WS5 -- aqui existe so' a costura
   (IAMQPDurabilitySink) e a marca d'agua que ela consulta. }
@@ -72,7 +91,9 @@ uses
   SyncObjs,
   Generics.Collections,
   AMQP.Threading,
-  AMQP.Server.Wal;
+  AMQP.Server.Wal,
+  AMQP.Server.Records,
+  AMQP.Server.Recovery;
 
 const
   /// Teto da fila de submissao, em bytes de payload. Acima disso o Submit
@@ -86,6 +107,14 @@ const
   /// nao espera peer nenhum, so' o disco, entao estourar isto e' disco parado
   /// ou bug nosso.
   AMQP_JOURNAL_SUBMIT_TIMEOUT_MS = 30000;
+
+  /// Quantas vezes o log pode ser MAIOR que o conteudo vivo antes de o
+  /// journal se compactar sozinho. Quatro e' a fracao viva de 25% da D26,
+  /// escrita do lado de ca': depois de cada compactacao o limiar seguinte
+  /// vira quatro vezes o que sobrou, entao um log genuinamente VIVO nunca e'
+  /// recompactado a toa -- ele so' volta a disparar quando quadruplicar de
+  /// novo. Sem parametro de tempo, na forma da D25.
+  AMQP_JOURNAL_COMPACT_FATOR = 4;
 
   /// Quanto o Stop espera a thread drenar o que ja' foi aceito.
   AMQP_JOURNAL_STOP_TIMEOUT_MS = 30000;
@@ -134,6 +163,9 @@ type
     MaiorLote: Integer;
     /// Quantas vezes o segmento cheio foi fechado e outro aberto (D26).
     Rotacoes: Int64;
+    /// Quantas compactacoes rodaram, e quantos segmentos elas apagaram.
+    Compactacoes: Int64;
+    SegmentosApagados: Int64;
     /// Bytes de payload esperando na fila de submissao AGORA.
     PendingBytes: Int64;
     DurableLsn: UInt64;
@@ -175,6 +207,7 @@ type
     FPendingBytes: Int64;
     FMaxPendingBytes: Int64;
     FMaxSegmentBytes: Int64;
+    FCompactarAcima: Int64;
     FSegNo: Cardinal;
     FProximoLsn: UInt64;
     FDurableLsn: UInt64;   // atomico -- leitura fora do lock
@@ -185,6 +218,8 @@ type
     FSink: IAMQPDurabilitySink;
     FLotes: Int64;
     FRotacoes: Int64;
+    FCompactacoes: Int64;
+    FSegmentosApagados: Int64;
     FSyncs: Int64;
     FRegistros: Int64;
     FMaiorLote: Integer;
@@ -208,6 +243,13 @@ type
     /// Fecha o segmento cheio e abre o proximo. Chamado SO' na fronteira de
     /// lote -- ver o comentario na chamada.
     procedure Rotaciona;
+    /// Abre um segmento novo (o proximo numero) e o torna o ativo.
+    procedure AbreProximoSegmento;
+    /// Escreve os registros vivos no segmento ativo, com os identificadores
+    /// PRESERVADOS. Devolve o LSN do ULTIMO que escreveu (0 se nao escreveu
+    /// nada) -- e' o numero que a marca d agua tem de alcancar depois do
+    /// fsync da compactacao.
+    function EscreveVivos(AEstado: TAMQPRecoveredState): UInt64;
   public
     /// ADir e' o DataDir. O lock exclusivo do diretorio e' tomado no Start,
     /// nao aqui -- construir um journal nao pode roubar o diretorio de um
@@ -249,8 +291,23 @@ type
     /// (D26). Mexer nisto so' faz sentido em teste: o default e' o do WAL.
     property MaxSegmentBytes: Int64 read FMaxSegmentBytes
       write FMaxSegmentBytes;
+    /// A partir de que tamanho total o journal se compacta sozinho. 0 desliga
+    /// a compactacao automatica (o Compacta manual continua valendo).
+    property CompactarAcimaDe: Int64 read FCompactarAcima
+      write FCompactarAcima;
     /// Numero do segmento ATIVO. Cresce a cada rotacao.
     function SegmentoAtivo: Cardinal;
+    /// Soma dos tamanhos de todos os segmentos, em bytes.
+    function TamanhoTotal: Int64;
+
+    /// Reescreve o log deixando so' o que esta' vivo e apaga o resto (D26).
+    /// SO' PODE SER CHAMADA PELA THREAD DO JOURNAL (ou com ela parada): ela e'
+    /// a unica que escreve, e a compactacao conta com isso para nao precisar
+    /// de trava nenhuma sobre o arquivo.
+    ///
+    /// False quando nao havia nada a fazer ou o journal esta' falho; a falha
+    /// de I/O no meio marca o journal como falho, como qualquer outra.
+    function Compacta: Boolean;
 
     /// Contagens, lidas sob o lock (ver TAMQPJournalStats).
     function Stats: TAMQPJournalStats;
@@ -287,6 +344,7 @@ begin
   FPendentes := TQueue<TAMQPJournalItem>.Create;
   FMaxPendingBytes := AMQP_JOURNAL_MAX_PENDING_BYTES;
   FMaxSegmentBytes := AMQP_WAL_SEGMENT_BYTES;
+  FCompactarAcima := AMQP_WAL_SEGMENT_BYTES * AMQP_JOURNAL_COMPACT_FATOR;
   FProximoLsn := 1;
 end;
 
@@ -535,6 +593,8 @@ begin
   try
     Result.Lotes := FLotes;
     Result.Rotacoes := FRotacoes;
+    Result.Compactacoes := FCompactacoes;
+    Result.SegmentosApagados := FSegmentosApagados;
     Result.Syncs := FSyncs;
     Result.SyncsFalhos := FSyncsFalhos;
     Result.Registros := FRegistros;
@@ -555,22 +615,189 @@ end;
 // Fecha o segmento cheio e abre o proximo. O LSN CONTINUA: a numeracao e' do
 // journal inteiro, nao do arquivo, e e' o que permite a recuperacao ler os
 // segmentos em sequencia como se fossem um log so'.
-procedure TAMQPJournal.Rotaciona;
+procedure TAMQPJournal.AbreProximoSegmento;
 var
   LPath: string;
 begin
   FreeAndNil(FSegmento);
-  FArquivo := nil; // fecha o arquivo cheio
+  FArquivo := nil; // fecha o arquivo anterior
   Inc(FSegNo);
   LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(FSegNo);
   FArquivo := CriaArquivo(LPath, True);
   FSegmento := TAMQPWalSegment.CreateNew(FArquivo, FSegNo);
+end;
+
+procedure TAMQPJournal.Rotaciona;
+begin
+  AbreProximoSegmento;
   FMon.Enter;
   try
     Inc(FRotacoes);
   finally
     FMon.Leave;
   end;
+end;
+
+function TAMQPJournal.TamanhoTotal: Int64;
+var
+  LSegs: TArray<Cardinal>;
+  I: Integer;
+  LArq: TSearchRec;
+  LNome: string;
+begin
+  Result := 0;
+  LSegs := AmqpWalListSegments(FDir);
+  for I := 0 to High(LSegs) do
+  begin
+    LNome := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]);
+    if FindFirst(LNome, faAnyFile, LArq) = 0 then
+    begin
+      Result := Result + LArq.Size;
+      SysUtils.FindClose(LArq);
+    end;
+  end;
+end;
+
+// Reescreve o vivo no segmento ATIVO, com os identificadores PRESERVADOS --
+// e' o que faz a reescrita ser idempotente e, por isso, segura a queda (ver o
+// cabecalho da unit). A ordem repete a do log original: topologia primeiro,
+// depois cada conteudo antes da colocacao que o usa.
+function TAMQPJournal.EscreveVivos(AEstado: TAMQPRecoveredState): UInt64;
+var
+  I: Integer;
+  LEx: TAMQPRecExchange;
+  LQ: TAMQPRecQueue;
+  LB: TAMQPRecoveredBinding;
+  LEnq: TAMQPRecEnqueue;
+  LCont: TAMQPRecContent;
+  LJaEscrito: TDictionary<UInt64, Byte>;
+
+  procedure Poe(AKind: Byte; const APayload: TBytes);
+  var
+    LLsn: UInt64;
+  begin
+    FMon.Enter;
+    try
+      LLsn := FProximoLsn;
+      Inc(FProximoLsn);
+    finally
+      FMon.Leave;
+    end;
+    FSegmento.Append(LLsn, AKind, APayload);
+    Result := LLsn;
+  end;
+
+begin
+  Result := 0;
+  for I := 0 to AEstado.Exchanges.Count - 1 do
+  begin
+    LEx := AEstado.Exchanges[I];
+    Poe(AMQP_REC_EXCHANGE_DECLARE, AmqpEncodeRecExchange(LEx));
+  end;
+  for I := 0 to AEstado.Queues.Count - 1 do
+  begin
+    LQ := AEstado.Queues[I];
+    Poe(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LQ));
+  end;
+  for I := 0 to AEstado.Bindings.Count - 1 do
+  begin
+    LB := AEstado.Bindings[I];
+    if LB.ParaExchange then
+      Poe(AMQP_REC_EXCHANGE_BIND, AmqpEncodeRecBinding(LB.Binding))
+    else
+      Poe(AMQP_REC_QUEUE_BIND, AmqpEncodeRecBinding(LB.Binding));
+  end;
+
+  LJaEscrito := TDictionary<UInt64, Byte>.Create;
+  try
+    for I := 0 to AEstado.Entries.Count - 1 do
+    begin
+      LEnq := AEstado.Entries[I];
+      // O CORPO SO' UMA VEZ, como no log original (D22): N colocacoes do mesmo
+      // fan-out, e a derivada do dead-letter, compartilham o ContentId.
+      if not LJaEscrito.ContainsKey(LEnq.ContentId) then
+        if AEstado.Contents.TryGetValue(LEnq.ContentId, LCont) then
+        begin
+          Poe(AMQP_REC_CONTENT, AmqpEncodeRecContent(LCont));
+          LJaEscrito.Add(LEnq.ContentId, 0);
+        end;
+      Poe(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
+    end;
+  finally
+    LJaEscrito.Free;
+  end;
+end;
+
+function TAMQPJournal.Compacta: Boolean;
+var
+  LAntigos: TArray<Cardinal>;
+  LEstado: TAMQPRecoveredState;
+  I: Integer;
+  LCaminho: string;
+  LUltimo: UInt64;
+begin
+  Result := False;
+  if FFalho or (FSegmento = nil) then
+    Exit;
+
+  LAntigos := AmqpWalListSegments(FDir);
+  if Length(LAntigos) = 0 then
+    Exit;
+
+  try
+    // (1) FECHA O ATIVO. Dai' em diante nenhum segmento velho recebe mais
+    // nada, e o replay do passo 2 le' um log que ja' parou de crescer.
+    FreeAndNil(FSegmento);
+    FArquivo := nil;
+
+    // (2) O CONJUNTO VIVO -- a MESMA leitura da recuperacao, sem uma segunda
+    // implementacao da semantica (D26: uma mecanica so').
+    LEstado := AmqpReplayWal(FDir);
+    try
+      // (3) O NOVO, com os identificadores preservados.
+      AbreProximoSegmento;
+      LUltimo := EscreveVivos(LEstado);
+    finally
+      LEstado.Free;
+    end;
+
+    // (4) So' depois do fsync o novo e' verdade. Se ele falhar, NAO se apaga
+    // nada: o log fica maior do que precisava, que e' o erro certo a cometer.
+    if not FSegmento.Sync then
+      Exit;
+
+    // A MARCA D AGUA TEM DE ALCANCAR O QUE A COMPACTACAO ESCREVEU. Ela
+    // consumiu LSNs; se a marca ficasse para tras, quem esperasse por um deles
+    // esperaria ate' o proximo lote de publish -- que pode nunca vir. Estes
+    // registros ESTAO no disco: dizer isso e a coisa honesta.
+    if LUltimo > 0 then
+      AmqpAtomicWrite64(FDurableLsn, LUltimo);
+
+    // (5) Agora os velhos podem ir. Uma queda aqui deixa as duas copias, e o
+    // replay as unifica por EntryId -- o dobro dos bytes, nunca o dobro das
+    // mensagens.
+    for I := 0 to High(LAntigos) do
+    begin
+      LCaminho := IncludeTrailingPathDelimiter(FDir)
+        + AmqpWalSegmentName(LAntigos[I]);
+      if SysUtils.DeleteFile(LCaminho) then
+        Inc(FSegmentosApagados);
+    end;
+  except
+    on E: Exception do
+    begin
+      MarcaFalho(Format('falha ao compactar o journal: %s', [E.Message]));
+      Exit(False);
+    end;
+  end;
+
+  FMon.Enter;
+  try
+    Inc(FCompactacoes);
+  finally
+    FMon.Leave;
+  end;
+  Result := True;
 end;
 
 function TAMQPJournal.SegmentoAtivo: Cardinal;
@@ -671,6 +898,20 @@ begin
         Exit(False);
       end;
     end;
+
+    // COMPACTACAO AUTOMATICA, so' aqui: na rotacao, que ja' e' o momento em
+    // que o journal para para trocar de arquivo, e nunca no meio de um lote.
+    // Roda NESTA thread -- ela e' a unica que escreve, e e' isso que dispensa
+    // trava sobre o arquivo. O custo e' uma leitura do log inteiro, e ele
+    // aparece como uma pausa nos confirms; a alternativa (crescer sem limite)
+    // e' pior, e o fator de folga abaixo garante que a pausa e' rara.
+    if (FCompactarAcima > 0) and (TamanhoTotal >= FCompactarAcima) then
+      if Compacta then
+        // O PROXIMO limiar sai do que SOBROU: um log genuinamente vivo cresce
+        // o limiar junto e para de disparar; um log cheio de aposentadas
+        // encolhe, e o limiar encolhe com ele. E' a fracao viva da D26 sem
+        // ninguem precisar calcula-la.
+        FCompactarAcima := TamanhoTotal * AMQP_JOURNAL_COMPACT_FATOR;
   end;
 
   FMon.Enter;
