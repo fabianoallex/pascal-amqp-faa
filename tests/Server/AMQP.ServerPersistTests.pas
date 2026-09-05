@@ -57,8 +57,6 @@ type
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
     FDir: string;
-    [Setup]    procedure SetUp;
-    [TearDown] procedure TearDown;
     function DeclaraFila(const ANome: string; ADurable: Boolean;
       AArgs: TAMQPFieldTable = nil): string;
     /// Fecha o cliente, para o broker e devolve um resumo do WAL.
@@ -66,6 +64,17 @@ type
     function Conta(L: TStringList; const APrefixo: string): Integer;
     /// Indice da primeira linha que comeca com APrefixo, ou -1.
     function Indice(L: TStringList; const APrefixo: string): Integer;
+  public
+    // PUBLIC, e nao protected: o DUnitX acha Setup/TearDown por RTTI, e o
+    // RTTI padrao do Delphi so publica metodos public e published. Numa
+    // secao protected os atributos existem no fonte, compilam, e simplesmente
+    // NUNCA SAO ENCONTRADOS -- a fixture roda com todos os campos nil. Foi o
+    // que aconteceu aqui: os [Test] (public) foram achados e executados, o
+    // [Setup] (protected) nao, e as 11 asserções morreram em access violation
+    // lendo nil+0x0C. Os helpers acima podem ficar protected: eles sao
+    // chamados por codigo Pascal comum, que nao passa por RTTI.
+    [Setup]    procedure SetUp;
+    [TearDown] procedure TearDown;
   end;
 
   [TestFixture]

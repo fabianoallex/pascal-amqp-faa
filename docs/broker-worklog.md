@@ -563,6 +563,14 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **E ela nasceu com um falso-positivo que valia a pena olhar:** acusou `AMQP.HandshakeIntegrationTests`, onde o comentário explica *por que* o `AssertException` do FPCUnit não serve e cita o `Assert.WillRaise` do DUnitX. Citar o outro dialeto ao documentar a diferença é justamente o que se quer que um arquivo de teste faça — o defeito era da checagem, não da prosa. Entrou um `sem_comentarios` que troca comentários e literais por espaços **preservando as quebras de linha**, para os números de linha do relatório continuarem apontando para o arquivo de verdade.
 
+- **`[Setup]` numa seção `protected` é um `[Setup]` que nunca roda.** A segunda rodada Delphi da WS4+WS5 passou tudo — unitária 121×2, integração 28×2, aceitação 28×2 — e deu **access violation nos 11 testes do `TPersistWiringTests`**, nos dois build modes, sempre lendo `nil+0x0C`.
+
+  A causa é uma regra do Delphi que não tem equivalente no FPC: **o RTTI padrão só publica métodos `public` e `published`**. A fixture-base `TPersistFixture` declarava `[Setup]`/`[TearDown]` em `protected`; o atributo compila, e o DUnitX simplesmente **não o encontra**. Os `[Test]`, esses sim `public`, foram encontrados e executados — com `FBroker`, `FConn` e `FChan` todos nil. O padrão de falha conta a história inteira: 10 testes morrem no mesmo endereço (o primeiro campo que tocam) e o único que morre noutro é o `Confirm_ComDataDir_OCanalPassaAAdiar`, que começa por `FBroker.Confirms` em vez de `FChan`.
+
+  **É a pior variante da família**, porque nem sempre grita: um `[Setup]` invisível numa fixture que só faz trabalho opcional passa despercebido, e um `[Test]` invisível some da suíte em silêncio — o verde falso que este projeto já documenta desde a WS9 da Fase 2. E o FPCUnit não tem como avisar: lá a visibilidade que importa é `published`, e a fixture-base nem precisa dela.
+
+  Virou a **checagem [5]** do verificador (atributo do DUnitX em seção `private`/`protected`), provada por mutação. Varrida a árvore inteira: eram as duas únicas linhas.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

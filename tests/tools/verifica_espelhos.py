@@ -31,7 +31,15 @@ apareceu no dcc32 como "E2003 Undeclared identifier: 'ASSERTTRUE'". Custou
 exatamente o round-trip que este script existe para evitar, e a deteccao e
 trivial: os dois conjuntos de nomes de assercao sao disjuntos e conhecidos.
 
-Nenhum dos quatro precisa de compilador para ser detectado. Rode isto antes de
+E uma quinta, na mesma rodada: atributo do DUnitX ([Setup], [Test]...) numa
+secao `private`/`protected`. O RTTI padrao do Delphi so publica metodos
+`public` e `published` -- numa secao protegida o atributo compila e NUNCA E
+ENCONTRADO. Quando e um [Setup], a fixture roda com todos os campos nil; quando
+e um [Test], ele some da suite em silencio, que e o verde falso de sempre. O
+FPCUnit nao tem como avisar: la a visibilidade que importa e `published`, e a
+fixture-base nem precisa dela.
+
+Nenhum dos cinco precisa de compilador para ser detectado. Rode isto antes de
 mandar a suite para o IDE.
 
 USO
@@ -386,6 +394,40 @@ def verifica_dialeto_das_assercoes():
     return problemas
 
 
+# Secoes onde um atributo do DUnitX fica invisivel ao RTTI padrao.
+VIS_SEM_RTTI = ('private', 'protected', 'strict private', 'strict protected')
+
+RE_SECAO = re.compile(r'^\s*(strict\s+private|strict\s+protected|private|'
+                      r'protected|public|published)\s*$', re.IGNORECASE)
+RE_ATRIBUTO_DUNITX = re.compile(
+    r'\[\s*(Setup|TearDown|SetupFixture|TearDownFixture|Test|TestCase)\b',
+    re.IGNORECASE)
+
+
+def verifica_visibilidade_dos_atributos():
+    """Atributo do DUnitX numa secao que o RTTI padrao nao publica.
+
+    Heuristica deliberadamente simples, e suficiente: varre linha a linha
+    guardando a ultima secao de visibilidade vista. Comeca em `public` porque
+    e' o default de uma classe Delphi sem especificador.
+    """
+    problemas = []
+    for dunitx, _fpcunit in pares_espelhados():
+        corpo = sem_comentarios(le(dunitx))
+        vis = 'public'
+        for n, linha in enumerate(corpo.splitlines(), 1):
+            m = RE_SECAO.match(linha)
+            if m:
+                vis = ' '.join(m.group(1).lower().split())
+                continue
+            if RE_ATRIBUTO_DUNITX.search(linha) and vis in VIS_SEM_RTTI:
+                problemas.append((rel(dunitx),
+                                  'linha %d: atributo do DUnitX em secao %s -- '
+                                  'o RTTI padrao nao o enxerga, e ele nunca '
+                                  'sera executado' % (n, vis)))
+    return problemas
+
+
 def main():
     falhou = False
 
@@ -421,6 +463,15 @@ def main():
     if dial:
         falhou = True
         for arq, msg in dial:
+            print('    FALHA  %s: %s' % (arq, msg))
+    else:
+        print('    ok')
+
+    print('[5] atributos do DUnitX em secao visivel ao RTTI')
+    vis = verifica_visibilidade_dos_atributos()
+    if vis:
+        falhou = True
+        for arq, msg in vis:
             print('    FALHA  %s: %s' % (arq, msg))
     else:
         print('    ok')
