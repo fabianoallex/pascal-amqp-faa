@@ -571,6 +571,10 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   Virou a **checagem [5]** do verificador (atributo do DUnitX em seção `private`/`protected`), provada por mutação. Varrida a árvore inteira: eram as duas únicas linhas.
 
+- **WS4 e WS5 validadas no Delphi.** Server **392/392** (Debug) e **396/396** (OpenSSL), `0 Leaked`; unitária 121×2, integração 28×2, aceitação 28×2, todas limpas. Com isso as duas workstreams fecham nos dois compiladores.
+
+  **Custaram duas rodadas pela IDE, e as duas por defeitos da WS4** — nenhum deles alcançável pelo FPC: a asserção no dialeto errado e o `[Setup]` invisível ao RTTI. As duas viraram checagem do `verifica_espelhos.py`, que foi de três para cinco. É a lição de sempre desta codebase, na sua forma mais nítida até agora: **verde num compilador não é evidência sobre o outro** — e quando o defeito é estrutural, a correção certa inclui ensinar o verificador a pegá-lo.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
