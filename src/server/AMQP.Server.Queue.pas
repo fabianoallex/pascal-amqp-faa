@@ -306,6 +306,12 @@ type
     MessageTtlMs: Int64;   // amqqcEnqueue (-1 = sem 'expiration')
     JournalId: UInt64;     // amqqcEnqueue (0 = nao persistida)
     ContentId: UInt64;     // amqqcEnqueue
+    /// amqqcEnqueue: entrada vinda da RECUPERACAO (WS6). A D27 manda toda
+    /// entrada recuperada voltar com redelivered=True -- persistir o flag
+    /// custaria uma escrita no caminho mais quente que existe, e seria
+    /// precisao falsa: depois de uma queda o broker nao sabe se o consumidor
+    /// chegou a ver a mensagem.
+    Recuperada: Boolean;   // amqqcEnqueue
     Multiple: Boolean;
     Requeue: Boolean;
     IfUnused: Boolean;
@@ -491,7 +497,7 @@ type
     /// ultimo elo, nao o primeiro. Zero = nada foi persistido.
     procedure PostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
       AMessageTtlMs: Int64 = -1; AJournalId: UInt64 = 0;
-      AContentId: UInt64 = 0);
+      AContentId: UInt64 = 0; ARecuperada: Boolean = False);
     /// A fila passa a ser dona de AConsumer.
     procedure PostAddConsumer(AConsumer: TAMQPServerConsumer);
     procedure PostRemoveConsumer(AChannelId: NativeUInt;
@@ -947,7 +953,8 @@ end;
 { --- API assincrona --- }
 
 procedure TAMQPServerQueue.PostMessage(AMessage: TAMQPMessage;
-  APriority: Byte; AMessageTtlMs: Int64; AJournalId, AContentId: UInt64);
+  APriority: Byte; AMessageTtlMs: Int64; AJournalId, AContentId: UInt64;
+  ARecuperada: Boolean);
 var
   LCmd: TAMQPQueueCommand;
 begin
@@ -958,6 +965,7 @@ begin
   LCmd.MessageTtlMs := AMessageTtlMs;
   LCmd.JournalId := AJournalId;
   LCmd.ContentId := AContentId;
+  LCmd.Recuperada := ARecuperada;
   Post(LCmd);
 end;
 
@@ -1646,7 +1654,7 @@ begin
     amqqcEnqueue:
       begin
         LEntry.Msg := ACmd.Msg;
-        LEntry.Redelivered := False;
+        LEntry.Redelivered := ACmd.Recuperada; // D27
         LEntry.Priority := LimitaPrioridade(ACmd.Priority);
         LEntry.ExpiraEm := CalculaPrazo(ACmd.MessageTtlMs);
         LEntry.JournalId := ACmd.JournalId;

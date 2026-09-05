@@ -36,6 +36,7 @@ uses
   AMQP.Server.Engine,
   AMQP.Server.Journal,
   AMQP.Server.Confirm,
+  AMQP.Server.Recovery,
   AMQP.Server.Connection;
 
 // TAMQPVirtualHostRegistry mudou-se para AMQP.Server.Types no WS4 (a FSM de
@@ -86,6 +87,10 @@ type
     // pelo mesmo motivo: sem DataDir nao ha o que esperar, e o confirm sai
     // inline como na Fase 3.
     FConfirms: IAMQPConfirmRegistry;
+    // O que a ultima recuperacao encontrou. Zerado enquanto DataDir estiver
+    // vazio. Existe pela mesma razao das contagens do journal: um broker que
+    // subiu com o log truncado tem de conseguir DIZER isso.
+    FRecoveryStats: TAMQPRecoveryStats;
     FDataDir: string;
     FMaxQueueLength: Integer;
     FVHosts: TAMQPVirtualHostRegistry;
@@ -134,6 +139,9 @@ type
     /// Registro de confirms adiados, ou nil quando DataDir esta' vazio.
     /// Existe pela mesma razao do Journal acima: diagnostico e teste.
     property Confirms: IAMQPConfirmRegistry read FConfirms;
+    /// O que o replay do WAL encontrou no ultimo Start. Tudo zero quando
+    /// DataDir esta' vazio ou o log estava vazio.
+    property RecoveryStats: TAMQPRecoveryStats read FRecoveryStats;
 
     /// Diretorio de dados. VAZIO (default) = broker exatamente igual ao da
     /// Fase 3: `durable` e `delivery-mode 2` continuam aceitos e ignorados, e
@@ -285,6 +293,8 @@ begin
 end;
 
 procedure TAMQPServer.Start;
+var
+  LEstado: TAMQPRecoveredState;
 begin
   if FRunning then
     Exit;
@@ -311,6 +321,18 @@ begin
       raise;
     end;
     FEngine.Journal := FJournal;
+
+    // A RECUPERACAO RODA AQUI: depois de o journal estar de pe' -- e com o
+    // lock do diretorio ja' na mao, o que garante que nenhum outro broker
+    // esta' mexendo no mesmo WAL -- e ANTES de o socket de escuta abrir.
+    // Ninguem pode falar com um broker meio recuperado.
+    LEstado := AmqpReplayWal(FDataDir);
+    try
+      FEngine.Recupera(LEstado);
+      FRecoveryStats := LEstado.Stats;
+    finally
+      LEstado.Free;
+    end;
   end;
   FListener := TAMQPTcpListener.Create;
   FListener.Listen(FBindAddress, FPort, FBacklog);

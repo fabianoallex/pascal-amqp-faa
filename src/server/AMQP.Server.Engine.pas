@@ -53,7 +53,8 @@ uses
   AMQP.Server.Queue,
   AMQP.Server.VHost,
   AMQP.Server.Journal,
-  AMQP.Server.Records;
+  AMQP.Server.Records,
+  AMQP.Server.Recovery;
 
 type
   { O que aconteceu numa operacao da engine. A FSM (WS5) mapeia para
@@ -114,6 +115,10 @@ type
     FMaxQueueLength: Integer;
     FJournal: TAMQPJournal;
     FProximoId: UInt64;
+    /// True enquanto o Recupera esta aplicando o log. Enquanto for True o
+    /// journal fica MUDO: o que se declara e enfileira agora VEIO do log, e
+    /// regravar faria o WAL crescer uma copia por boot, para sempre.
+    FRecuperando: Boolean;
     FPool: TAMQPThreadPool;
     FRouted: Integer;   // atomico -- publicacoes com ao menos uma rota
     FUnrouted: Integer; // atomico -- publicacoes sem rota
@@ -265,6 +270,14 @@ type
     /// NADA de topologia vai para o disco (D19) -- o caminho fica identico ao
     /// da Fase 3. Injetado pelo TAMQPServer no Start; a engine nao e' dona.
     property Journal: TAMQPJournal read FJournal write FJournal;
+
+    /// Aplica ao broker o estado que o replay leu. Roda DENTRO do Start,
+    /// antes de o socket de escuta abrir: ninguem pode falar com um broker
+    /// meio recuperado.
+    ///
+    /// Com o journal MUDO (ver FRecuperando): o que se declara aqui veio do
+    /// log, e regravar faria o WAL crescer uma copia por boot.
+    procedure Recupera(AEstado: TAMQPRecoveredState);
 
     property MaxQueueLength: Integer read FMaxQueueLength
       write FMaxQueueLength;
@@ -927,7 +940,9 @@ var
 begin
   Result := 0;
   ALsn := 0;
-  if not FilaPersiste(AQueue) then
+  // Mesma razao do GravaTopo: durante o replay a colocacao JA' esta' no log --
+  // regrava-la duplicaria a mensagem a cada boot.
+  if FRecuperando or (not FilaPersiste(AQueue)) then
     Exit;
 
   LN := 0;
@@ -1004,6 +1019,11 @@ var
 begin
   if FJournal = nil then
     Exit(True); // sem journal nao ha o que gravar, e isso nao e' falha
+  // MUDO durante a recuperacao: o que estamos declarando agora VEIO do log.
+  // Sem isto, cada restart reescreveria a topologia inteira -- o WAL cresceria
+  // uma copia por boot, para sempre, e a compactacao da WS7 nunca alcancaria.
+  if FRecuperando then
+    Exit(True);
   Result := False;
   SetLength(LRecs, 1);
   LRecs[0].Kind := AKind;
@@ -1093,6 +1113,133 @@ begin
     // esta conexao (foi assim que a fila entrou na lista).
     if DeleteQueue(AVHost, LNomes[I], False, False, 0, LCount) = amqerOk then
       Inc(Result);
+end;
+
+{ --- recuperacao (WS6 da Fase 4) --- }
+
+// Reconstroi o prazo pela D21: no disco vive PAREDE (instante do enfileiramento
+// + TTL efetivo em ms); na memoria, monotonico. A conversao acontece so' aqui e
+// na escrita -- e' o que faz um salto de NTP nao mexer em fila viva.
+//
+// Devolve o TTL RESTANTE em ms, ou -1 para "sem prazo". Zero quer dizer "ja'
+// venceu": a mensagem entra e morre pelo caminho NORMAL de expiracao, com
+// dead-letter e tudo, no primeiro toque do ator.
+function TtlRestante(const AEnq: TAMQPRecEnqueue; ANowWall: Int64): Int64;
+var
+  LDecorrido: Int64;
+begin
+  if AEnq.TtlMs < 0 then
+    Exit(-1);
+  LDecorrido := ANowWall - AEnq.EnqueuedAtWall;
+  if LDecorrido < 0 then
+    LDecorrido := 0; // relogio andou para tras entre os dois boots
+  Result := AEnq.TtlMs - LDecorrido;
+  if Result < 0 then
+    Result := 0;
+end;
+
+procedure TAMQPEngine.Recupera(AEstado: TAMQPRecoveredState);
+var
+  I: Integer;
+  LEx: TAMQPRecExchange;
+  LQ: TAMQPRecQueue;
+  LB: TAMQPRecoveredBinding;
+  LEnq: TAMQPRecEnqueue;
+  LCont: TAMQPRecContent;
+  LFila: TAMQPServerQueue;
+  LMsg: TAMQPMessage;
+  LMsgCount, LConsCount: Integer;
+  LNowWall: Int64;
+begin
+  if AEstado = nil then
+    Exit;
+  FRecuperando := True;
+  try
+    // 1) TOPOLOGIA. Exchanges antes das filas, e os binds por ultimo: um bind
+    //    precisa das duas pontas de pe'.
+    for I := 0 to AEstado.Exchanges.Count - 1 do
+    begin
+      LEx := AEstado.Exchanges[I];
+      EnsureVHost(LEx.VHost);
+      DeclareExchange(LEx.VHost, LEx.Name, LEx.ExchangeType, False,
+        LEx.Durable, LEx.AutoDelete, LEx.Internal, LEx.Arguments);
+      // A POSSE DOS ARGUMENTOS PASSOU. A engine libera AArguments em TODO
+      // caminho -- inclusive nos que recusam --, entao o estado nao pode
+      // libera-los de novo no destrutor dele. Anular item a item (e nao um
+      // flag no estado inteiro) mantem a conta exata mesmo se este laco
+      // parar no meio.
+      LEx.Arguments := nil;
+      AEstado.Exchanges[I] := LEx;
+    end;
+
+    for I := 0 to AEstado.Queues.Count - 1 do
+    begin
+      LQ := AEstado.Queues[I];
+      EnsureVHost(LQ.VHost);
+      // AExclusive=False SEMPRE: fila exclusiva nunca foi persistida (D20), e
+      // uma recuperada nao tem dono vivo para ser exclusiva de quem.
+      // AOwnerId=0 pela mesma razao. E a fila nasce com EverHadConsumer=False,
+      // que e' o que impede o guard de auto-delete da Fase 2 de apaga-la no
+      // boot antes de alguem ter chance de consumir.
+      DeclareQueue(LQ.VHost, LQ.Name, False, LQ.Durable, False, LQ.AutoDelete,
+        LQ.Arguments, 0, LMsgCount, LConsCount);
+      LQ.Arguments := nil; // a posse passou -- ver o comentario acima
+      AEstado.Queues[I] := LQ;
+    end;
+
+    for I := 0 to AEstado.Bindings.Count - 1 do
+    begin
+      LB := AEstado.Bindings[I];
+      if LB.ParaExchange then
+        BindExchange(LB.Binding.VHost, LB.Binding.Destination,
+          LB.Binding.Source, LB.Binding.RoutingKey, LB.Binding.Arguments)
+      else
+        BindQueue(LB.Binding.VHost, LB.Binding.Destination,
+          LB.Binding.Source, LB.Binding.RoutingKey, LB.Binding.Arguments, 0);
+      LB.Binding.Arguments := nil; // a posse passou -- ver o comentario acima
+      AEstado.Bindings[I] := LB;
+    end;
+
+    // 2) O CONTADOR DE IDS continua DEPOIS do maior id que o log ja' usou.
+    //    Recomecar do zero faria uma colocacao nova colidir com uma recuperada,
+    //    e o DEQ de uma aposentaria a outra -- silencioso e fatal.
+    FLock.Enter;
+    try
+      if AEstado.MaxId > FProximoId then
+        FProximoId := AEstado.MaxId;
+    finally
+      FLock.Leave;
+    end;
+
+    // 3) AS COLOCACOES, NA ORDEM DO LOG -- que e' a ordem de enfileiramento. O
+    //    balde de prioridade vem no registro, entao cada mensagem cai
+    //    exatamente onde o RequeueFront da D12 a poria. Nada a ordenar.
+    LNowWall := AmqpWallMs;
+    for I := 0 to AEstado.Entries.Count - 1 do
+    begin
+      LEnq := AEstado.Entries[I];
+      LFila := FindQueue(LEnq.VHost, LEnq.Queue);
+      if LFila = nil then
+        Continue; // fila apagada no log; o replay ja' devia ter tirado
+      if not AEstado.Contents.TryGetValue(LEnq.ContentId, LCont) then
+        Continue;
+      LMsg := TAMQPMessage.Create(LEnq.Exchange, LEnq.RoutingKey, LCont.UserId,
+        LEnq.HeaderPayload, LCont.Body);
+      try
+        // O TTL passa como RESTANTE, e nao como o efetivo gravado: o
+        // CalculaPrazo do ator aplica o "menor vence" de novo, e o restante e'
+        // por construcao <= o efetivo, entao o minimo devolve o restante. Uma
+        // regra, uma implementacao -- nao ha caminho de enfileiramento
+        // separado para a recuperacao.
+        LFila.PostMessage(LMsg, LEnq.Priority, TtlRestante(LEnq, LNowWall),
+          LEnq.EntryId, LEnq.ContentId, True); // True = D27, volta redelivered
+      finally
+        LMsg.Release; // a fila fez o proprio AddRef
+      end;
+    end;
+  finally
+    FRecuperando := False;
+  end;
 end;
 
 { --- publicacao --- }

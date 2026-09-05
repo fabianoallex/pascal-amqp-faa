@@ -599,6 +599,22 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **E a primeira versão da checagem não pegava o defeito que a motivou.** O matcher exigia `(` depois do nome, e tanto `GetTempDir` quanto `TPath` aparecem sem parênteses (`IncludeTrailingPathDelimiter(GetTempDir)`, `TPath.GetTempPath`). Só a mutação mostrou — a checagem passava verde sobre o arquivo mutado. **Quando a mutação não derruba a verificação que deveria, o defeito é da verificação**, e é a mesma regra que este projeto já aplica a testes.
 
+- **WS6 completa: o estado volta para dentro do broker.** A recuperação roda no `Start`, depois de o journal estar de pé — e com o lock do diretório já na mão, o que garante que nenhum outro broker está mexendo no mesmo WAL — e **antes de o socket de escuta abrir**: ninguém pode falar com um broker meio recuperado.
+
+  **O journal fica MUDO durante o replay.** É o detalhe que nenhum teste de "a mensagem voltou" pega e que, sem ele, seria fatal a médio prazo: o que se declara e enfileira durante a recuperação **veio do log**, e regravá-lo faria o WAL crescer uma cópia inteira por boot, para sempre — e a compactação da WS7 nunca alcançaria. Virou um teste próprio, que mede o tamanho do log em dois restarts seguidos.
+
+  **Três coisas caíram de graça e uma não.** De graça: o `EverHadConsumer=False` de uma fila recuperada (é o estado natural de uma fila recém-criada, e é justamente o que impede o guard de auto-delete da Fase 2 de apagá-la no boot); o `x-expires` reiniciando (o `FUltimoUso` nasce agora); e a ordem — o balde de prioridade está dentro do ENQ e a ordem do log é a ordem de enfileiramento, então não há nada a ordenar. **Não caiu de graça:** o contador de ids. `EntryId` e `ContentId` saem do mesmo contador, e se ele recomeçasse do zero uma colocação nova colidiria com uma recuperada — o `DEQ` do ack de uma aposentaria a outra, e a mensagem antiga sumiria sem ninguém a ter consumido.
+
+  **Uma decisão que não virou código, e é o resultado que interessa:** o TTL passa para o ator como **restante**, e não por um caminho de enfileiramento novo. O `CalculaPrazo` aplica o "menor vence" de novo, e o restante é por construção ≤ o efetivo gravado, então o mínimo devolve o restante — exato em todos os casos. Uma regra, uma implementação; a recuperação não ganhou API própria na fila.
+
+  **O erro que o heaptrc pegou: a posse dos argumentos.** Eu tinha assumido — e escrito em comentário — que a engine *não* toma posse da `TAMQPFieldTable` de argumentos. Ela toma, em **todo** caminho, inclusive nos que recusam (é a correção da WS5 da Fase 2). O resultado foi access violation + 19 blocos vazados no primeiro teste que recuperou uma fila **com argumentos** — os seis anteriores passavam porque nenhum tinha `x-max-priority`. A posse agora é transferida item a item (anular no elemento da lista, não um flag no estado inteiro), o que mantém a conta exata mesmo se o laço parar no meio. **Comentário afirmando ciclo de vida é hipótese até ser verificado no código do outro lado.**
+
+  **Mutação, sete mutantes.** Seis morreram de imediato: não chamar `Recupera`; journal não ficar mudo; não restaurar o `MaxId`; não marcar `redelivered`; não declarar a topologia; ignorar a prioridade gravada. **O sétimo sobreviveu** — ignorar o tempo decorrido no cálculo do prazo — e é o coração da D21. Nenhum teste alcançava: os de TTL do restart não existiam, e os outros não têm prazo. Entrou o `Restart_PrazoDescontaOTempoDecorrido`, com os números escolhidos para separar as duas hipóteses (sobram ~300 ms depois do restart; sem o desconto o prazo voltaria a 1200 ms e a mensagem sobreviveria à espera). Com ele, sete de sete.
+
+  **Estado:** server **406 → 415** (Default) e **410 → 419** (`openssl`), `0 unfreed memory blocks`. Aceitação 28/28, integração 28/28, SmokeTest PASS, `verifica_espelhos.py` limpo nas seis checagens, broker compilando no Linux.
+
+  **O que a WS6 NÃO faz, de propósito:** o WAL ainda cresce sem limite — segmentos, compactação e teto são a WS7. E matar o processo continua **não** testando fsync (D28); o que estes testes provam é que o log escrito é suficiente para reconstruir o estado, e que o que não devia estar lá não volta.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

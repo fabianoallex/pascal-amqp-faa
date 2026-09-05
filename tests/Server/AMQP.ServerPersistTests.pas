@@ -26,6 +26,7 @@ uses
   System.IOUtils,
   AMQP.Wire,
   AMQP.Exchange.Methods,
+  AMQP.Basic.Methods,
   AMQP.Queue.Methods,
   AMQP.Connection,
   AMQP.Server.Wal,
@@ -64,6 +65,17 @@ type
     function Conta(L: TStringList; const APrefixo: string): Integer;
     /// Indice da primeira linha que comeca com APrefixo, ou -1.
     function Indice(L: TStringList; const APrefixo: string): Integer;
+    /// Sobe um broker novo apontando para FDir e reconecta o cliente.
+    procedure AbreBroker;
+    /// Derruba o broker e sobe outro no MESMO diretorio -- o que um restart e',
+    /// do ponto de vista do disco.
+    procedure Reabre;
+    /// Soma o tamanho de todos os segmentos do WAL.
+    function TamanhoDoWal: Int64;
+    /// Publica persistente com a propriedade 'priority' preenchida.
+    procedure PublicaComPrioridade(const AFila, ACorpo: string; APrio: Byte);
+    /// True se a fila existe (passive declare num canal descartavel).
+    function FilaExiste(const AFila: string): Boolean;
   public
     // PUBLIC, e nao protected: o DUnitX acha Setup/TearDown por RTTI, e o
     // RTTI padrao do Delphi so publica metodos public e published. Numa
@@ -91,6 +103,16 @@ type
     [Test] procedure Confirm_PublishPersistente_ChegaComOJournalJaDuravel;
     [Test] procedure Confirm_LoteDePersistentes_TodosConfirmam;
     [Test] procedure Confirm_PersistenteETransienteMisturados_TodosConfirmam;
+    // --- WS6: o broker cai e sobe de novo no MESMO diretorio ---
+    [Test] procedure Restart_MensagemPersistente_Sobrevive;
+    [Test] procedure Restart_Transiente_NaoSobrevive;
+    [Test] procedure Restart_TopologiaDuravel_Sobrevive;
+    [Test] procedure Restart_MensagemVolta_ComRedelivered;
+    [Test] procedure Restart_OrdemDePrioridade_Preservada;
+    [Test] procedure Restart_Consumida_NaoRessuscita;
+    [Test] procedure Restart_NaoReescreveOLog;
+    [Test] procedure Restart_IdNovoNaoColideComRecuperado;
+    [Test] procedure Restart_PrazoDescontaOTempoDecorrido;
   end;
 
 implementation
@@ -99,6 +121,19 @@ implementation
 procedure ChecaOk(const AMsg: string; ACond: Boolean);
 begin
   Assert.IsTrue(ACond, AMsg);
+end;
+procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+begin
+  Assert.AreEqual(AEsperado, AObtido, AMsg);
+end;
+procedure ChecaStr(const AMsg, AEsperado, AObtido: string);
+begin
+  Assert.AreEqual(AEsperado, AObtido, AMsg);
+end;
+
+procedure ChecaNao(const AMsg: string; ACond: Boolean);
+begin
+  Assert.IsFalse(ACond, AMsg);
 end;
 
 function BytesIguais(const A, B: TBytes): Boolean;
@@ -395,8 +430,6 @@ end;
 { TPersistFixture }
 
 procedure TPersistFixture.SetUp;
-var
-  LParams: TAMQPConnectionParams;
 begin
   
   Inc(GSeq);
@@ -404,17 +437,9 @@ begin
     + IntToStr(GSeq);
   ForceDirectories(FDir);
   LimpaDir(FDir);
-  FBroker := TAMQPServer.Create;
-  FBroker.BindAddress := '127.0.0.1';
-  FBroker.Port := 0;
-  FBroker.DataDir := FDir;
-  FBroker.Start;
-  LParams := TAMQPConnectionParams.Localhost;
-  LParams.Host := '127.0.0.1';
-  LParams.Port := FBroker.Port;
-  FConn := TAMQPConnection.Create(LParams);
-  FConn.Open;
-  FChan := FConn.CreateChannel;
+  // Uma implementacao so de subir broker: o Reabre da WS6 chama a MESMA, e
+  // duas copias seriam duas chances de o restart nao ser o que o SetUp faz.
+  AbreBroker;
 end;
 
 procedure TPersistFixture.TearDown;
@@ -730,6 +755,300 @@ begin
   for I := 1 to 100 do
     FChan.PublishText('', 'q.dur', 'm' + IntToStr(I), (I mod 2) = 0);
   ChecaOk('os 100 confirmaram', FChan.WaitForConfirms(20000));
+end;
+
+procedure TPersistFixture.AbreBroker;
+var
+  LParams: TAMQPConnectionParams;
+begin
+  FBroker := TAMQPServer.Create;
+  FBroker.BindAddress := '127.0.0.1';
+  FBroker.Port := 0;
+  FBroker.DataDir := FDir;
+  FBroker.Start;
+  LParams := TAMQPConnectionParams.Localhost;
+  LParams.Host := '127.0.0.1';
+  LParams.Port := FBroker.Port;
+  FConn := TAMQPConnection.Create(LParams);
+  FConn.Open;
+  FChan := FConn.CreateChannel;
+end;
+
+procedure TPersistFixture.Reabre;
+begin
+  FChan := nil; // o destrutor da conexao recolhe os canais registrados
+  if FConn <> nil then
+  begin
+    try
+      FConn.Close;
+    except
+    end;
+    FreeAndNil(FConn);
+  end;
+  FBroker.Stop;
+  FreeAndNil(FBroker);
+  AbreBroker;
+end;
+
+function TPersistFixture.TamanhoDoWal: Int64;
+var
+  LSegs: TArray<Cardinal>;
+  I: Integer;
+  LF: TFileStream;
+begin
+  Result := 0;
+  LSegs := AmqpWalListSegments(FDir);
+  for I := 0 to High(LSegs) do
+  begin
+    LF := TFileStream.Create(
+      IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]),
+      fmOpenRead or fmShareDenyNone);
+    try
+      Result := Result + LF.Size;
+    finally
+      LF.Free;
+    end;
+  end;
+end;
+
+procedure TPersistFixture.PublicaComPrioridade(const AFila, ACorpo: string;
+  APrio: Byte);
+var
+  LProps: TAMQPBasicProperties;
+begin
+  LProps := TAMQPBasicProperties.Empty;
+  LProps.SetDeliveryMode(2);
+  LProps.SetPriority(APrio);
+  FChan.Publish('', AFila, AmqpUtf8Encode(ACorpo), LProps);
+end;
+
+function TPersistFixture.FilaExiste(const AFila: string): Boolean;
+var
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+begin
+  // Canal DESCARTAVEL: um passive que nao acha a fila fecha o canal com 404,
+  // e um canal morto nao serve para mais nada.
+  LCh := FConn.CreateChannel;
+  try
+    LDecl := TAMQPQueueDeclare.Create(AFila);
+    LDecl.Passive := True;
+    Result := True;
+    try
+      LCh.DeclareQueue(LDecl);
+    except
+      on E: EAMQPChannel do
+        Result := False;
+    end;
+  finally
+    LCh.Free;
+  end;
+end;
+
+// ---------------------------------------------------------------- WS6 -----
+// A prova que a Fase 4 inteira existe para dar: o broker cai, sobe de novo no
+// MESMO DataDir, e a mensagem persistente esta la'.
+//
+// O QUE ESTES TESTES NAO SAO: teste de fsync. Matar (ou parar) o processo NAO
+// testa fsync -- a cache do SO sobrevive a morte do processo, e so' a queda da
+// maquina a perde. E' a admissao explicita da D28, e vai no README. O que eles
+// provam e' a RECUPERACAO: que o log escrito e' suficiente para reconstruir o
+// estado, e -- tao importante quanto -- que o que NAO devia estar la' nao volta.
+
+procedure TPersistWiringTests.Restart_MensagemPersistente_Sobrevive;
+var
+  LGet: TAMQPGetResult;
+begin
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'sobrevivi', True);
+  Reabre;
+  LGet := FChan.BasicGet('q.dur', True);
+  ChecaOk('a mensagem voltou', LGet.Found);
+  ChecaStr('com o corpo intacto', 'sobrevivi', LGet.BodyAsText);
+end;
+
+procedure TPersistWiringTests.Restart_Transiente_NaoSobrevive;
+var
+  LGet: TAMQPGetResult;
+begin
+  // A outra metade da regra dos tres (D20): o que nao foi ao disco nao volta.
+  // Sem esta assercao, um broker que persistisse TUDO passaria no teste acima.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'efemera', False);
+  Reabre;
+  LGet := FChan.BasicGet('q.dur', True);
+  ChecaNao('a transiente NAO voltou', LGet.Found);
+end;
+
+procedure TPersistWiringTests.Restart_TopologiaDuravel_Sobrevive;
+var
+  LGet: TAMQPGetResult;
+  LBind: TAMQPQueueBind;
+begin
+  DeclaraFila('q.dur', True);
+  FChan.DeclareExchange(TAMQPExchangeDeclare.Create('ex.dur', 'direct', True));
+  LBind.QueueName := 'q.dur';
+  LBind.ExchangeName := 'ex.dur';
+  LBind.RoutingKey := 'rk';
+  LBind.NoWait := False;
+  LBind.Arguments := nil;
+  FChan.BindQueue(LBind);
+  Reabre;
+  ChecaOk('a fila voltou', FilaExiste('q.dur'));
+  // E o BINDING voltou junto -- a prova de verdade, porque uma recuperacao que
+  // so' trouxesse fila e exchange passaria no FilaExiste acima.
+  FChan.PublishText('ex.dur', 'rk', 'roteada', True);
+  Sleep(300);
+  LGet := FChan.BasicGet('q.dur', True);
+  ChecaOk('o binding sobreviveu', LGet.Found);
+end;
+
+procedure TPersistWiringTests.Restart_MensagemVolta_ComRedelivered;
+var
+  LGet: TAMQPGetResult;
+begin
+  // D27: toda entrada recuperada volta redelivered=True. Persistir o flag
+  // custaria uma escrita no caminho mais quente que existe, e seria precisao
+  // FALSA -- depois de uma queda o broker nao sabe se o consumidor chegou a ver.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'x', True);
+  Reabre;
+  LGet := FChan.BasicGet('q.dur', True);
+  ChecaOk('voltou', LGet.Found);
+  ChecaOk('e marcada como reentregue', LGet.Redelivered);
+end;
+
+procedure TPersistWiringTests.Restart_OrdemDePrioridade_Preservada;
+var
+  LArgs: TAMQPFieldTable;
+  LGet: TAMQPGetResult;
+begin
+  // O balde de prioridade esta' DENTRO do registro ENQ, e a ordem do log e' a
+  // ordem de enfileiramento -- entao o replay poe cada mensagem exatamente
+  // onde o RequeueFront da D12 a poria, sem ordenar nada. Publico a BAIXA
+  // primeiro: se o replay ignorasse o balde e so' respeitasse a ordem do log,
+  // ela sairia na frente.
+  LArgs := TAMQPFieldTable.Create;
+  try
+    LArgs.Put('x-max-priority', 5);
+    DeclaraFila('q.pri', True, LArgs);
+  finally
+    LArgs.Free;
+  end;
+  PublicaComPrioridade('q.pri', 'baixa', 1);
+  PublicaComPrioridade('q.pri', 'alta', 4);
+  Sleep(300);
+  Reabre;
+  LGet := FChan.BasicGet('q.pri', True);
+  ChecaOk('veio alguma', LGet.Found);
+  ChecaStr('e a de MAIOR prioridade vem primeiro, como antes da queda',
+    'alta', LGet.BodyAsText);
+end;
+
+procedure TPersistWiringTests.Restart_Consumida_NaoRessuscita;
+var
+  LGet: TAMQPGetResult;
+begin
+  // A colocacao viva e' a que tem ENQ e NAO tem DEQ. Sem o DEQ do ack, toda
+  // mensagem ja' consumida voltaria a cada restart -- o pior modo de falha
+  // possivel, porque cresce sem limite e ninguem percebe de imediato.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'consumida', True);
+  LGet := FChan.BasicGet('q.dur', False); // modo ack
+  ChecaOk('pegou antes da queda', LGet.Found);
+  FChan.Ack(LGet.DeliveryTag);
+  Sleep(300); // o ack viaja e o ator ainda tem de processa-lo
+  Reabre;
+  LGet := FChan.BasicGet('q.dur', True);
+  ChecaNao('a consumida NAO ressuscitou', LGet.Found);
+end;
+
+procedure TPersistWiringTests.Restart_NaoReescreveOLog;
+var
+  LTamanho1, LTamanho2: Int64;
+begin
+  // O journal fica MUDO durante a recuperacao. Sem isso, cada boot reescreveria
+  // a topologia e as colocacoes inteiras: o WAL cresceria uma copia por
+  // restart, PARA SEMPRE, e a compactacao da WS7 nunca alcancaria. Nenhum outro
+  // teste pega isso -- todos passariam com o log inchando.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'x', True);
+  Sleep(300);
+  Reabre;
+  LTamanho1 := TamanhoDoWal;
+  Reabre;
+  LTamanho2 := TamanhoDoWal;
+  ChecaOk('o segundo restart nao acrescentou nada ao log',
+    LTamanho2 = LTamanho1);
+end;
+
+procedure TPersistWiringTests.Restart_IdNovoNaoColideComRecuperado;
+var
+  LGet: TAMQPGetResult;
+  I, LVivas: Integer;
+begin
+  // O CONTADOR DE IDS TEM DE CONTINUAR DEPOIS DO MAIOR ID DO LOG. Se ele
+  // recomecasse do zero, a colocacao do publish NOVO abaixo receberia um
+  // EntryId que uma RECUPERADA ja' usa -- e o DEQ do ack dele aposentaria as
+  // duas. A mensagem antiga sumiria sem ninguem a ter consumido.
+  //
+  // Nenhum outro teste desta suite pega isso: todos passam com o contador
+  // zerado, porque so' o SEGUNDO restart revela o estrago.
+  DeclaraFila('q.dur', True);
+  FChan.PublishText('', 'q.dur', 'velha-1', True);
+  FChan.PublishText('', 'q.dur', 'velha-2', True);
+  Sleep(300);
+  Reabre;
+
+  // Publica DEPOIS da recuperacao, consome e confirma so' esta.
+  FChan.PublishText('', 'q.dur', 'nova', True);
+  Sleep(300);
+  LGet := FChan.BasicGet('q.dur', False); // modo ack
+  ChecaOk('pegou alguma', LGet.Found);
+  FChan.Ack(LGet.DeliveryTag);
+  Sleep(300);
+  Reabre;
+
+  // Sobrou UMA a menos que as tres publicadas -- e as duas restantes tem de
+  // estar la'. Com o contador zerado, o ack acima teria levado duas.
+  LVivas := 0;
+  for I := 1 to 3 do
+  begin
+    LGet := FChan.BasicGet('q.dur', True);
+    if not LGet.Found then
+      Break;
+    Inc(LVivas);
+  end;
+  ChecaInt('duas mensagens sobreviveram ao ack de UMA', 2, LVivas);
+end;
+
+procedure TPersistWiringTests.Restart_PrazoDescontaOTempoDecorrido;
+var
+  LArgs: TAMQPFieldTable;
+  LGet: TAMQPGetResult;
+begin
+  // O CORACAO DA D21, e o unico teste que o alcanca: no disco vive PAREDE
+  // (instante do enfileiramento + TTL efetivo); na memoria, monotonico. A
+  // recuperacao tem de DESCONTAR o tempo que passou -- senao cada restart
+  // renovaria o prazo, e uma mensagem com TTL de um minuto viveria para sempre
+  // num broker que reinicia a cada cinquenta segundos.
+  //
+  // Os numeros sao escolhidos para separar as duas hipoteses: com o desconto,
+  // sobram ~300 ms depois do restart e a mensagem morre dentro da espera; sem
+  // ele, o prazo volta a 1200 ms e ela sobrevive a ela.
+  LArgs := TAMQPFieldTable.Create;
+  try
+    LArgs.Put('x-message-ttl', Int64(1200));
+    DeclaraFila('q.ttl', True, LArgs);
+  finally
+    LArgs.Free;
+  end;
+  FChan.PublishText('', 'q.ttl', 'vence', True);
+  Sleep(900); // ainda VIVA quando o broker cai -- o log a leva consigo
+  Reabre;
+  Sleep(600); // o que sobrava do prazo (~300 ms) acaba aqui
+  LGet := FChan.BasicGet('q.ttl', True);
+  ChecaNao('o prazo continuou correndo por cima do restart', LGet.Found);
 end;
 
 initialization
