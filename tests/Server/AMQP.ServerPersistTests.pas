@@ -626,9 +626,9 @@ begin
 
     LIdxNova := Indice(L, 'enqueue:q.dlq:');
     LIdxVelha := Indice(L, 'dequeue:q.src:');
-    ASSERTTRUE('a colocacao nova aparece ANTES da aposentadoria da velha '
-      + '(D23: falhar no meio da duplicata, nunca perda)',
-      (LIdxNova >= 0) and (LIdxVelha >= 0) and (LIdxNova < LIdxVelha));
+    Assert.IsTrue((LIdxNova >= 0) and (LIdxVelha >= 0) and (LIdxNova < LIdxVelha),
+      'a colocacao nova aparece ANTES da aposentadoria da velha '
+      + '(D23: falhar no meio produz duplicata, nunca perda)');
   finally
     L.Free;
   end;

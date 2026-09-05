@@ -19,12 +19,19 @@ defeitos que motivaram este script apareceram na WS2 da Fase 3:
    menos, que e exatamente o verde falso que o CLAUDE.md ja documenta da WS9
    da Fase 2.
 
-Depois entrou uma terceira, da mesma familia (WS5): unit nova de src/server
-listada num projeto Delphi e esquecida no outro. O FPC nao pega porque la as
-units vem do PACOTE; no Delphi cada .dpr/.dproj lista uma a uma, e esquecer
-custa "F2613 Unit not found" -- outro round-trip pela IDE.
+Depois entrou uma terceira, da mesma familia (WS5 da Fase 3): unit nova de
+src/server listada num projeto Delphi e esquecida no outro. O FPC nao pega
+porque la as units vem do PACOTE; no Delphi cada .dpr/.dproj lista uma a uma,
+e esquecer custa "F2613 Unit not found" -- outro round-trip pela IDE.
 
-Nenhum dos tres precisa de compilador para ser detectado. Rode isto antes de
+E uma quarta, na WS5 da Fase 4: uma assercao NO DIALETO ERRADO. Um script que
+gera os dois espelhos deixou `AssertTrue(msg, cond)` -- forma do FPCUnit -- no
+arquivo DUnitX. O FPC compilava, a suite FPC estava verde, e o defeito so
+apareceu no dcc32 como "E2003 Undeclared identifier: 'ASSERTTRUE'". Custou
+exatamente o round-trip que este script existe para evitar, e a deteccao e
+trivial: os dois conjuntos de nomes de assercao sao disjuntos e conhecidos.
+
+Nenhum dos quatro precisa de compilador para ser detectado. Rode isto antes de
 mandar a suite para o IDE.
 
 USO
@@ -287,6 +294,98 @@ def verifica_units_do_server():
     return problemas
 
 
+# Nomes de assercao de cada dialeto. Sao disjuntos: o FPCUnit expoe metodos
+# soltos herdados de TAssert, o DUnitX so o objeto `Assert`. Uma chamada do
+# conjunto errado nao compila -- mas so no compilador do OUTRO lado, que e
+# justamente o que passa despercebido quando um gerador escreve os dois.
+ASSERCOES_FPCUNIT = (
+    'AssertEquals', 'AssertTrue', 'AssertFalse', 'AssertNull', 'AssertNotNull',
+    'AssertSame', 'AssertNotSame', 'AssertException', 'AssertEqualsString',
+)
+
+# `Assert.` casa o DUnitX inteiro (AreEqual, IsTrue, WillRaise, Pass, Fail...)
+# sem precisar listar metodo por metodo.
+RE_ASSERT_DUNITX = re.compile(r'(?<![\w.])Assert\s*\.\s*[A-Za-z]')
+
+
+def sem_comentarios(texto):
+    """Troca comentarios e literais por espacos, preservando os \\n.
+
+    Sem isto a checagem [4] acusa a PROSA: o comentario de
+    AMQP.HandshakeIntegrationTests explica a diferenca entre o AssertException
+    do FPCUnit e o Assert.WillRaise do DUnitX, e citar o nome do outro dialeto
+    ao documentar por que ele nao serve e' exatamente o que se quer que um
+    arquivo de teste faca. Preservar as quebras de linha mantem os numeros de
+    linha do relatorio apontando para o arquivo de verdade.
+    """
+    saida = []
+    i, n = 0, len(texto)
+    while i < n:
+        c = texto[i]
+        if c == "'":                      # literal de string
+            j = i + 1
+            while j < n and texto[j] != "'":
+                j += 1
+            saida.append(' ' * (min(j, n - 1) - i + 1))
+            i = j + 1
+        elif c == '/' and texto[i:i + 2] == '//':
+            j = texto.find('\n', i)
+            if j < 0:
+                j = n
+            saida.append(' ' * (j - i))
+            i = j
+        elif c == '{':                    # comentario de bloco (e diretivas)
+            j = texto.find('}', i)
+            if j < 0:
+                j = n - 1
+            saida.append(''.join(ch if ch == '\n' else ' '
+                                 for ch in texto[i:j + 1]))
+            i = j + 1
+        elif texto[i:i + 2] == '(*':
+            j = texto.find('*)', i)
+            j = n - 2 if j < 0 else j
+            saida.append(''.join(ch if ch == '\n' else ' '
+                                 for ch in texto[i:j + 2]))
+            i = j + 2
+        else:
+            saida.append(c)
+            i += 1
+    return ''.join(saida)
+
+
+def _chamadas(corpo, nomes):
+    """Nomes de `nomes` chamados como funcao, ignorando `TAssert.Xxx(...)`."""
+    achados = []
+    for nome in nomes:
+        for m in re.finditer(r'(?<![\w.])' + nome + r'\s*\(', corpo,
+                             re.IGNORECASE):
+            achados.append((nome, corpo.count('\n', 0, m.start()) + 1))
+    return achados
+
+
+def verifica_dialeto_das_assercoes():
+    """Assercao do dialeto errado -- o defeito que so o OUTRO compilador pega.
+
+    Nao tenta entender o codigo: procura os nomes de assercao de um dialeto
+    dentro de um arquivo do outro. `TAssert.AssertTrue(...)` qualificado e
+    legitimo nos dois lados e por isso e' excluido do casamento.
+    """
+    problemas = []
+    for dunitx, fpcunit in pares_espelhados():
+        corpo = sem_comentarios(le(dunitx))
+        for nome, linha in _chamadas(corpo, ASSERCOES_FPCUNIT):
+            problemas.append((rel(dunitx),
+                              'linha %d: assercao do FPCUnit (%s) num arquivo '
+                              'DUnitX -- use Assert.*' % (linha, nome)))
+        corpo = sem_comentarios(le(fpcunit))
+        for m in RE_ASSERT_DUNITX.finditer(corpo):
+            linha = corpo.count('\n', 0, m.start()) + 1
+            problemas.append((rel(fpcunit),
+                              'linha %d: assercao do DUnitX (Assert.*) num '
+                              'arquivo FPCUnit' % linha))
+    return problemas
+
+
 def main():
     falhou = False
 
@@ -313,6 +412,15 @@ def main():
     if su:
         falhou = True
         for arq, msg in su:
+            print('    FALHA  %s: %s' % (arq, msg))
+    else:
+        print('    ok')
+
+    print('[4] assercoes no dialeto certo de cada espelho')
+    dial = verifica_dialeto_das_assercoes()
+    if dial:
+        falhou = True
+        for arq, msg in dial:
             print('    FALHA  %s: %s' % (arq, msg))
     else:
         print('    ok')

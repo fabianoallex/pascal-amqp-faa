@@ -557,6 +557,12 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **O que a WS5 NÃO faz, de propósito:** nada é lido de volta ainda. O journal acumula e o broker sobe vazio — a recuperação é a WS6.
 
+- **Uma asserção no dialeto errado, e a quarta checagem do verificador.** A primeira compilação Delphi da WS4+WS5 achou um defeito que o FPC nunca poderia achar: o script que gerou os dois espelhos deixou `AssertTrue(msg, cond)` — forma do **FPCUnit** — dentro do arquivo **DUnitX** (`E2003 Undeclared identifier: 'ASSERTTRUE'`). A suíte FPC estava verde o tempo todo. É a mesma família dos três defeitos que já motivaram o `verifica_espelhos.py`, e custou exatamente o round-trip que ele existe para evitar.
+
+  Virou a **checagem [4]**: os nomes de asserção dos dois dialetos são disjuntos e conhecidos (`AssertEquals`/`AssertTrue`/… de um lado, `Assert.*` do outro), então achar um conjunto dentro de um arquivo do outro não precisa de compilador. Ela pegou os dois sentidos numa mutação deliberada.
+
+  **E ela nasceu com um falso-positivo que valia a pena olhar:** acusou `AMQP.HandshakeIntegrationTests`, onde o comentário explica *por que* o `AssertException` do FPCUnit não serve e cita o `Assert.WillRaise` do DUnitX. Citar o outro dialeto ao documentar a diferença é justamente o que se quer que um arquivo de teste faça — o defeito era da checagem, não da prosa. Entrou um `sem_comentarios` que troca comentários e literais por espaços **preservando as quebras de linha**, para os números de linha do relatório continuarem apontando para o arquivo de verdade.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

@@ -150,7 +150,7 @@ Planejada em 2026-09-04, em sessão própria e em Opus. Plano completo com as me
 
 ### Verificador de espelhos FPCUnit↔DUnitX
 
-`python tests\tools\verifica_espelhos.py` — roda **sem compilador**, checa (1) código declarado depois do `initialization` (vira diretiva no dcc32, `E2070`), (2) paridade de testes/fixtures entre os dois dialetos (fixture não registrada no DUnitX não dá erro de compilação — dá suíte verde com menos testes), (3) toda unit de `src\server\` listada em todo `.dpr`/`.dproj` que compila o submódulo. Sai com código 1 em divergência — rode antes de mandar a suíte para a IDE. Histórico de como foi calibrado (falsos-positivos, mutações que precisou pegar) em `docs/broker-worklog.md`.
+`python tests\tools\verifica_espelhos.py` — roda **sem compilador**, checa (1) código declarado depois do `initialization` (vira diretiva no dcc32, `E2070`), (2) paridade de testes/fixtures entre os dois dialetos (fixture não registrada no DUnitX não dá erro de compilação — dá suíte verde com menos testes), (3) toda unit de `src\server\` listada em todo `.dpr`/`.dproj` que compila o submódulo, (4) asserção no dialeto certo de cada espelho (`AssertTrue(...)` do FPCUnit num arquivo DUnitX só falha no dcc32 — a suíte FPC fica verde). Sai com código 1 em divergência — rode antes de mandar a suíte para a IDE. Histórico de como foi calibrado (falsos-positivos, mutações que precisou pegar) em `docs/broker-worklog.md`.
 
 ### Build/teste do server
 
