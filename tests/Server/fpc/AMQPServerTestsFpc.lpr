@@ -27,7 +27,8 @@ uses
   AMQP.ServerWalTests,
   AMQP.ServerJournalTests,
   AMQP.ServerTopologyTests,
-  AMQP.ServerPersistTests;
+  AMQP.ServerPersistTests,
+  AMQP.ServerConfirmTests;
 
 var
   ConsoleApp: TTestRunner;

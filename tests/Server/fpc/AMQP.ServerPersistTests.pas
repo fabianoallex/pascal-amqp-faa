@@ -75,9 +75,19 @@ type
     procedure Ack_AposentaAColocacao;
     procedure GetSemAck_AposentaNaHora;
     procedure DeadLetter_ColocacaoNovaAntesDeAposentarAVelha;
+    procedure Confirm_ComDataDir_OCanalPassaAAdiar;
+    procedure Confirm_PublishPersistente_ChegaComOJournalJaDuravel;
+    procedure Confirm_LoteDePersistentes_TodosConfirmam;
+    procedure Confirm_PersistenteETransienteMisturados_TodosConfirmam;
   end;
 
 implementation
+
+// Ponte para a assercao do dialeto (mesma ideia de AMQP.ServerConfirmTests).
+procedure ChecaOk(const AMsg: string; ACond: Boolean);
+begin
+  TAssert.AssertTrue(AMsg, ACond);
+end;
 
 function BytesIguais(const A, B: TBytes): Boolean;
 var
@@ -615,6 +625,95 @@ begin
   finally
     L.Free;
   end;
+end;
+
+// ---------------------------------------------------------------- WS5 -----
+// De ponta a ponta, com cliente de verdade: o confirm passa a sair pela marca
+// d'agua (D24), e nao mais inline. O que estes tres testes provam e' que a
+// FIACAO esta viva -- publish -> engine -> journal -> marca -> rastreador ->
+// wire -- e que ela nao PERDE nem PENDURA confirm nenhum.
+//
+// A ORDEM e o COLAPSO nao sao observaveis daqui: o WaitForConfirms espera por
+// todos os seqs e ficaria verde com a ordem trocada ou com um frame por seq.
+// Quem prende essas duas propriedades e' AMQP.ServerConfirmTests, que le os
+// frames no wire com a marca entrando como parametro.
+
+procedure TPersistWiringTests.Confirm_ComDataDir_OCanalPassaAAdiar;
+var
+  I: Integer;
+begin
+  // A mutacao que este teste existe para matar: NAO criar o rastreador e
+  // seguir emitindo o confirm inline, como na Fase 3. Todo o resto da suite
+  // continuaria verde -- o cliente receberia os acks do mesmo jeito, so' que
+  // antes de o disco ter respondido. Aqui a fiacao e' observada direto.
+  ChecaOk('o broker tem registro de confirms', FBroker.Confirms <> nil);
+  ChecaOk('e nenhum canal adia nada antes do Confirm.Select',
+    FBroker.Confirms.TrackerCount = 0);
+
+  // O Confirm.Select e' RPC: quando ele volta, o Select-Ok ja' saiu, e o
+  // rastreador foi criado ANTES dele. Nao ha o que esperar aqui.
+  FChan.ConfirmSelect;
+  ChecaOk('o Confirm.Select registrou o rastreador do canal',
+    FBroker.Confirms.TrackerCount = 1);
+
+  // E o rastreador SAI do registro quando o canal morre -- senao a thread do
+  // journal percorreria canais mortos a cada fsync, para sempre. Aqui a
+  // espera e' necessaria: o broker posta o Close-Ok ANTES de recolher o
+  // canal, entao o Close do cliente volta antes do efeito.
+  FChan.Close;
+  for I := 1 to 200 do
+  begin
+    if FBroker.Confirms.TrackerCount = 0 then
+      Break;
+    Sleep(10);
+  end;
+  ChecaOk('o canal fechado saiu do registro',
+    FBroker.Confirms.TrackerCount = 0);
+  FreeAndNil(FChan); // Close desregistra: a posse volta para nos (ver CLAUDE.md)
+end;
+
+procedure TPersistWiringTests.Confirm_PublishPersistente_ChegaComOJournalJaDuravel;
+var
+  LMarca: UInt64;
+begin
+  DeclaraFila('q.dur', True);
+  FChan.ConfirmSelect;
+  FChan.PublishText('', 'q.dur', 'carga', True);
+  ChecaOk('o confirm chegou', FChan.WaitForConfirms(10000));
+  // Quando o ack chega, o que ele PROMETE ja' tem de estar cumprido: a marca
+  // d'agua do journal cobre pelo menos os dois registros deste publish
+  // (CONTENT + ENQ). Com o confirm saindo inline, este numero poderia ser 0.
+  LMarca := FBroker.Journal.DurableLsn;
+  ChecaOk('a marca d agua ja passou do lote deste publish', LMarca >= 2);
+end;
+
+procedure TPersistWiringTests.Confirm_LoteDePersistentes_TodosConfirmam;
+var
+  I: Integer;
+begin
+  // O caminho do group commit de ponta a ponta: 200 publishes persistentes
+  // atravessam poucos fsyncs e voltam colapsados. Se a liberacao perdesse um
+  // pendente -- ou o apagasse sem ter conseguido postar --, este teste NAO
+  // FALHARIA: ele PENDURARIA ate' o timeout. E' o sintoma a reconhecer.
+  DeclaraFila('q.dur', True);
+  FChan.ConfirmSelect;
+  for I := 1 to 200 do
+    FChan.PublishText('', 'q.dur', 'm' + IntToStr(I), True);
+  ChecaOk('os 200 confirmaram', FChan.WaitForConfirms(20000));
+end;
+
+procedure TPersistWiringTests.Confirm_PersistenteETransienteMisturados_TodosConfirmam;
+var
+  I: Integer;
+begin
+  // Metade nao toca o disco. Pelo corolario (a) da D24 os transientes ficam
+  // ATRAS dos persistentes pendentes em vez de passar na frente -- e o que
+  // este teste garante e' que ficar atras nao e' ficar preso.
+  DeclaraFila('q.dur', True);
+  FChan.ConfirmSelect;
+  for I := 1 to 100 do
+    FChan.PublishText('', 'q.dur', 'm' + IntToStr(I), (I mod 2) = 0);
+  ChecaOk('os 100 confirmaram', FChan.WaitForConfirms(20000));
 end;
 
 initialization

@@ -85,6 +85,10 @@
         <Filename Value="..\src\server\AMQP.Server.Records.pas"/>
         <UnitName Value="AMQP.Server.Records"/>
       </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.Confirm.pas"/>
+        <UnitName Value="AMQP.Server.Confirm"/>
+      </Item>
     </Files>
     <RequiredPkgs>
       <Item>

@@ -21,7 +21,11 @@ uses
   AMQP.Wire,
   AMQP.Server.Message,
   AMQP.Server.Queue,
-  AMQP.Server.Wal;
+  AMQP.Server.Wal,
+  AMQP.Protocol,
+  AMQP.Frame,
+  AMQP.Threading,
+  AMQP.Server.FrameIO;
 
 type
   { Uma entrega registrada pelo alvo falso. }
@@ -110,6 +114,35 @@ type
     /// Numero da escrita (1-based) em que Append vai levantar. -1 = nunca.
     procedure SetFalharEscritaNa(AValue: Integer);
   end;
+
+  { Stream de teste: guarda o que foi escrito e pode BLOQUEAR a escritora
+    (para encher a fila de saida do writer de proposito).
+
+    Mora aqui, e nao na suite da entrega onde nasceu, desde a WS5 da Fase 4: a
+    suite do confirm assincrono precisa exatamente do mesmo par -- um writer de
+    verdade sobre um stream que registra -- para LER os frames que o rastreador
+    emitiu. Duas copias divergiriam. }
+  TStreamGravador = class(TStream)
+  private
+    FLock: TCriticalSection;
+    FLog: TBytes;
+    FLen: Integer;
+    FPortao: TEvent; // sinalizado = passa
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Seek(const AOffset: Int64; AOrigin: TSeekOrigin): Int64; override;
+    procedure Bloquear;
+    procedure Liberar;
+    function Bytes: TBytes;
+  end;
+
+/// Espera a escritora esvaziar (PARANDO-A) e devolve os frames escritos ate
+/// agora. Depois disso o writer nao serve mais para escrever.
+function FramesEscritos(AWriter: TAMQPFrameWriter;
+  AStream: TStreamGravador): TArray<TAMQPFrame>;
 
 implementation
 
@@ -382,6 +415,101 @@ begin
   finally
     FLock.Leave;
   end;
+end;
+
+{ TStreamGravador }
+
+constructor TStreamGravador.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+  FPortao := TEvent.Create(nil, True, True, ''); // manual-reset, aberto
+end;
+
+destructor TStreamGravador.Destroy;
+begin
+  FPortao.Free;
+  FLock.Free;
+  inherited;
+end;
+
+procedure TStreamGravador.Bloquear;
+begin
+  FPortao.ResetEvent;
+end;
+
+procedure TStreamGravador.Liberar;
+begin
+  FPortao.SetEvent;
+end;
+
+function TStreamGravador.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;
+end;
+
+function TStreamGravador.Seek(const AOffset: Int64; AOrigin: TSeekOrigin): Int64;
+begin
+  Result := 0;
+end;
+
+function TStreamGravador.Write(const Buffer; Count: Longint): Longint;
+var
+  P: PByte;
+  I: Integer;
+begin
+  FPortao.WaitFor(AMQP_WAIT_INFINITE);
+  FLock.Enter;
+  try
+    if FLen + Count > Length(FLog) then
+      SetLength(FLog, (FLen + Count) * 2 + 64);
+    P := @Buffer;
+    for I := 0 to Count - 1 do
+    begin
+      FLog[FLen] := P[I];
+      Inc(FLen);
+    end;
+  finally
+    FLock.Leave;
+  end;
+  Result := Count;
+end;
+
+function TStreamGravador.Bytes: TBytes;
+begin
+  FLock.Enter;
+  try
+    Result := Copy(FLog, 0, FLen);
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function LeFrames(const ABytes: TBytes): TArray<TAMQPFrame>;
+var
+  LMem: TBytesStream;
+  LLista: TList<TAMQPFrame>;
+begin
+  LLista := TList<TAMQPFrame>.Create;
+  try
+    LMem := TBytesStream.Create(ABytes);
+    try
+      while LMem.Position < LMem.Size do
+        LLista.Add(TAMQPFrame.ReadFrom(LMem));
+    finally
+      LMem.Free;
+    end;
+    Result := LLista.ToArray;
+  finally
+    LLista.Free;
+  end;
+end;
+
+function FramesEscritos(AWriter: TAMQPFrameWriter;
+  AStream: TStreamGravador): TArray<TAMQPFrame>;
+begin
+  AWriter.Stop; // drena o que estiver na fila e encerra a thread escritora
+  Result := LeFrames(AStream.Bytes);
 end;
 
 end.

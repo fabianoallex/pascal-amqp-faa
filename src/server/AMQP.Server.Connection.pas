@@ -200,6 +200,10 @@ type
     procedure ReleaseChannelResources(AChannel: TAMQPServerChannel);
     /// Basic.Return + content-header + body de um publish `mandatory` que não
     /// achou rota (spec 1.8.3.6, reply-code 312 NO_ROUTE).
+    /// Emite (ou adia ate a marca d agua) o confirm de um publish. ALsn=0
+    /// significa que nada foi escrito no journal por este publish.
+    procedure ConfirmaPublish(AChannel: TAMQPServerChannel;
+      ASeq, ALsn: UInt64; ANack: Boolean);
     procedure SendBasicReturn(AChannel: TAMQPServerChannel;
       const AMessage: TAMQPServerMessage);
     procedure SendGetOk(AChannel: TAMQPServerChannel;
@@ -1103,7 +1107,14 @@ begin
     for I := 0 to High(LNomes) do
       FEngine.MaybeAutoDeleteQueue(FVirtualHost, LNomes[I]);
   end;
-  AChannel.DetachDelivery;
+  AChannel.DetachDelivery; // destaca tambem o rastreador de confirms
+  // ... e ele sai do registro do broker, senao a thread do journal seguiria
+  // percorrendo rastreadores de canais mortos a cada fsync.
+  if (FConfig.Confirms <> nil) and (AChannel.Confirms <> nil) then
+  begin
+    FConfig.Confirms.Unregister(AChannel.Confirms);
+    AChannel.Confirms := nil;
+  end;
 end;
 
 // Basic.Return + content-header + body, num lote indivisivel: o cliente
@@ -1623,6 +1634,12 @@ begin
       begin
         LNoWait := DecodeConfirmSelect(AReader);
         AChannel.ConfirmMode := True;
+        // WS5 da Fase 4: com durabilidade ligada, o confirm deste canal passa
+        // a ser adiado ate' a marca d'agua. Sem DataDir o registro e' nil e
+        // nada muda -- o confirm sai inline, exatamente como na Fase 3 (D19).
+        if (FConfig.Confirms <> nil) and (AChannel.Confirms = nil) then
+          AChannel.Confirms := FConfig.Confirms.CreateTracker(FWriter,
+            AChannel.Id);
         if not LNoWait then
           PostMethod(AChannel.Id, BuildConfirmSelectOk);
       end;
@@ -1661,6 +1678,7 @@ var
   LRoteada: Boolean;
   LRejeitada: Boolean;
   LTtlMs: Int64;
+  LLsn: UInt64;
 begin
   try
     LMsg := AChannel.CurrentMessage(FUserId);
@@ -1693,9 +1711,11 @@ begin
 
     LRoteada := False;
     LRejeitada := False;
+    LLsn := 0;
     try
       if FConfig.Sink <> nil then
-        LRoteada := FConfig.Sink.RouteMessage(FVirtualHost, LMsg, LRejeitada);
+        LRoteada := FConfig.Sink.RouteMessage(FVirtualHost, LMsg, LRejeitada,
+          LLsn);
     except
       // Basic.Nack e' reservado a FALHA INTERNA do broker (spec da extensao:
       // "the broker could not handle the message"). Nao e' o caso de mensagem
@@ -1703,7 +1723,7 @@ begin
       on E: Exception do
       begin
         if AChannel.ConfirmMode then
-          PostMethod(AChannel.Id, BuildBasicNack(LSeq, False, False));
+          ConfirmaPublish(AChannel, LSeq, 0, True);
         raise;
       end;
     end;
@@ -1725,13 +1745,33 @@ begin
       // do RabbitMQ, e a alternativa (desfazer o que ja entrou) nao existe sem
       // transacao. O publicador tem de tratar o nack como "pode ter entregue
       // em parte", que e' o contrato de confirms de qualquer jeito.
+      //
+      // WS5 da Fase 4: quem decide se o frame sai AGORA ou fica preso a marca
+      // d'agua e' o ConfirmaPublish. Um nack nao espera disco (nao promete
+      // durabilidade nenhuma), mas continua respeitando a ordem de seq.
       if LRejeitada then
-        PostMethod(AChannel.Id, BuildBasicNack(LSeq, False, False))
+        ConfirmaPublish(AChannel, LSeq, 0, True)
       else
-        PostMethod(AChannel.Id, BuildBasicAck(LSeq, False));
+        ConfirmaPublish(AChannel, LSeq, LLsn, False);
   finally
     AChannel.ResetContent;
   end;
+end;
+
+// O confirm de UM publish. Sem durabilidade (ou sem nada a esperar e sem
+// pendente na frente) o frame sai aqui mesmo, como na Fase 3; do contrario
+// fica com o rastreador do canal ate' o LSN estar no disco -- e sai de la'
+// colapsado com os vizinhos num unico multiple=true (D24/D9).
+procedure TAMQPServerConnection.ConfirmaPublish(AChannel: TAMQPServerChannel;
+  ASeq, ALsn: UInt64; ANack: Boolean);
+begin
+  if (AChannel.Confirms <> nil)
+    and AChannel.Confirms.TryDefer(ASeq, ALsn, ANack) then
+    Exit;
+  if ANack then
+    PostMethod(AChannel.Id, BuildBasicNack(ASeq, False, False))
+  else
+    PostMethod(AChannel.Id, BuildBasicAck(ASeq, False));
 end;
 
 function TAMQPServerConnection.DispatchContent(AChannel: TAMQPServerChannel;

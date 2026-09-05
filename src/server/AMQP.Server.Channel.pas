@@ -60,6 +60,12 @@ type
     // os canais, e e' justamente nessa varredura que as filas precisam saber
     // de qual canal soltar consumidores e nao-confirmadas.
     FDeliveryId: NativeUInt;
+    // Rastreador de confirms adiados (WS5 da Fase 4). nil enquanto o broker
+    // nao tiver DataDir -- sem durabilidade o confirm sai inline, como na
+    // Fase 3. Quem cria e registra e' a conexao (so' ela conhece o registro
+    // do broker); o canal so' guarda e destaca, pelo mesmo motivo do alvo de
+    // entrega: quem libera o pendente e' a thread do JOURNAL.
+    FConfirms: IAMQPConfirmTracker;
     // WS5: o canal e' quem sabe amarrar o que o cliente diz ao que a engine
     // precisa. Duas amarracoes:
     //  - consumer-tag -> nome da fila, para o Basic.Cancel e para o teardown;
@@ -136,6 +142,8 @@ type
     /// Identidade do alvo deste canal. Continua valida depois do
     /// DetachDelivery (ver o campo). 0 antes do AttachDelivery.
     property DeliveryId: NativeUInt read FDeliveryId;
+    /// Rastreador de confirms deste canal, ou nil (broker sem durabilidade).
+    property Confirms: IAMQPConfirmTracker read FConfirms write FConfirms;
     /// Channel.Flow: False = o peer pediu que paremos de entregar conteúdo
     /// neste canal. A Fase 2 respeita na entrega.
     property Active: Boolean read FActive write SetActive;
@@ -199,6 +207,11 @@ procedure TAMQPServerChannel.DetachDelivery;
 begin
   if FTargetObj <> nil then
     FTargetObj.Detach;
+  // O rastreador de confirms morre junto, e pela mesma razao: a thread do
+  // journal pode estar dentro dele agora. Detach solta o writer sob lock.
+  // A referencia fica (o registro do broker ainda a tem ate' o Unregister).
+  if FConfirms <> nil then
+    FConfirms.Detach;
   // A REFERENCIA continua aqui de proposito (so' o Detach acontece): o
   // teardown da conexao destaca todos os alvos ANTES de varrer os canais, e
   // essa varredura ainda precisa perguntar ao alvo em que filas este canal

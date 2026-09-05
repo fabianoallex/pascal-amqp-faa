@@ -351,7 +351,8 @@ type
     constructor Create;
     destructor Destroy; override;
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
+      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+      out ALsn: UInt64): Boolean;
     function Count: Integer;
     function Exchange: string;
     function RoutingKey: string;
@@ -379,11 +380,13 @@ begin
 end;
 
 function TRecordingSink.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
+  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+  out ALsn: UInt64): Boolean;
 var
   LValue: TValue;
 begin
   ARejeitada := False; // este duble aceita tudo
+  ALsn := 0;           // e nao escreve journal nenhum
   FLock.Enter;
   try
     Inc(FCount);

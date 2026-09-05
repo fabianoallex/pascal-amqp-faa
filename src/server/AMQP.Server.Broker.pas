@@ -35,6 +35,7 @@ uses
   AMQP.Server.Types,
   AMQP.Server.Engine,
   AMQP.Server.Journal,
+  AMQP.Server.Confirm,
   AMQP.Server.Connection;
 
 // TAMQPVirtualHostRegistry mudou-se para AMQP.Server.Types no WS4 (a FSM de
@@ -81,6 +82,10 @@ type
     FSink: IAMQPMessageSink;
     FEngine: TAMQPEngine; // WS5: a engine de verdade; tambem e' o Sink
     FJournal: TAMQPJournal; // Fase 4: nil enquanto DataDir estiver vazio
+    // Onde os canais penduram confirms adiados. Existe junto com o journal e
+    // pelo mesmo motivo: sem DataDir nao ha o que esperar, e o confirm sai
+    // inline como na Fase 3.
+    FConfirms: IAMQPConfirmRegistry;
     FDataDir: string;
     FMaxQueueLength: Integer;
     FVHosts: TAMQPVirtualHostRegistry;
@@ -126,6 +131,9 @@ type
     /// Journal de durabilidade, ou nil quando DataDir esta' vazio. Existe so'
     /// entre o Start e o Stop.
     property Journal: TAMQPJournal read FJournal;
+    /// Registro de confirms adiados, ou nil quando DataDir esta' vazio.
+    /// Existe pela mesma razao do Journal acima: diagnostico e teste.
+    property Confirms: IAMQPConfirmRegistry read FConfirms;
 
     /// Diretorio de dados. VAZIO (default) = broker exatamente igual ao da
     /// Fase 3: `durable` e `delivery-mode 2` continuam aceitos e ignorados, e
@@ -244,6 +252,7 @@ begin
   Result.Heartbeat := FHeartbeat;
   Result.CloseTimeoutMs := FCloseTimeoutMs;
   Result.Sink := FSink;
+  Result.Confirms := FConfirms;
   Result.Tls := FUseTls;
   Result.TlsCertFile := FTlsCertFile;
   Result.TlsKeyFile := FTlsKeyFile;
@@ -289,9 +298,15 @@ begin
   if FDataDir <> '' then
   begin
     FJournal := TAMQPJournal.Create(FDataDir);
+    // O registro de confirms E' o IAMQPDurabilitySink do journal: e' assim que
+    // "a marca d'agua andou" vira "estes canais podem confirmar" (D24).
+    // Injetado ANTES do Start, como a propriedade pede.
+    FConfirms := TAMQPConfirmRegistry.Create;
+    FJournal.DurabilitySink := FConfirms as IAMQPDurabilitySink;
     try
       FJournal.Start;
     except
+      FConfirms := nil;
       FreeAndNil(FJournal);
       raise;
     end;
@@ -375,6 +390,9 @@ begin
     end;
     FreeAndNil(FJournal);
   end;
+  // O registro so cai depois do journal: enquanto a thread do journal vive,
+  // ela pode estar dentro de um Release.
+  FConfirms := nil;
 
   FRunning := False;
 end;
@@ -429,6 +447,16 @@ begin
     // no writer e o Shutdown de uma conexão morta chama HandleConnClosed, que
     // também pega o lock). Seguro porque só ESTA thread libera conexões
     // enquanto o broker roda, e o ReapDead abaixo só acontece depois dos Tick.
+    // WS5: recobra confirm que ficou preso porque a fila de escrita do canal
+    // estava cheia no instante do fsync. Sem este cutucao, um canal assim so'
+    // confirmaria no PROXIMO avanco da marca -- que pode nunca vir, se ninguem
+    // mais publicar. Mesma ideia do PostDeliverTick para a entrega (D3).
+    if FConfirms <> nil then
+      try
+        FConfirms.RetryPending;
+      except
+      end;
+
     LSnapshot := Connections;
     for I := 0 to High(LSnapshot) do
     begin

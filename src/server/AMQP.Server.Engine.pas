@@ -212,7 +212,8 @@ type
     function ProximoId: UInt64;
     function GravaColocacao(AQueue: TAMQPServerQueue; const AVHost: string;
       AMessage: TAMQPMessage; APriority: Byte; AMessageTtlMs: Int64;
-      var AContentId: UInt64; AEsperarVaga: Boolean): UInt64;
+      var AContentId: UInt64; AEsperarVaga: Boolean;
+      out ALsn: UInt64): UInt64;
     /// True se esta fila viva vai persistir alguma coisa (D20).
     function FilaPersiste(AQueue: TAMQPServerQueue): Boolean;
     procedure MaybeAutoDeleteQueue(const AVHost, AQueue: string);
@@ -236,7 +237,8 @@ type
 
     // --- publicacao (IAMQPMessageSink) ---
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
+      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+      out ALsn: UInt64): Boolean;
 
     /// Republica uma mensagem ja' montada (usada pelo dead-lettering). Roda na
     /// thread do ATOR da fila de origem: le a topologia sob RWLock e posta na
@@ -915,7 +917,8 @@ end;
 // colocacoes precisam estar duraveis, e por isso e' quem escreve o lote.
 function TAMQPEngine.GravaColocacao(AQueue: TAMQPServerQueue;
   const AVHost: string; AMessage: TAMQPMessage; APriority: Byte;
-  AMessageTtlMs: Int64; var AContentId: UInt64; AEsperarVaga: Boolean): UInt64;
+  AMessageTtlMs: Int64; var AContentId: UInt64; AEsperarVaga: Boolean;
+  out ALsn: UInt64): UInt64;
 var
   LRecs: TAMQPJournalRecords;
   LConteudo: TAMQPRecContent;
@@ -923,6 +926,7 @@ var
   LN: Integer;
 begin
   Result := 0;
+  ALsn := 0;
   if not FilaPersiste(AQueue) then
     Exit;
 
@@ -962,15 +966,18 @@ begin
   try
     if AEsperarVaga then
       // Thread do publicador: PODE bloquear na contrapressao (D24, corolario c).
-      FJournal.Submit(LRecs)
+      ALsn := FJournal.Submit(LRecs)
     else
       // Thread do ATOR (dead-letter): a D2 proibe esperar I/O.
-      FJournal.SubmitNoWait(LRecs);
+      ALsn := FJournal.SubmitNoWait(LRecs);
   except
     on E: EAMQPJournal do
+    begin
       // Journal em falha: nada foi gravado, entao a colocacao nao tem
       // identidade e nenhuma aposentadoria sera escrita por ela depois.
       Result := 0;
+      ALsn := 0;
+    end;
   end;
 end;
 
@@ -1091,7 +1098,8 @@ end;
 { --- publicacao --- }
 
 function TAMQPEngine.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
+  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+  out ALsn: UInt64): Boolean;
 var
   LVHost: TAMQPVHost;
   LDestinos: TArray<string>;
@@ -1102,9 +1110,10 @@ var
   LPriority: Byte;
   LTtlMs: Int64;
   LPersistente: Boolean;
-  LContentId, LEntryId: UInt64;
+  LContentId, LEntryId, LLsn: UInt64;
 begin
   ARejeitada := False;
+  ALsn := 0;
   LVHost := FVHosts.GetOrCreate(AVHost);
   // Headers vivos do canal: o match roda AQUI, na thread do publicador
   // (invariante da Fase 2), nao depois do enqueue.
@@ -1155,8 +1164,16 @@ begin
         Continue;
       LEntryId := 0;
       if LPersistente then
+      begin
         LEntryId := GravaColocacao(LQueue, AVHost, LMsg, LPriority, LTtlMs,
-          LContentId, True);
+          LContentId, True, LLsn);
+        // WS5/D24: o confirm deste publish espera o MAIOR LSN que ele
+        // escreveu. Como o journal atribui LSNs crescentes e o lote de cada
+        // fila e' indivisivel, o maior e' o da ultima fila que gravou -- mas
+        // comparar e' de graca e nao depende dessa ordem continuar valendo.
+        if LLsn > ALsn then
+          ALsn := LLsn;
+      end;
       // D15: so' a fila declarada com reject-publish paga o enqueue SINCRONO.
       // As outras seguem pelo caminho assincrono de sempre.
       if LQueue.Policy.Overflow = amqovRejectPublish then
@@ -1178,6 +1195,7 @@ procedure TAMQPEngine.RepublishTo(const AVHost, AExchange,
   ARoutingKey: string; AMessage: TAMQPMessage; APriority: Byte;
   AContentId: UInt64);
 var
+  LLsnIgn: UInt64;
   LEntryId: UInt64;
   LVHost: TAMQPVHost;
   LDestinos: TArray<string>;
@@ -1223,8 +1241,11 @@ begin
     // esta' no disco.
     LEntryId := 0;
     if AContentId <> 0 then
+      // O LSN e' descartado de proposito: dead-letter nao tem seq-no de
+      // publicador esperando por ele -- o publicador original ja' foi
+      // confirmado quando a mensagem entrou na fila de origem.
       LEntryId := GravaColocacao(LQueue, AVHost, AMessage, APriority, -1,
-        AContentId, False); // no ator: sem esperar vaga (D2)
+        AContentId, False, LLsnIgn); // no ator: sem esperar vaga (D2)
     // TTL da mensagem vai como -1: o 'expiration' original foi retirado pelo
     // dead-lettering (senao ela morreria de novo no ato na DLQ), e o prazo
     // que passa a valer e' o da fila de DESTINO.

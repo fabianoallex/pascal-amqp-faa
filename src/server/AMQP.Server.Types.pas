@@ -24,7 +24,9 @@ uses
   SyncObjs,
   AMQP.Threading,     // atomics
   AMQP.Basic.Methods, // TAMQPBasicProperties
-  AMQP.Server.Auth;
+  AMQP.Server.Auth,
+  AMQP.Server.FrameIO; // TAMQPFrameWriter (o rastreador de confirms escreve
+                       // no canal do publicador)
 
 const
   /// Limites que o broker propõe no Connection.Tune. Iguais aos do RabbitMQ,
@@ -101,9 +103,72 @@ type
     /// o publish leva `Basic.Nack` em vez de `Basic.Ack`. É um resultado
     /// SEPARADO de "não roteou": uma mensagem pode ter sido aceita por duas
     /// filas e recusada pela terceira, e o publicador precisa saber disso.
+    ///
+    /// ALsn (WS5 da Fase 4) sai com o MAIOR LSN que este publish escreveu no
+    /// journal, ou 0 quando ele nao escreveu nada (mensagem transiente, fila
+    /// transiente, ou broker sem DataDir). E' o numero que o confirm deste
+    /// seq-no tem de esperar ficar duravel -- a D24 em uma linha: quem roteou
+    /// e' quem sabe qual LSN amarra qual seq.
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage;
-      out ARejeitada: Boolean): Boolean;
+      out ARejeitada: Boolean; out ALsn: UInt64): Boolean;
+  end;
+
+  { Rastreador de confirms adiados de UM canal -- WS5 da Fase 4, a D24.
+
+    Enquanto o broker nao tem DataDir, ninguem cria um destes e o caminho do
+    confirm e' letra por letra o da Fase 3. Com durabilidade ligada, o publish
+    persistente NAO leva ack na hora: ele fica aqui, preso ao LSN que precisa
+    estar no disco, ate' a thread do journal avancar a marca d'agua.
+
+    Mesmo padrao de ciclo de vida do TAMQPChannelDeliveryTarget, e pela mesma
+    razao: quem libera o pendente e' a thread do JOURNAL, e o canal pode ter
+    morrido no meio. Refcount mantem o objeto vivo, e Detach solta o writer sob
+    lock sem esperar I/O. }
+  IAMQPConfirmTracker = interface
+    ['{7C4E1B85-93A0-4D62-B1F7-0E58C2A46D31}']
+    /// Registra o confirm de ASeq como ADIADO e devolve True; devolve False
+    /// quando nao ha nada a esperar e o chamador pode emitir na hora.
+    ///
+    /// Adia quando ALsn > 0 (este publish escreveu no disco) OU quando ja' ha
+    /// pendente neste canal -- o corolario (a) da D24: confirm sai em ordem de
+    /// seq POR CANAL, entao um publish transiente atras de um persistente
+    /// pendente espera e sai colapsado no mesmo multiple=true.
+    function TryDefer(ASeq, ALsn: UInt64; ANack: Boolean): Boolean;
+    /// Libera todo pendente com Lsn <= AMarca, colapsado por canal num unico
+    /// Basic.Ack(maiorSeq, multiple=true). Nunca bloqueia; o que a fila de
+    /// escrita recusar fica para a proxima rodada (forma da D3).
+    procedure Release(AMarca: UInt64);
+    /// O journal falhou de vez: todo pendente vira Basic.Nack, porque a
+    /// promessa de durabilidade nao pode mais ser cumprida.
+    procedure FailAll;
+    /// O canal morreu: solta o writer e descarta o pendente.
+    procedure Detach;
+    /// Quantos confirms estao presos aqui (diagnostico e teste).
+    function PendingCount: Integer;
+  end;
+
+  { Onde vivem todos os rastreadores do broker. E' o IAMQPDurabilitySink que a
+    thread do journal chama depois de cada fsync -- a unica peca que sabe que
+    "a marca andou" tem de virar "estes canais podem confirmar". }
+  IAMQPConfirmRegistry = interface
+    ['{1F60A2D9-5E37-4C84-A0B6-83D915E7C42A}']
+    /// Cria e registra o rastreador do canal. O chamador guarda a interface e
+    /// chama Unregister quando o canal morre.
+    function CreateTracker(AWriter: TAMQPFrameWriter;
+      AChannelNo: Word): IAMQPConfirmTracker;
+    procedure Unregister(const ATracker: IAMQPConfirmTracker);
+    /// Tudo com LSN <= isto ja' esta' no disco.
+    function Watermark: UInt64;
+    /// Quantos canais tem rastreador registrado agora. Diagnostico -- e o
+    /// unico jeito de um teste de ponta a ponta ver que o canal REALMENTE
+    /// passou a adiar o confirm, em vez de emiti-lo inline como na Fase 3.
+    function TrackerCount: Integer;
+    /// Recobra o que ficou preso por recusa da fila de escrita. Chamado pela
+    /// thread monitora: sem isso, um canal que estava com a saida cheia no
+    /// instante do fsync so' confirmaria no proximo avanco da marca -- que
+    /// pode nunca vir, se ninguem mais publicar.
+    procedure RetryPending;
   end;
 
   { Descarta tudo (broker "nulo" da Fase 1). Conta o que passou, para os testes
@@ -114,7 +179,7 @@ type
   public
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage;
-      out ARejeitada: Boolean): Boolean;
+      out ARejeitada: Boolean; out ALsn: UInt64): Boolean;
     /// Quantas mensagens foram descartadas desde a criação.
     function Count: Integer;
   end;
@@ -181,6 +246,10 @@ type
     /// Para onde vão as mensagens publicadas. Nunca nil nas conexões que o
     /// broker cria (ele semeia com TAMQPNullMessageSink).
     Sink: IAMQPMessageSink;
+    /// Onde os canais registram confirms adiados. nil = sem durabilidade, e o
+    /// confirm sai inline como na Fase 3 (D19: o broker sem DataDir e' o
+    /// broker da Fase 3, inclusive aqui).
+    Confirms: IAMQPConfirmRegistry;
     /// Config sem autenticador/vhosts (o broker preenche esses dois).
     class function Defaults: TAMQPServerConnConfig; static;
   end;
@@ -294,14 +363,17 @@ begin
   Result.TlsKeyFile := '';
   Result.CloseTimeoutMs := AMQP_SERVER_CLOSE_TIMEOUT_MS;
   Result.Sink := nil;
+  Result.Confirms := nil;
 end;
 
 { TAMQPNullMessageSink }
 
 function TAMQPNullMessageSink.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean): Boolean;
+  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+  out ALsn: UInt64): Boolean;
 begin
   ARejeitada := False; // sink nulo nunca recusa: nao ha fila para encher
+  ALsn := 0;           // e nao durou nada: nao ha journal
   AmqpAtomicInc(FCount);
   // Fase 1: nenhuma fila existe, então nada foi roteado. Devolver False é o
   // que a Fase 2 usará para disparar o Basic.Return de um publish mandatory.
