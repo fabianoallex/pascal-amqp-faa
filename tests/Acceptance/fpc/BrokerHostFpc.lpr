@@ -9,7 +9,13 @@ program BrokerHostFpc;
   puro: aqui o broker, la' o cliente.
 
     .\BrokerHostFpc.exe [porta] [--tls porta-tls] [--seconds N]
+                        [--datadir <dir>]
     .\SmokeTest.exe --host 127.0.0.1 --port <porta>
+
+  --datadir liga a durabilidade (Fase 4). E' o que permite o passo de RESTART
+  do SmokeTest: sobe o host com um diretorio, o SmokeTest publica persistente,
+  o host e' morto e sobe de novo no MESMO diretorio, e o SmokeTest confere que
+  as mensagens estao la'. Ver tests\tools\smoke_restart.py.
 
   Sem argumentos: porta 5673 (fora do 5672 do RabbitMQ de dev, para os dois
   poderem coexistir), sem TLS, e fica no ar por 120 s ou ate' receber uma
@@ -52,6 +58,7 @@ end;
 var
   LBroker: TAMQPServer;
   LPorta, LPortaTls: Word;
+  LDataDir: string;
   LSegundos, I: Integer;
   LArg, LCert, LKey: string;
   LDeadline: UInt64;
@@ -64,6 +71,7 @@ begin
   LPorta := PORTA_PADRAO;
   LPortaTls := 0;
   LSegundos := SEGUNDOS_PADRAO;
+  LDataDir := '';
 
   I := 1;
   while I <= ParamCount do
@@ -79,6 +87,11 @@ begin
       LSegundos := StrToIntDef(ParamStr(I + 1), SEGUNDOS_PADRAO);
       Inc(I);
     end
+    else if SameText(LArg, '--datadir') and (I < ParamCount) then
+    begin
+      LDataDir := ParamStr(I + 1);
+      Inc(I);
+    end
     else
       LPorta := StrToIntDef(LArg, LPorta);
     Inc(I);
@@ -91,6 +104,9 @@ begin
   try
     LBroker.BindAddress := '127.0.0.1';
     LBroker.Port := LPorta;
+    // Vazio = broker da Fase 3, letra por letra (D19). Preenchido = o WAL
+    // vive ali, e o host passa a sobreviver ao proprio restart.
+    LBroker.DataDir := LDataDir;
     LBroker.Start;
     WriteLn('broker embutido ouvindo em 127.0.0.1:', LBroker.Port);
 

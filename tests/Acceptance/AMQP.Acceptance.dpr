@@ -7,6 +7,24 @@
   EMBUTIDO desta lib em vez do RabbitMQ. Nenhum teste e' reescrito -- a unica
   diferenca e' o AmqpUseEmbeddedBroker abaixo.
 
+  DUAS PASSADAS: TRANSIENTE E DURAVEL (WS10 da Fase 4)
+  ----------------------------------------------------
+  Com a variavel de ambiente AMQP_ACEITACAO_DURAVEL=1 o broker embutido sobe
+  com DataDir num diretorio temporario, e as MESMAS 28 rodam de novo. A
+  pergunta da segunda passada e' diferente da primeira: ligar a durabilidade
+  NAO PODE MUDAR A SEMANTICA que o cliente ve'. E' facil quebrar algo sutil --
+  a ordem dos confirms, o momento do Basic.Return, o requeue de uma
+  nao-confirmada -- sem que nenhum teste da suite do SERVER perceba, porque
+  todos eles foram escritos ja' sabendo da durabilidade. Estes 28 nao: sao os
+  testes do CLIENTE, escritos contra o RabbitMQ muito antes de existir Fase 4.
+
+  VARIAVEL, E NAO FLAG: o runner do DUnitX (como o do FPCUnit) parseia a linha
+  de comando inteira e recusa opcao que nao conhece. Um --durable morreria
+  antes de chegar aos testes.
+
+    AMQP.Acceptance.exe
+    set AMQP_ACEITACAO_DURAVEL=1 && AMQP.Acceptance.exe
+
   No build sem TLS de servidor (o backend SChannel desta lib so' implementa o
   lado cliente), o broker nao sobe porta cifrada e os testes de TLS se
   auto-ignoram -- o AMQP.IntegrationConfig aponta para uma porta onde nada
@@ -18,6 +36,7 @@
 
 uses
   System.SysUtils,
+  System.IOUtils,
   DUnitX.Loggers.Console,
   DUnitX.Loggers.Xml.NUnit,
   DUnitX.TestFramework,
@@ -81,6 +100,45 @@ begin
 end;
 {$ENDIF}
 
+// True quando a variavel de ambiente pede a passada duravel.
+function PediuDuravel: Boolean;
+var
+  LVal: string;
+begin
+  LVal := LowerCase(Trim(GetEnvironmentVariable('AMQP_ACEITACAO_DURAVEL')));
+  Result := (LVal <> '') and (LVal <> '0') and (LVal <> 'false');
+end;
+
+// Diretorio limpo para a passada duravel. Nao reaproveita: um WAL de outra
+// execucao faria a suite comecar com filas e mensagens que ela nao criou.
+function DirDuravel: string;
+begin
+  // Nome unico sem precisar do PID -- pegar o PID exigiria Winapi.Windows, e
+  // essa unit sombreia FindClose e DeleteFile da System.SysUtils (ver a tabela
+  // de armadilhas do CLAUDE.md). Nao vale a pena so' por um nome de pasta.
+  Result := IncludeTrailingPathDelimiter(TPath.GetTempPath)
+    + 'amqpaceita-' + TPath.GetGUIDFileName(False);
+  ForceDirectories(Result);
+end;
+
+procedure LimpaDir(const ADir: string);
+var
+  LRec: TSearchRec;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, LRec) = 0 then
+  begin
+    try
+      repeat
+        if (LRec.Attr and faDirectory) = 0 then
+          System.SysUtils.DeleteFile(
+            IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+      until FindNext(LRec) <> 0;
+    finally
+      System.SysUtils.FindClose(LRec);
+    end;
+  end;
+end;
+
 var
   runner: ITestRunner;
   results: IRunResults;
@@ -88,6 +146,7 @@ var
   nunitLogger: ITestLogger;
   broker: TAMQPServer;
   portaTls: Word;
+  dataDir: string;
   {$IFDEF AMQP_OPENSSL}
   brokerTls: TAMQPServer;
   cert, key: string;
@@ -102,7 +161,18 @@ begin
   try
     broker.BindAddress := '127.0.0.1';
     broker.Port := 0; // porta efemera
+    dataDir := '';
+    if PediuDuravel then
+    begin
+      dataDir := DirDuravel;
+      LimpaDir(dataDir);
+    end;
+    broker.DataDir := dataDir; // '' = broker da Fase 3, letra por letra (D19)
     broker.Start;
+    if dataDir <> '' then
+      WriteLn('PASSADA DURAVEL -- DataDir: ', dataDir)
+    else
+      WriteLn('passada transiente -- sem DataDir');
 
     // Sem isto o build OpenSSL rodava a aceitacao SEM exercitar TLS de
     // servidor: os 5 testes de TLS se auto-ignoravam em 0.000s e o resumo

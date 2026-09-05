@@ -16,7 +16,29 @@ program AMQPAcceptanceFpc;
   implementa o lado cliente), entao os testes de TLS nao acham porta e se
   auto-ignoram -- mesmo caminho de quando o broker TLS esta fora do ar. No
   build `openssl` o broker sobe uma segunda porta cifrada com os certs de
-  docker\certs e eles rodam de verdade. }
+  docker\certs e eles rodam de verdade.
+
+  DUAS PASSADAS: TRANSIENTE E DURAVEL (WS10 da Fase 4)
+  ----------------------------------------------------
+  Com --durable o broker embutido sobe com DataDir apontando para um diretorio
+  temporario, e as MESMAS 28 rodam de novo. A pergunta que a segunda passada
+  responde e' diferente da primeira, e e' a razao de ela existir: ligar a
+  durabilidade NAO PODE MUDAR A SEMANTICA que o cliente ve'.
+
+  E' facil escrever um broker durave que quebre algo sutil -- a ordem dos
+  confirms, o momento do Basic.Return, o requeue de uma nao-confirmada -- e
+  nenhum teste da suite do SERVER perceberia, porque todos eles ja' foram
+  escritos sabendo da durabilidade. Estes 28 nao: sao os testes do CLIENTE,
+  escritos contra o RabbitMQ, muito antes de existir Fase 4.
+
+  Duas passadas, dois processos:
+
+    .\AMQPAcceptanceFpc.exe --all --format=plain
+    set AMQP_ACEITACAO_DURAVEL=1 && .\AMQPAcceptanceFpc.exe --all --format=plain
+
+  Processos separados de proposito: um broker duravel recem-criado num
+  diretorio limpo e' o estado que interessa, e reaproveitar o processo
+  carregaria o estado da primeira passada para a segunda. }
 
 {$mode delphi}{$H+}
 
@@ -35,12 +57,55 @@ uses
   AMQP.TlsIntegrationTests,
   AMQP.ReviewRegressionTests;
 
+// True quando a variavel de ambiente pede a passada duravel.
+//
+// VARIAVEL, E NAO FLAG, e a razao e' pratica: tanto o runner do FPCUnit quanto
+// o do DUnitX parseiam a linha de comando inteira e RECUSAM opcao que nao
+// conhecem ("Invalid option at position 1"). Um --durable morreria antes de
+// chegar aos testes. A variavel passa ao largo dos dois parsers e vale
+// igualzinho nos dois espelhos.
+function PediuDuravel: Boolean;
+var
+  LVal: string;
+begin
+  LVal := LowerCase(Trim(GetEnvironmentVariable('AMQP_ACEITACAO_DURAVEL')));
+  Result := (LVal <> '') and (LVal <> '0') and (LVal <> 'false');
+end;
+
+// Diretorio limpo para a passada duravel. Nao reaproveita: um WAL de outra
+// execucao faria a suite comecar com filas e mensagens que ela nao criou.
+function DirDuravel: string;
+begin
+  Result := IncludeTrailingPathDelimiter(GetTempDir)
+    + 'amqpaceita-' + IntToStr(GetProcessID);
+  ForceDirectories(Result);
+end;
+
+procedure LimpaDir(const ADir: string);
+var
+  LRec: TSearchRec;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, LRec) = 0 then
+  begin
+    try
+      repeat
+        if (LRec.Attr and faDirectory) = 0 then
+          SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+      until FindNext(LRec) <> 0;
+    finally
+      SysUtils.FindClose(LRec);
+    end;
+  end;
+end;
+
 // Sobe o broker em 127.0.0.1 numa porta efemera. Devolve a porta escolhida.
-function IniciaBroker(out ABroker: TAMQPServer): Word;
+function IniciaBroker(out ABroker: TAMQPServer;
+  const ADataDir: string): Word;
 begin
   ABroker := TAMQPServer.Create;
   ABroker.BindAddress := '127.0.0.1';
   ABroker.Port := 0; // o SO escolhe
+  ABroker.DataDir := ADataDir; // '' = broker da Fase 3, letra por letra (D19)
   ABroker.Start;
   Result := ABroker.Port;
 end;
@@ -101,13 +166,20 @@ var
   ConsoleApp: TTestRunner;
   LBroker: TAMQPServer;
   LPorta, LPortaTls: Word;
+  LDataDir: string;
   {$IFDEF AMQP_OPENSSL}
   LBrokerTls: TAMQPServer;
   {$ENDIF}
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
 
-  LPorta := IniciaBroker(LBroker);
+  LDataDir := '';
+  if PediuDuravel then
+  begin
+    LDataDir := DirDuravel;
+    LimpaDir(LDataDir);
+  end;
+  LPorta := IniciaBroker(LBroker, LDataDir);
   LPortaTls := 0;
   {$IFDEF AMQP_OPENSSL}
   LBrokerTls := nil;
@@ -117,6 +189,10 @@ begin
     AmqpUseEmbeddedBroker(LPorta, LPortaTls);
     WriteLn('broker embutido em 127.0.0.1:', LPorta,
       ' (tls: ', LPortaTls, ')');
+    if LDataDir <> '' then
+      WriteLn('PASSADA DURAVEL -- DataDir: ', LDataDir)
+    else
+      WriteLn('passada transiente -- sem DataDir');
 
     DefaultFormat := fPlain;
     DefaultRunAllTests := True;
@@ -133,5 +209,7 @@ begin
     LBrokerTls.Free;
     {$ENDIF}
     LBroker.Free;
+    if LDataDir <> '' then
+      LimpaDir(LDataDir);
   end;
 end.

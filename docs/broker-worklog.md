@@ -675,6 +675,18 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **Estado:** matriz limpa nos quatro cenários, `0 unfreed memory blocks` no host, e ele compila no Linux.
 
+- **WS10: a aceitação duas vezes, e o restart visto pelo cliente.** Duas peças.
+
+  **(1) As 28 do cliente, agora também com durabilidade ligada.** Com `AMQP_ACEITACAO_DURAVEL=1` o broker embutido sobe com `DataDir` num diretório limpo e as mesmas 28 rodam de novo. A pergunta da segunda passada é diferente da primeira, e é a razão de ela existir: **ligar a durabilidade não pode mudar a semântica que o cliente vê.** É fácil quebrar algo sutil — a ordem dos confirms, o momento do `Basic.Return`, o requeue de uma não-confirmada — sem que nenhum teste da suíte do *server* perceba, porque todos eles foram escritos já sabendo da Fase 4. Estes 28 não: são os testes do **cliente**, escritos contra o RabbitMQ muito antes. Passaram os 28 nas duas passadas, sem uma linha alterada.
+
+  **Variável de ambiente, e não flag**, por um motivo medido: tanto o runner do FPCUnit quanto o do DUnitX parseiam a linha de comando inteira e **recusam opção que não conhecem** — um `--durable` morre em `Invalid option at position 1` antes de chegar aos testes. A variável passa ao largo dos dois parsers e vale igual nos dois espelhos.
+
+  **(2) O passo de restart do SmokeTest.** O SmokeTest ganhou `--durable-publish N` e `--durable-verify N`, e o `BrokerHostFpc` ganhou `--datadir`. Quem orquestra é `tests/tools/smoke_restart.py`: sobe o host com um diretório, o cliente publica N persistentes e recebe os confirms, o host é **morto sem aviso**, outro sobe no mesmo diretório, e o cliente confere que as N estão lá — na ordem, com o corpo íntegro, marcadas `redelivered` (a D27 vista de fora), e que nada a mais voltou.
+
+  **É o único lugar do repositório onde a durabilidade é observada por um cliente puro, por cima de um socket, contra um processo de broker que morreu de verdade.** As suítes rodam broker e cliente no mesmo processo — ótimo para cobertura, inútil para esta pergunta. E continua valendo a admissão da D28: matar o processo não testa fsync.
+
+  **Estado:** aceitação 28/28 nas duas passadas, `0 unfreed memory blocks`; SmokeTest normal PASS; restart PASS; server 435/435; `verifica_espelhos.py` limpo; Linux compilando.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

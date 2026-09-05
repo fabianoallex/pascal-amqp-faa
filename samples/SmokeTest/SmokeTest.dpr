@@ -131,6 +131,23 @@ end;
 //   --host <nome>  aponta para outro host (default: o de Localhost)
 //   --port <n>     aponta para outra porta (default: 5672, ou 5671 com --tls)
 //
+//   --durable-publish <n>  publica n mensagens PERSISTENTES numa fila durável
+//                          e sai. Não roda os 9 passos.
+//   --durable-verify <n>   confere que as n mensagens estão lá, na ordem, e
+//                          que a fila fica vazia depois. Não roda os 9 passos.
+//
+// O par --durable-publish/--durable-verify é o passo de RESTART da Fase 4
+// (WS10). Ele não cabe num programa só porque o broker precisa MORRER no
+// meio: quem orquestra é tests\tools\smoke_restart.py, que sobe o
+// BrokerHostFpc com --datadir, chama o publish, MATA o host, sobe outro no
+// mesmo diretório e chama o verify.
+//
+// Por que aqui, e não numa suíte: este é o único lugar do repositório onde a
+// durabilidade é observada por um cliente PURO, por cima de um socket, contra
+// um processo de broker que morreu de verdade. As suítes rodam broker e
+// cliente no mesmo processo — o que é ótimo para cobertura e inútil para esta
+// pergunta.
+//
 // --host/--port existem para o SmokeTest poder rodar contra QUALQUER broker --
 // inclusive o broker embutido desta própria lib, que o runner de aceitação
 // (tests\Acceptance\fpc\BrokerHostFpc) sobe numa porta fixa. É o passo do
@@ -162,6 +179,17 @@ begin
     end;
     Inc(I);
   end;
+end;
+
+// Le um argumento numerico de uma opcao, ou -1 se ela nao veio.
+function ArgNumerico(const AOpcao: string): Integer;
+var
+  I: Integer;
+begin
+  Result := -1;
+  for I := 1 to ParamCount - 1 do
+    if SameText(ParamStr(I), AOpcao) then
+      Exit(StrToIntDef(ParamStr(I + 1), -1));
 end;
 
 procedure Check(ACondition: Boolean; const AWhat: string);
@@ -365,6 +393,71 @@ begin
   end;
 end;
 
+const
+  FILA_DURAVEL = 'smoke.durable';
+
+// Publica AN mensagens persistentes numa fila duravel e confirma. O corpo de
+// cada uma e' o proprio numero: o verify checa ORDEM e INTEGRIDADE, nao so'
+// contagem.
+procedure DurablePublish(const AParams: TAMQPConnectionParams; AN: Integer);
+var
+  LConn: TAMQPConnection;
+  LChan: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  I: Integer;
+begin
+  WriteLn('[durable-publish] ', AN, ' persistentes em ', FILA_DURAVEL);
+  LConn := TAMQPConnection.Create(AParams);
+  try
+    LConn.Open;
+    LChan := LConn.CreateChannel;
+    LDecl := TAMQPQueueDeclare.Create(FILA_DURAVEL, True); // durable
+    LChan.DeclareQueue(LDecl);
+    LChan.ConfirmSelect;
+    for I := 1 to AN do
+      LChan.PublishText('', FILA_DURAVEL, IntToStr(I), True); // persistente
+    Check(LChan.WaitForConfirms(30000), 'o broker confirmou as ' +
+      IntToStr(AN) + ' persistentes');
+    LConn.Close;
+  finally
+    LConn.Free;
+  end;
+end;
+
+// Confere que as AN mensagens sobreviveram ao restart do BROKER, na ordem, e
+// que nao veio nada a mais.
+procedure DurableVerify(const AParams: TAMQPConnectionParams; AN: Integer);
+var
+  LConn: TAMQPConnection;
+  LChan: TAMQPChannel;
+  LGet: TAMQPGetResult;
+  I: Integer;
+begin
+  WriteLn('[durable-verify] esperando ', AN, ' de volta em ', FILA_DURAVEL);
+  LConn := TAMQPConnection.Create(AParams);
+  try
+    LConn.Open;
+    LChan := LConn.CreateChannel;
+    for I := 1 to AN do
+    begin
+      LGet := LChan.BasicGet(FILA_DURAVEL, True);
+      Check(LGet.Found, Format('mensagem %d sobreviveu ao restart', [I]));
+      Check(LGet.BodyAsText = IntToStr(I),
+        Format('mensagem %d na ordem e integra (veio "%s")',
+          [I, LGet.BodyAsText]));
+      // A D27 em uma linha, vista pelo CLIENTE: toda entrada recuperada volta
+      // marcada como reentregue. Persistir o flag seria precisao falsa --
+      // depois de uma queda o broker nao sabe se alguem chegou a ver.
+      Check(LGet.Redelivered, Format('mensagem %d veio redelivered', [I]));
+    end;
+    LGet := LChan.BasicGet(FILA_DURAVEL, True);
+    Check(not LGet.Found, 'e nada a mais voltou');
+    LConn.Close;
+  finally
+    LConn.Free;
+  end;
+end;
+
 var
   LConn: TAMQPConnection;
   LChan: TAMQPChannel;
@@ -377,6 +470,38 @@ var
 begin
   ExitCode := 1;
   LSmoke := nil;
+  // Os modos duraveis SUBSTITUEM os 9 passos: eles sao metade de um teste que
+  // so' faz sentido com um restart de broker no meio.
+  if ArgNumerico('--durable-publish') >= 0 then
+  begin
+    try
+      DurablePublish(SmokeParams, ArgNumerico('--durable-publish'));
+      WriteLn('DURABLE PUBLISH: OK');
+      ExitCode := 0;
+    except
+      on E: Exception do
+      begin
+        WriteLn('DURABLE PUBLISH: FAIL - ', E.ClassName, ': ', E.Message);
+        ExitCode := 1;
+      end;
+    end;
+    Exit;
+  end;
+  if ArgNumerico('--durable-verify') >= 0 then
+  begin
+    try
+      DurableVerify(SmokeParams, ArgNumerico('--durable-verify'));
+      WriteLn('DURABLE VERIFY: OK');
+      ExitCode := 0;
+    except
+      on E: Exception do
+      begin
+        WriteLn('DURABLE VERIFY: FAIL - ', E.ClassName, ': ', E.Message);
+        ExitCode := 1;
+      end;
+    end;
+    Exit;
+  end;
   LConn := TAMQPConnection.Create(SmokeParams);
   try
     try
