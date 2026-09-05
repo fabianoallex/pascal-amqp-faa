@@ -1,0 +1,621 @@
+﻿unit AMQP.ServerRecoveryTests;
+
+{ Replay do WAL -- WS6 da Fase 4 (durabilidade, ver CLAUDE.md, D19-D28).
+
+  A pergunta que estes testes fazem e' uma so': DADO ESTE LOG, QUAL E' O
+  ESTADO? Nenhum deles sobe broker, socket ou thread -- o log e' escrito aqui
+  mesmo, registro a registro, e lido de volta. E' o que permite prender a
+  semantica do replay em vez de so' constatar que "recuperou alguma coisa".
+
+  O QUE PRECISA SER PROVADO, E POR QUE NAO E' OBVIO
+
+  1. Apagar uma fila apaga o que PENDIA nela. Uma implementacao que so tirasse
+     a fila da lista passaria em qualquer teste de topologia -- e ressuscitaria
+     mensagem de fila que nao existe mais.
+
+  2. Apagar um exchange leva os bindings dos DOIS lados. Um exchange pode ser
+     origem de uns e destino de outros (D5): olhar so' o Source deixa binding
+     orfao apontando para o que sumiu.
+
+  3. A ordem das colocacoes e' a ordem do LOG. E' o que faz a D27 sair de
+     graca: o balde de prioridade esta' dentro do ENQ, entao reenfileirar na
+     ordem de leitura poe cada mensagem onde o RequeueFront da D12 a poria.
+
+  4. UM conteudo para N colocacoes (D22), e conteudo que ninguem referencia e'
+     SOLTADO. Sem isso a recuperacao carregaria na memoria o corpo de toda
+     mensagem que o broker ja' viu na vida -- o log e' append-only.
+
+  5. O maior id visto sobrevive. Se o contador da engine recomecasse do zero,
+     uma colocacao nova colidiria com uma recuperada, e o DEQ de uma
+     aposentaria a outra. Silencioso e fatal.
+
+  6. Cauda torta replica o PREFIXO (D23). E' o caso NORMAL depois de uma queda,
+     nao um erro.
+
+  As tres funcoes Checa* existem para os corpos dos testes serem IDENTICOS nos
+  dois dialetos: so' a implementacao delas muda de lado.
+
+  Espelho de tests\Server\fpc\AMQP.ServerRecoveryTests.pas -- mantenha os dois em sincronia. }
+
+interface
+
+uses
+  DUnitX.TestFramework,
+  System.SysUtils,
+  System.Classes,
+  System.IOUtils,
+  AMQP.Wire,
+  AMQP.Server.Wal,
+  AMQP.Server.Journal,
+  AMQP.Server.Records,
+  AMQP.Server.Recovery;
+
+type
+  { Escreve um WAL a mao e le de volta. }
+  [TestFixture]
+  TRecoveryReplayTests = class
+  private
+    FDir: string;
+    FJournal: TAMQPJournal;
+    /// Grava UM registro e devolve o LSN.
+    function Grava(AKind: Byte; const APayload: TBytes): UInt64;
+    procedure DeclaraExchange(const ANome, ATipo: string);
+    procedure DeclaraFila(const ANome: string; AAutoDelete: Boolean = False);
+    procedure Liga(const AExchange, AFila, ARk: string);
+    procedure Desliga(const AExchange, AFila, ARk: string);
+    procedure LigaExchanges(const AOrigem, ADestino, ARk: string);
+    procedure ApagaFila(const ANome: string);
+    procedure ApagaExchange(const ANome: string);
+    procedure Conteudo(AId: UInt64; const ACorpo: string);
+    procedure Coloca(AId, AConteudo: UInt64; const AFila: string;
+      APrioridade: Byte = 0);
+    procedure Aposenta(AId: UInt64; const AFila: string);
+    /// Fecha o journal (o log fica no disco) e replica.
+    function Replica: TAMQPRecoveredState;
+  public
+    [Setup]    procedure SetUp;
+    [TearDown] procedure TearDown;
+    [Test] procedure LogVazio_EstadoVazio;
+    [Test] procedure TopologiaDuravel_Sobrevive;
+    [Test] procedure Redeclare_OUltimoVale;
+    [Test] procedure Unbind_TiraOBinding;
+    [Test] procedure ApagarFila_LevaBindingsEColocacoes;
+    [Test] procedure ApagarExchange_LevaBindingsDosDoisLados;
+    [Test] procedure EnqSemDeq_FicaVivo;
+    [Test] procedure EnqComDeq_Some;
+    [Test] procedure OrdemDasColocacoes_EAOrdemDoLog;
+    [Test] procedure UmConteudoDuasColocacoes;
+    [Test] procedure ConteudoSemColocacaoViva_ESoltado;
+    [Test] procedure MaxId_EOMaiorVisto;
+    [Test] procedure PrazoEPrioridade_ChegamIntactos;
+    [Test] procedure CaudaTorta_ReplicaOPrefixo;
+  end;
+
+implementation
+
+var
+  GRecSeq: Integer = 0;
+
+procedure LimpaDirRec(const ADir: string);
+var
+  LRec: TSearchRec;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, LRec) = 0 then
+  begin
+    try
+      repeat
+        if (LRec.Attr and faDirectory) = 0 then
+          SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+      until FindNext(LRec) <> 0;
+    finally
+      SysUtils.FindClose(LRec);
+    end;
+  end;
+end;
+
+// As pontes para as assercoes do dialeto -- ver o cabecalho.
+procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+begin
+  Assert.AreEqual(AEsperado, AObtido, AMsg);
+end;
+
+procedure ChecaStr(const AMsg, AEsperado, AObtido: string);
+begin
+  Assert.AreEqual(AEsperado, AObtido, AMsg);
+end;
+
+procedure ChecaOk(const AMsg: string; ACond: Boolean);
+begin
+  Assert.IsTrue(ACond, AMsg);
+end;
+
+procedure ChecaNao(const AMsg: string; ACond: Boolean);
+begin
+  Assert.IsFalse(ACond, AMsg);
+end;
+
+function TRecoveryReplayTests.Grava(AKind: Byte;
+  const APayload: TBytes): UInt64;
+var
+  LRecs: TAMQPJournalRecords;
+begin
+  SetLength(LRecs, 1);
+  LRecs[0].Kind := AKind;
+  LRecs[0].Payload := APayload;
+  Result := FJournal.Submit(LRecs);
+end;
+
+procedure TRecoveryReplayTests.DeclaraExchange(const ANome, ATipo: string);
+var
+  LEx: TAMQPRecExchange;
+begin
+  LEx.VHost := '/';
+  LEx.Name := ANome;
+  LEx.ExchangeType := ATipo;
+  LEx.Durable := True;
+  LEx.AutoDelete := False;
+  LEx.Internal := False;
+  LEx.Arguments := nil;
+  Grava(AMQP_REC_EXCHANGE_DECLARE, AmqpEncodeRecExchange(LEx));
+end;
+
+procedure TRecoveryReplayTests.DeclaraFila(const ANome: string;
+  AAutoDelete: Boolean);
+var
+  LQ: TAMQPRecQueue;
+begin
+  LQ.VHost := '/';
+  LQ.Name := ANome;
+  LQ.Durable := True;
+  LQ.AutoDelete := AAutoDelete;
+  LQ.Arguments := nil;
+  Grava(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LQ));
+end;
+
+procedure TRecoveryReplayTests.Liga(const AExchange, AFila, ARk: string);
+var
+  LB: TAMQPRecBinding;
+begin
+  LB.VHost := '/';
+  LB.Source := AExchange;
+  LB.Destination := AFila;
+  LB.RoutingKey := ARk;
+  LB.Arguments := nil;
+  Grava(AMQP_REC_QUEUE_BIND, AmqpEncodeRecBinding(LB));
+end;
+
+procedure TRecoveryReplayTests.Desliga(const AExchange, AFila, ARk: string);
+var
+  LB: TAMQPRecBinding;
+begin
+  LB.VHost := '/';
+  LB.Source := AExchange;
+  LB.Destination := AFila;
+  LB.RoutingKey := ARk;
+  LB.Arguments := nil;
+  Grava(AMQP_REC_QUEUE_UNBIND, AmqpEncodeRecBinding(LB));
+end;
+
+procedure TRecoveryReplayTests.LigaExchanges(const AOrigem, ADestino,
+  ARk: string);
+var
+  LB: TAMQPRecBinding;
+begin
+  LB.VHost := '/';
+  LB.Source := AOrigem;
+  LB.Destination := ADestino;
+  LB.RoutingKey := ARk;
+  LB.Arguments := nil;
+  Grava(AMQP_REC_EXCHANGE_BIND, AmqpEncodeRecBinding(LB));
+end;
+
+procedure TRecoveryReplayTests.ApagaFila(const ANome: string);
+var
+  LN: TAMQPRecName;
+begin
+  LN.VHost := '/';
+  LN.Name := ANome;
+  Grava(AMQP_REC_QUEUE_DELETE, AmqpEncodeRecName(LN));
+end;
+
+procedure TRecoveryReplayTests.ApagaExchange(const ANome: string);
+var
+  LN: TAMQPRecName;
+begin
+  LN.VHost := '/';
+  LN.Name := ANome;
+  Grava(AMQP_REC_EXCHANGE_DELETE, AmqpEncodeRecName(LN));
+end;
+
+procedure TRecoveryReplayTests.Conteudo(AId: UInt64; const ACorpo: string);
+var
+  LC: TAMQPRecContent;
+begin
+  LC.ContentId := AId;
+  LC.UserId := 'guest';
+  LC.Body := AmqpUtf8Encode(ACorpo);
+  Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(LC));
+end;
+
+procedure TRecoveryReplayTests.Coloca(AId, AConteudo: UInt64;
+  const AFila: string; APrioridade: Byte);
+var
+  LE: TAMQPRecEnqueue;
+begin
+  LE.VHost := '/';
+  LE.Queue := AFila;
+  LE.EntryId := AId;
+  LE.ContentId := AConteudo;
+  LE.Exchange := '';
+  LE.RoutingKey := AFila;
+  LE.Priority := APrioridade;
+  LE.EnqueuedAtWall := 1700000000000;
+  LE.TtlMs := -1;
+  LE.HeaderPayload := nil;
+  Grava(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LE));
+end;
+
+procedure TRecoveryReplayTests.Aposenta(AId: UInt64; const AFila: string);
+var
+  LD: TAMQPRecDequeue;
+begin
+  LD.VHost := '/';
+  LD.Queue := AFila;
+  LD.EntryId := AId;
+  Grava(AMQP_REC_DEQUEUE, AmqpEncodeRecDequeue(LD));
+end;
+
+function TRecoveryReplayTests.Replica: TAMQPRecoveredState;
+begin
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+  Result := AmqpReplayWal(FDir);
+end;
+
+procedure TRecoveryReplayTests.SetUp;
+begin
+  Inc(GRecSeq);
+  FDir := IncludeTrailingPathDelimiter(GetTempDir) + 'amqprec-'
+    + IntToStr(GRecSeq);
+  ForceDirectories(FDir);
+  LimpaDirRec(FDir);
+  FJournal := TAMQPJournal.Create(FDir);
+  FJournal.Start;
+end;
+
+procedure TRecoveryReplayTests.TearDown;
+begin
+  if FJournal <> nil then
+  begin
+    try
+      FJournal.Stop;
+    except
+    end;
+    FreeAndNil(FJournal);
+  end;
+  LimpaDirRec(FDir);
+end;
+
+procedure TRecoveryReplayTests.LogVazio_EstadoVazio;
+var
+  E: TAMQPRecoveredState;
+begin
+  E := Replica;
+  try
+    ChecaInt('sem exchange', 0, E.Exchanges.Count);
+    ChecaInt('sem fila', 0, E.Queues.Count);
+    ChecaInt('sem colocacao', 0, E.Entries.Count);
+    ChecaInt('maior id', 0, Integer(E.MaxId));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.TopologiaDuravel_Sobrevive;
+var
+  E: TAMQPRecoveredState;
+begin
+  DeclaraExchange('ex.a', 'direct');
+  DeclaraFila('q.a');
+  Liga('ex.a', 'q.a', 'rk');
+  E := Replica;
+  try
+    ChecaInt('um exchange', 1, E.Exchanges.Count);
+    ChecaStr('nome do exchange', 'ex.a', E.Exchanges[0].Name);
+    ChecaStr('tipo do exchange', 'direct', E.Exchanges[0].ExchangeType);
+    ChecaInt('uma fila', 1, E.Queues.Count);
+    ChecaStr('nome da fila', 'q.a', E.Queues[0].Name);
+    ChecaInt('um binding', 1, E.Bindings.Count);
+    ChecaStr('routing key', 'rk', E.Bindings[0].Binding.RoutingKey);
+    ChecaNao('e o destino e uma FILA', E.Bindings[0].ParaExchange);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Redeclare_OUltimoVale;
+var
+  E: TAMQPRecoveredState;
+begin
+  // Redeclarar nao duplica: o log e' de operacoes, o estado e' o final.
+  DeclaraFila('q.a');
+  DeclaraFila('q.a', True);
+  E := Replica;
+  try
+    ChecaInt('uma fila, nao duas', 1, E.Queues.Count);
+    ChecaOk('e com o auto-delete do ULTIMO declare', E.Queues[0].AutoDelete);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.Unbind_TiraOBinding;
+var
+  E: TAMQPRecoveredState;
+begin
+  DeclaraExchange('ex.a', 'direct');
+  DeclaraFila('q.a');
+  Liga('ex.a', 'q.a', 'rk');
+  Desliga('ex.a', 'q.a', 'rk');
+  E := Replica;
+  try
+    ChecaInt('nenhum binding', 0, E.Bindings.Count);
+    ChecaInt('mas a fila fica', 1, E.Queues.Count);
+    ChecaInt('e o exchange tambem', 1, E.Exchanges.Count);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.ApagarFila_LevaBindingsEColocacoes;
+var
+  E: TAMQPRecoveredState;
+begin
+  // O teste que uma implementacao ingenua NAO passa: tirar a fila da lista e
+  // esquecer o resto ressuscitaria mensagem de fila que nao existe mais.
+  DeclaraExchange('ex.a', 'direct');
+  DeclaraFila('q.a');
+  DeclaraFila('q.b');
+  Liga('ex.a', 'q.a', 'rk');
+  Liga('ex.a', 'q.b', 'rk');
+  Conteudo(1, 'corpo');
+  Coloca(2, 1, 'q.a');
+  Coloca(3, 1, 'q.b');
+  ApagaFila('q.a');
+  E := Replica;
+  try
+    ChecaInt('sobrou uma fila', 1, E.Queues.Count);
+    ChecaStr('a que nao foi apagada', 'q.b', E.Queues[0].Name);
+    ChecaInt('sobrou um binding', 1, E.Bindings.Count);
+    ChecaStr('o da fila viva', 'q.b', E.Bindings[0].Binding.Destination);
+    ChecaInt('e uma colocacao so', 1, E.Entries.Count);
+    ChecaStr('a da fila viva', 'q.b', E.Entries[0].Queue);
+    ChecaInt('a outra contou como orfa de fila', 1, E.Stats.OrfasDeFila);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.ApagarExchange_LevaBindingsDosDoisLados;
+var
+  E: TAMQPRecoveredState;
+begin
+  // O exchange do meio e' DESTINO de um binding e ORIGEM de outro (D5).
+  // Olhar so' o Source deixaria o primeiro orfao apontando para o que sumiu.
+  DeclaraExchange('ex.orig', 'fanout');
+  DeclaraExchange('ex.meio', 'fanout');
+  DeclaraFila('q.a');
+  LigaExchanges('ex.orig', 'ex.meio', '');
+  Liga('ex.meio', 'q.a', '');
+  ApagaExchange('ex.meio');
+  E := Replica;
+  try
+    ChecaInt('sobrou um exchange', 1, E.Exchanges.Count);
+    ChecaStr('o de origem', 'ex.orig', E.Exchanges[0].Name);
+    ChecaInt('e NENHUM binding: os dois tocavam o que sumiu', 0,
+      E.Bindings.Count);
+    ChecaInt('a fila continua de pe', 1, E.Queues.Count);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.EnqSemDeq_FicaVivo;
+var
+  E: TAMQPRecoveredState;
+begin
+  // A D27 em uma linha: a ENTREGA nao e' journalada, entao uma mensagem
+  // entregue e nao confirmada continua sendo um ENQ vivo e volta pronta.
+  DeclaraFila('q.a');
+  Conteudo(1, 'corpo');
+  Coloca(2, 1, 'q.a');
+  E := Replica;
+  try
+    ChecaInt('uma colocacao viva', 1, E.Entries.Count);
+    ChecaInt('nas contagens tambem', 1, E.Stats.Vivas);
+    ChecaInt('nada aposentado', 0, E.Stats.Aposentadas);
+    ChecaStr('o corpo veio junto', 'corpo',
+      AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.EnqComDeq_Some;
+var
+  E: TAMQPRecoveredState;
+begin
+  DeclaraFila('q.a');
+  Conteudo(1, 'corpo');
+  Coloca(2, 1, 'q.a');
+  Aposenta(2, 'q.a');
+  E := Replica;
+  try
+    ChecaInt('nada vivo', 0, E.Entries.Count);
+    ChecaInt('uma aposentadoria', 1, E.Stats.Aposentadas);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.OrdemDasColocacoes_EAOrdemDoLog;
+var
+  E: TAMQPRecoveredState;
+begin
+  // A ordem do log E' a ordem de enfileiramento, e o balde de prioridade esta'
+  // dentro do ENQ -- e' o que faz a D27 nao precisar de registro nenhum extra.
+  DeclaraFila('q.a');
+  Conteudo(1, 'a');
+  Coloca(2, 1, 'q.a');
+  Conteudo(3, 'b');
+  Coloca(4, 3, 'q.a');
+  Conteudo(5, 'c');
+  Coloca(6, 5, 'q.a');
+  Aposenta(4, 'q.a'); // a do meio sai
+  E := Replica;
+  try
+    ChecaInt('duas vivas', 2, E.Entries.Count);
+    ChecaStr('1a: a mais antiga', 'a',
+      AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
+    ChecaStr('2a: a mais nova', 'c',
+      AmqpUtf8Decode(E.Contents[E.Entries[1].ContentId].Body));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.UmConteudoDuasColocacoes;
+var
+  E: TAMQPRecoveredState;
+begin
+  // O pagamento da D22, do lado da leitura: um fan-out para N filas tem UM
+  // corpo no arquivo e N colocacoes apontando para ele.
+  DeclaraFila('q.a');
+  DeclaraFila('q.b');
+  Conteudo(1, 'corpo');
+  Coloca(2, 1, 'q.a');
+  Coloca(3, 1, 'q.b');
+  E := Replica;
+  try
+    ChecaInt('duas colocacoes', 2, E.Entries.Count);
+    ChecaInt('um conteudo so', 1, E.Contents.Count);
+    ChecaOk('e as duas apontam para ele',
+      (E.Entries[0].ContentId = 1) and (E.Entries[1].ContentId = 1));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.ConteudoSemColocacaoViva_ESoltado;
+var
+  E: TAMQPRecoveredState;
+begin
+  // Sem isto a recuperacao carregaria na memoria o corpo de TODA mensagem que
+  // o broker ja' viu na vida -- o log e' append-only, os corpos ficam la'.
+  DeclaraFila('q.a');
+  Conteudo(1, 'consumida');
+  Coloca(2, 1, 'q.a');
+  Aposenta(2, 'q.a');
+  Conteudo(3, 'viva');
+  Coloca(4, 3, 'q.a');
+  E := Replica;
+  try
+    ChecaInt('uma colocacao viva', 1, E.Entries.Count);
+    ChecaInt('e UM conteudo, nao dois', 1, E.Contents.Count);
+    ChecaOk('o que ficou e o da viva', E.Contents.ContainsKey(3));
+    ChecaNao('o da consumida foi solto', E.Contents.ContainsKey(1));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.MaxId_EOMaiorVisto;
+var
+  E: TAMQPRecoveredState;
+begin
+  // Se o contador da engine recomecasse do zero, uma colocacao nova colidiria
+  // com uma recuperada, e o DEQ de uma aposentaria a outra. Silencioso e fatal.
+  DeclaraFila('q.a');
+  Conteudo(7, 'x');
+  Coloca(9, 7, 'q.a');
+  Aposenta(9, 'q.a'); // aposentada, mas o id JA' FOI USADO
+  // O maior id pode estar num CONTENT e nao num ENQ -- os dois saem do MESMO
+  // contador da engine. Olhar so' as colocacoes deixaria este passar.
+  Conteudo(20, 'y');
+  Coloca(12, 20, 'q.a');
+  E := Replica;
+  try
+    ChecaInt('uma viva', 1, E.Entries.Count);
+    ChecaInt('e o maior id e o do CONTENT, nao o da colocacao', 20,
+      Integer(E.MaxId));
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.PrazoEPrioridade_ChegamIntactos;
+var
+  E: TAMQPRecoveredState;
+begin
+  // A D21: o replay NAO decide prazo. Ele entrega o instante de parede e o TTL
+  // como estao, e quem tem a fila viva na mao recompoe o monotonico.
+  DeclaraFila('q.a');
+  Conteudo(1, 'x');
+  Coloca(2, 1, 'q.a', 5);
+  E := Replica;
+  try
+    ChecaInt('a prioridade veio', 5, Integer(E.Entries[0].Priority));
+    ChecaOk('e o instante de parede tambem',
+      E.Entries[0].EnqueuedAtWall = 1700000000000);
+  finally
+    E.Free;
+  end;
+end;
+
+procedure TRecoveryReplayTests.CaudaTorta_ReplicaOPrefixo;
+var
+  E: TAMQPRecoveredState;
+  LArq: string;
+  LStream: TFileStream;
+  LSegs: TArray<Cardinal>;
+begin
+  // O caso NORMAL depois de uma queda, nao um erro (D23). O prefixo valido
+  // e' exatamente o que a recuperacao replica.
+  DeclaraFila('q.a');
+  Conteudo(1, 'a');
+  Coloca(2, 1, 'q.a');
+  Conteudo(3, 'b');
+  Coloca(4, 3, 'q.a');
+  FJournal.Stop;
+  FreeAndNil(FJournal);
+
+  // Corta os ultimos bytes: o registro final fica pela metade. O NUMERO do
+  // segmento vem da listagem, e nao de um literal: o journal comeca no 1, e
+  // adivinhar o nome faria o teste falhar por motivo errado.
+  LSegs := AmqpWalListSegments(FDir);
+  ChecaInt('um segmento', 1, Length(LSegs));
+  LArq := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[0]);
+  LStream := TFileStream.Create(LArq, fmOpenReadWrite or fmShareDenyNone);
+  try
+    LStream.Size := LStream.Size - 12;
+  finally
+    LStream.Free;
+  end;
+
+  E := AmqpReplayWal(FDir);
+  try
+    ChecaNao('a leitura NAO chegou ao fim inteira', E.Stats.Parada = awsFim);
+    ChecaInt('a fila do prefixo sobreviveu', 1, E.Queues.Count);
+    // A ultima colocacao caiu junto com a cauda; a primeira continua la'.
+    ChecaInt('uma colocacao viva', 1, E.Entries.Count);
+    ChecaStr('a do prefixo', 'a',
+      AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
+  finally
+    E.Free;
+  end;
+end;
+
+initialization
+  TDUnitX.RegisterTestFixture(TRecoveryReplayTests);
+
+end.

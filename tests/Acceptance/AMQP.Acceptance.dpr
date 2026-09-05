@@ -51,6 +51,7 @@ uses
   AMQP.Server.Journal in '..\..\src\server\AMQP.Server.Journal.pas',
   AMQP.Server.Records in '..\..\src\server\AMQP.Server.Records.pas',
   AMQP.Server.Confirm in '..\..\src\server\AMQP.Server.Confirm.pas',
+  AMQP.Server.Recovery in '..\..\src\server\AMQP.Server.Recovery.pas',
   AMQP.HandshakeIntegrationTests in '..\Integration\AMQP.HandshakeIntegrationTests.pas',
   AMQP.IntegrationConfig in '..\Integration\AMQP.IntegrationConfig.pas',
   AMQP.ChannelIntegrationTests in '..\Integration\AMQP.ChannelIntegrationTests.pas',

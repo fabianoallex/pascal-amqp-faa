@@ -154,6 +154,7 @@
         <DCCReference Include="..\..\src\server\AMQP.Server.Journal.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Records.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Confirm.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Recovery.pas"/>
         <DCCReference Include="AMQP.ServerSkeletonTests.pas"/>
         <DCCReference Include="AMQP.ServerHandshakeTests.pas"/>
         <DCCReference Include="AMQP.ServerEngineTests.pas"/>
@@ -167,6 +168,7 @@
         <DCCReference Include="AMQP.ServerTopologyTests.pas"/>
         <DCCReference Include="AMQP.ServerPersistTests.pas"/>
         <DCCReference Include="AMQP.ServerConfirmTests.pas"/>
+        <DCCReference Include="AMQP.ServerRecoveryTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

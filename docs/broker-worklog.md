@@ -575,6 +575,22 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **Custaram duas rodadas pela IDE, e as duas por defeitos da WS4** — nenhum deles alcançável pelo FPC: a asserção no dialeto errado e o `[Setup]` invisível ao RTTI. As duas viraram checagem do `verifica_espelhos.py`, que foi de três para cinco. É a lição de sempre desta codebase, na sua forma mais nítida até agora: **verde num compilador não é evidência sobre o outro** — e quando o defeito é estrutural, a correção certa inclui ensinar o verificador a pegá-lo.
 
+- **WS6, primeira metade: o replay.** `AMQP.Server.Recovery` **não fala com a engine**. Ela lê os segmentos em ordem de LSN e responde uma pergunta só: *dado este log, qual é o estado?* A separação é deliberada — a parte difícil da recuperação é a **semântica**, e assim ela é testável sem subir socket, thread ou broker, com o log escrito à mão registro a registro. Quem aplica o estado a um broker vivo é a segunda metade.
+
+  **O log é de operações; o estado é o final.** Um `QUEUE_DECLARE` seguido de `QUEUE_DELETE` não deixa fila — e não deixa **binding** nenhum nem **colocação** nenhuma daquela fila. Uma implementação que só tirasse a fila da lista passaria em qualquer teste de topologia e **ressuscitaria mensagem de fila que não existe mais**. O mesmo vale para exchange, com um agravante: um exchange pode ser origem de uns bindings e **destino** de outros (D5), então olhar só o `Source` deixa binding órfão apontando para o que sumiu.
+
+  **Três propriedades saem de graça, e é bom saber por quê.** (1) A colocação viva é a que tem ENQ e não tem DEQ — e como a *entrega* não é journalada, uma mensagem entregue e não confirmada continua viva e volta pronta: é a D27 inteira, sem registro nenhum a mais. (2) A ordem das colocações é a ordem do log, e o balde de prioridade está dentro do ENQ — então reenfileirar na ordem de leitura põe cada mensagem exatamente onde o `RequeueFront` da D12 a poria. (3) O corpo vem uma vez só (D22), e o dead-letter só acrescenta colocação.
+
+  **Duas coisas que precisaram de decisão, e não caíram de graça.** O **conteúdo que nenhuma colocação viva referencia é soltado** — sem isso a recuperação carregaria na memória o corpo de toda mensagem que o broker já viu na vida, porque o log é append-only e os corpos ficam lá. E o **maior id visto sobrevive**: `EntryId` e `ContentId` saem do mesmo contador da engine, e se ele recomeçasse do zero uma colocação nova colidiria com uma recuperada — o DEQ de uma aposentaria a outra. Silencioso e fatal.
+
+  **O que o replay NÃO faz: não decide prazo.** O ENQ carrega o instante de parede e o TTL (D21), e os dois passam intactos — converter para o monotônico é trabalho de quem tem a fila viva na mão.
+
+  **Mutação, sete mutantes, todos mortos pelo teste certo:** fila apagada não leva as colocações; nem os bindings; exchange apagado olha só o `Source`; DEQ não aposenta; `MaxId` ignora o `CONTENT`; sem poda de conteúdo; redeclare duplica. O do `MaxId` só morre porque o teste tem um `CONTENT` com id **maior** que o da colocação — a primeira versão usava ids em ordem natural e o mutante sobrevivia.
+
+  **Estado:** server **392 → 406** (Default), `0 unfreed memory blocks`; `verifica_espelhos.py` limpo nas cinco checagens; compila no Linux.
+
+  **O que falta para fechar a WS6:** aplicar o estado ao broker dentro do `Start`, antes de o socket de escuta abrir — declarar a topologia com o journal **mudo** (senão cada restart reescreveria o log inteiro), reenfileirar as colocações com o prazo recomposto pela D21, e continuar o contador de ids depois do `MaxId`.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
