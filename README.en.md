@@ -37,6 +37,7 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 - **Per-queue ceilings**: `x-max-length` and `x-max-length-bytes`, with `x-overflow` set to `drop-head` (drops the oldest) or `reject-publish` (refuses the publish, which comes back as `Basic.Nack` in confirm mode).
 - **`alternate-exchange`**: whatever matches no binding goes down to the AE before becoming a `Basic.Return`.
 - **`x-expires`**: a queue unused for the period is collected (use = consumer, `Basic.Get` or redeclare; publishing does not count).
+- **Durability** (opt-in through `DataDir`): append-only WAL with batched fsync, durable topology and persistent messages surviving a restart, confirms held back by the durability watermark, and log compaction. See [Durability](#durability-opt-in).
 - **Server-side TLS** through OpenSSL (`-dAMQP_OPENSSL`), on a dedicated 5671-style port.
 - **Separate package** (`pascal_amqp_faa_server`): client-only users link nothing from the server.
 
@@ -259,6 +260,8 @@ declare topology, publish and consume. Useful configuration:
 | `VirtualHosts` | vhosts accepted on `Connection.Open` (default: only `/`) |
 | `ChannelMax` / `FrameMax` / `Heartbeat` | limits proposed in `Connection.Tune` (defaults match RabbitMQ's) |
 | `MaxQueueLength` | cap of ready messages **per queue** (0 = unlimited). On overflow it drops from the head — the broker runs inside your app, and a queue with no consumer must not take the host process down |
+| `DataDir` | WAL directory. **Empty (default) = no durability**; set = durable topology and persistent messages survive a restart. See [Durability](#durability-opt-in) |
+| `MaxJournalBytes` | WAL cap in bytes (0 = unlimited). On overflow the **persistent** publish gets a `Basic.Nack` — a memory cap discards, a disk cap **refuses** |
 | `UseTls` + `TlsCertFile` / `TlsKeyFile` | encrypted port (only with `-dAMQP_OPENSSL`; see below) |
 
 **Building with the broker.** It is a separate package that depends on the client package:
@@ -270,20 +273,76 @@ lazbuild packages\pascal_amqp_faa_server.lpk
 With plain FPC, add `-Fusrc\server` to what you already use for the client. In Delphi,
 add `src\server\` to the search path.
 
+### Durability (opt-in)
+
+**Without `DataDir` the broker is entirely in memory** — that is the default, and the mode
+in which `durable` and `delivery-mode 2` are still accepted and ignored. Nobody gets a file
+on disk just for calling `Start`.
+
+With `DataDir` set, the broker keeps an **append-only WAL** and the classic rule of three
+applies: a message goes to disk when it has **`delivery-mode = 2`**, is published into a
+**`durable`** queue, on a broker with a **`DataDir`**. Miss any one of the three and the
+path is the usual one — a non-durable queue never touches the journal.
+
+```pascal
+LBroker := TAMQPServer.Create;
+LBroker.Port := 5672;
+LBroker.DataDir := 'C:\data\mybroker';            // <- turns durability on
+LBroker.MaxJournalBytes := 2 * 1024 * 1024 * 1024;  // optional: 2 GB cap
+LBroker.Start;
+```
+
+**What survives a restart:** exchanges, queues and bindings declared durable; and the
+persistent messages that were sitting in durable queues, **in the same order and the same
+priority bucket**, with the TTL deadline reduced by the time the broker was down. A message
+that was delivered and **not yet acked** comes back **ready for delivery** and flagged
+`redelivered` — the broker does not persist consumer state, and after a crash it could not
+know whether anyone ever saw the message.
+
+**Confirms become asynchronous.** With durability on, a persistent publish's `Basic.Ack`
+only goes out after the record is on disk, and several confirms are collapsed into a single
+`Basic.Ack(seq, multiple=true)`. Per-channel order is preserved: a transient publish behind
+a pending persistent one waits and goes out with it. For the client nothing changes but the
+timing — `WaitForConfirm`/`WaitForConfirms` work the same.
+
+**Log growth has two defences.** The log is split into segments and is **compacted on every
+`Start`**: before the listening socket opens, the broker rewrites only what is still live
+and deletes the rest. And, with `MaxJournalBytes`, once the cap is hit the persistent
+publish is **refused** with a `Basic.Nack` rather than discarded — discarding on disk would
+erase data the broker has already confirmed as durable.
+
+**There is no in-flight compaction**, and the reason is worth knowing: a record's LSN is
+assigned when the publish submits it, and compaction assigns fresh LSNs to the records it
+rewrites — a publish that took its LSN earlier and was still queued would be written
+afterwards with a smaller number, breaking the ordering the log requires. Compacting with
+the broker live would mean suspending that assignment, which collides with the rule that
+the queue actor never waits. In practice: **a broker that restarts periodically keeps its
+log pruned; one that never restarts relies on `MaxJournalBytes`.**
+
+> **What "durable" means here, with no euphemism.** **Killing the process does not test
+> fsync.** The OS cache survives the death of the process; only the *machine* going down
+> loses it. What this implementation claims, and tests, is narrower and verifiable:
+> **correct recovery from any truncation point of the log** (an exhaustive, deterministic
+> sweep) and **fsync demonstrably called at the batch boundary** (a file double that counts
+> the calls and fails at a chosen instant). There is also a process-kill matrix
+> (`tests/tools/matriz_de_queda.py`) and a SmokeTest restart step, and both carry the same
+> caveat: they prove the written log is enough to rebuild the state — not that the disk
+> received the bytes.
+
 ### What the broker does not do yet
 
-Everything lives in memory — **there is no persistence**. `durable` and `delivery-mode 2`
-are accepted and **ignored**: rejecting them would break clients that always declare
-durable, but nothing survives the end of the process.
-
-TTL, dead-lettering, priority, per-queue ceilings, alternate exchange and `x-expires`
-**do work** — which makes it easier to assume durability works too. It does not: restart
-the process and both topology and messages are gone.
+**There is no paging to disk** ("lazy queues"): durability is not paging, and the queue
+still lives entirely in memory — `MaxQueueLength` remains the host process's defence. There
+is also no `Connection.Blocked`/memory or disk alarms, and no persistence of `exclusive`
+queues (they die with the owning connection, by definition).
 
 The acceptance suite runs the client's integration suite against the embedded broker, and
-today **all 28 tests pass with nothing skipped for a missing feature** (the `SmokeTest`
-runs the same 9 steps against RabbitMQ and against the embedded broker, TTL+DLX and
-priority included).
+today **all 28 tests pass with nothing skipped for a missing feature** — and they pass
+**twice**, with and without `DataDir`, because turning durability on must not change the
+semantics the client sees. The `SmokeTest` runs the same 9 steps against RabbitMQ and
+against the embedded broker, and has an extra **restart** step: it publishes persistent
+messages, the broker is killed, another one comes up on the same directory, and the client
+checks the messages are there.
 
 Out of scope by decision, in any version: clustering, HTTP management API,
 federation/shovel, AMQP 1.0, STOMP/MQTT, quorum queues and streams.
@@ -298,6 +357,9 @@ Documented on purpose — these are not bugs:
 - **An unknown exchange type is a channel-level `406`**, not a connection-level `503` as in
   RabbitMQ — a bad declare need not take the connection down with it.
 - **`Basic.Recover` only with `requeue=true`**; with `false`, `540`.
+- **A disk cap refuses; a memory cap discards.** `MaxQueueLength` drops from the head on
+  overflow; `MaxJournalBytes` **refuses the publish** with a `Basic.Nack`. Discarding on
+  disk would erase data already confirmed as durable.
 - **`x-max-priority` goes up to 9**, not 255. Above that it is a `406` — an explicit
   refusal, not a silent clamp. RabbitMQ recommends ≤ 5; past 9 the per-queue memory cost
   (one ready-bucket per level) stops paying for itself.
@@ -530,7 +592,7 @@ The FPCUnit runner decides by itself via `ParamCount`: with no arguments it open
 - Publisher confirms + reconnection: publishes unconfirmed before the drop are reported as **not confirmed**; republishing on reconnection is **opt-in** (`RepublishUnconfirmedOnReconnect`, at-least-once) — without it, resend at your layer if you need an end-to-end guarantee. See [Publisher confirms in detail](#publisher-confirms-in-detail).
 - **Topology recovery with server-named queues** — see the section below.
 - TLS: server authentication only — no mTLS/client-cert, no manual version/cipher-suite selection (see [TLS (amqps)](#tls-amqps)).
-- **Embedded broker**: everything in memory (no persistence), no TTL/dead-lettering/priority/`x-max-length`, and no server-side TLS on the SChannel backend — see [What the broker does not do yet](#what-the-broker-does-not-do-yet).
+- **Embedded broker**: durability is **opt-in** through `DataDir` and covers neither paging to disk nor `exclusive` queues; no server-side TLS on the SChannel backend — see [Durability](#durability-opt-in) and [What the broker does not do yet](#what-the-broker-does-not-do-yet).
 
 ### Recovery of server-named queues
 
@@ -556,7 +618,7 @@ That way the queue is temporary with a **stable, known name**, and recovery work
 - ~~Linux validation~~ — done: x86_64 and ARM64, TLS/OpenSSL included, GUI samples validated on LCL/GTK2 (see the compatibility table).
 - ~~Embeddable broker — full protocol~~ and ~~in-memory routing engine~~ — done: handshake, channels, every client method answered with the correct `*-Ok`, server-side TLS, routing across the four exchange types, delivery with prefetch and ack, confirms, `mandatory`/`Return` and lifecycle (`exclusive`/`auto-delete`).
 - ~~Broker — message lifecycle~~ — done: `x-message-ttl` and `expiration`, dead-lettering with the full `x-death`, `x-max-priority`, `x-max-length`/`x-max-length-bytes`/`x-overflow`, `alternate-exchange` and `x-expires`.
-- **Broker — durability**: append-only WAL with batched fsync, recovery on start. It is what's missing for `durable` and `delivery-mode 2` to mean anything. Confirm's `Basic.Ack` then becomes asynchronous (emitted after the flush, as a prefix with `multiple=true`).
+- ~~Broker — durability~~ — done: append-only WAL with batched fsync and group commit, durable topology and persistent messages recovered on `Start` (before the listening socket opens), asynchronous confirms held back by the watermark (collapsed with `multiple=true`), segments with rewrite compaction on every `Start`, and a disk cap that refuses rather than discards. Opt-in through `DataDir`.
 - Validation of the OpenSSL backend compiled by Delphi on Linux (the Community Edition doesn't have the target; the same source is the one validated by FPC/Linux).
 - Server-side TLS on the SChannel backend (OpenSSL only today).
 - mTLS/client-cert.

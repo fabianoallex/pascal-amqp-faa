@@ -695,6 +695,20 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **É a quarta forma do mesmo erro nesta fase** — medir antes do efeito; dados uniformes; depender do agrupamento para contar segmentos; e agora depender do agrupamento para o gatilho sequer acontecer. Todas invisíveis num compilador e visíveis no outro, e nenhuma delas achável sem repetir a suíte.
 
+- **A compactação em voo saiu, e o motivo é um defeito real que o teste destapou.** Depois de tornar determinístico o teste do gatilho automático — dando a ele uma barreira por registro —, ele passou a submeter **concorrentemente com a compactação**, e o journal caiu em estado falho: `EAMQPJournal`, "falha ao escrever no journal".
+
+  **A causa:** o LSN é atribuído no `Submit`, na thread de quem publica. A compactação roda depois, na thread do journal, e atribui LSNs **novos** aos registros que reescreve. Um publish que pegou o seu LSN *antes* da compactação e ainda estava na fila é escrito *depois* dela — com um número **menor** que o último do arquivo. O `Append` recusa (a invariante de LSN crescente da WS1), a escrita falha, e o journal inteiro vai a falho. Não é perda silenciosa: é o broker parando de durar. Mas é um defeito de concorrência que só aparece sob carga, e a versão anterior do teste (que submetia tudo antes) nunca o alcançava.
+
+  **Não há conserto barato**, e vale registrar por quê para a próxima rodada não redescobrir: a ordem dos LSN tem de ser a ordem do arquivo, e o conteúdo compactado é **logicamente mais velho** que qualquer submit concorrente — escrevê-lo depois inverte a ordem, escrevê-lo antes exige LSNs menores que os já entregues a publicadores. Compactar em voo exige **quiescer a atribuição de LSN**, o que esbarra na D2 (o ator não pode esperar). Uma saída possível, para quando isso for retomado: drenar-e-mesclar os pendentes no estado recuperado antes de alocar o bloco, num laço que só aloca quando uma drenagem volta vazia com o lock na mão.
+
+  **O que ficou:** a compactação roda **dentro do `Start`**, depois da recuperação e antes de o socket de escuta abrir — onde não existe publicador nem ator, e a segurança é por construção. Na prática, o log é podado **a cada reinício**; um broker que nunca reinicia depende do `MaxJournalBytes`. Está dito assim nos dois READMEs, sem eufemismo, e o comentário de cabeçalho de `AMQP.Server.Journal` carrega a análise inteira.
+
+  **A lição de teste, que é a mesma da fase toda:** o teste que expôs isto só o fez **depois** de eu o tornar determinístico. Enquanto ele dependia do agrupamento do lote, ele não alcançava a janela — e passava. Tornar um teste determinístico não é só torná-lo confiável: é o que faz dele um instrumento.
+
+- **WS11: os READMEs.** Seção `Durabilidade (opt-in)` nos dois idiomas, com a regra dos três, o que sobrevive ao restart (incluindo o `redelivered` da D27 e o TTL descontado do tempo fora), o confirm assíncrono, as duas defesas contra crescimento e a ausência de compactação em voo com o motivo. A admissão da D28 — **matar o processo não testa fsync** — vai em citação destacada, não em nota de rodapé, com o que a implementação *de fato* afirma e testa no lugar. Tabela de configuração com `DataDir` e `MaxJournalBytes`, desvio novo (teto de disco recusa, teto de memória descarta), limitações e roadmap atualizados. 35 headings casando um a um entre `README.md` e `README.en.md`.
+
+  **Com isso a Fase 4 fecha.**
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
