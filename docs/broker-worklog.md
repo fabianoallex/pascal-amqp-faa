@@ -649,6 +649,18 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **O que falta para fechar a WS7:** o teto duro `MaxJournalBytes` (default 0 = ilimitado), que ao estourar **recusa** o publish persistente com `Basic.Nack` em vez de descartar — a diferença que importa em relação à D7: teto de memória descarta, teto de disco recusa, porque descartar da cabeça no disco seria apagar dado já confirmado.
 
+- **WS7 fechada: o teto duro do log.** `MaxJournalBytes`, default 0 = ilimitado — a forma do `MaxQueueLength` da D7: ninguém ganha um teto de disco por ter ligado a durabilidade. Ao estourar, o publish **persistente** leva `Basic.Nack`.
+
+  **A diferença que a D26 marca em relação à D7, e que é o ponto todo:** teto de **memória** descarta da cabeça; teto de **disco** **recusa**. Descartar aqui seria apagar dado que o broker já confirmou como durável — exatamente a promessa que a Fase 4 existe para cumprir. Recusar devolve a decisão a quem publica, que ainda tem a mensagem na mão.
+
+  **Duas regras de escopo, e as duas são o que impede o broker de se trancar ou de derrubar quem não tem culpa.** (1) O teto vale **só para o caminho do publicador**. Registro de **retirada** (o `SubmitNoWait` do ator) passa sempre: além de a D24 proibir barrar o ator, recusar um `DEQ` ressuscitaria a mensagem no próximo boot — e são justamente os DEQs que deixam a compactação encolher o log e **sair** da situação. Recusá-los seria fechar a única porta. (2) O teto é de **disco**: publish transiente não paga por ele. Sem essa segunda regra, uma fila durável cheia derrubaria o broker inteiro.
+
+  **O tamanho é aproximado de propósito.** Ele é mantido pela thread do journal nos três momentos em que muda de verdade (fim de lote, rotação, compactação) e lido sem lock pelos publicadores. Varrer o diretório no caminho quente do publish é que seria errado; o pior caso aqui é aceitar ou recusar um publish na fronteira exata, e o seguinte já vê o número certo.
+
+  **Mutação, quatro mutantes, e um sobreviveu: "recusa mas posta".** Nack **e** enfileirar ao mesmo tempo é o pior dos dois mundos — o publicador acha que falhou e reenvia, enquanto um consumidor recebe a cópia que "falhou". Nenhum dos outros testes percebia, porque todos olhavam ou o nack ou o log, nunca a **fila**. Entrou o `Teto_PublishRecusado_NaoEntraNaFila`, que compara a contagem da fila antes e depois de um publish recusado. É a mesma família dos buracos das duas rodadas anteriores: **o teste tem de olhar o lado do sistema que a mutação estraga.**
+
+  **Estado:** server **429 → 435** (Default) e **433 → 439** (`openssl`), `0 unfreed memory blocks`; aceitação 28/28, SmokeTest PASS, `verifica_espelhos.py` limpo, broker compilando no Linux. **A WS7 fecha.**
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**

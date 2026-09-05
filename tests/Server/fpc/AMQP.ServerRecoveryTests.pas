@@ -105,6 +105,9 @@ type
     procedure Compacta_Automatica_DisparaAcimaDoLimiar;
     procedure Compacta_FsyncReprovado_NaoApagaNada;
     procedure Compacta_FanOut_GravaOCorpoUmaVezSo;
+    procedure Teto_ZeroEIlimitado;
+    procedure Teto_Estourado_MarcaCheio;
+    procedure Teto_RetiradaNuncaERecusada;
   end;
 
 implementation
@@ -180,6 +183,21 @@ begin
   FReprovando := True;
   if FUltimo <> nil then
     FUltimo.SetSyncOk(False);
+end;
+
+/// Um lote de UM registro (o SubmitNoWait recebe array).
+function RegistroDe(AKind: Byte; const APayload: TBytes): TAMQPJournalRecords;
+begin
+  SetLength(Result, 1);
+  Result[0].Kind := AKind;
+  Result[0].Payload := APayload;
+end;
+
+function DequeueDe(AId: UInt64; const AFila: string): TAMQPRecDequeue;
+begin
+  Result.VHost := '/';
+  Result.Queue := AFila;
+  Result.EntryId := AId;
 end;
 
 function ConteudoDe(AId: UInt64; const ACorpo: string): TAMQPRecContent;
@@ -1154,6 +1172,67 @@ begin
   end;
   ChecaInt('UM registro de conteudo no log compactado', 1, LConteudos);
   ChecaInt('e tres colocacoes', 3, LColocacoes);
+end;
+
+{ --- teto duro do log (WS7 da Fase 4, D26) --- }
+
+procedure TRecoveryReplayTests.Teto_ZeroEIlimitado;
+var
+  I: Integer;
+  LLsn: UInt64;
+begin
+  // 0 = ilimitado, a forma do MaxQueueLength da D7. E' o DEFAULT: ninguem
+  // ganha um teto de disco por ter ligado a durabilidade.
+  ChecaInt('o default e zero', 0, Integer(FJournal.MaxJournalBytes));
+  for I := 1 to 40 do
+    LLsn := Grava(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ConteudoDe(I, StringOfChar('x', 200))));
+  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  ChecaNao('e o journal nunca se declara cheio', FJournal.Cheio);
+end;
+
+procedure TRecoveryReplayTests.Teto_Estourado_MarcaCheio;
+var
+  I: Integer;
+  LLsn: UInt64;
+begin
+  FJournal.MaxJournalBytes := 2000;
+  ChecaNao('comeca vazio', FJournal.Cheio);
+  for I := 1 to 40 do
+    LLsn := Grava(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ConteudoDe(I, StringOfChar('x', 200))));
+  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  ChecaOk('passou do teto e se declara cheio', FJournal.Cheio);
+  ChecaOk('e o tamanho relatado bate com o teto',
+    FJournal.Stats.Bytes >= 2000);
+end;
+
+procedure TRecoveryReplayTests.Teto_RetiradaNuncaERecusada;
+var
+  I: Integer;
+  LLsn: UInt64;
+  E: TAMQPRecoveredState;
+begin
+  // A REGRA QUE SALVA O BROKER DE SE TRANCAR: o teto vale para o caminho do
+  // PUBLICADOR. O registro de RETIRADA passa sempre -- alem de a D24 proibir
+  // barrar o ator, recusar um DEQ ressuscitaria a mensagem no proximo boot, e
+  // sao justamente os DEQs que deixam a compactacao encolher o log e SAIR
+  // desta situacao. Recusa-los seria fechar a unica porta.
+  DeclaraFila('q.a');
+  Conteudo(1, 'x');
+  Coloca(2, 1, 'q.a');
+  FJournal.MaxJournalBytes := 1; // cheio desde ja
+  ChecaOk('cheio', FJournal.Cheio);
+  LLsn := FJournal.SubmitNoWait(RegistroDe(AMQP_REC_DEQUEUE,
+    AmqpEncodeRecDequeue(DequeueDe(2, 'q.a'))));
+  ChecaOk('o DEQ foi aceito mesmo com o log cheio', LLsn > 0);
+  ChecaOk('e ficou duravel', FJournal.WaitDurable(LLsn, 5000));
+  E := Replica;
+  try
+    ChecaInt('a colocacao foi mesmo aposentada', 0, E.Entries.Count);
+  finally
+    E.Free;
+  end;
 end;
 
 initialization

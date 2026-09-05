@@ -58,6 +58,9 @@ type
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
     FDir: string;
+    /// Teto do WAL que o AbreBroker aplica. 0 = ilimitado (o default),
+    /// que e' o que todos os testes menos os do teto usam.
+    FTetoWal: Int64;
     function DeclaraFila(const ANome: string; ADurable: Boolean;
       AArgs: TAMQPFieldTable = nil): string;
     /// Fecha o cliente, para o broker e devolve um resumo do WAL.
@@ -113,6 +116,9 @@ type
     [Test] procedure Restart_NaoReescreveOLog;
     [Test] procedure Restart_IdNovoNaoColideComRecuperado;
     [Test] procedure Restart_PrazoDescontaOTempoDecorrido;
+    [Test] procedure Teto_PublishPersistenteAcimaDoTeto_LevaNack;
+    [Test] procedure Teto_PublishTransiente_PassaMesmoComOLogCheio;
+    [Test] procedure Teto_PublishRecusado_NaoEntraNaFila;
   end;
 
 implementation
@@ -765,6 +771,7 @@ begin
   FBroker.BindAddress := '127.0.0.1';
   FBroker.Port := 0;
   FBroker.DataDir := FDir;
+  FBroker.MaxJournalBytes := FTetoWal;
   FBroker.Start;
   LParams := TAMQPConnectionParams.Localhost;
   LParams.Host := '127.0.0.1';
@@ -1049,6 +1056,97 @@ begin
   Sleep(600); // o que sobrava do prazo (~300 ms) acaba aqui
   LGet := FChan.BasicGet('q.ttl', True);
   ChecaNao('o prazo continuou correndo por cima do restart', LGet.Found);
+end;
+
+// ---------------------------------------------------------- WS7: teto duro ---
+
+procedure TPersistWiringTests.Teto_PublishPersistenteAcimaDoTeto_LevaNack;
+var
+  I: Integer;
+  LTodosOk: Boolean;
+begin
+  // A diferenca que a D26 marca em relacao a D7: teto de MEMORIA descarta da
+  // cabeca, teto de DISCO RECUSA. Descartar aqui seria apagar dado que o
+  // broker ja' confirmou como duravel -- a promessa que a Fase 4 existe para
+  // cumprir. Recusar devolve a decisao a quem publica, que ainda tem a
+  // mensagem na mao.
+  FTetoWal := 40000; // pequeno de proposito: o teste nao mede desempenho
+  Reabre;
+  DeclaraFila('q.dur', True);
+  FChan.ConfirmSelect;
+  LTodosOk := True;
+  for I := 1 to 300 do
+  begin
+    FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
+    if (I mod 50) = 0 then
+      if not FChan.WaitForConfirms(10000) then
+      begin
+        LTodosOk := False;
+        Break;
+      end;
+  end;
+  if LTodosOk then
+    LTodosOk := FChan.WaitForConfirms(10000);
+  ChecaNao('algum publish foi NACK-ado depois de o log encher', LTodosOk);
+  ChecaOk('e a recusa foi contada', FBroker.Journal.Stats.Recusados > 0);
+end;
+
+procedure TPersistWiringTests.Teto_PublishTransiente_PassaMesmoComOLogCheio;
+var
+  I: Integer;
+  LGet: TAMQPGetResult;
+begin
+  // O teto e' de DISCO: quem nao escreve no disco nao paga por ele. Sem esta
+  // assercao, uma implementacao que recusasse TODO publish com o log cheio
+  // passaria no teste acima -- e derrubaria o broker inteiro por causa de uma
+  // fila duravel cheia.
+  FTetoWal := 40000;
+  Reabre;
+  DeclaraFila('q.dur', True);
+  DeclaraFila('q.tra', False);
+  for I := 1 to 300 do
+    FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
+  Sleep(500);
+  ChecaOk('o log encheu', FBroker.Journal.Cheio);
+
+  FChan.PublishText('', 'q.tra', 'transiente', False);
+  Sleep(300);
+  LGet := FChan.BasicGet('q.tra', True);
+  ChecaOk('o publish transiente passou', LGet.Found);
+  ChecaStr('com o corpo certo', 'transiente', LGet.BodyAsText);
+end;
+
+procedure TPersistWiringTests.Teto_PublishRecusado_NaoEntraNaFila;
+var
+  I, LAntes, LDepois: Integer;
+  LDecl: TAMQPQueueDeclare;
+begin
+  // NAO PODE HAVER PUBLISH PELA METADE. Recusar com Nack e ao mesmo tempo
+  // enfileirar seria o pior dos dois mundos: o publicador acha que falhou e
+  // reenvia, enquanto um consumidor recebe a copia que "falhou". A recusa
+  // acontece ANTES de escrever ou postar coisa nenhuma, e e' isto que este
+  // teste prende -- a mutacao "recusa mas posta" passava em todos os outros.
+  FTetoWal := 40000;
+  Reabre;
+  DeclaraFila('q.dur', True);
+  FChan.ConfirmSelect;
+  for I := 1 to 300 do
+    FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
+  FChan.WaitForConfirms(10000); // parte vai levar Nack: o log encheu
+  Sleep(500);                   // o ator termina de enfileirar o que passou
+  ChecaOk('o log encheu mesmo', FBroker.Journal.Cheio);
+
+  LDecl := TAMQPQueueDeclare.Create('q.dur');
+  LDecl.Passive := True;
+  LAntes := Integer(FChan.DeclareQueue(LDecl).MessageCount);
+
+  // Este ja' nasce recusado.
+  FChan.PublishText('', 'q.dur', StringOfChar('y', 500), True);
+  FChan.WaitForConfirms(5000);
+  Sleep(500);
+  LDepois := Integer(FChan.DeclareQueue(LDecl).MessageCount);
+
+  ChecaInt('o publish recusado NAO entrou na fila', LAntes, LDepois);
 end;
 
 initialization

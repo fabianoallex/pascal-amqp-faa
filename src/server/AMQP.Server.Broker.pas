@@ -91,6 +91,7 @@ type
     // vazio. Existe pela mesma razao das contagens do journal: um broker que
     // subiu com o log truncado tem de conseguir DIZER isso.
     FRecoveryStats: TAMQPRecoveryStats;
+    FMaxJournalBytes: Int64;
     FDataDir: string;
     FMaxQueueLength: Integer;
     FVHosts: TAMQPVirtualHostRegistry;
@@ -152,6 +153,12 @@ type
     /// usuario, e ninguem deve ganhar arquivos em disco por ter chamado Start.
     /// So' pode mudar com o broker parado.
     property DataDir: string read FDataDir write SetDataDir;
+    /// Teto duro do WAL em bytes. 0 (default) = ilimitado, a forma do
+    /// MaxQueueLength. Ao estourar, o publish PERSISTENTE leva Basic.Nack --
+    /// teto de memoria descarta, teto de disco recusa. Aplicado a partir do
+    /// proximo Start.
+    property MaxJournalBytes: Int64 read FMaxJournalBytes
+      write FMaxJournalBytes;
     /// Teto de mensagens prontas POR FILA (decisão D7 do CLAUDE.md).
     /// 0 (default) = ilimitado. O broker roda dentro da app do usuário: uma
     /// fila sem consumidor não pode derrubar o processo hospedeiro. Vale para
@@ -308,6 +315,7 @@ begin
   if FDataDir <> '' then
   begin
     FJournal := TAMQPJournal.Create(FDataDir);
+    FJournal.MaxJournalBytes := FMaxJournalBytes;
     // O registro de confirms E' o IAMQPDurabilitySink do journal: e' assim que
     // "a marca d'agua andou" vira "estes canais podem confirmar" (D24).
     // Injetado ANTES do Start, como a propriedade pede.

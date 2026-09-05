@@ -166,6 +166,10 @@ type
     /// Quantas compactacoes rodaram, e quantos segmentos elas apagaram.
     Compactacoes: Int64;
     SegmentosApagados: Int64;
+    /// Publishes persistentes recusados por teto de disco (D26).
+    Recusados: Int64;
+    /// Tamanho aproximado do log agora.
+    Bytes: Int64;
     /// Bytes de payload esperando na fila de submissao AGORA.
     PendingBytes: Int64;
     DurableLsn: UInt64;
@@ -208,6 +212,14 @@ type
     FMaxPendingBytes: Int64;
     FMaxSegmentBytes: Int64;
     FCompactarAcima: Int64;
+    FMaxJournalBytes: Int64;
+    /// Tamanho aproximado do log AGORA, mantido pela thread do journal e lido
+    /// sem lock pelos publicadores. Aproximado de proposito: um teto de disco
+    /// nao precisa de precisao de byte, e varrer o diretorio no caminho quente
+    /// do publish e' que seria errado.
+    FBytesTotal: UInt64;
+    FBytesFechados: UInt64;
+    FRecusados: Int64;
     FSegNo: Cardinal;
     FProximoLsn: UInt64;
     FDurableLsn: UInt64;   // atomico -- leitura fora do lock
@@ -245,6 +257,8 @@ type
     procedure Rotaciona;
     /// Abre um segmento novo (o proximo numero) e o torna o ativo.
     procedure AbreProximoSegmento;
+    /// Recalcula FBytesTotal. So' na thread do journal.
+    procedure AtualizaTamanho;
     /// Escreve os registros vivos no segmento ativo, com os identificadores
     /// PRESERVADOS. Devolve o LSN do ULTIMO que escreveu (0 se nao escreveu
     /// nada) -- e' o numero que a marca d agua tem de alcancar depois do
@@ -295,6 +309,27 @@ type
     /// a compactacao automatica (o Compacta manual continua valendo).
     property CompactarAcimaDe: Int64 read FCompactarAcima
       write FCompactarAcima;
+    /// TETO DURO do log em bytes. 0 (default) = ilimitado, a forma da D7.
+    /// Ao estourar, o publish PERSISTENTE e' recusado -- ver Cheio.
+    property MaxJournalBytes: Int64 read FMaxJournalBytes
+      write FMaxJournalBytes;
+
+    /// Conta mais um publish recusado por teto de disco.
+    procedure ContaRecusa;
+    /// True quando o log alcancou o MaxJournalBytes.
+    ///
+    /// A DIFERENCA QUE IMPORTA EM RELACAO A D7: teto de MEMORIA descarta da
+    /// cabeca; teto de DISCO **recusa**. Descartar no disco seria apagar dado
+    /// que o broker ja' confirmou como duravel -- exatamente a promessa que a
+    /// Fase 4 existe para cumprir. Recusar devolve a decisao a quem publica,
+    /// que ainda tem a mensagem na mao.
+    ///
+    /// Vale SO' para o caminho do publicador (Submit). Registro de RETIRADA
+    /// (SubmitNoWait, do ator) nunca e' recusado: alem de a D24 proibir o ator
+    /// de ser barrado, recusar um DEQ ressuscitaria a mensagem no proximo
+    /// boot -- e sao justamente os DEQs que permitem a compactacao encolher o
+    /// log e sair desta situacao.
+    function Cheio: Boolean;
     /// Numero do segmento ATIVO. Cresce a cada rotacao.
     function SegmentoAtivo: Cardinal;
     /// Soma dos tamanhos de todos os segmentos, em bytes.
@@ -395,6 +430,13 @@ begin
   // levantasse, produziria um arquivo que a recuperacao truncaria no ponto da
   // volta.
   FProximoLsn := FSegmento.LastLsn + 1;
+  // O tamanho de partida vem do DISCO: os segmentos que ja' estavam la' contam
+  // para o teto desde o primeiro publish, e nao so' depois do primeiro lote.
+  FBytesFechados := 0;
+  FBytesTotal := 0;
+  if TamanhoTotal > FSegmento.EndOffset then
+    FBytesFechados := UInt64(TamanhoTotal - FSegmento.EndOffset);
+  AtualizaTamanho;
   // O que ja' estava no arquivo esta' no disco por definicao: ninguem promete
   // nada sobre ele agora, mas a marca d'agua nao pode nascer ATRAS dele.
   AmqpAtomicWrite64(FDurableLsn, FSegmento.LastLsn);
@@ -595,6 +637,8 @@ begin
     Result.Rotacoes := FRotacoes;
     Result.Compactacoes := FCompactacoes;
     Result.SegmentosApagados := FSegmentosApagados;
+    Result.Recusados := FRecusados;
+    Result.Bytes := Int64(FBytesTotal);
     Result.Syncs := FSyncs;
     Result.SyncsFalhos := FSyncsFalhos;
     Result.Registros := FRegistros;
@@ -619,12 +663,15 @@ procedure TAMQPJournal.AbreProximoSegmento;
 var
   LPath: string;
 begin
+  if FSegmento <> nil then
+    Inc(FBytesFechados, UInt64(FSegmento.EndOffset));
   FreeAndNil(FSegmento);
   FArquivo := nil; // fecha o arquivo anterior
   Inc(FSegNo);
   LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(FSegNo);
   FArquivo := CriaArquivo(LPath, True);
   FSegmento := TAMQPWalSegment.CreateNew(FArquivo, FSegNo);
+  AtualizaTamanho;
 end;
 
 procedure TAMQPJournal.Rotaciona;
@@ -783,6 +830,9 @@ begin
       if SysUtils.DeleteFile(LCaminho) then
         Inc(FSegmentosApagados);
     end;
+    // Os velhos foram embora: o unico segmento que conta agora e' o ativo.
+    FBytesFechados := 0;
+    AtualizaTamanho;
   except
     on E: Exception do
     begin
@@ -798,6 +848,38 @@ begin
     FMon.Leave;
   end;
   Result := True;
+end;
+
+procedure TAMQPJournal.ContaRecusa;
+begin
+  FMon.Enter;
+  try
+    Inc(FRecusados);
+  finally
+    FMon.Leave;
+  end;
+end;
+
+function TAMQPJournal.Cheio: Boolean;
+begin
+  // Leitura sem lock, de proposito: e' um teto, nao um contador de dinheiro.
+  // O pior caso e' aceitar (ou recusar) um publish na fronteira exata, e o
+  // proximo ja' ve' o numero certo.
+  Result := (FMaxJournalBytes > 0)
+    and (Int64(AmqpAtomicRead64(FBytesTotal)) >= FMaxJournalBytes);
+end;
+
+// Recalcula o tamanho aproximado do log. Roda SO' na thread do journal, nos
+// tres momentos em que ele muda de verdade: fim de lote, rotacao e
+// compactacao.
+procedure TAMQPJournal.AtualizaTamanho;
+var
+  LFim: Int64;
+begin
+  LFim := 0;
+  if FSegmento <> nil then
+    LFim := FSegmento.EndOffset;
+  AmqpAtomicWrite64(FBytesTotal, UInt64(Int64(FBytesFechados) + LFim));
 end;
 
 function TAMQPJournal.SegmentoAtivo: Cardinal;
@@ -876,6 +958,7 @@ begin
   LSyncOk := FSegmento.Sync;
   if LSyncOk then
     AmqpAtomicWrite64(FDurableLsn, LMaiorLsn);
+  AtualizaTamanho;
 
   // ROTACAO, e SO' AQUI: na fronteira de lote, depois do fsync. Nunca no meio
   // de um lote -- o lote e' indivisivel (D24) e parti-lo entre dois arquivos

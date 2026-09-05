@@ -1301,6 +1301,19 @@ begin
   LPersistente := AMessage.Properties.Has(bpDeliveryMode)
     and (AMessage.Properties.DeliveryMode = 2); // 2 = persistente (spec)
 
+  // TETO DE DISCO (D26): estourou, o publish PERSISTENTE e' recusado -- e
+  // recusado ANTES de escrever ou postar coisa nenhuma, para nao existir
+  // publish pela metade. Teto de memoria descarta da cabeca (D7); teto de
+  // disco recusa, porque descartar aqui seria apagar dado que o broker ja'
+  // confirmou como duravel. Publish transiente nao e' afetado: ele nao toca o
+  // journal.
+  if LPersistente and (FJournal <> nil) and FJournal.Cheio then
+  begin
+    FJournal.ContaRecusa;
+    ARejeitada := True;
+    Exit(False);
+  end;
+
   LMsg := TAMQPMessage.FromServerMessage(AMessage);
   try
     LContentId := 0;
