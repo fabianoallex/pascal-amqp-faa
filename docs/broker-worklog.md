@@ -661,6 +661,20 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **Estado:** server **429 → 435** (Default) e **433 → 439** (`openssl`), `0 unfreed memory blocks`; aceitação 28/28, SmokeTest PASS, `verifica_espelhos.py` limpo, broker compilando no Linux. **A WS7 fecha.**
 
+- **WS8: a matriz de morte de processo.** É a terceira camada da D28. As outras duas já viviam na suíte desde a WS1 — a varredura exaustiva de truncamento e o dublê de arquivo que conta fsyncs e falha na hora escolhida. Esta mora **fora do runner**, pelo mesmo motivo do SmokeTest: um teste que precisa matar o próprio processo não cabe num runner que quer contar asserções.
+
+  `CrashHostFpc` (irmão do `BrokerHostFpc`) sobe o broker com `DataDir`, faz **um** trabalho, imprime uma marca e **fica vivo**. Quem o mata é o driver `tests/tools/matriz_de_queda.py`, de fora, com `taskkill /F` ou `SIGKILL` — nunca `SIGTERM`, que daria ao processo a chance de rodar finalização e faria a matriz medir um *shutdown*, não uma queda.
+
+  **O que ela prova, e o que declaradamente não prova.** Não prova fsync: **matar o processo não testa fsync**, porque a cache do SO sobrevive à morte do processo e só a queda da máquina a perde. Prova, isso sim, que (1) o que foi confirmado volta; (2) o que foi consumido não ressuscita; (3) morto **no meio da escrita**, o broker sobe e não perde o que já confirmara; (4) quedas sucessivas no mesmo diretório não duplicam nada.
+
+  **Duas correções que a matriz cobrou de mim, e as duas eram do teste:**
+  - O `confere` **consumia o que media**: usava `Basic.Get` em no-ack e esvaziava a fila, o que quebrava qualquer cenário com mais de uma queda. Passou a pegar em modo ack e **nunca confirmar** — fechar a conexão devolve tudo à fila.
+  - O cenário "morte no meio da escrita" tentava um **limite superior** ("não pode voltar mais do que N confirmadas"), e isso não é observável: o driver lê as marcas por um cano, e a leitura fica para trás da escrita. Quando ele mata, o host já confirmou muito mais do que ele leu — "voltaram 407 para 150 lidas" não é violação, é o cano atrasado. O que se pode afirmar de fora é o **piso**: tudo o que o driver *viu* confirmado tem de estar lá.
+
+  **E um defeito de verdade, que o heaptrc pegou no host: `Halt` vaza.** `Halt` chamado de dentro de uma rotina abandona os frames da pilha **sem finalizar os locais gerenciados** — strings, `TBytes`, interfaces. Quatro blocos, constantes, independentes do número de mensagens. Some trocando `Halt(n)` por `ExitCode := n; Exit`. Entrou na tabela de armadilhas do `CLAUDE.md`: vale para qualquer programa desta codebase, não só para o host.
+
+  **Estado:** matriz limpa nos quatro cenários, `0 unfreed memory blocks` no host, e ele compila no Linux.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
