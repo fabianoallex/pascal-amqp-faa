@@ -1060,17 +1060,33 @@ var
 begin
   // O gatilho: rotacao + tamanho acima do limiar. Com quase tudo aposentado, a
   // compactacao automatica tem de acontecer sem ninguem a pedir.
-  FJournal.MaxSegmentBytes := 400;
-  FJournal.CompactarAcimaDe := 2000;
+  //
+  // UMA BARREIRA POR REGISTRO, e a razao e' o desenho: a compactacao so' e'
+  // CONSULTADA NA ROTACAO -- de proposito, porque a rotacao ja' e' o momento
+  // em que o journal para para trocar de arquivo. Com o group commit juntando
+  // tudo num lote so', pode haver UMA rotacao apenas; e se o lote final deixar
+  // o segmento ativo abaixo do teto, nenhuma rotacao acontece DEPOIS de o
+  // tamanho passar do limiar, e a compactacao nunca e' consultada. O log fica
+  // grande, nada esta' errado no broker, e o teste falha por corrida.
+  //
+  // Foi assim que ele quebrou: verde no FPC, intermitente no Delphi (1 em ~7).
+  // Com barreira por registro cada um vira o seu proprio lote, as rotacoes
+  // ficam frequentes, e muitas delas acontecem depois de o limiar ser
+  // cruzado -- o gatilho passa a ser funcao do TAMANHO, nao do escalonador.
+  FJournal.MaxSegmentBytes := 300;
+  FJournal.CompactarAcimaDe := 1500;
   DeclaraFila('q.a');
-  for I := 1 to 60 do
+  for I := 1 to 30 do
   begin
-    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
+    ChecaOk('conteudo duravel', FJournal.WaitDurable(
+      Grava(AMQP_REC_CONTENT,
+        AmqpEncodeRecContent(ConteudoDe(I * 2 - 1, 'corpo-' + IntToStr(I)))),
+      5000));
     Coloca(I * 2, I * 2 - 1, 'q.a');
-    Aposenta(I * 2, 'q.a');
+    ChecaOk('aposentadoria duravel', FJournal.WaitDurable(
+      Grava(AMQP_REC_DEQUEUE, AmqpEncodeRecDequeue(DequeueDe(I * 2, 'q.a'))),
+      5000));
   end;
-  ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
   ChecaOk('a compactacao automatica rodou',
     FJournal.Stats.Compactacoes >= 1);
   ChecaOk('e apagou segmento', FJournal.Stats.SegmentosApagados >= 1);

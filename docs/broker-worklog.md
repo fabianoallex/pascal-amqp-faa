@@ -687,6 +687,14 @@ Suíte do server: **367 → 369** (Default) e **371 → 373** (`openssl`), 0 blo
 
   **Estado:** aceitação 28/28 nas duas passadas, `0 unfreed memory blocks`; SmokeTest normal PASS; restart PASS; server 435/435; `verifica_espelhos.py` limpo; Linux compilando.
 
+- **Um intermitente que só o Delphi mostrou, e que era do teste de novo.** Rodando as suítes Delphi da WS10, o server falhou **uma vez em ~7** no `Compacta_Automatica_DisparaAcimaDoLimiar`. No FPC, verde sempre — dez execuções seguidas.
+
+  A causa é do desenho, e está certa: **a compactação só é consultada NA ROTAÇÃO** — de propósito, porque a rotação já é o momento em que o journal para para trocar de arquivo. Com o group commit juntando tudo num lote só, pode haver **uma** rotação apenas; e se o lote final deixar o segmento ativo abaixo do teto, nenhuma rotação acontece *depois* de o tamanho cruzar o limiar, e o gatilho nunca é consultado. O log fica grande, nada está errado no broker, e o teste falha por corrida.
+
+  Corrigido com **uma barreira por registro**: cada um vira o seu próprio lote, as rotações ficam frequentes, e muitas acontecem depois de o limiar ser cruzado. O gatilho passa a ser função do **tamanho**, não do escalonador. Dez execuções seguidas limpas no FPC, e a mutação "compactação não dispara" continua morrendo no teste certo.
+
+  **É a quarta forma do mesmo erro nesta fase** — medir antes do efeito; dados uniformes; depender do agrupamento para contar segmentos; e agora depender do agrupamento para o gatilho sequer acontecer. Todas invisíveis num compilador e visíveis no outro, e nenhuma delas achável sem repetir a suíte.
+
 ### O travamento no Linux, investigado e corrigido
 
 O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própria. **Causa encontrada, corrigida, e a suíte do server passa inteira no Linux pela primeira vez: 358/358.**
