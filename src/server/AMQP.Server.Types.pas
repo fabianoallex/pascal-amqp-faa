@@ -250,6 +250,8 @@ type
     /// confirm sai inline como na Fase 3 (D19: o broker sem DataDir e' o
     /// broker da Fase 3, inclusive aqui).
     Confirms: IAMQPConfirmRegistry;
+    /// Callback para disparar eventos de observabilidade. Fase 4.1.
+    EventSink: TObject; { TAMQPServer cast as TObject para evitar ciclo }
     /// Config sem autenticador/vhosts (o broker preenche esses dois).
     class function Defaults: TAMQPServerConnConfig; static;
   end;

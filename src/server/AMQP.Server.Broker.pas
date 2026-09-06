@@ -33,6 +33,7 @@ uses
   AMQP.Transport,
   AMQP.Server.Auth,
   AMQP.Server.Types,
+  AMQP.Server.Events,
   AMQP.Server.Engine,
   AMQP.Server.Journal,
   AMQP.Server.Confirm,
@@ -108,6 +109,8 @@ type
     FRunning: Boolean;
     FStopping: Boolean;
     FTotalAccepted: Integer; // atômico
+    FObservers: TList<TAMQPServerEventHandler>;
+    FObserversLock: TCriticalSection;
     function ConnConfig: TAMQPServerConnConfig;
     procedure AcceptLoop;
     procedure MonitorLoop;
@@ -116,12 +119,22 @@ type
     procedure ReapDead;
     procedure SetMaxQueueLength(AValue: Integer);
     procedure SetDataDir(const AValue: string);
+  protected
+    procedure NotifyEvent(const Event: TAMQPServerEvent);
   public
     constructor Create;
     destructor Destroy; override;
 
     procedure Start;
     procedure Stop;
+
+    /// Registra um handler para receber eventos de observabilidade. Thread-safe.
+    /// Pode ser chamado antes ou durante o Start. Os handlers são CÓPIAS de
+    /// referência — não serão chamados se o objeto que contém o método for
+    /// destruído (cabe ao owner gerenciar).
+    procedure Subscribe(Handler: TAMQPServerEventHandler);
+    /// Remove um handler previamente registrado. Thread-safe.
+    procedure Unsubscribe(Handler: TAMQPServerEventHandler);
 
     /// Nº de conexões vivas neste momento.
     function ConnectionCount: Integer;
@@ -247,6 +260,8 @@ begin
   FEngine := TAMQPEngine.Create;
   FSink := FEngine;
   FMonitorStop := TEvent.Create(nil, True, False, '');
+  FObservers := TList<TAMQPServerEventHandler>.Create;
+  FObserversLock := TCriticalSection.Create;
   FBindAddress := '0.0.0.0';
   FPort := 5672;
   FBacklog := 64;
@@ -271,6 +286,7 @@ begin
   Result.Tls := FUseTls;
   Result.TlsCertFile := FTlsCertFile;
   Result.TlsKeyFile := FTlsKeyFile;
+  Result.EventSink := Self;
 end;
 
 destructor TAMQPServer.Destroy;
@@ -280,6 +296,8 @@ begin
   FDead.Free;
   FVHosts.Free;
   FMonitorStop.Free;
+  FObservers.Free;
+  FObserversLock.Free;
   FLock.Free;
   FAuth := nil;
   FAuthorizer := nil;
@@ -605,6 +623,49 @@ begin
   finally
     FLock.Leave;
   end;
+end;
+
+procedure TAMQPServer.Subscribe(Handler: TAMQPServerEventHandler);
+begin
+  FObserversLock.Enter;
+  try
+    if FObservers.IndexOf(Handler) < 0 then
+      FObservers.Add(Handler);
+  finally
+    FObserversLock.Leave;
+  end;
+end;
+
+procedure TAMQPServer.Unsubscribe(Handler: TAMQPServerEventHandler);
+begin
+  FObserversLock.Enter;
+  try
+    FObservers.Remove(Handler);
+  finally
+    FObserversLock.Leave;
+  end;
+end;
+
+procedure TAMQPServer.NotifyEvent(const Event: TAMQPServerEvent);
+var
+  LHandlers: TArray<TAMQPServerEventHandler>;
+  I: Integer;
+begin
+  FObserversLock.Enter;
+  try
+    SetLength(LHandlers, FObservers.Count);
+    for I := 0 to FObservers.Count - 1 do
+      LHandlers[I] := FObservers[I];
+  finally
+    FObserversLock.Leave;
+  end;
+  // Chamar fora do lock: o handler pode chamar Subscribe/Unsubscribe, ou ser
+  // lento, ou até levantar exceção.
+  for I := 0 to High(LHandlers) do
+    try
+      LHandlers[I](Event);
+    except
+    end;
 end;
 
 end.

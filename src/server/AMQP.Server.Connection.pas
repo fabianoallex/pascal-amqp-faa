@@ -768,6 +768,7 @@ begin
     FEngine.EnsureVHost(FVirtualHost);
   PostMethod(AMQP_CHANNEL_CONNECTION, BuildOpenOk);
   FState := amqssOpen;
+  // TODO Fase 4.2: disparar seConnectionAuthenticated via FConfig.EventSink
 end;
 
 { --- despacho ------------------------------------------------------------- }

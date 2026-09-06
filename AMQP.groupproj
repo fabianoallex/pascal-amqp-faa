@@ -48,6 +48,9 @@
         <Projects Include="samples\PrioridadeVcl\PrioridadeVcl.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="samples\Server\AMQPServer.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -191,14 +194,23 @@
     <Target Name="PrioridadeVcl:Make">
         <MSBuild Projects="samples\PrioridadeVcl\PrioridadeVcl.dproj" Targets="Make"/>
     </Target>
+    <Target Name="AMQPServer">
+        <MSBuild Projects="samples\Server\AMQPServer.dproj"/>
+    </Target>
+    <Target Name="AMQPServer:Clean">
+        <MSBuild Projects="samples\Server\AMQPServer.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="AMQPServer:Make">
+        <MSBuild Projects="samples\Server\AMQPServer.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AMQP_ServerTests;AMQP_Acceptance;SmokeTest;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;EventosTopicVcl;EventosHeadersVcl;PrioridadeVcl"/>
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AMQP_ServerTests;AMQP_Acceptance;SmokeTest;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;EventosTopicVcl;EventosHeadersVcl;PrioridadeVcl;AMQPServer"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AMQP_ServerTests:Clean;AMQP_Acceptance:Clean;SmokeTest:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;EventosTopicVcl:Clean;EventosHeadersVcl:Clean;PrioridadeVcl:Clean"/>
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AMQP_ServerTests:Clean;AMQP_Acceptance:Clean;SmokeTest:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;EventosTopicVcl:Clean;EventosHeadersVcl:Clean;PrioridadeVcl:Clean;AMQPServer:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AMQP_ServerTests:Make;AMQP_Acceptance:Make;SmokeTest:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;EventosTopicVcl:Make;EventosHeadersVcl:Make;PrioridadeVcl:Make"/>
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AMQP_ServerTests:Make;AMQP_Acceptance:Make;SmokeTest:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;EventosTopicVcl:Make;EventosHeadersVcl:Make;PrioridadeVcl:Make;AMQPServer:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>
