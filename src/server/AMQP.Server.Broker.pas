@@ -295,13 +295,13 @@ procedure TAMQPServer.SetDataDir(const AValue: string);
 begin
   if FRunning then
     raise EAMQPServerAbort.Create(
-      'DataDir nao pode mudar com o broker no ar');
+      'DataDir cannot be changed while the broker is running');
   FDataDir := AValue;
 end;
 
 procedure TAMQPServer.Start;
 var
-  LEstado: TAMQPRecoveredState;
+  LState: TAMQPRecoveredState;
 begin
   if FRunning then
     Exit;
@@ -334,12 +334,12 @@ begin
     // lock do diretorio ja' na mao, o que garante que nenhum outro broker
     // esta' mexendo no mesmo WAL -- e ANTES de o socket de escuta abrir.
     // Ninguem pode falar com um broker meio recuperado.
-    LEstado := AmqpReplayWal(FDataDir);
+    LState := AmqpReplayWal(FDataDir);
     try
-      FEngine.Recupera(LEstado);
-      FRecoveryStats := LEstado.Stats;
+      FEngine.Recover(LState);
+      FRecoveryStats := LState.Stats;
     finally
-      LEstado.Free;
+      LState.Free;
     end;
 
     // COMPACTACAO, e SO' AQUI: o journal esta' quiescente (a recuperacao ja'
@@ -347,9 +347,9 @@ begin
     // nem ator submetendo). Compactar em voo exigiria quiescer a alocacao de
     // LSN, o que esbarra na D2 -- ver o cabecalho de AMQP.Server.Journal.
     // O efeito pratico: o log e' podado A CADA REINICIO.
-    if (FJournal.CompactarAcimaDe > 0)
-      and (FJournal.TamanhoTotal >= FJournal.CompactarAcimaDe) then
-      FJournal.Compacta;
+    if (FJournal.CompactAbove > 0)
+      and (FJournal.TotalSize >= FJournal.CompactAbove) then
+      FJournal.Compact;
   end;
   FListener := TAMQPTcpListener.Create;
   FListener.Listen(FBindAddress, FPort, FBacklog);

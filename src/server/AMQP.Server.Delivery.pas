@@ -283,24 +283,24 @@ end;
 function TAMQPChannelDeliveryTarget.PendingQueues: TArray<string>;
 var
   I, J: Integer;
-  LNomes: TList<string>;
+  LNames: TList<string>;
 begin
-  LNomes := TList<string>.Create;
+  LNames := TList<string>.Create;
   try
     FLock.Enter;
     try
       for I := 0 to FOutstanding.Count - 1 do
       begin
-        J := LNomes.IndexOf(FOutstanding[I].Queue);
+        J := LNames.IndexOf(FOutstanding[I].Queue);
         if J < 0 then
-          LNomes.Add(FOutstanding[I].Queue);
+          LNames.Add(FOutstanding[I].Queue);
       end;
     finally
       FLock.Leave;
     end;
-    Result := LNomes.ToArray;
+    Result := LNames.ToArray;
   finally
-    LNomes.Free;
+    LNames.Free;
   end;
 end;
 
@@ -363,7 +363,7 @@ function TAMQPChannelDeliveryTarget.BuildFrames(const AConsumerTag: string;
   AMessage: TAMQPMessage): TArray<TAMQPFrame>;
 var
   LDeliver: TAMQPBasicDeliver;
-  LConteudo: TArray<TAMQPFrame>;
+  LContent: TArray<TAMQPFrame>;
   I: Integer;
 begin
   Result := nil;
@@ -373,12 +373,12 @@ begin
   LDeliver.Exchange := AMessage.Exchange;
   LDeliver.RoutingKey := AMessage.RoutingKey;
 
-  LConteudo := AmqpBuildContentFrames(FChannelNo, AMessage, FMaxPayload);
-  SetLength(Result, 1 + Length(LConteudo));
+  LContent := AmqpBuildContentFrames(FChannelNo, AMessage, FMaxPayload);
+  SetLength(Result, 1 + Length(LContent));
   Result[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, FChannelNo,
     BuildBasicDeliver(LDeliver));
-  for I := 0 to High(LConteudo) do
-    Result[1 + I] := LConteudo[I];
+  for I := 0 to High(LContent) do
+    Result[1 + I] := LContent[I];
 end;
 
 // Basic.Cancel servidor -> cliente: a fila do consumidor sumiu. Um unico

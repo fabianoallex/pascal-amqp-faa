@@ -55,7 +55,7 @@ type
     FArq: TAMQPWalFileFalso;
     FIface: IAMQPWalFile;
   protected
-    function CriaArquivo(const APath: string;
+    function CreateFile(const APath: string;
       ACriar: Boolean): IAMQPWalFile; override;
   public
     /// So' e' valido depois do Start.
@@ -71,7 +71,7 @@ type
     FInjetou: Boolean;
     FLsnInjetado: UInt64;
   protected
-    procedure LoteTomado; override;
+    procedure BatchTaken; override;
   public
     property LsnInjetado: UInt64 read FLsnInjetado;
   end;
@@ -239,7 +239,7 @@ end;
 
 { TJournalSobreDuble }
 
-function TJournalSobreDuble.CriaArquivo(const APath: string;
+function TJournalSobreDuble.CreateFile(const APath: string;
   ACriar: Boolean): IAMQPWalFile;
 begin
   if FArq = nil then
@@ -252,7 +252,7 @@ end;
 
 { TJournalComJanela }
 
-procedure TJournalComJanela.LoteTomado;
+procedure TJournalComJanela.BatchTaken;
 const
   MARCA = 'injetado na janela';
 var
@@ -463,11 +463,11 @@ begin
     end;
     Assert.IsTrue(J.WaitDurable(2000, 30000), 'tudo duravel');
     LS := J.Stats;
-    Assert.AreEqual(Int64(2000), LS.Registros, 'gravou tudo');
-    Assert.IsTrue(LS.Syncs < LS.Registros, 'agrupou: menos fsyncs que registros ('
-      + IntToStr(LS.Syncs) + ' x ' + IntToStr(LS.Registros) + ')');
-    Assert.IsTrue((LS.Registros div LS.Syncs) >= 3,
-      'lote medio bem acima de 1 (' + IntToStr(LS.Registros div LS.Syncs) + ')');
+    Assert.AreEqual(Int64(2000), LS.Records, 'gravou tudo');
+    Assert.IsTrue(LS.Syncs < LS.Records, 'agrupou: menos fsyncs que registros ('
+      + IntToStr(LS.Syncs) + ' x ' + IntToStr(LS.Records) + ')');
+    Assert.IsTrue((LS.Records div LS.Syncs) >= 3,
+      'lote medio bem acima de 1 (' + IntToStr(LS.Records div LS.Syncs) + ')');
   finally
     J.Free;
   end;
@@ -544,7 +544,7 @@ begin
       'o gatilho fica duravel');
     Assert.IsTrue(J.WaitDurable(J.LsnInjetado, 5000),
       'o injetado NA JANELA tambem');
-    Assert.AreEqual(Int64(2), J.Stats.Registros, 'e nada se perdeu');
+    Assert.AreEqual(Int64(2), J.Stats.Records, 'e nada se perdeu');
   finally
     J.Free;
   end;
@@ -596,7 +596,7 @@ begin
     Assert.IsFalse(J.WaitDurable(LSN, 800), 'nao pode ficar duravel');
     Assert.AreEqual(Int64(LAntes), Int64(J.DurableLsn),
       'marca d agua nao andou');
-    Assert.IsTrue(J.Stats.SyncsFalhos > 0, 'e o fsync falho foi contado');
+    Assert.IsTrue(J.Stats.FailedSyncs > 0, 'e o fsync falho foi contado');
   finally
     J.Free;
   end;
@@ -828,7 +828,7 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    Assert.AreEqual(Int64(LSN + 1), Int64(J.Stats.ProximoLsn),
+    Assert.AreEqual(Int64(LSN + 1), Int64(J.Stats.NextLsn),
       'proximo LSN continua');
     Assert.IsTrue(J.WaitDurable(J.Submit(Um(1, 'depois')), 5000),
       'e grava depois do restart');
@@ -890,7 +890,7 @@ begin
   try
     Assert.AreEqual(300, LSeg.ReadPrefix(LRegs, LStop),
       'os 300 aceitos foram ao disco');
-    Assert.IsTrue(LStop = awsFim, 'integro');
+    Assert.IsTrue(LStop = awsEnd, 'integro');
   finally
     LSeg.Free;
     LArq := nil;

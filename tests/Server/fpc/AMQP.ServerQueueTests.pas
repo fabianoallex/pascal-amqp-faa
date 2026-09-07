@@ -704,7 +704,7 @@ begin
   try
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False, AlvoQueRecusa(1)));
     AssertTrue('if-unused com consumidor',
-      LQ.Delete(True, False, LCount) = amqqdEmUso);
+      LQ.Delete(True, False, LCount) = amqqdInUse);
     // A fila continua viva.
     AssertEquals('fila segue atendendo', 1, LQ.Stats.ConsumerCount);
   finally
@@ -727,7 +727,7 @@ begin
       LMsg.Release;
     end;
     AssertTrue('if-empty com mensagem',
-      LQ.Delete(False, True, LCount) = amqqdNaoVazia);
+      LQ.Delete(False, True, LCount) = amqqdNotEmpty);
     AssertEquals('fila segue atendendo', 1, LQ.Stats.MessageCount);
   finally
     LQ.Free;

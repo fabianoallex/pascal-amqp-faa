@@ -237,16 +237,16 @@ end;
 
 function TAMQPServerChannel.TouchedQueues: TArray<string>;
 var
-  LNome: string;
+  LName: string;
   LSet: TDictionary<string, Boolean>;
 begin
   LSet := TDictionary<string, Boolean>.Create;
   try
-    for LNome in FConsumers.Values do
-      LSet.AddOrSetValue(LNome, True);
+    for LName in FConsumers.Values do
+      LSet.AddOrSetValue(LName, True);
     if FTargetObj <> nil then
-      for LNome in FTargetObj.PendingQueues do
-        LSet.AddOrSetValue(LNome, True);
+      for LName in FTargetObj.PendingQueues do
+        LSet.AddOrSetValue(LName, True);
     Result := LSet.Keys.ToArray;
   finally
     LSet.Free;
@@ -353,6 +353,7 @@ begin
   if Result then
     FAsmState := amqasIdle;
 end;
+
 
 function TAMQPServerChannel.CurrentMessage(
   const AUserId: string): TAMQPServerMessage;

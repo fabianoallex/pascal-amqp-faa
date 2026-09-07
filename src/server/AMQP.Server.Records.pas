@@ -211,26 +211,26 @@ begin
     AMQP_REC_ENQUEUE:          Result := 'enqueue';
     AMQP_REC_DEQUEUE:          Result := 'dequeue';
   else
-    Result := Format('desconhecido(%d)', [AKind]);
+    Result := Format('unknown(%d)', [AKind]);
   end;
 end;
 
 // A tabela vazia e' escrita como tabela vazia (quatro bytes de tamanho zero) e
 // volta como nil -- assim codificar nil e codificar uma tabela sem chaves dao
 // o MESMO byte, e nao ha dois jeitos de dizer "sem argumentos" no arquivo.
-procedure EscreveArgs(AWriter: TAMQPWriter; ATable: TAMQPFieldTable);
+procedure WriteArgs(AWriter: TAMQPWriter; ATable: TAMQPFieldTable);
 var
-  LVazia: TAMQPFieldTable;
+  LEmpty: TAMQPFieldTable;
 begin
   if ATable <> nil then
     AWriter.WriteFieldTable(ATable)
   else
   begin
-    LVazia := TAMQPFieldTable.Create;
+    LEmpty := TAMQPFieldTable.Create;
     try
-      AWriter.WriteFieldTable(LVazia);
+      AWriter.WriteFieldTable(LEmpty);
     finally
-      LVazia.Free;
+      LEmpty.Free;
     end;
   end;
 end;
@@ -256,7 +256,7 @@ begin
     LW.WriteBit(ARec.Durable);
     LW.WriteBit(ARec.AutoDelete);
     LW.WriteBit(ARec.Internal);
-    EscreveArgs(LW, ARec.Arguments);
+    WriteArgs(LW, ARec.Arguments);
     Result := LW.ToBytes;
   finally
     LW.Free;
@@ -293,7 +293,7 @@ begin
     LW.WriteShortStr(ARec.Name);
     LW.WriteBit(ARec.Durable);
     LW.WriteBit(ARec.AutoDelete);
-    EscreveArgs(LW, ARec.Arguments);
+    WriteArgs(LW, ARec.Arguments);
     Result := LW.ToBytes;
   finally
     LW.Free;
@@ -328,7 +328,7 @@ begin
     LW.WriteShortStr(ARec.Source);
     LW.WriteShortStr(ARec.Destination);
     LW.WriteShortStr(ARec.RoutingKey);
-    EscreveArgs(LW, ARec.Arguments);
+    WriteArgs(LW, ARec.Arguments);
     Result := LW.ToBytes;
   finally
     LW.Free;
@@ -386,14 +386,14 @@ end;
   NAO da' para usar WriteLongStr aqui: ele trata o valor como TEXTO e passa por
   AmqpUtf8Encode. Corpo de mensagem e content-header sao BINARIO -- qualquer
   transcodificacao os destruiria em silencio. }
-procedure EscreveBlob(AWriter: TAMQPWriter; const ABytes: TBytes);
+procedure WriteBlob(AWriter: TAMQPWriter; const ABytes: TBytes);
 begin
   AWriter.WriteLongUInt(Cardinal(Length(ABytes)));
   if Length(ABytes) > 0 then
     AWriter.WriteRaw(ABytes);
 end;
 
-function LeBlob(AReader: TAMQPReader): TBytes;
+function ReadBlob(AReader: TAMQPReader): TBytes;
 var
   LLen: Cardinal;
 begin
@@ -414,7 +414,7 @@ begin
   try
     LW.WriteLongLongUInt(ARec.ContentId);
     LW.WriteShortStr(ARec.UserId);
-    EscreveBlob(LW, ARec.Body);
+    WriteBlob(LW, ARec.Body);
     Result := LW.ToBytes;
   finally
     LW.Free;
@@ -429,7 +429,7 @@ begin
   try
     Result.ContentId := LR.ReadLongLongUInt;
     Result.UserId := LR.ReadShortStr;
-    Result.Body := LeBlob(LR);
+    Result.Body := ReadBlob(LR);
   finally
     LR.Free;
   end;
@@ -452,7 +452,7 @@ begin
     LW.WriteOctet(ARec.Priority);
     LW.WriteLongLongUInt(UInt64(ARec.EnqueuedAtWall));
     LW.WriteLongLongUInt(UInt64(ARec.TtlMs));
-    EscreveBlob(LW, ARec.HeaderPayload);
+    WriteBlob(LW, ARec.HeaderPayload);
     Result := LW.ToBytes;
   finally
     LW.Free;
@@ -474,7 +474,7 @@ begin
     Result.Priority := LR.ReadOctet;
     Result.EnqueuedAtWall := Int64(LR.ReadLongLongUInt);
     Result.TtlMs := Int64(LR.ReadLongLongUInt);
-    Result.HeaderPayload := LeBlob(LR);
+    Result.HeaderPayload := ReadBlob(LR);
   finally
     LR.Free;
   end;

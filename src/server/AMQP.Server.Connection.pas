@@ -186,11 +186,11 @@ type
       ARes: TAMQPEngineResult; const AWhat: string;
       AClassId, AMethodId: Word);
     /// Levanta 406 PRECONDITION_FAILED quando um x-argument do declare e'
-    /// invalido, com o AErro que o parser produziu -- que NOMEIA o argumento
+    /// invalido, com o AError que o parser produziu -- que NOMEIA o argumento
     /// ofensor. Erro de CANAL: config errada num declare nao leva a conexao
     /// junto (mesma linha do amqerTipoInvalido; ver CheckEngine).
     procedure CheckArgs(AChannel: TAMQPServerChannel; AOk: Boolean;
-      const AErro: string; AClassId, AMethodId: Word);
+      const AError: string; AClassId, AMethodId: Word);
     /// Levanta 403 se o nome for reservado ('amq.') ou vazio quando o cliente
     /// nao pode escolher -- spec 1.4: o prefixo e' do servidor.
     procedure CheckReservedName(AChannel: TAMQPServerChannel;
@@ -202,7 +202,7 @@ type
     /// achou rota (spec 1.8.3.6, reply-code 312 NO_ROUTE).
     /// Emite (ou adia ate a marca d agua) o confirm de um publish. ALsn=0
     /// significa que nada foi escrito no journal por este publish.
-    procedure ConfirmaPublish(AChannel: TAMQPServerChannel;
+    procedure ConfirmPublish(AChannel: TAMQPServerChannel;
       ASeq, ALsn: UInt64; ANack: Boolean);
     procedure SendBasicReturn(AChannel: TAMQPServerChannel;
       const AMessage: TAMQPServerMessage);
@@ -996,19 +996,19 @@ begin
 end;
 
 procedure TAMQPServerConnection.CheckArgs(AChannel: TAMQPServerChannel;
-  AOk: Boolean; const AErro: string; AClassId, AMethodId: Word);
+  AOk: Boolean; const AError: string; AClassId, AMethodId: Word);
 begin
   if AOk then
     Exit;
   raise EAMQPChannelError.Create(AChannel.Id, AMQP_PRECONDITION_FAILED,
-    AErro, AClassId, AMethodId);
+    AError, AClassId, AMethodId);
 end;
 
 procedure TAMQPServerConnection.CheckEngine(AChannel: TAMQPServerChannel;
   ARes: TAMQPEngineResult; const AWhat: string; AClassId, AMethodId: Word);
 var
   LCode: Word;
-  LTexto: string;
+  LText: string;
 begin
   if ARes = amqerOk then
     Exit;
@@ -1016,55 +1016,55 @@ begin
   // nao consegue mais registrar topologia duravel esta' quebrado como um todo
   // (Fase 4, WS3). Continuar respondendo Declare-Ok seria mentir sobre
   // durabilidade; 541 diz a verdade e derruba a conexao.
-  if ARes = amqerSemDurabilidade then
+  if ARes = amqerNoDurability then
     raise EAMQPConnectionError.Create(AMQP_INTERNAL_ERROR,
       'could not journal durable ' + AWhat + ': broker cannot guarantee '
       + 'durability', AClassId, AMethodId);
   case ARes of
-    amqerNaoEncontrado:
+    amqerNotFound:
       begin
         LCode := AMQP_NOT_FOUND;
-        LTexto := 'no ' + AWhat;
+        LText := 'no ' + AWhat;
       end;
-    amqerDivergente:
+    amqerPreconditionFailed:
       begin
         LCode := AMQP_PRECONDITION_FAILED;
-        LTexto := 'inequivalent arg for ' + AWhat;
+        LText := 'inequivalent arg for ' + AWhat;
       end;
-    amqerTipoInvalido:
+    amqerCommandInvalid:
       begin
         // Desvio deliberado do RabbitMQ, decidido no WS2 e registrado no
         // CLAUDE.md: ele trata tipo de exchange desconhecido como 503
         // COMMAND_INVALID, que derruba a CONEXAO. Aqui e' 406 de canal --
         // config errada de um declare nao precisa levar a conexao junto.
         LCode := AMQP_PRECONDITION_FAILED;
-        LTexto := 'invalid type or match for ' + AWhat;
+        LText := 'invalid type or match for ' + AWhat;
       end;
-    amqerEmUso:
+    amqerInUse:
       begin
         LCode := AMQP_PRECONDITION_FAILED;
-        LTexto := AWhat + ' in use';
+        LText := AWhat + ' in use';
       end;
-    amqerNaoVazia:
+    amqerNotEmpty:
       begin
         LCode := AMQP_PRECONDITION_FAILED;
-        LTexto := AWhat + ' not empty';
+        LText := AWhat + ' not empty';
       end;
-    amqerNomeReservado:
+    amqerAccessRefused:
       begin
         LCode := AMQP_ACCESS_REFUSED;
-        LTexto := 'access to ' + AWhat + ' refused: reserved name';
+        LText := 'access to ' + AWhat + ' refused: reserved name';
       end;
-    amqerExclusivaDeOutro:
+    amqerResourceLocked:
       begin
         LCode := AMQP_RESOURCE_LOCKED;
-        LTexto := 'cannot obtain exclusive access to ' + AWhat;
+        LText := 'cannot obtain exclusive access to ' + AWhat;
       end;
   else
     LCode := AMQP_PRECONDITION_FAILED;
-    LTexto := AWhat;
+    LText := AWhat;
   end;
-  raise EAMQPChannelError.Create(AChannel.Id, LCode, LTexto, AClassId,
+  raise EAMQPChannelError.Create(AChannel.Id, LCode, LText, AClassId,
     AMethodId);
 end;
 
@@ -1073,15 +1073,15 @@ procedure TAMQPServerConnection.CheckReservedName(
   AClassId, AMethodId: Word);
 begin
   if AmqpIsReservedName(AName) then
-    CheckEngine(AChannel, amqerNomeReservado, AWhat + ' ' + AName,
+    CheckEngine(AChannel, amqerAccessRefused, AWhat + ' ' + AName,
       AClassId, AMethodId);
 end;
 
 procedure TAMQPServerConnection.ReleaseChannelResources(
   AChannel: TAMQPServerChannel);
 var
-  LNomes: TArray<string>;
-  LFila: TAMQPServerQueue;
+  LNames: TArray<string>;
+  LQueue: TAMQPServerQueue;
   I: Integer;
   LId: NativeUInt;
 begin
@@ -1092,20 +1092,20 @@ begin
   if (FEngine <> nil) and (AChannel.DeliveryId <> 0) then
   begin
     LId := AChannel.DeliveryId;
-    LNomes := AChannel.TouchedQueues;
-    for I := 0 to High(LNomes) do
+    LNames := AChannel.TouchedQueues;
+    for I := 0 to High(LNames) do
     begin
-      LFila := FEngine.FindQueue(FVirtualHost, LNomes[I]);
-      if LFila <> nil then
+      LQueue := FEngine.FindQueue(FVirtualHost, LNames[I]);
+      if LQueue <> nil then
         // Tira os consumidores deste canal e devolve as nao-confirmadas dele
         // para a fila -- o cliente nunca as confirmou.
-        LFila.PostRemoveChannel(LId);
+        LQueue.PostRemoveChannel(LId);
     end;
     // WS7, DEPOIS de postar todas as remocoes: uma fila auto-delete que
     // perdeu o ultimo consumidor com este canal some agora. O Stats de dentro
     // do MaybeAutoDeleteQueue e' a barreira sobre o PostRemoveChannel acima.
-    for I := 0 to High(LNomes) do
-      FEngine.MaybeAutoDeleteQueue(FVirtualHost, LNomes[I]);
+    for I := 0 to High(LNames) do
+      FEngine.MaybeAutoDeleteQueue(FVirtualHost, LNames[I]);
   end;
   AChannel.DetachDelivery; // destaca tambem o rastreador de confirms
   // ... e ele sai do registro do broker, senao a thread do journal seguiria
@@ -1124,7 +1124,7 @@ procedure TAMQPServerConnection.SendBasicReturn(AChannel: TAMQPServerChannel;
 var
   LReturn: TAMQPBasicReturn;
   LMsg: TAMQPMessage;
-  LConteudo, LTodos: TArray<TAMQPFrame>;
+  LContent, LAll: TArray<TAMQPFrame>;
   I: Integer;
 begin
   LReturn.ReplyCode := AMQP_NO_ROUTE;
@@ -1136,13 +1136,13 @@ begin
   // decisao D1); esta mensagem nao vai para fila nenhuma.
   LMsg := TAMQPMessage.FromServerMessage(AMessage);
   try
-    LConteudo := AmqpBuildContentFrames(AChannel.Id, LMsg, CurrentMaxPayload);
-    SetLength(LTodos, 1 + Length(LConteudo));
-    LTodos[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, AChannel.Id,
+    LContent := AmqpBuildContentFrames(AChannel.Id, LMsg, CurrentMaxPayload);
+    SetLength(LAll, 1 + Length(LContent));
+    LAll[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, AChannel.Id,
       BuildBasicReturn(LReturn));
-    for I := 0 to High(LConteudo) do
-      LTodos[1 + I] := LConteudo[I];
-    FWriter.PostFrames(LTodos);
+    for I := 0 to High(LContent) do
+      LAll[1 + I] := LContent[I];
+    FWriter.PostFrames(LAll);
   finally
     LMsg.Release;
   end;
@@ -1154,7 +1154,7 @@ procedure TAMQPServerConnection.SendGetOk(AChannel: TAMQPServerChannel;
   AMessage: TAMQPMessage);
 var
   LGetOk: TAMQPBasicGetOk;
-  LConteudo, LTodos: TArray<TAMQPFrame>;
+  LContent, LAll: TArray<TAMQPFrame>;
   I: Integer;
 begin
   LGetOk.DeliveryTag := ADeliveryTag;
@@ -1163,14 +1163,14 @@ begin
   LGetOk.RoutingKey := AMessage.RoutingKey;
   LGetOk.MessageCount := Cardinal(AMessageCount);
 
-  LConteudo := AmqpBuildContentFrames(AChannel.Id, AMessage,
+  LContent := AmqpBuildContentFrames(AChannel.Id, AMessage,
     CurrentMaxPayload);
-  SetLength(LTodos, 1 + Length(LConteudo));
-  LTodos[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, AChannel.Id,
+  SetLength(LAll, 1 + Length(LContent));
+  LAll[0] := TAMQPFrame.Create(AMQP_FRAME_METHOD, AChannel.Id,
     BuildBasicGetOk(LGetOk));
-  for I := 0 to High(LConteudo) do
-    LTodos[1 + I] := LConteudo[I];
-  FWriter.PostFrames(LTodos);
+  for I := 0 to High(LContent) do
+    LAll[1 + I] := LContent[I];
+  FWriter.PostFrames(LAll);
 end;
 
 function TAMQPServerConnection.DispatchExchange(AChannel: TAMQPServerChannel;
@@ -1180,8 +1180,8 @@ var
   LDelete: TAMQPExchangeDelete;
   LBind: TAMQPExchangeBinding;
   LRes: TAMQPEngineResult;
-  LAltNome, LArgErro: string;
-  LAltTem: Boolean;
+  LAltName, LErrorArg: string;
+  LAltHas: Boolean;
 begin
   Result := True;
   case AId.MethodId of
@@ -1201,7 +1201,7 @@ begin
               // declarado pelo cliente (spec 1.4). Passive escapa: consultar
               // 'amq.direct' e' legitimo e comum.
               if LDeclare.ExchangeName = '' then
-                CheckEngine(AChannel, amqerNomeReservado, 'default exchange',
+                CheckEngine(AChannel, amqerAccessRefused, 'default exchange',
                   AId.ClassId, AId.MethodId);
               CheckReservedName(AChannel, LDeclare.ExchangeName, 'exchange',
                 AId.ClassId, AId.MethodId);
@@ -1213,7 +1213,7 @@ begin
             // nada, e o cliente costuma mandar a tabela vazia nesse caso.
             if not LDeclare.Passive then
               CheckArgs(AChannel, AmqpParseAlternateExchange(
-                LDeclare.Arguments, LAltNome, LAltTem, LArgErro), LArgErro,
+                LDeclare.Arguments, LAltName, LAltHas, LErrorArg), LErrorArg,
                 AId.ClassId, AId.MethodId);
             LRes := FEngine.DeclareExchange(FVirtualHost,
               LDeclare.ExchangeName, LDeclare.ExchangeType, LDeclare.Passive,
@@ -1299,7 +1299,7 @@ var
   LMsgs, LCons: Integer;
   LRes: TAMQPEngineResult;
   LPolicy: TAMQPQueuePolicy;
-  LArgErro: string;
+  LErrorArg: string;
 begin
   Result := True;
   case AId.MethodId of
@@ -1328,14 +1328,14 @@ begin
             begin
               if LDeclare.Passive then
                 // Passive sem nome nao tem o que verificar.
-                CheckEngine(AChannel, amqerNaoEncontrado, 'queue',
+                CheckEngine(AChannel, amqerNotFound, 'queue',
                   AId.ClassId, AId.MethodId);
               LName := GeneratedName('amq.gen-');
             end;
             // WS2 da Fase 3 -- ver o comentario equivalente no Exchange.Declare.
             if not LDeclare.Passive then
               CheckArgs(AChannel, AmqpParseQueuePolicy(LDeclare.Arguments,
-                LPolicy, LArgErro), LArgErro, AId.ClassId, AId.MethodId);
+                LPolicy, LErrorArg), LErrorArg, AId.ClassId, AId.MethodId);
             LRes := FEngine.DeclareQueue(FVirtualHost, LName, LDeclare.Passive,
               LDeclare.Durable, LDeclare.Exclusive, LDeclare.AutoDelete,
               LDeclare.Arguments, FConnId, LMsgs, LCons);
@@ -1449,7 +1449,7 @@ var
   LAck: TAMQPBasicAck;
   LNack: TAMQPBasicNack;
   LReject: TAMQPBasicReject;
-  LTag, LFila: string;
+  LTag, LQueueName: string;
   LDeliveryTag: UInt64;
   LFound, LRedelivered: Boolean;
   LMsg: TAMQPMessage;
@@ -1488,17 +1488,17 @@ begin
               'no-local not implemented', AId.ClassId, AId.MethodId);
           // Tag repetida no mesmo canal e erro de CONEXAO pela spec
           // (1.8.3.3, not-allowed), nao de canal.
-          if AChannel.ConsumerQueue(LTag, LFila) then
+          if AChannel.ConsumerQueue(LTag, LQueueName) then
             raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED,
               'consumer tag already used: ' + LTag, AId.ClassId, AId.MethodId);
-          LFila := LConsume.Queue;
-          if LFila = '' then
-            LFila := AChannel.LastQueue;
+          LQueueName := LConsume.Queue;
+          if LQueueName = '' then
+            LQueueName := AChannel.LastQueue;
           CheckEngine(AChannel,
-            FEngine.AddConsumer(FVirtualHost, LFila, LTag, LConsume.NoAck,
+            FEngine.AddConsumer(FVirtualHost, LQueueName, LTag, LConsume.NoAck,
               LConsume.Exclusive, AChannel.DeliveryTarget, FConnId),
-            'queue ' + LFila, AId.ClassId, AId.MethodId);
-          AChannel.AddConsumerTag(LTag, LFila);
+            'queue ' + LQueueName, AId.ClassId, AId.MethodId);
+          AChannel.AddConsumerTag(LTag, LQueueName);
         end;
         if not LConsume.NoWait then
           PostMethod(AChannel.Id, BuildBasicConsumeOk(LTag));
@@ -1510,14 +1510,14 @@ begin
         begin
           // Tag desconhecida nao e erro: a spec manda responder Cancel-Ok do
           // mesmo jeito (o consumidor pode ter sumido junto com a fila).
-          if AChannel.ConsumerQueue(LCancel.ConsumerTag, LFila) then
+          if AChannel.ConsumerQueue(LCancel.ConsumerTag, LQueueName) then
           begin
-            FEngine.RemoveConsumer(FVirtualHost, LFila, LCancel.ConsumerTag,
+            FEngine.RemoveConsumer(FVirtualHost, LQueueName, LCancel.ConsumerTag,
               AChannel.Delivery.ChannelId);
             AChannel.RemoveConsumerTag(LCancel.ConsumerTag);
             // WS7: se a fila e' auto-delete e este era o ultimo consumidor,
             // ela some agora.
-            FEngine.MaybeAutoDeleteQueue(FVirtualHost, LFila);
+            FEngine.MaybeAutoDeleteQueue(FVirtualHost, LQueueName);
           end;
         end;
         if not LCancel.NoWait then
@@ -1543,16 +1543,16 @@ begin
           PostMethod(AChannel.Id, BuildBasicGetEmpty);
           Exit;
         end;
-        LFila := LGet.Queue;
-        if LFila = '' then
-          LFila := AChannel.LastQueue;
+        LQueueName := LGet.Queue;
+        if LQueueName = '' then
+          LQueueName := AChannel.LastQueue;
         // A tag e do CANAL, mesmo no Get: sai da mesma sequencia da entrega.
         LDeliveryTag := AChannel.Delivery.NextDeliveryTag;
         CheckEngine(AChannel,
-          FEngine.GetMessage(FVirtualHost, LFila, LGet.NoAck, LDeliveryTag,
+          FEngine.GetMessage(FVirtualHost, LQueueName, LGet.NoAck, LDeliveryTag,
             AChannel.Delivery.ChannelId, FConnId, LFound, LMsg, LRedelivered,
             LMsgs),
-          'queue ' + LFila, AId.ClassId, AId.MethodId);
+          'queue ' + LQueueName, AId.ClassId, AId.MethodId);
         if not LFound then
           PostMethod(AChannel.Id, BuildBasicGetEmpty)
         else
@@ -1560,7 +1560,7 @@ begin
             if not LGet.NoAck then
               // Registrado no ALVO, como as entregas a consumidor -- mas sem
               // contar para o prefetch (a spec limita entrega a consumidor).
-              AChannel.Delivery.NoteGet(LDeliveryTag, LFila);
+              AChannel.Delivery.NoteGet(LDeliveryTag, LQueueName);
             SendGetOk(AChannel, LDeliveryTag, LRedelivered, LMsgs, LMsg);
           finally
             LMsg.Release; // a referencia que o Get entregou a nos
@@ -1675,8 +1675,8 @@ procedure TAMQPServerConnection.CompleteContent(AChannel: TAMQPServerChannel);
 var
   LMsg: TAMQPServerMessage;
   LSeq: UInt64;
-  LRoteada: Boolean;
-  LRejeitada: Boolean;
+  LRouted: Boolean;
+  LRejected: Boolean;
   LTtlMs: Int64;
   LLsn: UInt64;
 begin
@@ -1709,12 +1709,12 @@ begin
     if AChannel.ConfirmMode then
       LSeq := AChannel.NextPublishSeq;
 
-    LRoteada := False;
-    LRejeitada := False;
+    LRouted := False;
+    LRejected := False;
     LLsn := 0;
     try
       if FConfig.Sink <> nil then
-        LRoteada := FConfig.Sink.RouteMessage(FVirtualHost, LMsg, LRejeitada,
+        LRouted := FConfig.Sink.RouteMessage(FVirtualHost, LMsg, LRejected,
           LLsn);
     except
       // Basic.Nack e' reservado a FALHA INTERNA do broker (spec da extensao:
@@ -1723,7 +1723,7 @@ begin
       on E: Exception do
       begin
         if AChannel.ConfirmMode then
-          ConfirmaPublish(AChannel, LSeq, 0, True);
+          ConfirmPublish(AChannel, LSeq, 0, True);
         raise;
       end;
     end;
@@ -1732,7 +1732,7 @@ begin
     // publish assim que o ack chega (o WaitForConfirms desta lib faz isso);
     // se o ack viesse primeiro, o return chegaria para um publish que o
     // cliente ja considera resolvido.
-    if (not LRoteada) and LMsg.Mandatory then
+    if (not LRouted) and LMsg.Mandatory then
       SendBasicReturn(AChannel, LMsg);
 
     if AChannel.ConfirmMode then
@@ -1749,10 +1749,10 @@ begin
       // WS5 da Fase 4: quem decide se o frame sai AGORA ou fica preso a marca
       // d'agua e' o ConfirmaPublish. Um nack nao espera disco (nao promete
       // durabilidade nenhuma), mas continua respeitando a ordem de seq.
-      if LRejeitada then
-        ConfirmaPublish(AChannel, LSeq, 0, True)
+      if LRejected then
+        ConfirmPublish(AChannel, LSeq, 0, True)
       else
-        ConfirmaPublish(AChannel, LSeq, LLsn, False);
+        ConfirmPublish(AChannel, LSeq, LLsn, False);
   finally
     AChannel.ResetContent;
   end;
@@ -1762,7 +1762,7 @@ end;
 // pendente na frente) o frame sai aqui mesmo, como na Fase 3; do contrario
 // fica com o rastreador do canal ate' o LSN estar no disco -- e sai de la'
 // colapsado com os vizinhos num unico multiple=true (D24/D9).
-procedure TAMQPServerConnection.ConfirmaPublish(AChannel: TAMQPServerChannel;
+procedure TAMQPServerConnection.ConfirmPublish(AChannel: TAMQPServerChannel;
   ASeq, ALsn: UInt64; ANack: Boolean);
 begin
   if (AChannel.Confirms <> nil)

@@ -464,7 +464,7 @@ begin
     AssertTrue('primeira declaracao', LVHost.DeclareExchange('ex1',
       AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrOk);
     AssertTrue('redeclare identico -> equivalente', LVHost.DeclareExchange('ex1',
-      AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrEquivalente);
+      AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrEquivalent);
   finally
     LVHost.Free;
   end;
@@ -480,10 +480,10 @@ begin
       AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrOk);
     AssertTrue('redeclare com durable diferente -> divergente',
       LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_TOPIC, False, False,
-      False, nil) = amqtrDivergente);
+      False, nil) = amqtrPreconditionFailed);
     AssertTrue('redeclare com tipo diferente -> divergente',
       LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
-      False, nil) = amqtrDivergente);
+      False, nil) = amqtrPreconditionFailed);
   finally
     LVHost.Free;
   end;
@@ -495,9 +495,9 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    AssertTrue('tipo desconhecido -> amqtrTipoInvalido',
+    AssertTrue('tipo desconhecido -> amqtrCommandInvalid',
       LVHost.DeclareExchange('ex1', 'custom', True, False, False, nil) =
-      amqtrTipoInvalido);
+      amqtrCommandInvalid);
     AssertFalse('nao ficou registrado', LVHost.ExchangeExists('ex1'));
   finally
     LVHost.Free;
@@ -513,7 +513,7 @@ begin
     AssertTrue('primeira declaracao',
       LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrOk);
     AssertTrue('redeclare identica -> equivalente',
-      LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrEquivalente);
+      LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrEquivalent);
   finally
     LVHost.Free;
   end;
@@ -528,7 +528,7 @@ begin
     AssertTrue('primeira declaracao',
       LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrOk);
     AssertTrue('redeclare com exclusive diferente -> divergente',
-      LVHost.DeclareQueue('q1', True, True, False, nil) = amqtrDivergente);
+      LVHost.DeclareQueue('q1', True, True, False, nil) = amqtrPreconditionFailed);
   finally
     LVHost.Free;
   end;
@@ -542,7 +542,7 @@ begin
   try
     LVHost.DeclareQueue('q1', True, False, False, nil);
     AssertTrue('exchange nao existe -> naoEncontrado',
-      LVHost.BindQueue('nao-existe', 'q1', 'rk', nil) = amqtrNaoEncontrado);
+      LVHost.BindQueue('nao-existe', 'q1', 'rk', nil) = amqtrNotFound);
   finally
     LVHost.Free;
   end;
@@ -557,7 +557,7 @@ begin
     LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, nil);
     AssertTrue('fila nao existe -> naoEncontrado',
-      LVHost.BindQueue('ex1', 'nao-existe', 'rk', nil) = amqtrNaoEncontrado);
+      LVHost.BindQueue('ex1', 'nao-existe', 'rk', nil) = amqtrNotFound);
   finally
     LVHost.Free;
   end;
@@ -575,8 +575,8 @@ begin
     LVHost.DeclareQueue('q1', True, False, False, nil);
     LArgs := TAMQPFieldTable.Create;
     LArgs.Put('x-match', 'xyz');
-    AssertTrue('x-match invalido -> amqtrTipoInvalido',
-      LVHost.BindQueue('exh', 'q1', '', LArgs) = amqtrTipoInvalido);
+    AssertTrue('x-match invalido -> amqtrCommandInvalid',
+      LVHost.BindQueue('exh', 'q1', '', LArgs) = amqtrCommandInvalid);
   finally
     LVHost.Free;
   end;
@@ -632,7 +632,7 @@ begin
       False, nil);
     LVHost.DeclareQueue('q1', True, False, False, nil);
     AssertTrue('unbind de algo que nunca foi ligado -> naoEncontrado',
-      LVHost.UnbindQueue('ex1', 'q1', 'rk-nunca-ligada', nil) = amqtrNaoEncontrado);
+      LVHost.UnbindQueue('ex1', 'q1', 'rk-nunca-ligada', nil) = amqtrNotFound);
   finally
     LVHost.Free;
   end;
@@ -883,7 +883,7 @@ begin
       Length(LResult));
 
     AssertTrue('delete de novo -> naoEncontrado',
-      LVHost.DeleteQueue('q1') = amqtrNaoEncontrado);
+      LVHost.DeleteQueue('q1') = amqtrNotFound);
   finally
     LVHost.Free;
   end;

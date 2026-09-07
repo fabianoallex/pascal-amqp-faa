@@ -172,29 +172,29 @@ type
     os AmqpAtomic*64 na AMQP.Threading. }
   TAMQPJournalStats = record
     /// Rodadas do laco que escreveram alguma coisa.
-    Lotes: Int64;
+    Batches: Int64;
     /// fsyncs tentados. Registros/Syncs e' o tamanho medio do lote -- e' este
     /// numero que prova que o group commit esta' agrupando.
     Syncs: Int64;
     /// fsyncs que devolveram False (nao avancaram a marca d'agua).
-    SyncsFalhos: Int64;
-    Registros: Int64;
+    FailedSyncs: Int64;
+    Records: Int64;
     /// Maior lote ja' escrito numa rodada.
-    MaiorLote: Integer;
+    MaxBatchSize: Integer;
     /// Quantas vezes o segmento cheio foi fechado e outro aberto (D26).
-    Rotacoes: Int64;
+    Rotations: Int64;
     /// Quantas compactacoes rodaram, e quantos segmentos elas apagaram.
-    Compactacoes: Int64;
-    SegmentosApagados: Int64;
+    Compactions: Int64;
+    DeletedSegments: Int64;
     /// Publishes persistentes recusados por teto de disco (D26).
-    Recusados: Int64;
+    Refused: Int64;
     /// Tamanho aproximado do log agora.
     Bytes: Int64;
     /// Bytes de payload esperando na fila de submissao AGORA.
     PendingBytes: Int64;
     DurableLsn: UInt64;
     /// LSN que o proximo registro submetido vai receber.
-    ProximoLsn: UInt64;
+    NextLsn: UInt64;
   end;
 
   TAMQPJournal = class;
@@ -223,67 +223,67 @@ type
   private
     FDir: string;
     FLock: TAMQPWalDirLock;
-    FSegmento: TAMQPWalSegment;
-    FArquivo: IAMQPWalFile;
+    FSegment: TAMQPWalSegment;
+    FFile: IAMQPWalFile;
     FThread: TAMQPJournalThread;
     FMon: TAMQPMonitor;
-    FPendentes: TQueue<TAMQPJournalItem>;
+    FPendings: TQueue<TAMQPJournalItem>;
     FPendingBytes: Int64;
     FMaxPendingBytes: Int64;
     FMaxSegmentBytes: Int64;
-    FCompactarAcima: Int64;
+    FCompactAbove: Int64;
     FMaxJournalBytes: Int64;
     /// Tamanho aproximado do log AGORA, mantido pela thread do journal e lido
     /// sem lock pelos publicadores. Aproximado de proposito: um teto de disco
     /// nao precisa de precisao de byte, e varrer o diretorio no caminho quente
     /// do publish e' que seria errado.
-    FBytesTotal: UInt64;
-    FBytesFechados: UInt64;
-    FRecusados: Int64;
+    FTotalBytes: UInt64;
+    FClosedBytes: UInt64;
+    FRefused: Int64;
     FSegNo: Cardinal;
-    FProximoLsn: UInt64;
+    FNextLsn: UInt64;
     FDurableLsn: UInt64;   // atomico -- leitura fora do lock
-    FRodando: Boolean;
-    FParando: Boolean;
-    FFalho: Boolean;
-    FErro: string;
+    FRunning: Boolean;
+    FStopping: Boolean;
+    FFailed: Boolean;
+    FError: string;
     FSink: IAMQPDurabilitySink;
-    FLotes: Int64;
-    FRotacoes: Int64;
-    FCompactacoes: Int64;
-    FSegmentosApagados: Int64;
+    FBatches: Int64;
+    FRotations: Int64;
+    FCompactions: Int64;
+    FDeletedSegments: Int64;
     FSyncs: Int64;
-    FRegistros: Int64;
-    FMaiorLote: Integer;
-    FSyncsFalhos: Int64;
-    procedure AbreOuRecupera;
-    procedure MarcaFalho(const AMensagem: string);
-    function SubmitInterno(const ARecs: array of TAMQPJournalRecord;
-      AEsperarVaga: Boolean): UInt64;
+    FRecords: Int64;
+    FMaxBatchSize: Integer;
+    FFailedSyncs: Int64;
+    procedure OpenOrRecover;
+    procedure MarkFailed(const AMsg: string);
+    function InternalSubmit(const ARecs: array of TAMQPJournalRecord;
+      AWaitVacancy: Boolean): UInt64;
   protected
     /// Uma rodada do laco: drena, escreve, sincroniza, avanca a marca.
     /// Devolve False quando nao ha mais nada a fazer e a parada foi pedida.
-    function RodaUmLote: Boolean;
+    function ProcessSingleBatch: Boolean;
     /// Ponto exato entre "tirei o lote da fila" e "escrevi" -- a janela em que
     /// um Submit concorrente decide se entra neste lote ou no proximo. No-op
     /// em producao; o teste sobrescreve para postar de outra thread dentro
     /// dela. NAO PODE LEVANTAR. (Mesma ideia do ActorRoundEnding da fila.)
-    procedure LoteTomado; virtual;
+    procedure BatchTaken; virtual;
     /// A costura de arquivo do segmento ativo. Virtual para o teste injetar um
     /// duble que conta fsyncs e falha na hora escolhida (camada 2 da D28).
-    function CriaArquivo(const APath: string; ACriar: Boolean): IAMQPWalFile; virtual;
+    function CreateFile(const APath: string; ACreate: Boolean): IAMQPWalFile; virtual;
     /// Fecha o segmento cheio e abre o proximo. Chamado SO' na fronteira de
     /// lote -- ver o comentario na chamada.
-    procedure Rotaciona;
+    procedure Rotate;
     /// Abre um segmento novo (o proximo numero) e o torna o ativo.
-    procedure AbreProximoSegmento;
+    procedure OpenNextSegment;
     /// Recalcula FBytesTotal. So' na thread do journal.
-    procedure AtualizaTamanho;
+    procedure UpdateSize;
     /// Escreve os registros vivos no segmento ativo, com os identificadores
     /// PRESERVADOS. Devolve o LSN do ULTIMO que escreveu (0 se nao escreveu
     /// nada) -- e' o numero que a marca d agua tem de alcancar depois do
     /// fsync da compactacao.
-    function EscreveVivos(AEstado: TAMQPRecoveredState): UInt64;
+    function WriteLiveRecords(AState: TAMQPRecoveredState): UInt64;
   public
     /// ADir e' o DataDir. O lock exclusivo do diretorio e' tomado no Start,
     /// nao aqui -- construir um journal nao pode roubar o diretorio de um
@@ -313,10 +313,10 @@ type
     function WaitDurable(ALsn: UInt64; ATimeoutMs: Cardinal): Boolean;
 
     property Dir: string read FDir;
-    property Running: Boolean read FRodando;
+    property Running: Boolean read FRunning;
     /// True depois de uma falha de ESCRITA -- definitivo (ver o cabecalho).
-    property Failed: Boolean read FFalho;
-    property LastError: string read FErro;
+    property Failed: Boolean read FFailed;
+    property LastError: string read FError;
     /// Quem e' avisado a cada fsync bem-sucedido. Injetado antes do Start.
     property DurabilitySink: IAMQPDurabilitySink read FSink write FSink;
     property MaxPendingBytes: Int64 read FMaxPendingBytes
@@ -327,15 +327,15 @@ type
       write FMaxSegmentBytes;
     /// A partir de que tamanho total o Start compacta o log. 0 desliga.
     /// NAO ha compactacao em voo -- ver o cabecalho da unit.
-    property CompactarAcimaDe: Int64 read FCompactarAcima
-      write FCompactarAcima;
+    property CompactAbove: Int64 read FCompactAbove
+      write FCompactAbove;
     /// TETO DURO do log em bytes. 0 (default) = ilimitado, a forma da D7.
     /// Ao estourar, o publish PERSISTENTE e' recusado -- ver Cheio.
     property MaxJournalBytes: Int64 read FMaxJournalBytes
       write FMaxJournalBytes;
 
     /// Conta mais um publish recusado por teto de disco.
-    procedure ContaRecusa;
+    procedure IncrementRefused;
     /// True quando o log alcancou o MaxJournalBytes.
     ///
     /// A DIFERENCA QUE IMPORTA EM RELACAO A D7: teto de MEMORIA descarta da
@@ -349,11 +349,11 @@ type
     /// de ser barrado, recusar um DEQ ressuscitaria a mensagem no proximo
     /// boot -- e sao justamente os DEQs que permitem a compactacao encolher o
     /// log e sair desta situacao.
-    function Cheio: Boolean;
+    function IsFull: Boolean;
     /// Numero do segmento ATIVO. Cresce a cada rotacao.
-    function SegmentoAtivo: Cardinal;
+    function ActiveSegment: Cardinal;
     /// Soma dos tamanhos de todos os segmentos, em bytes.
-    function TamanhoTotal: Int64;
+    function TotalSize: Int64;
 
     /// Reescreve o log deixando so' o que esta' vivo e apaga o resto (D26).
     /// SO' PODE SER CHAMADA PELA THREAD DO JOURNAL (ou com ela parada): ela e'
@@ -362,7 +362,7 @@ type
     ///
     /// False quando nao havia nada a fazer ou o journal esta' falho; a falha
     /// de I/O no meio marca o journal como falho, como qualquer outra.
-    function Compacta: Boolean;
+    function Compact: Boolean;
 
     /// Contagens, lidas sob o lock (ver TAMQPJournalStats).
     function Stats: TAMQPJournalStats;
@@ -385,7 +385,7 @@ end;
 
 procedure TAMQPJournalThread.Execute;
 begin
-  while FJournal.RodaUmLote do
+  while FJournal.ProcessSingleBatch do
     ;
 end;
 
@@ -396,31 +396,31 @@ begin
   inherited Create;
   FDir := ADir;
   FMon := TAMQPMonitor.Create;
-  FPendentes := TQueue<TAMQPJournalItem>.Create;
+  FPendings := TQueue<TAMQPJournalItem>.Create;
   FMaxPendingBytes := AMQP_JOURNAL_MAX_PENDING_BYTES;
   FMaxSegmentBytes := AMQP_WAL_SEGMENT_BYTES;
-  FCompactarAcima := AMQP_WAL_SEGMENT_BYTES * AMQP_JOURNAL_COMPACT_FATOR;
-  FProximoLsn := 1;
+  FCompactAbove := AMQP_WAL_SEGMENT_BYTES * AMQP_JOURNAL_COMPACT_FATOR;
+  FNextLsn := 1;
 end;
 
 destructor TAMQPJournal.Destroy;
 begin
   Stop;
-  FPendentes.Free;
-  FSegmento.Free;
-  FArquivo := nil;
+  FPendings.Free;
+  FSegment.Free;
+  FFile := nil;
   FLock.Free;
   FMon.Free;
   inherited Destroy;
 end;
 
-function TAMQPJournal.CriaArquivo(const APath: string;
-  ACriar: Boolean): IAMQPWalFile;
+function TAMQPJournal.CreateFile(const APath: string;
+  ACreate: Boolean): IAMQPWalFile;
 begin
-  Result := TAMQPWalOsFile.Create(APath, ACriar);
+  Result := TAMQPWalOsFile.Create(APath, ACreate);
 end;
 
-procedure TAMQPJournal.AbreOuRecupera;
+procedure TAMQPJournal.OpenOrRecover;
 var
   LSegs: TArray<Cardinal>;
   LNo: Cardinal;
@@ -431,8 +431,8 @@ begin
   begin
     LNo := 1;
     LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LNo);
-    FArquivo := CriaArquivo(LPath, True);
-    FSegmento := TAMQPWalSegment.CreateNew(FArquivo, LNo);
+    FFile := CreateFile(LPath, True);
+    FSegment := TAMQPWalSegment.CreateNew(FFile, LNo);
     FSegNo := LNo;
   end
   else
@@ -441,36 +441,36 @@ begin
     // uma queda deixou -- e' o que torna o proximo append alcancavel (WS1).
     LNo := LSegs[High(LSegs)];
     LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LNo);
-    FArquivo := CriaArquivo(LPath, False);
-    FSegmento := TAMQPWalSegment.OpenExisting(FArquivo, True);
+    FFile := CreateFile(LPath, False);
+    FSegment := TAMQPWalSegment.OpenExisting(FFile, True);
     FSegNo := LNo;
   end;
   // O LSN CONTINUA DE ONDE PAROU. Recomecar do 1 depois de um restart faria o
   // proprio Append da WS1 levantar (LSN nao crescente) -- e, pior, se nao
   // levantasse, produziria um arquivo que a recuperacao truncaria no ponto da
   // volta.
-  FProximoLsn := FSegmento.LastLsn + 1;
+  FNextLsn := FSegment.LastLsn + 1;
   // O tamanho de partida vem do DISCO: os segmentos que ja' estavam la' contam
   // para o teto desde o primeiro publish, e nao so' depois do primeiro lote.
-  FBytesFechados := 0;
-  FBytesTotal := 0;
-  if TamanhoTotal > FSegmento.EndOffset then
-    FBytesFechados := UInt64(TamanhoTotal - FSegmento.EndOffset);
-  AtualizaTamanho;
+  FClosedBytes := 0;
+  FTotalBytes := 0;
+  if TotalSize > FSegment.EndOffset then
+    FClosedBytes := UInt64(TotalSize - FSegment.EndOffset);
+  UpdateSize;
   // O que ja' estava no arquivo esta' no disco por definicao: ninguem promete
   // nada sobre ele agora, mas a marca d'agua nao pode nascer ATRAS dele.
-  AmqpAtomicWrite64(FDurableLsn, FSegmento.LastLsn);
+  AmqpAtomicWrite64(FDurableLsn, FSegment.LastLsn);
 end;
 
 procedure TAMQPJournal.Start;
 begin
   FMon.Enter;
   try
-    if FRodando then
+    if FRunning then
       Exit;
-    FParando := False;
-    FFalho := False;
-    FErro := '';
+    FStopping := False;
+    FFailed := False;
+    FError := '';
   finally
     FMon.Leave;
   end;
@@ -479,7 +479,7 @@ begin
   // levantar. Se levantarem, o journal continua parado e nada foi prometido.
   FLock := TAMQPWalDirLock.Create(FDir);
   try
-    AbreOuRecupera;
+    OpenOrRecover;
   except
     on E: Exception do
     begin
@@ -490,7 +490,7 @@ begin
 
   FMon.Enter;
   try
-    FRodando := True;
+    FRunning := True;
   finally
     FMon.Leave;
   end;
@@ -501,13 +501,13 @@ procedure TAMQPJournal.Stop;
 begin
   FMon.Enter;
   try
-    if not FRodando then
+    if not FRunning then
     begin
-      FParando := True;
+      FStopping := True;
       FMon.PulseAll;
       Exit;
     end;
-    FParando := True;
+    FStopping := True;
     FMon.PulseAll;
   finally
     FMon.Leave;
@@ -526,28 +526,28 @@ begin
 
   FMon.Enter;
   try
-    FRodando := False;
+    FRunning := False;
     FMon.PulseAll;
   finally
     FMon.Leave;
   end;
 
-  FreeAndNil(FSegmento);
-  FArquivo := nil;
+  FreeAndNil(FSegment);
+  FFile := nil;
   FreeAndNil(FLock);
 end;
 
-procedure TAMQPJournal.MarcaFalho(const AMensagem: string);
+procedure TAMQPJournal.MarkFailed(const AMsg: string);
 var
   LSink: IAMQPDurabilitySink;
   LAvisar: Boolean;
 begin
   FMon.Enter;
   try
-    LAvisar := not FFalho;
-    FFalho := True;
-    if FErro = '' then
-      FErro := AMensagem;
+    LAvisar := not FFailed;
+    FFailed := True;
+    if FError = '' then
+      FError := AMsg;
     FMon.PulseAll; // solta quem espera vaga e quem espera durabilidade
   finally
     FMon.Leave;
@@ -555,21 +555,21 @@ begin
   LSink := FSink;
   if LAvisar and (LSink <> nil) then
     try
-      LSink.JournalFailed(AMensagem);
+      LSink.JournalFailed(AMsg);
     except
     end;
 end;
 
-function TAMQPJournal.SubmitInterno(const ARecs: array of TAMQPJournalRecord;
-  AEsperarVaga: Boolean): UInt64;
+function TAMQPJournal.InternalSubmit(const ARecs: array of TAMQPJournalRecord;
+  AWaitVacancy: Boolean): UInt64;
 var
   I: Integer;
   LItem: TAMQPJournalItem;
   LBytes: Int64;
-  LPrazo: UInt64;
+  LDeadline: UInt64;
 begin
   if Length(ARecs) = 0 then
-    raise EAMQPJournal.Create('Submit sem registro nenhum');
+    raise EAMQPJournal.Create('submit without any records');
 
   LBytes := 0;
   for I := 0 to High(ARecs) do
@@ -577,24 +577,25 @@ begin
 
   FMon.Enter;
   try
-    if AEsperarVaga then
+    if AWaitVacancy then
     begin
       // Contrapressao: espera a fila baixar do teto. Re-checa em laco com
       // deadline, como manda o contrato do TAMQPMonitor (wakeup espurio).
-      LPrazo := AmqpTickMs + AMQP_JOURNAL_SUBMIT_TIMEOUT_MS;
-      while FRodando and (not FParando) and (not FFalho)
-        and (FPendingBytes >= FMaxPendingBytes) and (AmqpTickMs < LPrazo) do
+      LDeadline := AmqpTickMs + AMQP_JOURNAL_SUBMIT_TIMEOUT_MS;
+      while FRunning and (not FStopping) and (not FFailed)
+        and (FPendingBytes >= FMaxPendingBytes) and (AmqpTickMs < LDeadline) do
         FMon.Wait(50);
     end;
 
-    if FFalho then
-      raise EAMQPJournal.CreateFmt('journal em falha: %s', [FErro]);
-    if (not FRodando) or FParando then
-      raise EAMQPJournal.Create('journal parado');
-    if AEsperarVaga and (FPendingBytes >= FMaxPendingBytes) then
-      raise EAMQPJournal.CreateFmt('fila do journal cheia ha mais de %d ms '
-        + '(%d bytes pendentes)',
+    if FFailed then
+      raise EAMQPJournal.CreateFmt('journal has failed: %s', [FError]);
+    if (not FRunning) or FStopping then
+      raise EAMQPJournal.Create('journal is stopped');
+    if AWaitVacancy and (FPendingBytes >= FMaxPendingBytes) then
+      raise EAMQPJournal.CreateFmt('journal queue has been full for more than %d ms '
+        + '(%d pending bytes)',
         [AMQP_JOURNAL_SUBMIT_TIMEOUT_MS, FPendingBytes]);
+
 
     // LSNs contiguos, atribuidos AQUI: o publicador precisa do numero antes de
     // voltar (D24). E a fila fica ordenada por LSN de graca, porque a
@@ -603,12 +604,12 @@ begin
     Result := 0;
     for I := 0 to High(ARecs) do
     begin
-      LItem.Lsn := FProximoLsn;
+      LItem.Lsn := FNextLsn;
       LItem.Kind := ARecs[I].Kind;
       LItem.Payload := ARecs[I].Payload;
-      FPendentes.Enqueue(LItem);
-      Result := FProximoLsn;
-      Inc(FProximoLsn);
+      FPendings.Enqueue(LItem);
+      Result := FNextLsn;
+      Inc(FNextLsn);
     end;
     Inc(FPendingBytes, LBytes);
     FMon.PulseAll; // acorda a thread do journal
@@ -619,13 +620,13 @@ end;
 
 function TAMQPJournal.Submit(const ARecs: array of TAMQPJournalRecord): UInt64;
 begin
-  Result := SubmitInterno(ARecs, True);
+  Result := InternalSubmit(ARecs, True);
 end;
 
 function TAMQPJournal.SubmitNoWait(
   const ARecs: array of TAMQPJournalRecord): UInt64;
 begin
-  Result := SubmitInterno(ARecs, False);
+  Result := InternalSubmit(ARecs, False);
 end;
 
 function TAMQPJournal.DurableLsn: UInt64;
@@ -635,15 +636,15 @@ end;
 
 function TAMQPJournal.WaitDurable(ALsn: UInt64; ATimeoutMs: Cardinal): Boolean;
 var
-  LPrazo: UInt64;
+  LDeadline: UInt64;
 begin
-  LPrazo := AmqpTickMs + ATimeoutMs;
+  LDeadline := AmqpTickMs + ATimeoutMs;
   FMon.Enter;
   try
-    while (AmqpAtomicRead64(FDurableLsn) < ALsn) and (not FFalho)
-      and (AmqpTickMs < LPrazo) do
+    while (AmqpAtomicRead64(FDurableLsn) < ALsn) and (not FFailed)
+      and (AmqpTickMs < LDeadline) do
       FMon.Wait(20);
-    Result := (not FFalho) and (AmqpAtomicRead64(FDurableLsn) >= ALsn);
+    Result := (not FFailed) and (AmqpAtomicRead64(FDurableLsn) >= ALsn);
   finally
     FMon.Leave;
   end;
@@ -653,25 +654,25 @@ function TAMQPJournal.Stats: TAMQPJournalStats;
 begin
   FMon.Enter;
   try
-    Result.Lotes := FLotes;
-    Result.Rotacoes := FRotacoes;
-    Result.Compactacoes := FCompactacoes;
-    Result.SegmentosApagados := FSegmentosApagados;
-    Result.Recusados := FRecusados;
-    Result.Bytes := Int64(FBytesTotal);
+    Result.Batches := FBatches;
+    Result.Rotations := FRotations;
+    Result.Compactions := FCompactions;
+    Result.DeletedSegments := FDeletedSegments;
+    Result.Refused := FRefused;
+    Result.Bytes := Int64(FTotalBytes);
     Result.Syncs := FSyncs;
-    Result.SyncsFalhos := FSyncsFalhos;
-    Result.Registros := FRegistros;
-    Result.MaiorLote := FMaiorLote;
+    Result.FailedSyncs := FFailedSyncs;
+    Result.Records := FRecords;
+    Result.MaxBatchSize := FMaxBatchSize;
     Result.PendingBytes := FPendingBytes;
     Result.DurableLsn := AmqpAtomicRead64(FDurableLsn);
-    Result.ProximoLsn := FProximoLsn;
+    Result.NextLsn := FNextLsn;
   finally
     FMon.Leave;
   end;
 end;
 
-procedure TAMQPJournal.LoteTomado;
+procedure TAMQPJournal.BatchTaken;
 begin
   // no-op em producao -- ver a declaracao
 end;
@@ -679,48 +680,48 @@ end;
 // Fecha o segmento cheio e abre o proximo. O LSN CONTINUA: a numeracao e' do
 // journal inteiro, nao do arquivo, e e' o que permite a recuperacao ler os
 // segmentos em sequencia como se fossem um log so'.
-procedure TAMQPJournal.AbreProximoSegmento;
+procedure TAMQPJournal.OpenNextSegment;
 var
   LPath: string;
 begin
-  if FSegmento <> nil then
-    Inc(FBytesFechados, UInt64(FSegmento.EndOffset));
-  FreeAndNil(FSegmento);
-  FArquivo := nil; // fecha o arquivo anterior
+  if FSegment <> nil then
+    Inc(FClosedBytes, UInt64(FSegment.EndOffset));
+  FreeAndNil(FSegment);
+  FFile := nil; // fecha o arquivo anterior
   Inc(FSegNo);
   LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(FSegNo);
-  FArquivo := CriaArquivo(LPath, True);
-  FSegmento := TAMQPWalSegment.CreateNew(FArquivo, FSegNo);
-  AtualizaTamanho;
+  FFile := CreateFile(LPath, True);
+  FSegment := TAMQPWalSegment.CreateNew(FFile, FSegNo);
+  UpdateSize;
 end;
 
-procedure TAMQPJournal.Rotaciona;
+procedure TAMQPJournal.Rotate;
 begin
-  AbreProximoSegmento;
+  OpenNextSegment;
   FMon.Enter;
   try
-    Inc(FRotacoes);
+    Inc(FRotations);
   finally
     FMon.Leave;
   end;
 end;
 
-function TAMQPJournal.TamanhoTotal: Int64;
+function TAMQPJournal.TotalSize: Int64;
 var
   LSegs: TArray<Cardinal>;
   I: Integer;
-  LArq: TSearchRec;
-  LNome: string;
+  LFile: TSearchRec;
+  LName: string;
 begin
   Result := 0;
   LSegs := AmqpWalListSegments(FDir);
   for I := 0 to High(LSegs) do
   begin
-    LNome := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]);
-    if FindFirst(LNome, faAnyFile, LArq) = 0 then
+    LName := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]);
+    if FindFirst(LName, faAnyFile, LFile) = 0 then
     begin
-      Result := Result + LArq.Size;
-      SysUtils.FindClose(LArq);
+      Result := Result + LFile.Size;
+      SysUtils.FindClose(LFile);
     end;
   end;
 end;
@@ -729,180 +730,180 @@ end;
 // e' o que faz a reescrita ser idempotente e, por isso, segura a queda (ver o
 // cabecalho da unit). A ordem repete a do log original: topologia primeiro,
 // depois cada conteudo antes da colocacao que o usa.
-function TAMQPJournal.EscreveVivos(AEstado: TAMQPRecoveredState): UInt64;
+function TAMQPJournal.WriteLiveRecords(AState: TAMQPRecoveredState): UInt64;
 var
   I: Integer;
   LEx: TAMQPRecExchange;
   LQ: TAMQPRecQueue;
   LB: TAMQPRecoveredBinding;
   LEnq: TAMQPRecEnqueue;
-  LCont: TAMQPRecContent;
-  LJaEscrito: TDictionary<UInt64, Byte>;
+  LCount: TAMQPRecContent;
+  LAlreadyWritten: TDictionary<UInt64, Byte>;
 
-  procedure Poe(AKind: Byte; const APayload: TBytes);
+  procedure AppendRecord(AKind: Byte; const APayload: TBytes);
   var
     LLsn: UInt64;
   begin
     FMon.Enter;
     try
-      LLsn := FProximoLsn;
-      Inc(FProximoLsn);
+      LLsn := FNextLsn;
+      Inc(FNextLsn);
     finally
       FMon.Leave;
     end;
-    FSegmento.Append(LLsn, AKind, APayload);
+    FSegment.Append(LLsn, AKind, APayload);
     Result := LLsn;
   end;
 
 begin
   Result := 0;
-  for I := 0 to AEstado.Exchanges.Count - 1 do
+  for I := 0 to AState.Exchanges.Count - 1 do
   begin
-    LEx := AEstado.Exchanges[I];
-    Poe(AMQP_REC_EXCHANGE_DECLARE, AmqpEncodeRecExchange(LEx));
+    LEx := AState.Exchanges[I];
+    AppendRecord(AMQP_REC_EXCHANGE_DECLARE, AmqpEncodeRecExchange(LEx));
   end;
-  for I := 0 to AEstado.Queues.Count - 1 do
+  for I := 0 to AState.Queues.Count - 1 do
   begin
-    LQ := AEstado.Queues[I];
-    Poe(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LQ));
+    LQ := AState.Queues[I];
+    AppendRecord(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LQ));
   end;
-  for I := 0 to AEstado.Bindings.Count - 1 do
+  for I := 0 to AState.Bindings.Count - 1 do
   begin
-    LB := AEstado.Bindings[I];
-    if LB.ParaExchange then
-      Poe(AMQP_REC_EXCHANGE_BIND, AmqpEncodeRecBinding(LB.Binding))
+    LB := AState.Bindings[I];
+    if LB.DestinationIsExchange then
+      AppendRecord(AMQP_REC_EXCHANGE_BIND, AmqpEncodeRecBinding(LB.Binding))
     else
-      Poe(AMQP_REC_QUEUE_BIND, AmqpEncodeRecBinding(LB.Binding));
+      AppendRecord(AMQP_REC_QUEUE_BIND, AmqpEncodeRecBinding(LB.Binding));
   end;
 
-  LJaEscrito := TDictionary<UInt64, Byte>.Create;
+  LAlreadyWritten := TDictionary<UInt64, Byte>.Create;
   try
-    for I := 0 to AEstado.Entries.Count - 1 do
+    for I := 0 to AState.Entries.Count - 1 do
     begin
-      LEnq := AEstado.Entries[I];
+      LEnq := AState.Entries[I];
       // O CORPO SO' UMA VEZ, como no log original (D22): N colocacoes do mesmo
       // fan-out, e a derivada do dead-letter, compartilham o ContentId.
-      if not LJaEscrito.ContainsKey(LEnq.ContentId) then
-        if AEstado.Contents.TryGetValue(LEnq.ContentId, LCont) then
+      if not LAlreadyWritten.ContainsKey(LEnq.ContentId) then
+        if AState.Contents.TryGetValue(LEnq.ContentId, LCount) then
         begin
-          Poe(AMQP_REC_CONTENT, AmqpEncodeRecContent(LCont));
-          LJaEscrito.Add(LEnq.ContentId, 0);
+          AppendRecord(AMQP_REC_CONTENT, AmqpEncodeRecContent(LCount));
+          LAlreadyWritten.Add(LEnq.ContentId, 0);
         end;
-      Poe(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
+      AppendRecord(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
     end;
   finally
-    LJaEscrito.Free;
+    LAlreadyWritten.Free;
   end;
 end;
 
-function TAMQPJournal.Compacta: Boolean;
+function TAMQPJournal.Compact: Boolean;
 var
-  LAntigos: TArray<Cardinal>;
-  LEstado: TAMQPRecoveredState;
+  LOlds: TArray<Cardinal>;
+  LState: TAMQPRecoveredState;
   I: Integer;
-  LCaminho: string;
-  LUltimo: UInt64;
+  LPath: string;
+  LLast: UInt64;
 begin
   Result := False;
-  if FFalho or (FSegmento = nil) then
+  if FFailed or (FSegment = nil) then
     Exit;
 
-  LAntigos := AmqpWalListSegments(FDir);
-  if Length(LAntigos) = 0 then
+  LOlds := AmqpWalListSegments(FDir);
+  if Length(LOlds) = 0 then
     Exit;
 
   try
     // (1) FECHA O ATIVO. Dai' em diante nenhum segmento velho recebe mais
     // nada, e o replay do passo 2 le' um log que ja' parou de crescer.
-    FreeAndNil(FSegmento);
-    FArquivo := nil;
+    FreeAndNil(FSegment);
+    FFile := nil;
 
     // (2) O CONJUNTO VIVO -- a MESMA leitura da recuperacao, sem uma segunda
     // implementacao da semantica (D26: uma mecanica so').
-    LEstado := AmqpReplayWal(FDir);
+    LState := AmqpReplayWal(FDir);
     try
       // (3) O NOVO, com os identificadores preservados.
-      AbreProximoSegmento;
-      LUltimo := EscreveVivos(LEstado);
+      OpenNextSegment;
+      LLast := WriteLiveRecords(LState);
     finally
-      LEstado.Free;
+      LState.Free;
     end;
 
     // (4) So' depois do fsync o novo e' verdade. Se ele falhar, NAO se apaga
     // nada: o log fica maior do que precisava, que e' o erro certo a cometer.
-    if not FSegmento.Sync then
+    if not FSegment.Sync then
       Exit;
 
     // A MARCA D AGUA TEM DE ALCANCAR O QUE A COMPACTACAO ESCREVEU. Ela
     // consumiu LSNs; se a marca ficasse para tras, quem esperasse por um deles
     // esperaria ate' o proximo lote de publish -- que pode nunca vir. Estes
     // registros ESTAO no disco: dizer isso e a coisa honesta.
-    if LUltimo > 0 then
-      AmqpAtomicWrite64(FDurableLsn, LUltimo);
+    if LLast > 0 then
+      AmqpAtomicWrite64(FDurableLsn, LLast);
 
     // (5) Agora os velhos podem ir. Uma queda aqui deixa as duas copias, e o
     // replay as unifica por EntryId -- o dobro dos bytes, nunca o dobro das
     // mensagens.
-    for I := 0 to High(LAntigos) do
+    for I := 0 to High(LOlds) do
     begin
-      LCaminho := IncludeTrailingPathDelimiter(FDir)
-        + AmqpWalSegmentName(LAntigos[I]);
-      if SysUtils.DeleteFile(LCaminho) then
-        Inc(FSegmentosApagados);
+      LPath := IncludeTrailingPathDelimiter(FDir)
+        + AmqpWalSegmentName(LOlds[I]);
+      if SysUtils.DeleteFile(LPath) then
+        Inc(FDeletedSegments);
     end;
     // Os velhos foram embora: o unico segmento que conta agora e' o ativo.
-    FBytesFechados := 0;
-    AtualizaTamanho;
+    FClosedBytes := 0;
+    UpdateSize;
   except
     on E: Exception do
     begin
-      MarcaFalho(Format('falha ao compactar o journal: %s', [E.Message]));
+      MarkFailed(Format('journal compaction failed: %s', [E.Message]));
       Exit(False);
     end;
   end;
 
   FMon.Enter;
   try
-    Inc(FCompactacoes);
+    Inc(FCompactions);
   finally
     FMon.Leave;
   end;
   Result := True;
 end;
 
-procedure TAMQPJournal.ContaRecusa;
+procedure TAMQPJournal.IncrementRefused;
 begin
   FMon.Enter;
   try
-    Inc(FRecusados);
+    Inc(FRefused);
   finally
     FMon.Leave;
   end;
 end;
 
-function TAMQPJournal.Cheio: Boolean;
+function TAMQPJournal.IsFull: Boolean;
 begin
   // Leitura sem lock, de proposito: e' um teto, nao um contador de dinheiro.
   // O pior caso e' aceitar (ou recusar) um publish na fronteira exata, e o
   // proximo ja' ve' o numero certo.
   Result := (FMaxJournalBytes > 0)
-    and (Int64(AmqpAtomicRead64(FBytesTotal)) >= FMaxJournalBytes);
+    and (Int64(AmqpAtomicRead64(FTotalBytes)) >= FMaxJournalBytes);
 end;
 
 // Recalcula o tamanho aproximado do log. Roda SO' na thread do journal, nos
 // tres momentos em que ele muda de verdade: fim de lote, rotacao e
 // compactacao.
-procedure TAMQPJournal.AtualizaTamanho;
+procedure TAMQPJournal.UpdateSize;
 var
-  LFim: Int64;
+  LEnd: Int64;
 begin
-  LFim := 0;
-  if FSegmento <> nil then
-    LFim := FSegmento.EndOffset;
-  AmqpAtomicWrite64(FBytesTotal, UInt64(Int64(FBytesFechados) + LFim));
+  LEnd := 0;
+  if FSegment <> nil then
+    LEnd := FSegment.EndOffset;
+  AmqpAtomicWrite64(FTotalBytes, UInt64(Int64(FClosedBytes) + LEnd));
 end;
 
-function TAMQPJournal.SegmentoAtivo: Cardinal;
+function TAMQPJournal.ActiveSegment: Cardinal;
 begin
   FMon.Enter;
   try
@@ -912,33 +913,33 @@ begin
   end;
 end;
 
-function TAMQPJournal.RodaUmLote: Boolean;
+function TAMQPJournal.ProcessSingleBatch: Boolean;
 var
-  LLote: array of TAMQPJournalItem;
+  LBatch: array of TAMQPJournalItem;
   LN, I: Integer;
-  LMaiorLsn: UInt64;
+  LMaxLsn: UInt64;
   LSink: IAMQPDurabilitySink;
   LSyncOk: Boolean;
 begin
   Result := True;
-  LLote := nil;
+  LBatch := nil;
   LN := 0;
 
   FMon.Enter;
   try
-    while (FPendentes.Count = 0) and (not FParando) and (not FFalho) do
+    while (FPendings.Count = 0) and (not FStopping) and (not FFailed) do
       FMon.Wait(100);
 
-    if FFalho then
+    if FFailed then
       Exit(False);
 
-    LN := FPendentes.Count;
+    LN := FPendings.Count;
     if LN = 0 then
     begin
       // Fila vazia E parada pedida: a thread sai. Este e' o UNICO caminho de
       // saida normal, e ele so' acontece depois de tudo que foi aceito ter
       // sido escrito -- e' o que faz o Stop nao perder registro.
-      if FParando then
+      if FStopping then
         Exit(False);
       Exit(True);
     end;
@@ -946,28 +947,28 @@ begin
     // TIRA TUDO -- e' o group commit. O que chegar durante a escrita ja' e' o
     // proximo lote, e e' assim que o tamanho do lote se ajusta sozinho a'
     // carga sem nenhum parametro (D25).
-    SetLength(LLote, LN);
+    SetLength(LBatch, LN);
     for I := 0 to LN - 1 do
-      LLote[I] := FPendentes.Dequeue;
+      LBatch[I] := FPendings.Dequeue;
     FPendingBytes := 0;
     FMon.PulseAll; // libera quem estava bloqueado por contrapressao
   finally
     FMon.Leave;
   end;
 
-  LoteTomado;
+  BatchTaken;
 
   // --- fora do lock: I/O ---
-  LMaiorLsn := LLote[LN - 1].Lsn;
+  LMaxLsn := LBatch[LN - 1].Lsn;
   try
     for I := 0 to LN - 1 do
-      FSegmento.Append(LLote[I].Lsn, LLote[I].Kind, LLote[I].Payload);
+      FSegment.Append(LBatch[I].Lsn, LBatch[I].Kind, LBatch[I].Payload);
   except
     on E: Exception do
     begin
       // Escrita que falha nao tem como ser reposta: os registros nao estao em
       // lugar nenhum. Estado falho, definitivo.
-      MarcaFalho(Format('falha ao escrever no journal: %s', [E.Message]));
+      MarkFailed(Format('journal write failed: %s', [E.Message]));
       Exit(False);
     end;
   end;
@@ -975,10 +976,10 @@ begin
   // fsync que falha NAO e' fatal: os bytes estao no arquivo, e um fsync
   // posterior cobre este lote. O que NAO pode acontecer e' a marca d'agua
   // andar -- seria prometer durabilidade que ninguem confirmou.
-  LSyncOk := FSegmento.Sync;
+  LSyncOk := FSegment.Sync;
   if LSyncOk then
-    AmqpAtomicWrite64(FDurableLsn, LMaiorLsn);
-  AtualizaTamanho;
+    AmqpAtomicWrite64(FDurableLsn, LMaxLsn);
+  UpdateSize;
 
   // ROTACAO, e SO' AQUI: na fronteira de lote, depois do fsync. Nunca no meio
   // de um lote -- o lote e' indivisivel (D24) e parti-lo entre dois arquivos
@@ -988,16 +989,16 @@ begin
   // Depois de um fsync que FALHOU nao se rotaciona: os bytes deste lote ainda
   // nao estao garantidos no disco, e fechar o arquivo agora tiraria a chance
   // de um fsync posterior cobri-los.
-  if LSyncOk and (FSegmento.EndOffset >= FMaxSegmentBytes) then
+  if LSyncOk and (FSegment.EndOffset >= FMaxSegmentBytes) then
   begin
     try
-      Rotaciona;
+      Rotate;
     except
       on E: Exception do
       begin
         // Nao conseguir abrir o proximo segmento e' falha de escrita: os
         // proximos registros nao teriam onde ir.
-        MarcaFalho(Format('falha ao rotacionar o segmento: %s', [E.Message]));
+        MarkFailed(Format('segment rotation failed: %s', [E.Message]));
         Exit(False);
       end;
     end;
@@ -1006,13 +1007,13 @@ begin
 
   FMon.Enter;
   try
-    Inc(FLotes);
-    Inc(FRegistros, LN);
+    Inc(FBatches);
+    Inc(FRecords, LN);
     Inc(FSyncs);
     if not LSyncOk then
-      Inc(FSyncsFalhos);
-    if LN > FMaiorLote then
-      FMaiorLote := LN;
+      Inc(FFailedSyncs);
+    if LN > FMaxBatchSize then
+      FMaxBatchSize := LN;
     FMon.PulseAll; // acorda WaitDurable
   finally
     FMon.Leave;
@@ -1024,7 +1025,7 @@ begin
   LSink := FSink;
   if LSink <> nil then
     try
-      LSink.Durable(LMaiorLsn);
+      LSink.Durable(LMaxLsn);
     except
       // Sink que levanta nao pode derrubar a thread do journal: o registro JA'
       // esta' duravel e a marca d'agua ja' andou. Engolir e seguir e' menos

@@ -77,7 +77,7 @@ type
   private
     FProps: TAMQPBasicProperties;
     FBodySize: UInt64;
-    FTinhaHeaders: Boolean;
+    FHadHeaders: Boolean;
   public
     /// Decodifica APayload (o content-header cru, como veio no frame).
     /// Levanta EAMQPWire se o payload for malformado.
@@ -92,7 +92,7 @@ type
     function Headers: TAMQPFieldTable;
     /// True se a mensagem ORIGINAL trazia a propriedade headers -- util para
     /// quem quiser evitar acrescentar uma tabela vazia sem necessidade.
-    function TinhaHeaders: Boolean;
+    function HadHeaders: Boolean;
 
     /// Re-encoda o header com as mudancas. ABodySize e' EXPLICITO de proposito:
     /// derivar uma mensagem com corpo diferente e esquecer de ajustar o
@@ -138,19 +138,19 @@ function AmqpDeathHops(AHeaders: TAMQPFieldTable): Int64;
 procedure AmqpAddDeath(AEditor: TAMQPHeaderEditor;
   const AQueue, AReason, AExchange, ARoutingKey, AOriginalExpiration: string);
 
-/// Deriva uma mensagem NOVA a partir de AOrigem, trocando so' o header.
+/// Deriva uma mensagem NOVA a partir de ASource, trocando so' o header.
 ///
 /// O Body e' COMPARTILHADO por referencia (semantica normal de dynamic array):
 /// nada e' copiado, e como a TAMQPMessage e' imutavel, compartilhar e' seguro.
 /// O body-size do header novo vem do corpo real, entao nao ha como divergir.
 ///
 /// A mensagem devolvida nasce com RefCount=1 e e' do chamador (Release, nunca
-/// Free). AOrigem NAO e' tocada nem liberada.
+/// Free). ASource NAO e' tocada nem liberada.
 ///
 /// AExchange/ARoutingKey trocam o destino -- e' o que o dead-lettering precisa
 /// (a mensagem morta e' republicada no DLX com outra routing key).
-function AmqpDeriveMessage(AOrigem: TAMQPMessage;
-  const ANovoHeaderPayload: TBytes;
+function AmqpDeriveMessage(ASource: TAMQPMessage;
+  const ANewHeaderPayload: TBytes;
   const AExchange, ARoutingKey: string): TAMQPMessage;
 
 implementation
@@ -171,7 +171,7 @@ begin
   end;
   FProps := LHeader.Properties;
   FBodySize := LHeader.BodySize;
-  FTinhaHeaders := FProps.Has(bpHeaders) and (FProps.Headers <> nil);
+  FHadHeaders := FProps.Has(bpHeaders) and (FProps.Headers <> nil);
 end;
 
 destructor TAMQPHeaderEditor.Destroy;
@@ -190,9 +190,9 @@ begin
   Result := FProps.Headers;
 end;
 
-function TAMQPHeaderEditor.TinhaHeaders: Boolean;
+function TAMQPHeaderEditor.HadHeaders: Boolean;
 begin
-  Result := FTinhaHeaders;
+  Result := FHadHeaders;
 end;
 
 function TAMQPHeaderEditor.BuildPayload(ABodySize: UInt64): TBytes;
@@ -234,7 +234,7 @@ end;
 // Le o x-death como array, ja' desembrulhado. nil se ausente/malformado.
 // AmqpUnwrapValue e' obrigatorio em TODO GetArrayElement (gotcha do FPC 3.2:
 // elemento de TArray<TValue> volta re-embrulhado).
-function LeDeaths(AHeaders: TAMQPFieldTable; out AArr: TValue): Boolean;
+function ReadDeaths(AHeaders: TAMQPFieldTable; out AArr: TValue): Boolean;
 begin
   AArr := TValue.Empty;
   Result := (AHeaders <> nil) and AHeaders.TryGetValue('x-death', AArr);
@@ -244,7 +244,7 @@ begin
   Result := AArr.IsArray;
 end;
 
-function EntradaDe(const AArr: TValue; AIdx: Integer): TAMQPFieldTable;
+function EntryOf(const AArr: TValue; AIdx: Integer): TAMQPFieldTable;
 var
   LElem: TValue;
 begin
@@ -254,7 +254,7 @@ begin
     Result := TAMQPFieldTable(LElem.AsObject);
 end;
 
-function CampoStr(ATab: TAMQPFieldTable; const AKey: string): string;
+function StrField(ATab: TAMQPFieldTable; const AKey: string): string;
 var
   LVal: TValue;
 begin
@@ -267,7 +267,7 @@ begin
   end;
 end;
 
-function CampoInt(ATab: TAMQPFieldTable; const AKey: string): Int64;
+function IntField(ATab: TAMQPFieldTable; const AKey: string): Int64;
 var
   LVal: TValue;
 begin
@@ -288,78 +288,78 @@ var
   I: Integer;
 begin
   Result := 0;
-  if not LeDeaths(AHeaders, LArr) then
+  if not ReadDeaths(AHeaders, LArr) then
     Exit;
   for I := 0 to LArr.GetArrayLength - 1 do
-    Inc(Result, CampoInt(EntradaDe(LArr, I), 'count'));
+    Inc(Result, IntField(EntryOf(LArr, I), 'count'));
 end;
 
 procedure AmqpAddDeath(AEditor: TAMQPHeaderEditor;
   const AQueue, AReason, AExchange, ARoutingKey, AOriginalExpiration: string);
 var
-  LHeaders, LEntrada, LNova: TAMQPFieldTable;
+  LHeaders, LEntry, LNew: TAMQPFieldTable;
   LArr, LVal: TValue;
-  LNovoArr, LChaves: TAMQPValueArray;
+  LNewArr, LKeys: TAMQPValueArray;
   I, N: Integer;
-  LAgora: Int64;
+  LNow: Int64;
 begin
   LHeaders := AEditor.Headers; // cria sob demanda se a mensagem nao tinha
-  LAgora := DateTimeToUnix(Now, False); // False = a entrada e' hora LOCAL
-  LEntrada := nil;
+  LNow := DateTimeToUnix(Now, False); // False = a entrada e' hora LOCAL
+  LEntry := nil;
 
   // Colapso por (fila, razao).
-  if LeDeaths(LHeaders, LArr) then
+  if ReadDeaths(LHeaders, LArr) then
     for I := 0 to LArr.GetArrayLength - 1 do
     begin
-      LNova := EntradaDe(LArr, I);
-      if (LNova <> nil) and (CampoStr(LNova, 'queue') = AQueue)
-        and (CampoStr(LNova, 'reason') = AReason) then
+      LNew := EntryOf(LArr, I);
+      if (LNew <> nil) and (StrField(LNew, 'queue') = AQueue)
+        and (StrField(LNew, 'reason') = AReason) then
       begin
-        LEntrada := LNova;
+        LEntry := LNew;
         Break;
       end;
     end;
 
-  if LEntrada <> nil then
+  if LEntry <> nil then
   begin
-    LVal := TValue.From<Int64>(CampoInt(LEntrada, 'count') + 1);
-    LEntrada.Put('count', LVal);
-    LVal := TValue.From<Int64>(LAgora);
-    LEntrada.Put('time', LVal);
+    LVal := TValue.From<Int64>(IntField(LEntry, 'count') + 1);
+    LEntry.Put('count', LVal);
+    LVal := TValue.From<Int64>(LNow);
+    LEntry.Put('time', LVal);
     Exit; // o array nao muda: a entrada ja' esta' nele
   end;
 
   // Entrada nova.
-  LEntrada := TAMQPFieldTable.Create;
+  LEntry := TAMQPFieldTable.Create;
   LVal := TValue.From<Int64>(1);
-  LEntrada.Put('count', LVal);
+  LEntry.Put('count', LVal);
   LVal := TValue.From<string>(AReason);
-  LEntrada.Put('reason', LVal);
+  LEntry.Put('reason', LVal);
   LVal := TValue.From<string>(AQueue);
-  LEntrada.Put('queue', LVal);
-  LVal := TValue.From<Int64>(LAgora);
-  LEntrada.Put('time', LVal);
+  LEntry.Put('queue', LVal);
+  LVal := TValue.From<Int64>(LNow);
+  LEntry.Put('time', LVal);
   LVal := TValue.From<string>(AExchange);
-  LEntrada.Put('exchange', LVal);
-  SetLength(LChaves, 1);
-  LChaves[0] := TValue.From<string>(ARoutingKey);
-  LVal := TValue.From<TAMQPValueArray>(LChaves);
-  LEntrada.Put('routing-keys', LVal);
+  LEntry.Put('exchange', LVal);
+  SetLength(LKeys, 1);
+  LKeys[0] := TValue.From<string>(ARoutingKey);
+  LVal := TValue.From<TAMQPValueArray>(LKeys);
+  LEntry.Put('routing-keys', LVal);
   if AOriginalExpiration <> '' then
   begin
     LVal := TValue.From<string>(AOriginalExpiration);
-    LEntrada.Put('original-expiration', LVal);
+    LEntry.Put('original-expiration', LVal);
   end;
 
   // Mais recente na FRENTE (ordem do RabbitMQ).
   N := 0;
   if LArr.IsArray then
     N := LArr.GetArrayLength;
-  SetLength(LNovoArr, N + 1);
-  LNovoArr[0] := TValue.From<TObject>(LEntrada);
+  SetLength(LNewArr, N + 1);
+  LNewArr[0] := TValue.From<TObject>(LEntry);
   for I := 0 to N - 1 do
-    LNovoArr[I + 1] := TValue.From<TObject>(EntradaDe(LArr, I));
-  LVal := TValue.From<TAMQPValueArray>(LNovoArr);
+    LNewArr[I + 1] := TValue.From<TObject>(EntryOf(LArr, I));
+  LVal := TValue.From<TAMQPValueArray>(LNewArr);
   LHeaders.Put('x-death', LVal);
 
   // x-first-death-*: so' na PRIMEIRA morte, nunca sobrescritos depois.
@@ -376,16 +376,16 @@ end;
 
 { AmqpDeriveMessage }
 
-function AmqpDeriveMessage(AOrigem: TAMQPMessage;
-  const ANovoHeaderPayload: TBytes;
+function AmqpDeriveMessage(ASource: TAMQPMessage;
+  const ANewHeaderPayload: TBytes;
   const AExchange, ARoutingKey: string): TAMQPMessage;
 begin
-  if AOrigem = nil then
-    raise EAMQPWire.Create('AmqpDeriveMessage: mensagem de origem nil');
+  if ASource = nil then
+    raise EAMQPWire.Create('AmqpDeriveMessage: source message is nil');
   // UserId vem da origem: quem publicou continua sendo quem publicou, mesmo
   // depois de a mensagem ser republicada num dead-letter exchange.
-  Result := TAMQPMessage.Create(AExchange, ARoutingKey, AOrigem.UserId,
-    ANovoHeaderPayload, AOrigem.Body);
+  Result := TAMQPMessage.Create(AExchange, ARoutingKey, ASource.UserId,
+    ANewHeaderPayload, ASource.Body);
 end;
 
 end.

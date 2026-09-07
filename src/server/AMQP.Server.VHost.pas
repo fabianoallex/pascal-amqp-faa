@@ -62,11 +62,11 @@ type
     (403/404/405/406/...) e' a WS5 -- esta unit so' relata O QUE aconteceu. }
   TAMQPTopologyResult = (
     amqtrOk,           // operacao concluida (criado/removido/ligado/etc.)
-    amqtrEquivalente,  // redeclare do MESMO nome com flags/argumentos IGUAIS -- idempotente, nao mudou nada
-    amqtrNaoEncontrado,// exchange/fila referenciada nao existe (delete/bind/unbind)
-    amqtrDivergente,   // redeclare do MESMO nome com flags/argumentos DIFERENTES -- 406 na WS5
-    amqtrTipoInvalido, // tipo de exchange desconhecido no declare, OU 'x-match' invalido no bind de um headers exchange -- 406 na WS5
-    amqtrEmUso         // delete com if-unused=True e o recurso tem bindings -- 405 na WS5
+    amqtrEquivalent,  // redeclare do MESMO nome com flags/argumentos IGUAIS -- idempotente, nao mudou nada
+    amqtrNotFound,// exchange/fila referenciada nao existe (delete/bind/unbind)
+    amqtrPreconditionFailed,   // redeclare do MESMO nome com flags/argumentos DIFERENTES -- 406 na WS5
+    amqtrCommandInvalid, // tipo de exchange desconhecido no declare, OU 'x-match' invalido no bind de um headers exchange -- 406 na WS5
+    amqtrInUse         // delete com if-unused=True e o recurso tem bindings -- 405 na WS5
   );
 
   { Um binding liga um exchange de ORIGEM (Source) a um destino, que e' uma
@@ -306,7 +306,7 @@ begin
   if not AmqpIsValidExchangeType(AExchangeType) then
   begin
     AArguments.Free; // esta unit sempre e' dona do que recebe, mesmo recusando
-    Exit(amqtrTipoInvalido);
+    Exit(amqtrCommandInvalid);
   end;
 
   FLock.BeginWrite;
@@ -319,9 +319,9 @@ begin
         AAutoDelete, AInternal, AArguments);
       try
         if LExisting.EquivalentTo(LCandidate) then
-          Result := amqtrEquivalente
+          Result := amqtrEquivalent
         else
-          Result := amqtrDivergente;
+          Result := amqtrPreconditionFailed;
       finally
         LCandidate.Free;
       end;
@@ -346,7 +346,7 @@ begin
   FLock.BeginWrite;
   try
     if not FExchanges.TryGetValue(AName, LDef) then
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
 
     if AIfUnused then
     begin
@@ -358,7 +358,7 @@ begin
           Break;
         end;
       if LHasBindings then
-        Exit(amqtrEmUso);
+        Exit(amqtrInUse);
     end;
 
     // Remove bindings onde AName e' origem, e onde e' destino de um
@@ -397,9 +397,9 @@ begin
         AAutoDelete, AArguments);
       try
         if LExisting.EquivalentTo(LCandidate) then
-          Result := amqtrEquivalente
+          Result := amqtrEquivalent
         else
-          Result := amqtrDivergente;
+          Result := amqtrPreconditionFailed;
       finally
         LCandidate.Free;
       end;
@@ -424,7 +424,7 @@ begin
   FLock.BeginWrite;
   try
     if not FQueues.TryGetValue(AName, LDef) then
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
 
     I := 0;
     while I < FBindings.Count do
@@ -455,19 +455,19 @@ begin
     if not FExchanges.TryGetValue(AExchange, LExDef) then
     begin
       AArguments.Free;
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
     end;
     if not FQueues.ContainsKey(AQueue) then
     begin
       AArguments.Free;
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
     end;
 
     if (LExDef.ExchangeType = AMQP_EXCHANGE_TYPE_HEADERS) and
        (not AmqpParseHeadersMatch(AArguments, LMode)) then
     begin
       AArguments.Free;
-      Exit(amqtrTipoInvalido); // 'x-match' invalido -- 406 na WS5
+      Exit(amqtrCommandInvalid); // 'x-match' invalido -- 406 na WS5
     end;
 
     if FindBinding(amqbkQueue, AExchange, AQueue, ARoutingKey,
@@ -496,7 +496,7 @@ begin
       AArguments);
     AArguments.Free; // so' serviu pra comparar -- esta unit sempre libera
     if LBind = nil then
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
     FBindings.Remove(LBind); // OwnsObjects=True: libera o TAMQPBinding
     Result := amqtrOk;
   finally
@@ -515,19 +515,19 @@ begin
     if not FExchanges.TryGetValue(ASource, LSrcDef) then
     begin
       AArguments.Free;
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
     end;
     if not FExchanges.ContainsKey(ADestination) then
     begin
       AArguments.Free;
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
     end;
 
     if (LSrcDef.ExchangeType = AMQP_EXCHANGE_TYPE_HEADERS) and
        (not AmqpParseHeadersMatch(AArguments, LMode)) then
     begin
       AArguments.Free;
-      Exit(amqtrTipoInvalido);
+      Exit(amqtrCommandInvalid);
     end;
 
     if FindBinding(amqbkExchange, ASource, ADestination, ARoutingKey,
@@ -556,7 +556,7 @@ begin
       AArguments);
     AArguments.Free;
     if LBind = nil then
-      Exit(amqtrNaoEncontrado);
+      Exit(amqtrNotFound);
     FBindings.Remove(LBind);
     Result := amqtrOk;
   finally
@@ -577,22 +577,22 @@ end;
 function TAMQPVHost.ExchangeNames: TArray<string>;
 var
   LPar: TPair<string, TAMQPExchangeDef>;
-  LNomes: TList<string>;
+  LNames: TList<string>;
 begin
-  LNomes := TList<string>.Create;
+  LNames := TList<string>.Create;
   try
     FLock.BeginRead;
     try
       // NAO usar FExchanges.Values aqui -- ver o comentario em
       // ExclusiveQueuesOf: e' uma escrita disfarcada de leitura.
       for LPar in FExchanges do
-        LNomes.Add(LPar.Value.Name);
+        LNames.Add(LPar.Value.Name);
     finally
       FLock.EndRead;
     end;
-    Result := LNomes.ToArray;
+    Result := LNames.ToArray;
   finally
-    LNomes.Free;
+    LNames.Free;
   end;
 end;
 
@@ -613,10 +613,10 @@ end;
 
 function TAMQPVHost.ExclusiveQueuesOf(AOwnerId: NativeUInt): TArray<string>;
 var
-  LPar: TPair<string, TAMQPQueueDef>;
-  LNomes: TList<string>;
+  LPair: TPair<string, TAMQPQueueDef>;
+  LNames: TList<string>;
 begin
-  LNomes := TList<string>.Create;
+  LNames := TList<string>.Create;
   try
     FLock.BeginRead;
     try
@@ -629,15 +629,15 @@ begin
       // das execucoes. Achado com heaptrc; ver CLAUDE.md. Iterar o
       // dicionario direto cria um enumerador NOVO a cada chamada (nada de
       // campo compartilhado) e e' seguro entre leitores.
-      for LPar in FQueues do
-        if LPar.Value.Exclusive and (LPar.Value.OwnerId = AOwnerId) then
-          LNomes.Add(LPar.Value.Name);
+      for LPair in FQueues do
+        if LPair.Value.Exclusive and (LPair.Value.OwnerId = AOwnerId) then
+          LNames.Add(LPair.Value.Name);
     finally
       FLock.EndRead;
     end;
-    Result := LNomes.ToArray;
+    Result := LNames.ToArray;
   finally
-    LNomes.Free;
+    LNames.Free;
   end;
 end;
 
@@ -681,7 +681,7 @@ var
   LBind: TAMQPBinding;
   LMode: TAMQPHeadersMatch;
   LMatches: Boolean;
-  LCasouAlgum: Boolean;
+  LAnyMatched: Boolean;
 begin
   if ADepth > AMQP_MAX_EXCHANGE_HOP_DEPTH then
     Exit; // cadeia longa demais -- para em silencio, sem levantar
@@ -693,7 +693,7 @@ begin
   if not FExchanges.TryGetValue(AExchange, LExDef) then
     Exit; // exchange nao existe (ex.: deletado entre o bind e este publish)
 
-  LCasouAlgum := False;
+  LAnyMatched := False;
   for LBind in FBindings do
   begin
     if LBind.Source <> AExchange then
@@ -720,7 +720,7 @@ begin
     // levou a um exchange sem rota JA' roteou: quem deixa de rotear e' aquele
     // exchange, e o AE dele (se tiver) e' que responde por isso. Marcar aqui,
     // e nao depois de olhar o AResultSet, e' o que separa as duas coisas.
-    LCasouAlgum := True;
+    LAnyMatched := True;
 
     if LBind.Kind = amqbkQueue then
     begin
@@ -738,7 +738,7 @@ begin
   // mesmo, ou um ciclo X->AE->X, para sozinho. AE inexistente tambem para
   // sozinho, no TryGetValue la' de cima -- e' o que faz declarar um AE antes de
   // o exchange existir nao ser erro.
-  if (not LCasouAlgum) and LExDef.HasAlternateExchange then
+  if (not LAnyMatched) and LExDef.HasAlternateExchange then
     RouteInto(LExDef.AlternateExchange, ARoutingKey, AHeaders, ADepth + 1,
       AVisited, AResultSet);
 end;

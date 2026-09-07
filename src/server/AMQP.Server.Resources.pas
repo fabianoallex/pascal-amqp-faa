@@ -204,13 +204,13 @@ function AmqpValuesEqual(const A, B: TValue): Boolean;
 /// nao recusadas -- e' o que o RabbitMQ faz, e recusar quebraria cliente que
 /// manda argumento de uma extensao que este broker nao tem.
 function AmqpParseQueuePolicy(AArgs: TAMQPFieldTable;
-  out APolicy: TAMQPQueuePolicy; out AErro: string): Boolean;
+  out APolicy: TAMQPQueuePolicy; out AError: string): Boolean;
 
 /// Le e valida o argumento 'alternate-exchange' de um Exchange.Declare.
 /// ANome sai vazio e Result=True quando o argumento esta ausente (use
-/// AHas para distinguir de "presente e vazio"). Mesmo contrato de AErro.
+/// AHas para distinguir de "presente e vazio"). Mesmo contrato de AError.
 function AmqpParseAlternateExchange(AArgs: TAMQPFieldTable;
-  out AName: string; out AHas: Boolean; out AErro: string): Boolean;
+  out AName: string; out AHas: Boolean; out AError: string): Boolean;
 
 /// Le a propriedade 'expiration' do Basic: TTL da MENSAGEM em milissegundos,
 /// que a spec define como STRING decimal e nao como numero (por isso o
@@ -300,55 +300,55 @@ begin
   end;
 end;
 
-function ErroArg(const AKey, ADetalhe: string): string;
+function ArgError(const AKey, ADetail: string): string;
 begin
-  Result := Format('invalid arg ''%s'' for queue: %s', [AKey, ADetalhe]);
+  Result := Format('invalid arg ''%s'' for queue: %s', [AKey, ADetail]);
 end;
 
 // Le um numerico com piso. AMin e' o menor valor ACEITO (0 para os tetos e
 // para o TTL, 1 para x-expires -- uma fila que expira em 0 ms sumiria no
 // instante do declare, o que o RabbitMQ tambem recusa).
-function LerNumerico(AArgs: TAMQPFieldTable; const AKey: string; AMin: Int64;
-  var ADestino: Int64; out AErro: string): Boolean;
+function ReadNumeric(AArgs: TAMQPFieldTable; const AKey: string; AMin: Int64;
+  var ADestination: Int64; out AError: string): Boolean;
 var
   LVal: Int64;
   LOk: Boolean;
 begin
-  AErro := '';
+  AError := '';
   Result := True;
   if not TryArgInt64(AArgs, AKey, LVal, LOk) then
     Exit; // ausente
   if not LOk then
   begin
-    AErro := ErroArg(AKey, 'must be an integer');
+    AError := ArgError(AKey, 'must be an integer');
     Exit(False);
   end;
   if LVal < AMin then
   begin
-    AErro := ErroArg(AKey, Format('must be >= %d', [AMin]));
+    AError := ArgError(AKey, Format('must be >= %d', [AMin]));
     Exit(False);
   end;
-  ADestino := LVal;
+  ADestination := LVal;
 end;
 
 function AmqpParseQueuePolicy(AArgs: TAMQPFieldTable;
-  out APolicy: TAMQPQueuePolicy; out AErro: string): Boolean;
+  out APolicy: TAMQPQueuePolicy; out AError: string): Boolean;
 var
   LVal: Int64;
-  LTexto: string;
+  LText: string;
   LOk: Boolean;
 begin
   APolicy := TAMQPQueuePolicy.Empty;
-  AErro := '';
+  AError := '';
 
-  if not LerNumerico(AArgs, 'x-message-ttl', 0, APolicy.MessageTtlMs, AErro) then
+  if not ReadNumeric(AArgs, 'x-message-ttl', 0, APolicy.MessageTtlMs, AError) then
     Exit(False);
-  if not LerNumerico(AArgs, 'x-expires', 1, APolicy.ExpiresMs, AErro) then
+  if not ReadNumeric(AArgs, 'x-expires', 1, APolicy.ExpiresMs, AError) then
     Exit(False);
-  if not LerNumerico(AArgs, 'x-max-length', 0, APolicy.MaxLength, AErro) then
+  if not ReadNumeric(AArgs, 'x-max-length', 0, APolicy.MaxLength, AError) then
     Exit(False);
-  if not LerNumerico(AArgs, 'x-max-length-bytes', 0, APolicy.MaxLengthBytes,
-    AErro) then
+  if not ReadNumeric(AArgs, 'x-max-length-bytes', 0, APolicy.MaxLengthBytes,
+    AError) then
     Exit(False);
 
   // x-max-priority: faixa fechada da D12, nao so' "nao-negativo".
@@ -356,7 +356,7 @@ begin
   begin
     if (not LOk) or (LVal < 0) or (LVal > AMQP_MAX_PRIORITY_LEVEL) then
     begin
-      AErro := ErroArg('x-max-priority', Format(
+      AError := ArgError('x-max-priority', Format(
         'must be an integer between 0 and %d', [AMQP_MAX_PRIORITY_LEVEL]));
       Exit(False);
     end;
@@ -364,44 +364,44 @@ begin
   end;
 
   // x-overflow: so' as duas politicas desta implementacao.
-  if TryArgString(AArgs, 'x-overflow', LTexto, LOk) then
+  if TryArgString(AArgs, 'x-overflow', LText, LOk) then
   begin
     if not LOk then
     begin
-      AErro := ErroArg('x-overflow', 'must be a string');
+      AError := ArgError('x-overflow', 'must be a string');
       Exit(False);
     end;
-    if LTexto = 'drop-head' then
+    if LText = 'drop-head' then
       APolicy.Overflow := amqovDropHead
-    else if LTexto = 'reject-publish' then
+    else if LText = 'reject-publish' then
       APolicy.Overflow := amqovRejectPublish
     else
     begin
-      AErro := ErroArg('x-overflow',
+      AError := ArgError('x-overflow',
         'must be ''drop-head'' or ''reject-publish''');
       Exit(False);
     end;
   end;
 
-  if TryArgString(AArgs, 'x-dead-letter-exchange', LTexto, LOk) then
+  if TryArgString(AArgs, 'x-dead-letter-exchange', LText, LOk) then
   begin
     if not LOk then
     begin
-      AErro := ErroArg('x-dead-letter-exchange', 'must be a string');
+      AError := ArgError('x-dead-letter-exchange', 'must be a string');
       Exit(False);
     end;
-    APolicy.DeadLetterExchange := LTexto;
+    APolicy.DeadLetterExchange := LText;
     APolicy.HasDeadLetterExchange := True;
   end;
 
-  if TryArgString(AArgs, 'x-dead-letter-routing-key', LTexto, LOk) then
+  if TryArgString(AArgs, 'x-dead-letter-routing-key', LText, LOk) then
   begin
     if not LOk then
     begin
-      AErro := ErroArg('x-dead-letter-routing-key', 'must be a string');
+      AError := ArgError('x-dead-letter-routing-key', 'must be a string');
       Exit(False);
     end;
-    APolicy.DeadLetterRoutingKey := LTexto;
+    APolicy.DeadLetterRoutingKey := LText;
     APolicy.HasDeadLetterRoutingKey := True;
   end;
 
@@ -409,20 +409,20 @@ begin
 end;
 
 function AmqpParseAlternateExchange(AArgs: TAMQPFieldTable;
-  out AName: string; out AHas: Boolean; out AErro: string): Boolean;
+  out AName: string; out AHas: Boolean; out AError: string): Boolean;
 var
   LOk: Boolean;
 begin
   AName := '';
   AHas := False;
-  AErro := '';
+  AError := '';
   Result := True;
   if not TryArgString(AArgs, 'alternate-exchange', AName, LOk) then
     Exit; // ausente
   if not LOk then
   begin
     AName := '';
-    AErro := 'invalid arg ''alternate-exchange'' for exchange: '
+    AError := 'invalid arg ''alternate-exchange'' for exchange: '
       + 'must be a string';
     Exit(False);
   end;
@@ -574,7 +574,7 @@ end;
 constructor TAMQPExchangeDef.Create(const AName, AExchangeType: string;
   ADurable, AAutoDelete, AInternal: Boolean; AArguments: TAMQPFieldTable);
 var
-  LErro: string;
+  LError: string;
 begin
   inherited Create;
   FName := AName;
@@ -585,7 +585,7 @@ begin
   FArguments := AArguments;
   // Mesma politica do TAMQPQueueDef: nao levanta -- a FSM ja' validou.
   if not AmqpParseAlternateExchange(FArguments, FAlternateExchange,
-    FHasAlternateExchange, LErro) then
+    FHasAlternateExchange, LError) then
   begin
     FAlternateExchange := '';
     FHasAlternateExchange := False;
@@ -614,7 +614,7 @@ constructor TAMQPQueueDef.Create(const AName: string;
   ADurable, AExclusive, AAutoDelete: Boolean; AArguments: TAMQPFieldTable;
   AOwnerId: NativeUInt);
 var
-  LErro: string;
+  LError: string;
 begin
   inherited Create;
   FName := AName;
@@ -626,7 +626,7 @@ begin
   // Nao levanta: a FSM ja' validou antes de chegar aqui, e um descritor que
   // falha ao construir deixaria a topologia num estado pior que uma politica
   // vazia. Se um dia falhar, e' bug nosso e aparece como argumento sem efeito.
-  if not AmqpParseQueuePolicy(FArguments, FPolicy, LErro) then
+  if not AmqpParseQueuePolicy(FArguments, FPolicy, LError) then
     FPolicy := TAMQPQueuePolicy.Empty;
 end;
 

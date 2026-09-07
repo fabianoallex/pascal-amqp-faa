@@ -111,7 +111,7 @@ type
     /// e' quem sabe qual LSN amarra qual seq.
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage;
-      out ARejeitada: Boolean; out ALsn: UInt64): Boolean;
+      out ARejected: Boolean; out ALsn: UInt64): Boolean;
   end;
 
   { Rastreador de confirms adiados de UM canal -- WS5 da Fase 4, a D24.
@@ -179,7 +179,7 @@ type
   public
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage;
-      out ARejeitada: Boolean; out ALsn: UInt64): Boolean;
+      out ARejected: Boolean; out ALsn: UInt64): Boolean;
     /// Quantas mensagens foram descartadas desde a criação.
     function Count: Integer;
   end;
@@ -369,10 +369,10 @@ end;
 { TAMQPNullMessageSink }
 
 function TAMQPNullMessageSink.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+  const AMessage: TAMQPServerMessage; out ARejected: Boolean;
   out ALsn: UInt64): Boolean;
 begin
-  ARejeitada := False; // sink nulo nunca recusa: nao ha fila para encher
+  ARejected := False; // sink nulo nunca recusa: nao ha fila para encher
   ALsn := 0;           // e nao durou nada: nao ha journal
   AmqpAtomicInc(FCount);
   // Fase 1: nenhuma fila existe, então nada foi roteado. Devolver False é o

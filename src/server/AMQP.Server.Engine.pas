@@ -62,24 +62,24 @@ type
   TAMQPEngineResult = (
     amqerOk,
     /// recurso citado nao existe -- 404 NOT_FOUND
-    amqerNaoEncontrado,
+    amqerNotFound,
     /// redeclare do mesmo nome com flags/argumentos diferentes -- 406
-    amqerDivergente,
+    amqerPreconditionFailed,
     /// tipo de exchange desconhecido, ou 'x-match' invalido -- 406
-    amqerTipoInvalido,
+    amqerCommandInvalid,
     /// delete com if-unused e o recurso em uso -- 406
-    amqerEmUso,
+    amqerInUse,
     /// delete com if-empty e a fila com mensagens -- 406
-    amqerNaoVazia,
+    amqerNotEmpty,
     /// nome reservado ('amq.') vindo do cliente -- 403 ACCESS_REFUSED
-    amqerNomeReservado,
+    amqerAccessRefused,
     /// fila exclusiva de OUTRA conexao -- 405 RESOURCE_LOCKED
-    amqerExclusivaDeOutro,
+    amqerResourceLocked,
     /// A operacao mexia em topologia DURAVEL e o journal nao conseguiu
     /// registra-la (Fase 4, WS3). Vira 541 de CONEXAO, e nao erro de canal:
     /// um broker que nao consegue mais persistir esta' quebrado como um todo,
     /// e continuar aceitando declare duravel seria mentir sobre durabilidade.
-    amqerSemDurabilidade
+    amqerNoDurability
   );
 
   TAMQPEngine = class;
@@ -114,11 +114,11 @@ type
     FQueues: TDictionary<string, TAMQPServerQueue>;
     FMaxQueueLength: Integer;
     FJournal: TAMQPJournal;
-    FProximoId: UInt64;
+    FNextId: UInt64;
     /// True enquanto o Recupera esta aplicando o log. Enquanto for True o
     /// journal fica MUDO: o que se declara e enfileira agora VEIO do log, e
     /// regravar faria o WAL crescer uma copia por boot, para sempre.
-    FRecuperando: Boolean;
+    FRecovering: Boolean;
     FPool: TAMQPThreadPool;
     FRouted: Integer;   // atomico -- publicacoes com ao menos uma rota
     FUnrouted: Integer; // atomico -- publicacoes sem rota
@@ -200,27 +200,27 @@ type
     /// recurso e' duravel (D20). Exchange predefinido ('' e 'amq.*') NUNCA vai
     /// -- o EnsureVHost o recria a cada boot, e grava-lo so' encheria o log de
     /// registro que a recuperacao teria de ignorar.
-    function PersisteExchange(const AName: string; ADurable: Boolean): Boolean;
-    function PersisteFila(ADurable, AExclusive: Boolean): Boolean;
+    function PersistExchange(const AName: string; ADurable: Boolean): Boolean;
+    function PersistQueue(ADurable, AExclusive: Boolean): Boolean;
     /// Duravel de verdade: o descritor existe E esta' marcado duravel. Usado
     /// nos bindings, que so' sao persistidos quando as DUAS pontas sao
     /// duraveis -- um binding e' tao duravel quanto o mais fragil dos lados.
-    function ExchangeEhDuravel(AVHost: TAMQPVHost; const AName: string): Boolean;
-    function FilaEhDuravel(AVHost: TAMQPVHost; const AName: string): Boolean;
+    function IsExchangeDurable(AVHost: TAMQPVHost; const AName: string): Boolean;
+    function IsQueueDurable(AVHost: TAMQPVHost; const AName: string): Boolean;
     /// Grava um registro de topologia e ESPERA ele ficar duravel. False = nao
     /// deu, e o chamador devolve amqerSemDurabilidade.
-    function GravaTopo(AKind: Byte; const APayload: TBytes): Boolean;
+    function WriteTopology(AKind: Byte; const APayload: TBytes): Boolean;
     /// Proximo identificador de conteudo/colocacao. Monotonico e unico no
     /// broker; sob o mesmo lock que ja' guarda as filas vivas, porque nao ha
     /// incremento atomico de 64 bits portavel na AMQP.Threading e um contador
     /// de 32 bits daria a volta num broker de vida longa.
-    function ProximoId: UInt64;
-    function GravaColocacao(AQueue: TAMQPServerQueue; const AVHost: string;
+    function NextId: UInt64;
+    function WriteEnqueue(AQueue: TAMQPServerQueue; const AVHost: string;
       AMessage: TAMQPMessage; APriority: Byte; AMessageTtlMs: Int64;
-      var AContentId: UInt64; AEsperarVaga: Boolean;
+      var AContentId: UInt64; AWaitVacancy: Boolean;
       out ALsn: UInt64): UInt64;
     /// True se esta fila viva vai persistir alguma coisa (D20).
-    function FilaPersiste(AQueue: TAMQPServerQueue): Boolean;
+    function DoesQueuePersist(AQueue: TAMQPServerQueue): Boolean;
     procedure MaybeAutoDeleteQueue(const AVHost, AQueue: string);
     /// Apaga o exchange se ele for `auto-delete` e nao for mais origem de
     /// binding nenhum. Chamar depois de todo unbind (inclusive os implicitos,
@@ -242,7 +242,7 @@ type
 
     // --- publicacao (IAMQPMessageSink) ---
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+      const AMessage: TAMQPServerMessage; out ARejected: Boolean;
       out ALsn: UInt64): Boolean;
 
     /// Republica uma mensagem ja' montada (usada pelo dead-lettering). Roda na
@@ -275,9 +275,9 @@ type
     /// antes de o socket de escuta abrir: ninguem pode falar com um broker
     /// meio recuperado.
     ///
-    /// Com o journal MUDO (ver FRecuperando): o que se declara aqui veio do
+    /// Com o journal MUDO (ver FRecovering): o que se declara aqui veio do
     /// log, e regravar faria o WAL crescer uma copia por boot.
-    procedure Recupera(AEstado: TAMQPRecoveredState);
+    procedure Recover(AState: TAMQPRecoveredState);
 
     property MaxQueueLength: Integer read FMaxQueueLength
       write FMaxQueueLength;
@@ -404,24 +404,24 @@ begin
     if LVHost.ExchangeExists(AName) then
       Result := amqerOk
     else
-      Result := amqerNaoEncontrado;
+      Result := amqerNotFound;
     Exit;
   end;
 
   LRes := LVHost.DeclareExchange(AName, AType, ADurable, AAutoDelete,
     AInternal, AArguments); // o vhost toma posse dos argumentos
   case LRes of
-    amqtrOk, amqtrEquivalente: Result := amqerOk;
-    amqtrDivergente: Result := amqerDivergente;
-    amqtrTipoInvalido: Result := amqerTipoInvalido;
+    amqtrOk, amqtrEquivalent: Result := amqerOk;
+    amqtrPreconditionFailed: Result := amqerPreconditionFailed;
+    amqtrCommandInvalid: Result := amqerCommandInvalid;
   else
-    Result := amqerNaoEncontrado;
+    Result := amqerNotFound;
   end;
 
   // So' o declare que de fato CRIOU vai para o disco: amqtrEquivalente e'
   // redeclare idempotente, e grava-lo encheria o log de registros que a
   // recuperacao so' teria trabalho de reaplicar por cima de si mesmos.
-  if (LRes = amqtrOk) and PersisteExchange(AName, ADurable) then
+  if (LRes = amqtrOk) and PersistExchange(AName, ADurable) then
   begin
     LDef := LVHost.ExchangeDef(AName);
     if LDef <> nil then
@@ -435,9 +435,9 @@ begin
       LRec.AutoDelete := LDef.AutoDelete;
       LRec.Internal := LDef.Internal;
       LRec.Arguments := LDef.Arguments;
-      if not GravaTopo(AMQP_REC_EXCHANGE_DECLARE,
+      if not WriteTopology(AMQP_REC_EXCHANGE_DECLARE,
         AmqpEncodeRecExchange(LRec)) then
-        Result := amqerSemDurabilidade;
+        Result := amqerNoDurability;
     end;
   end;
 end;
@@ -447,31 +447,31 @@ function TAMQPEngine.DeleteExchange(const AVHost, AName: string;
 var
   LRes: TAMQPTopologyResult;
   LVHost: TAMQPVHost;
-  LEraDuravel: Boolean;
-  LNome: TAMQPRecName;
+  LWasDurable: Boolean;
+  LName: TAMQPRecName;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   // ANTES de apagar: depois o descritor nao existe mais e nao ha como saber se
   // era duravel.
-  LEraDuravel := (FJournal <> nil) and ExchangeEhDuravel(LVHost, AName);
+  LWasDurable := (FJournal <> nil) and IsExchangeDurable(LVHost, AName);
   LRes := LVHost.DeleteExchange(AName, AIfUnused);
   case LRes of
     amqtrOk: Result := amqerOk;
-    amqtrEmUso: Result := amqerEmUso;
+    amqtrInUse: Result := amqerInUse;
     // Idempotente pela mesma razao do DeleteQueue acima -- ver o comentario
     // la'. Manter os dois iguais importa: um setup que apaga antes de
     // redeclarar mexe nos dois.
-    amqtrNaoEncontrado: Result := amqerOk;
+    amqtrNotFound: Result := amqerOk;
   else
     Result := amqerOk;
   end;
 
-  if (LRes = amqtrOk) and LEraDuravel then
+  if (LRes = amqtrOk) and LWasDurable then
   begin
-    LNome.VHost := AVHost;
-    LNome.Name := AName;
-    if not GravaTopo(AMQP_REC_EXCHANGE_DELETE, AmqpEncodeRecName(LNome)) then
-      Result := amqerSemDurabilidade;
+    LName.VHost := AVHost;
+    LName.Name := AName;
+    if not WriteTopology(AMQP_REC_EXCHANGE_DELETE, AmqpEncodeRecName(LName)) then
+      Result := amqerNoDurability;
   end;
 end;
 
@@ -480,16 +480,16 @@ function TAMQPEngine.BindExchange(const AVHost, ADestination, ASource,
 var
   LRes: TAMQPTopologyResult;
   LVHost: TAMQPVHost;
-  LPersiste: Boolean;
+  LPersist: Boolean;
   LPayload: TBytes;
   LRec: TAMQPRecBinding;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   // As DUAS pontas duraveis, e a codificacao feita ANTES do bind: depois o
   // vhost e' dono de AArguments.
-  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, ASource)
-    and ExchangeEhDuravel(LVHost, ADestination);
-  if LPersiste then
+  LPersist := (FJournal <> nil) and IsExchangeDurable(LVHost, ASource)
+    and IsExchangeDurable(LVHost, ADestination);
+  if LPersist then
   begin
     LRec.VHost := AVHost;
     LRec.Source := ASource;
@@ -501,14 +501,14 @@ begin
   LRes := LVHost.BindExchange(ADestination, ASource,
     ARoutingKey, AArguments);
   case LRes of
-    amqtrOk, amqtrEquivalente: Result := amqerOk;
-    amqtrTipoInvalido: Result := amqerTipoInvalido;
+    amqtrOk, amqtrEquivalent: Result := amqerOk;
+    amqtrCommandInvalid: Result := amqerCommandInvalid;
   else
-    Result := amqerNaoEncontrado;
+    Result := amqerNotFound;
   end;
-  if (LRes = amqtrOk) and LPersiste then
-    if not GravaTopo(AMQP_REC_EXCHANGE_BIND, LPayload) then
-      Result := amqerSemDurabilidade;
+  if (LRes = amqtrOk) and LPersist then
+    if not WriteTopology(AMQP_REC_EXCHANGE_BIND, LPayload) then
+      Result := amqerNoDurability;
 end;
 
 function TAMQPEngine.UnbindExchange(const AVHost, ADestination, ASource,
@@ -516,14 +516,14 @@ function TAMQPEngine.UnbindExchange(const AVHost, ADestination, ASource,
 var
   LRes: TAMQPTopologyResult;
   LVHost: TAMQPVHost;
-  LPersiste: Boolean;
+  LPersist: Boolean;
   LPayload: TBytes;
   LRec: TAMQPRecBinding;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
-  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, ASource)
-    and ExchangeEhDuravel(LVHost, ADestination);
-  if LPersiste then
+  LPersist := (FJournal <> nil) and IsExchangeDurable(LVHost, ASource)
+    and IsExchangeDurable(LVHost, ADestination);
+  if LPersist then
   begin
     LRec.VHost := AVHost;
     LRec.Source := ASource;
@@ -534,13 +534,13 @@ begin
   end;
   LRes := LVHost.UnbindExchange(ADestination, ASource,
     ARoutingKey, AArguments);
-  if LRes in [amqtrOk, amqtrEquivalente] then
+  if LRes in [amqtrOk, amqtrEquivalent] then
     Result := amqerOk
   else
-    Result := amqerNaoEncontrado;
-  if (LRes = amqtrOk) and LPersiste then
-    if not GravaTopo(AMQP_REC_EXCHANGE_UNBIND, LPayload) then
-      Result := amqerSemDurabilidade;
+    Result := amqerNotFound;
+  if (LRes = amqtrOk) and LPersist then
+    if not WriteTopology(AMQP_REC_EXCHANGE_UNBIND, LPayload) then
+      Result := amqerNoDurability;
 end;
 
 function TAMQPEngine.ExchangeExists(const AVHost, AName: string): Boolean;
@@ -561,11 +561,11 @@ var
   LStats: TAMQPQueueStats;
   LDef: TAMQPQueueDef;
   LRecQ: TAMQPRecQueue;
-  LSemDurab: Boolean;
+  LNoDurability: Boolean;
 begin
   AMessageCount := 0;
   AConsumerCount := 0;
-  LSemDurab := False;
+  LNoDurability := False;
   LVHost := FVHosts.GetOrCreate(AVHost);
 
   if APassive then
@@ -573,9 +573,9 @@ begin
     AArguments.Free;
     LDef := LVHost.QueueDef(AName);
     if LDef = nil then
-      Exit(amqerNaoEncontrado);
+      Exit(amqerNotFound);
     if not CheckExclusive(LDef, AOwnerId) then
-      Exit(amqerExclusivaDeOutro);
+      Exit(amqerResourceLocked);
     Result := amqerOk;
   end
   else
@@ -584,15 +584,15 @@ begin
     if (LDef <> nil) and (not CheckExclusive(LDef, AOwnerId)) then
     begin
       AArguments.Free;
-      Exit(amqerExclusivaDeOutro);
+      Exit(amqerResourceLocked);
     end;
     LRes := LVHost.DeclareQueue(AName, ADurable, AExclusive, AAutoDelete,
       AArguments, AOwnerId);
     case LRes of
-      amqtrOk, amqtrEquivalente: Result := amqerOk;
-      amqtrDivergente: Exit(amqerDivergente);
+      amqtrOk, amqtrEquivalent: Result := amqerOk;
+      amqtrPreconditionFailed: Exit(amqerPreconditionFailed);
     else
-      Exit(amqerNaoEncontrado);
+      Exit(amqerNotFound);
     end;
 
     // So' o declare que de fato CRIOU vai para o disco (redeclare idempotente
@@ -600,7 +600,7 @@ begin
     // viva ainda tem de nascer abaixo, senao o descritor ficaria sem ator. Se
     // o journal falhou, a conexao cai com 541 -- e a divergencia entre memoria
     // e disco ate' o restart e' exatamente o que esse 541 comunica.
-    if (LRes = amqtrOk) and PersisteFila(ADurable, AExclusive) then
+    if (LRes = amqtrOk) and PersistQueue(ADurable, AExclusive) then
     begin
       LDef := LVHost.QueueDef(AName);
       if LDef <> nil then
@@ -610,8 +610,8 @@ begin
         LRecQ.Durable := LDef.Durable;
         LRecQ.AutoDelete := LDef.AutoDelete;
         LRecQ.Arguments := LDef.Arguments;
-        if not GravaTopo(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LRecQ)) then
-          LSemDurab := True;
+        if not WriteTopology(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LRecQ)) then
+          LNoDurability := True;
       end;
     end;
   end;
@@ -661,8 +661,8 @@ begin
     AMessageCount := LStats.MessageCount;
     AConsumerCount := LStats.ConsumerCount;
   end;
-  if LSemDurab then
-    Result := amqerSemDurabilidade;
+  if LNoDurability then
+    Result := amqerNoDurability;
 end;
 
 function TAMQPEngine.DeleteQueue(const AVHost, AName: string;
@@ -672,18 +672,18 @@ var
   LVHost: TAMQPVHost;
   LQueue: TAMQPServerQueue;
   LDel: TAMQPQueueDeleteResult;
-  LEraDuravel: Boolean;
-  LNome: TAMQPRecName;
+  LWasDurable: Boolean;
+  LName: TAMQPRecName;
 begin
   AMessageCount := 0;
   LVHost := FVHosts.GetOrCreate(AVHost);
   if not CheckExclusive(LVHost.QueueDef(AName), AOwnerId) then
-    Exit(amqerExclusivaDeOutro);
+    Exit(amqerResourceLocked);
   // ANTES de apagar: depois o descritor nao existe e nao ha como saber se era
   // duravel. Vale para o delete explicito E para o auto-delete, que chega aqui
   // pelo MaybeAutoDeleteQueue -- uma fila auto-delete DURAVEL que sumiu tem de
   // registrar o sumico, senao a recuperacao a ressuscita.
-  LEraDuravel := (FJournal <> nil) and FilaEhDuravel(LVHost, AName);
+  LWasDurable := (FJournal <> nil) and IsQueueDurable(LVHost, AName);
 
   FLock.Enter;
   try
@@ -705,8 +705,8 @@ begin
     // O ator decide: if-unused/if-empty sao estado DELE.
     LDel := LQueue.Delete(AIfUnused, AIfEmpty, AMessageCount);
     case LDel of
-      amqqdEmUso: Exit(amqerEmUso);
-      amqqdNaoVazia: Exit(amqerNaoVazia);
+      amqqdInUse: Exit(amqerInUse);
+      amqqdNotEmpty: Exit(amqerNotEmpty);
     end;
     // amqqdOk: o Delete ja parou o ator (e drenou o estoque).
     FQueues.Remove(Key(AVHost, AName));
@@ -724,12 +724,12 @@ begin
   // Um unico registro de delete: os bindings da fila somem junto com ela na
   // recuperacao, do mesmo jeito que somem aqui, entao gravar um unbind para
   // cada seria escrever o que ja' esta' implicito.
-  if LEraDuravel then
+  if LWasDurable then
   begin
-    LNome.VHost := AVHost;
-    LNome.Name := AName;
-    if not GravaTopo(AMQP_REC_QUEUE_DELETE, AmqpEncodeRecName(LNome)) then
-      Result := amqerSemDurabilidade;
+    LName.VHost := AVHost;
+    LName.Name := AName;
+    if not WriteTopology(AMQP_REC_QUEUE_DELETE, AmqpEncodeRecName(LName)) then
+      Result := amqerNoDurability;
   end;
 end;
 
@@ -741,10 +741,10 @@ begin
   AMessageCount := 0;
   if not CheckExclusive(FVHosts.GetOrCreate(AVHost).QueueDef(AName),
     AOwnerId) then
-    Exit(amqerExclusivaDeOutro);
+    Exit(amqerResourceLocked);
   LQueue := FindQueue(AVHost, AName);
   if LQueue = nil then
-    Exit(amqerNaoEncontrado);
+    Exit(amqerNotFound);
   AMessageCount := LQueue.Purge;
   Result := amqerOk;
 end;
@@ -755,7 +755,7 @@ function TAMQPEngine.BindQueue(const AVHost, AQueue, AExchange,
 var
   LVHost: TAMQPVHost;
   LRes: TAMQPTopologyResult;
-  LPersiste: Boolean;
+  LPersist: Boolean;
   LPayload: TBytes;
   LRec: TAMQPRecBinding;
 begin
@@ -763,11 +763,11 @@ begin
   if not CheckExclusive(LVHost.QueueDef(AQueue), AOwnerId) then
   begin
     AArguments.Free;
-    Exit(amqerExclusivaDeOutro);
+    Exit(amqerResourceLocked);
   end;
-  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, AExchange)
-    and FilaEhDuravel(LVHost, AQueue);
-  if LPersiste then
+  LPersist := (FJournal <> nil) and IsExchangeDurable(LVHost, AExchange)
+    and IsQueueDurable(LVHost, AQueue);
+  if LPersist then
   begin
     // Codificado ANTES do bind: depois o vhost e' dono de AArguments.
     LRec.VHost := AVHost;
@@ -779,14 +779,14 @@ begin
   end;
   LRes := LVHost.BindQueue(AExchange, AQueue, ARoutingKey, AArguments);
   case LRes of
-    amqtrOk, amqtrEquivalente: Result := amqerOk;
-    amqtrTipoInvalido: Result := amqerTipoInvalido;
+    amqtrOk, amqtrEquivalent: Result := amqerOk;
+    amqtrCommandInvalid: Result := amqerCommandInvalid;
   else
-    Result := amqerNaoEncontrado;
+    Result := amqerNotFound;
   end;
-  if (LRes = amqtrOk) and LPersiste then
-    if not GravaTopo(AMQP_REC_QUEUE_BIND, LPayload) then
-      Result := amqerSemDurabilidade;
+  if (LRes = amqtrOk) and LPersist then
+    if not WriteTopology(AMQP_REC_QUEUE_BIND, LPayload) then
+      Result := amqerNoDurability;
 end;
 
 function TAMQPEngine.UnbindQueue(const AVHost, AQueue, AExchange,
@@ -795,7 +795,7 @@ function TAMQPEngine.UnbindQueue(const AVHost, AQueue, AExchange,
 var
   LVHost: TAMQPVHost;
   LRes: TAMQPTopologyResult;
-  LPersiste: Boolean;
+  LPersist: Boolean;
   LPayload: TBytes;
   LRec: TAMQPRecBinding;
 begin
@@ -803,11 +803,11 @@ begin
   if not CheckExclusive(LVHost.QueueDef(AQueue), AOwnerId) then
   begin
     AArguments.Free;
-    Exit(amqerExclusivaDeOutro);
+    Exit(amqerResourceLocked);
   end;
-  LPersiste := (FJournal <> nil) and ExchangeEhDuravel(LVHost, AExchange)
-    and FilaEhDuravel(LVHost, AQueue);
-  if LPersiste then
+  LPersist := (FJournal <> nil) and IsExchangeDurable(LVHost, AExchange)
+    and IsQueueDurable(LVHost, AQueue);
+  if LPersist then
   begin
     LRec.VHost := AVHost;
     LRec.Source := AExchange;
@@ -817,13 +817,13 @@ begin
     LPayload := AmqpEncodeRecBinding(LRec);
   end;
   LRes := LVHost.UnbindQueue(AExchange, AQueue, ARoutingKey, AArguments);
-  if LRes in [amqtrOk, amqtrEquivalente] then
+  if LRes in [amqtrOk, amqtrEquivalent] then
     Result := amqerOk
   else
-    Result := amqerNaoEncontrado;
-  if (LRes = amqtrOk) and LPersiste then
-    if not GravaTopo(AMQP_REC_QUEUE_UNBIND, LPayload) then
-      Result := amqerSemDurabilidade;
+    Result := amqerNotFound;
+  if (LRes = amqtrOk) and LPersist then
+    if not WriteTopology(AMQP_REC_QUEUE_UNBIND, LPayload) then
+      Result := amqerNoDurability;
 end;
 
 function TAMQPEngine.QueueExists(const AVHost, AName: string): Boolean;
@@ -841,10 +841,10 @@ var
 begin
   if not CheckExclusive(FVHosts.GetOrCreate(AVHost).QueueDef(AQueue),
     AOwnerId) then
-    Exit(amqerExclusivaDeOutro);
+    Exit(amqerResourceLocked);
   LQueue := FindQueue(AVHost, AQueue);
   if LQueue = nil then
-    Exit(amqerNaoEncontrado);
+    Exit(amqerNotFound);
   LQueue.PostAddConsumer(TAMQPServerConsumer.Create(AConsumerTag, ANoAck,
     AExclusive, ATarget));
   Result := amqerOk;
@@ -857,7 +857,7 @@ var
 begin
   LQueue := FindQueue(AVHost, AQueue);
   if LQueue = nil then
-    Exit(amqerNaoEncontrado);
+    Exit(amqerNotFound);
   LQueue.PostRemoveConsumer(AChannelId, AConsumerTag);
   Result := amqerOk;
 end;
@@ -875,10 +875,10 @@ begin
   AMessageCount := 0;
   if not CheckExclusive(FVHosts.GetOrCreate(AVHost).QueueDef(AQueue),
     AOwnerId) then
-    Exit(amqerExclusivaDeOutro);
+    Exit(amqerResourceLocked);
   LQueue := FindQueue(AVHost, AQueue);
   if LQueue = nil then
-    Exit(amqerNaoEncontrado);
+    Exit(amqerNotFound);
 
   AFound := LQueue.Get(AChannelId, ADeliveryTag, ANoAck, AMessage,
     ARedelivered);
@@ -889,21 +889,21 @@ end;
 
 { --- ciclo de vida automatico (WS7) --- }
 
-function TAMQPEngine.PersisteExchange(const AName: string;
+function TAMQPEngine.PersistExchange(const AName: string;
   ADurable: Boolean): Boolean;
 begin
   Result := (FJournal <> nil) and ADurable and (AName <> '')
     and (not SameText(Copy(AName, 1, 4), 'amq.'));
 end;
 
-function TAMQPEngine.PersisteFila(ADurable, AExclusive: Boolean): Boolean;
+function TAMQPEngine.PersistQueue(ADurable, AExclusive: Boolean): Boolean;
 begin
   // D20: fila exclusiva NUNCA e' persistida -- ela morre com a conexao dona, e
   // depois de um restart nao existe conexao dona.
   Result := (FJournal <> nil) and ADurable and (not AExclusive);
 end;
 
-function TAMQPEngine.ExchangeEhDuravel(AVHost: TAMQPVHost;
+function TAMQPEngine.IsExchangeDurable(AVHost: TAMQPVHost;
   const AName: string): Boolean;
 var
   LDef: TAMQPExchangeDef;
@@ -913,7 +913,7 @@ begin
     and (AName <> '') and (not SameText(Copy(AName, 1, 4), 'amq.'));
 end;
 
-function TAMQPEngine.FilaEhDuravel(AVHost: TAMQPVHost;
+function TAMQPEngine.IsQueueDurable(AVHost: TAMQPVHost;
   const AName: string): Boolean;
 var
   LDef: TAMQPQueueDef;
@@ -928,13 +928,13 @@ end;
 // Roda na thread de QUEM PUBLICA -- a do publicador no publish, a do ator da
 // fila de origem no dead-letter. E' a D24: so' quem ja' roteou sabe quais
 // colocacoes precisam estar duraveis, e por isso e' quem escreve o lote.
-function TAMQPEngine.GravaColocacao(AQueue: TAMQPServerQueue;
+function TAMQPEngine.WriteEnqueue(AQueue: TAMQPServerQueue;
   const AVHost: string; AMessage: TAMQPMessage; APriority: Byte;
-  AMessageTtlMs: Int64; var AContentId: UInt64; AEsperarVaga: Boolean;
+  AMessageTtlMs: Int64; var AContentId: UInt64; AWaitVacancy: Boolean;
   out ALsn: UInt64): UInt64;
 var
   LRecs: TAMQPJournalRecords;
-  LConteudo: TAMQPRecContent;
+  LContent: TAMQPRecContent;
   LEnq: TAMQPRecEnqueue;
   LN: Integer;
 begin
@@ -942,7 +942,7 @@ begin
   ALsn := 0;
   // Mesma razao do GravaTopo: durante o replay a colocacao JA' esta' no log --
   // regrava-la duplicaria a mensagem a cada boot.
-  if FRecuperando or (not FilaPersiste(AQueue)) then
+  if FRecovering or (not DoesQueuePersist(AQueue)) then
     Exit;
 
   LN := 0;
@@ -952,16 +952,16 @@ begin
     // Primeira colocacao desta mensagem: o corpo vai UMA vez (D22). As demais
     // -- outras filas do mesmo publish, ou a derivada do dead-letter --
     // reaproveitam este identificador e nao reescrevem o corpo.
-    AContentId := ProximoId;
-    LConteudo.ContentId := AContentId;
-    LConteudo.UserId := AMessage.UserId;
-    LConteudo.Body := AMessage.Body;
+    AContentId := NextId;
+    LContent.ContentId := AContentId;
+    LContent.UserId := AMessage.UserId;
+    LContent.Body := AMessage.Body;
     LRecs[0].Kind := AMQP_REC_CONTENT;
-    LRecs[0].Payload := AmqpEncodeRecContent(LConteudo);
+    LRecs[0].Payload := AmqpEncodeRecContent(LContent);
     LN := 1;
   end;
 
-  Result := ProximoId;
+  Result := NextId;
   LEnq.VHost := AVHost;
   LEnq.Queue := AQueue.Name;
   LEnq.EntryId := Result;
@@ -970,16 +970,16 @@ begin
   LEnq.RoutingKey := AMessage.RoutingKey;
   // Os numeros EFETIVOS, os mesmos que o ator vai guardar -- a fila e' quem os
   // calcula, para nao haver duas copias da regra.
-  LEnq.Priority := AQueue.PrioridadeEfetiva(APriority);
+  LEnq.Priority := AQueue.EffectivePriority(APriority);
   LEnq.EnqueuedAtWall := AmqpWallMs; // D21: parede no disco, nunca monotonico
-  LEnq.TtlMs := AQueue.TtlEfetivo(AMessageTtlMs);
+  LEnq.TtlMs := AQueue.EffectiveTtl(AMessageTtlMs);
   LEnq.HeaderPayload := AMessage.HeaderPayload;
   LRecs[LN].Kind := AMQP_REC_ENQUEUE;
   LRecs[LN].Payload := AmqpEncodeRecEnqueue(LEnq);
   SetLength(LRecs, LN + 1);
 
   try
-    if AEsperarVaga then
+    if AWaitVacancy then
       // Thread do publicador: PODE bloquear na contrapressao (D24, corolario c).
       ALsn := FJournal.Submit(LRecs)
     else
@@ -996,23 +996,23 @@ begin
   end;
 end;
 
-function TAMQPEngine.ProximoId: UInt64;
+function TAMQPEngine.NextId: UInt64;
 begin
   FLock.Enter;
   try
-    Inc(FProximoId);
-    Result := FProximoId;
+    Inc(FNextId);
+    Result := FNextId;
   finally
     FLock.Leave;
   end;
 end;
 
-function TAMQPEngine.FilaPersiste(AQueue: TAMQPServerQueue): Boolean;
+function TAMQPEngine.DoesQueuePersist(AQueue: TAMQPServerQueue): Boolean;
 begin
   Result := (FJournal <> nil) and (AQueue <> nil) and AQueue.Durable;
 end;
 
-function TAMQPEngine.GravaTopo(AKind: Byte; const APayload: TBytes): Boolean;
+function TAMQPEngine.WriteTopology(AKind: Byte; const APayload: TBytes): Boolean;
 var
   LRecs: TAMQPJournalRecords;
   LLsn: UInt64;
@@ -1022,7 +1022,7 @@ begin
   // MUDO durante a recuperacao: o que estamos declarando agora VEIO do log.
   // Sem isto, cada restart reescreveria a topologia inteira -- o WAL cresceria
   // uma copia por boot, para sempre, e a compactacao da WS7 nunca alcancaria.
-  if FRecuperando then
+  if FRecovering then
     Exit(True);
   Result := False;
   SetLength(LRecs, 1);
@@ -1090,28 +1090,28 @@ end;
 
 procedure TAMQPEngine.SweepAutoDeleteExchanges(const AVHost: string);
 var
-  LNomes: TArray<string>;
+  LNames: TArray<string>;
   I: Integer;
 begin
-  LNomes := FVHosts.GetOrCreate(AVHost).ExchangeNames;
-  for I := 0 to High(LNomes) do
-    MaybeAutoDeleteExchange(AVHost, LNomes[I]);
+  LNames := FVHosts.GetOrCreate(AVHost).ExchangeNames;
+  for I := 0 to High(LNames) do
+    MaybeAutoDeleteExchange(AVHost, LNames[I]);
 end;
 
 function TAMQPEngine.DeleteExclusiveQueuesOf(const AVHost: string;
   AOwnerId: NativeUInt): Integer;
 var
-  LNomes: TArray<string>;
+  LNames: TArray<string>;
   I, LCount: Integer;
 begin
   Result := 0;
   if AOwnerId = 0 then
     Exit;
-  LNomes := FVHosts.GetOrCreate(AVHost).ExclusiveQueuesOf(AOwnerId);
-  for I := 0 to High(LNomes) do
+  LNames := FVHosts.GetOrCreate(AVHost).ExclusiveQueuesOf(AOwnerId);
+  for I := 0 to High(LNames) do
     // AOwnerId=0 no DeleteQueue: chamada interna, ja sabemos que o dono e'
     // esta conexao (foi assim que a fila entrou na lista).
-    if DeleteQueue(AVHost, LNomes[I], False, False, 0, LCount) = amqerOk then
+    if DeleteQueue(AVHost, LNames[I], False, False, 0, LCount) = amqerOk then
       Inc(Result);
 end;
 
@@ -1126,40 +1126,40 @@ end;
 // dead-letter e tudo, no primeiro toque do ator.
 function TtlRestante(const AEnq: TAMQPRecEnqueue; ANowWall: Int64): Int64;
 var
-  LDecorrido: Int64;
+  LElapsed: Int64;
 begin
   if AEnq.TtlMs < 0 then
     Exit(-1);
-  LDecorrido := ANowWall - AEnq.EnqueuedAtWall;
-  if LDecorrido < 0 then
-    LDecorrido := 0; // relogio andou para tras entre os dois boots
-  Result := AEnq.TtlMs - LDecorrido;
+  LElapsed := ANowWall - AEnq.EnqueuedAtWall;
+  if LElapsed < 0 then
+    LElapsed := 0; // relogio andou para tras entre os dois boots
+  Result := AEnq.TtlMs - LElapsed;
   if Result < 0 then
     Result := 0;
 end;
 
-procedure TAMQPEngine.Recupera(AEstado: TAMQPRecoveredState);
+procedure TAMQPEngine.Recover(AState: TAMQPRecoveredState);
 var
   I: Integer;
   LEx: TAMQPRecExchange;
   LQ: TAMQPRecQueue;
   LB: TAMQPRecoveredBinding;
   LEnq: TAMQPRecEnqueue;
-  LCont: TAMQPRecContent;
-  LFila: TAMQPServerQueue;
+  LCount: TAMQPRecContent;
+  LQueue: TAMQPServerQueue;
   LMsg: TAMQPMessage;
   LMsgCount, LConsCount: Integer;
   LNowWall: Int64;
 begin
-  if AEstado = nil then
+  if AState = nil then
     Exit;
-  FRecuperando := True;
+  FRecovering := True;
   try
     // 1) TOPOLOGIA. Exchanges antes das filas, e os binds por ultimo: um bind
     //    precisa das duas pontas de pe'.
-    for I := 0 to AEstado.Exchanges.Count - 1 do
+    for I := 0 to AState.Exchanges.Count - 1 do
     begin
-      LEx := AEstado.Exchanges[I];
+      LEx := AState.Exchanges[I];
       EnsureVHost(LEx.VHost);
       DeclareExchange(LEx.VHost, LEx.Name, LEx.ExchangeType, False,
         LEx.Durable, LEx.AutoDelete, LEx.Internal, LEx.Arguments);
@@ -1169,12 +1169,12 @@ begin
       // flag no estado inteiro) mantem a conta exata mesmo se este laco
       // parar no meio.
       LEx.Arguments := nil;
-      AEstado.Exchanges[I] := LEx;
+      AState.Exchanges[I] := LEx;
     end;
 
-    for I := 0 to AEstado.Queues.Count - 1 do
+    for I := 0 to AState.Queues.Count - 1 do
     begin
-      LQ := AEstado.Queues[I];
+      LQ := AState.Queues[I];
       EnsureVHost(LQ.VHost);
       // AExclusive=False SEMPRE: fila exclusiva nunca foi persistida (D20), e
       // uma recuperada nao tem dono vivo para ser exclusiva de quem.
@@ -1184,20 +1184,20 @@ begin
       DeclareQueue(LQ.VHost, LQ.Name, False, LQ.Durable, False, LQ.AutoDelete,
         LQ.Arguments, 0, LMsgCount, LConsCount);
       LQ.Arguments := nil; // a posse passou -- ver o comentario acima
-      AEstado.Queues[I] := LQ;
+      AState.Queues[I] := LQ;
     end;
 
-    for I := 0 to AEstado.Bindings.Count - 1 do
+    for I := 0 to AState.Bindings.Count - 1 do
     begin
-      LB := AEstado.Bindings[I];
-      if LB.ParaExchange then
+      LB := AState.Bindings[I];
+      if LB.DestinationIsExchange then
         BindExchange(LB.Binding.VHost, LB.Binding.Destination,
           LB.Binding.Source, LB.Binding.RoutingKey, LB.Binding.Arguments)
       else
         BindQueue(LB.Binding.VHost, LB.Binding.Destination,
           LB.Binding.Source, LB.Binding.RoutingKey, LB.Binding.Arguments, 0);
       LB.Binding.Arguments := nil; // a posse passou -- ver o comentario acima
-      AEstado.Bindings[I] := LB;
+      AState.Bindings[I] := LB;
     end;
 
     // 2) O CONTADOR DE IDS continua DEPOIS do maior id que o log ja' usou.
@@ -1205,8 +1205,8 @@ begin
     //    e o DEQ de uma aposentaria a outra -- silencioso e fatal.
     FLock.Enter;
     try
-      if AEstado.MaxId > FProximoId then
-        FProximoId := AEstado.MaxId;
+      if AState.MaxId > FNextId then
+        FNextId := AState.MaxId;
     finally
       FLock.Leave;
     end;
@@ -1215,51 +1215,51 @@ begin
     //    balde de prioridade vem no registro, entao cada mensagem cai
     //    exatamente onde o RequeueFront da D12 a poria. Nada a ordenar.
     LNowWall := AmqpWallMs;
-    for I := 0 to AEstado.Entries.Count - 1 do
+    for I := 0 to AState.Entries.Count - 1 do
     begin
-      LEnq := AEstado.Entries[I];
-      LFila := FindQueue(LEnq.VHost, LEnq.Queue);
-      if LFila = nil then
+      LEnq := AState.Entries[I];
+      LQueue := FindQueue(LEnq.VHost, LEnq.Queue);
+      if LQueue = nil then
         Continue; // fila apagada no log; o replay ja' devia ter tirado
-      if not AEstado.Contents.TryGetValue(LEnq.ContentId, LCont) then
+      if not AState.Contents.TryGetValue(LEnq.ContentId, LCount) then
         Continue;
-      LMsg := TAMQPMessage.Create(LEnq.Exchange, LEnq.RoutingKey, LCont.UserId,
-        LEnq.HeaderPayload, LCont.Body);
+      LMsg := TAMQPMessage.Create(LEnq.Exchange, LEnq.RoutingKey, LCount.UserId,
+        LEnq.HeaderPayload, LCount.Body);
       try
         // O TTL passa como RESTANTE, e nao como o efetivo gravado: o
         // CalculaPrazo do ator aplica o "menor vence" de novo, e o restante e'
         // por construcao <= o efetivo, entao o minimo devolve o restante. Uma
         // regra, uma implementacao -- nao ha caminho de enfileiramento
         // separado para a recuperacao.
-        LFila.PostMessage(LMsg, LEnq.Priority, TtlRestante(LEnq, LNowWall),
+        LQueue.PostMessage(LMsg, LEnq.Priority, TtlRestante(LEnq, LNowWall),
           LEnq.EntryId, LEnq.ContentId, True); // True = D27, volta redelivered
       finally
         LMsg.Release; // a fila fez o proprio AddRef
       end;
     end;
   finally
-    FRecuperando := False;
+    FRecovering := False;
   end;
 end;
 
 { --- publicacao --- }
 
 function TAMQPEngine.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+  const AMessage: TAMQPServerMessage; out ARejected: Boolean;
   out ALsn: UInt64): Boolean;
 var
   LVHost: TAMQPVHost;
-  LDestinos: TArray<string>;
+  LDestinations: TArray<string>;
   LMsg: TAMQPMessage;
   LQueue: TAMQPServerQueue;
   I: Integer;
   LHeaders: TAMQPFieldTable;
   LPriority: Byte;
   LTtlMs: Int64;
-  LPersistente: Boolean;
+  LPersistent: Boolean;
   LContentId, LEntryId, LLsn: UInt64;
 begin
-  ARejeitada := False;
+  ARejected := False;
   ALsn := 0;
   LVHost := FVHosts.GetOrCreate(AVHost);
   // Headers vivos do canal: o match roda AQUI, na thread do publicador
@@ -1268,8 +1268,8 @@ begin
   if AMessage.Properties.Has(bpHeaders) then
     LHeaders := AMessage.Properties.Headers;
 
-  LDestinos := LVHost.Route(AMessage.Exchange, AMessage.RoutingKey, LHeaders);
-  Result := Length(LDestinos) > 0;
+  LDestinations := LVHost.Route(AMessage.Exchange, AMessage.RoutingKey, LHeaders);
+  Result := Length(LDestinations) > 0;
   if not Result then
   begin
     AmqpAtomicInc(FUnrouted);
@@ -1298,7 +1298,7 @@ begin
   // duraveis. Lido AQUI, na thread do publicador, pela mesma razao da
   // prioridade e do 'expiration' (decisao D1): quem tem as propriedades
   // decodificadas na mao e' quem publicou.
-  LPersistente := AMessage.Properties.Has(bpDeliveryMode)
+  LPersistent := AMessage.Properties.Has(bpDeliveryMode)
     and (AMessage.Properties.DeliveryMode = 2); // 2 = persistente (spec)
 
   // TETO DE DISCO (D26): estourou, o publish PERSISTENTE e' recusado -- e
@@ -1307,25 +1307,25 @@ begin
   // disco recusa, porque descartar aqui seria apagar dado que o broker ja'
   // confirmou como duravel. Publish transiente nao e' afetado: ele nao toca o
   // journal.
-  if LPersistente and (FJournal <> nil) and FJournal.Cheio then
+  if LPersistent and (FJournal <> nil) and FJournal.IsFull then
   begin
-    FJournal.ContaRecusa;
-    ARejeitada := True;
+    FJournal.IncrementRefused;
+    ARejected := True;
     Exit(False);
   end;
 
   LMsg := TAMQPMessage.FromServerMessage(AMessage);
   try
     LContentId := 0;
-    for I := 0 to High(LDestinos) do
+    for I := 0 to High(LDestinations) do
     begin
-      LQueue := FindQueue(AVHost, LDestinos[I]);
+      LQueue := FindQueue(AVHost, LDestinations[I]);
       if LQueue = nil then
         Continue;
       LEntryId := 0;
-      if LPersistente then
+      if LPersistent then
       begin
-        LEntryId := GravaColocacao(LQueue, AVHost, LMsg, LPriority, LTtlMs,
+        LEntryId := WriteEnqueue(LQueue, AVHost, LMsg, LPriority, LTtlMs,
           LContentId, True, LLsn);
         // WS5/D24: o confirm deste publish espera o MAIOR LSN que ele
         // escreveu. Como o journal atribui LSNs crescentes e o lote de cada
@@ -1340,7 +1340,7 @@ begin
       begin
         if not LQueue.TryPostMessage(LMsg, LPriority, LTtlMs, LEntryId,
           LContentId) then
-          ARejeitada := True;
+          ARejected := True;
       end
       else
         // faz o proprio AddRef
@@ -1358,7 +1358,7 @@ var
   LLsnIgn: UInt64;
   LEntryId: UInt64;
   LVHost: TAMQPVHost;
-  LDestinos: TArray<string>;
+  LDestinations: TArray<string>;
   LQueue: TAMQPServerQueue;
   LEd: TAMQPHeaderEditor;
   I: Integer;
@@ -1371,7 +1371,7 @@ begin
   try
     try
       LEd := TAMQPHeaderEditor.Create(AMessage.HeaderPayload);
-      LDestinos := LVHost.Route(AExchange, ARoutingKey, LEd.Headers);
+      LDestinations := LVHost.Route(AExchange, ARoutingKey, LEd.Headers);
     except
       // Header ilegivel nao pode derrubar o ator da fila de origem.
       on E: Exception do
@@ -1381,7 +1381,7 @@ begin
     LEd.Free;
   end;
 
-  if Length(LDestinos) = 0 then
+  if Length(LDestinations) = 0 then
   begin
     // DLX sem rota: a mensagem morre de vez. E' o mesmo destino que teria sem
     // DLX nenhum, e por isso nao e' erro -- so' nao ha para onde mandar.
@@ -1390,9 +1390,9 @@ begin
   end;
   AmqpAtomicInc(FRouted);
 
-  for I := 0 to High(LDestinos) do
+  for I := 0 to High(LDestinations) do
   begin
-    LQueue := FindQueue(AVHost, LDestinos[I]);
+    LQueue := FindQueue(AVHost, LDestinations[I]);
     if LQueue = nil then
       Continue;
     // D23: a colocacao NOVA e' escrita AQUI, e a velha so' e' aposentada
@@ -1404,7 +1404,7 @@ begin
       // O LSN e' descartado de proposito: dead-letter nao tem seq-no de
       // publicador esperando por ele -- o publicador original ja' foi
       // confirmado quando a mensagem entrou na fila de origem.
-      LEntryId := GravaColocacao(LQueue, AVHost, AMessage, APriority, -1,
+      LEntryId := WriteEnqueue(LQueue, AVHost, AMessage, APriority, -1,
         AContentId, False, LLsnIgn); // no ator: sem esperar vaga (D2)
     // TTL da mensagem vai como -1: o 'expiration' original foi retirado pelo
     // dead-lettering (senao ela morreria de novo no ato na DLQ), e o prazo
@@ -1415,13 +1415,13 @@ end;
 
 procedure TAMQPEngine.ExpireIdleQueues;
 var
-  LPares: TArray<TPair<string, TAMQPServerQueue>>;
-  LNomes: TArray<string>;
+  LPairs: TArray<TPair<string, TAMQPServerQueue>>;
+  LNames: TArray<string>;
   LVHosts: TArray<string>;
   I, N, LBarra: Integer;
   LStats: TAMQPQueueStats;
   LMsgs: Integer;
-  LChave: string;
+  LKey: string;
 begin
   // Snapshot sob o lock, decisao FORA dele: ler Stats e' comando SINCRONO no
   // ator, e segurar o lock da engine enquanto se espera um ator seria
@@ -1429,46 +1429,46 @@ begin
   // que volta a pedir FindQueue).
   FLock.Enter;
   try
-    LPares := FQueues.ToArray;
+    LPairs := FQueues.ToArray;
   finally
     FLock.Leave;
   end;
 
-  SetLength(LNomes, 0);
+  SetLength(LNames, 0);
   SetLength(LVHosts, 0);
-  for I := 0 to High(LPares) do
+  for I := 0 to High(LPairs) do
   begin
     // So' fila que PEDIU x-expires paga o comando sincrono.
-    if LPares[I].Value.Policy.ExpiresMs < 0 then
+    if LPairs[I].Value.Policy.ExpiresMs < 0 then
       Continue;
     try
-      LStats := LPares[I].Value.Stats;
+      LStats := LPairs[I].Value.Stats;
     except
       // Fila parando debaixo da varredura: nao e' erro, e' corrida normal.
       Continue;
     end;
-    if LStats.IdleMs < LPares[I].Value.Policy.ExpiresMs then
+    if LStats.IdleMs < LPairs[I].Value.Policy.ExpiresMs then
       Continue;
 
     // A chave e' 'vhost/nome'; o nome pode conter barra, o vhost nao comeca
     // com uma, entao a PRIMEIRA barra e' o separador.
-    LChave := LPares[I].Key;
-    LBarra := Pos('/', LChave);
+    LKey := LPairs[I].Key;
+    LBarra := Pos('/', LKey);
     if LBarra <= 0 then
       Continue;
-    N := Length(LNomes);
-    SetLength(LNomes, N + 1);
+    N := Length(LNames);
+    SetLength(LNames, N + 1);
     SetLength(LVHosts, N + 1);
-    LVHosts[N] := Copy(LChave, 1, LBarra - 1);
-    LNomes[N] := Copy(LChave, LBarra + 1, MaxInt);
+    LVHosts[N] := Copy(LKey, 1, LBarra - 1);
+    LNames[N] := Copy(LKey, LBarra + 1, MaxInt);
   end;
 
-  for I := 0 to High(LNomes) do
+  for I := 0 to High(LNames) do
     try
       // AOwnerId=0: chamador interno, passa pelo CheckExclusive. Sem
       // if-unused/if-empty: x-expires apaga mesmo com mensagem dentro, que e'
       // o comportamento do RabbitMQ -- o argumento fala de USO, nao de vazio.
-      DeleteQueue(LVHosts[I], LNomes[I], False, False, 0, LMsgs);
+      DeleteQueue(LVHosts[I], LNames[I], False, False, 0, LMsgs);
     except
       // Outra thread pode ter apagado a fila entre a decisao e a execucao.
       ;
@@ -1477,17 +1477,17 @@ end;
 
 procedure TAMQPEngine.DeliverTick;
 var
-  LTodas: TArray<TAMQPServerQueue>;
+  LAll: TArray<TAMQPServerQueue>;
   I: Integer;
 begin
   FLock.Enter;
   try
-    LTodas := FQueues.Values.ToArray;
+    LAll := FQueues.Values.ToArray;
   finally
     FLock.Leave;
   end;
-  for I := 0 to High(LTodas) do
-    LTodas[I].PostDeliverTick;
+  for I := 0 to High(LAll) do
+    LAll[I].PostDeliverTick;
 end;
 
 function TAMQPEngine.RoutedCount: Integer;

@@ -780,7 +780,7 @@ begin
     LJournal.Stop;
     AssertTrue('declare duravel avisa que nao da',
       LEngine.DeclareQueue('/', 'q.dur', False, True, False, False, nil, 0,
-        LMsg, LCons) = amqerSemDurabilidade);
+        LMsg, LCons) = amqerNoDurability);
   finally
     LEngine.Free;
     LJournal.Free;

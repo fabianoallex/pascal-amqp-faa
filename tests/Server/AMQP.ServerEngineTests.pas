@@ -1060,7 +1060,7 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B);
   try
-    ChecaBool('original nao tinha headers', False, LEd.TinhaHeaders);
+    ChecaBool('original nao tinha headers', False, LEd.HadHeaders);
     LVal := TValue.From<Int64>(1);
     LEd.Headers.Put('x-death-count', LVal);
     B2 := LEd.BuildPayload(3);
@@ -1070,7 +1070,7 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    ChecaBool('agora tem headers', True, LEd.TinhaHeaders);
+    ChecaBool('agora tem headers', True, LEd.HadHeaders);
     ChecaBool('chave presente', True,
       LEd.Headers.TryGetValue('x-death-count', LVal));
     ChecaInt('valor', 1, LVal.AsInt64);

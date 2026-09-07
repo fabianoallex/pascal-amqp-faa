@@ -163,14 +163,14 @@ type
     FRefUltimo: IAMQPWalFile; // mantem FUltimo vivo enquanto o teste o usa
     FReprovando: Boolean;
   protected
-    function CriaArquivo(const APath: string;
+    function CreateFile(const APath: string;
       ACriar: Boolean): IAMQPWalFile; override;
   public
     /// A partir daqui todo fsync reprova -- inclusive o da compactacao.
     procedure ReprovaOSync;
   end;
 
-function TJournalComSyncFalho.CriaArquivo(const APath: string;
+function TJournalComSyncFalho.CreateFile(const APath: string;
   ACriar: Boolean): IAMQPWalFile;
 begin
   FUltimo := TAMQPWalFileComFalha.Create(TAMQPWalOsFile.Create(APath, ACriar));
@@ -401,7 +401,7 @@ begin
     ChecaStr('nome da fila', 'q.a', E.Queues[0].Name);
     ChecaInt('um binding', 1, E.Bindings.Count);
     ChecaStr('routing key', 'rk', E.Bindings[0].Binding.RoutingKey);
-    ChecaNao('e o destino e uma FILA', E.Bindings[0].ParaExchange);
+    ChecaNao('e o destino e uma FILA', E.Bindings[0].DestinationIsExchange);
   finally
     E.Free;
   end;
@@ -464,7 +464,7 @@ begin
     ChecaStr('o da fila viva', 'q.b', E.Bindings[0].Binding.Destination);
     ChecaInt('e uma colocacao so', 1, E.Entries.Count);
     ChecaStr('a da fila viva', 'q.b', E.Entries[0].Queue);
-    ChecaInt('a outra contou como orfa de fila', 1, E.Stats.OrfasDeFila);
+    ChecaInt('a outra contou como orfa de fila', 1, E.Stats.OrphanedFromQueue);
   finally
     E.Free;
   end;
@@ -506,8 +506,8 @@ begin
   E := Replica;
   try
     ChecaInt('uma colocacao viva', 1, E.Entries.Count);
-    ChecaInt('nas contagens tambem', 1, E.Stats.Vivas);
-    ChecaInt('nada aposentado', 0, E.Stats.Aposentadas);
+    ChecaInt('nas contagens tambem', 1, E.Stats.Live);
+    ChecaInt('nada aposentado', 0, E.Stats.Retired);
     ChecaStr('o corpo veio junto', 'corpo',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
   finally
@@ -526,7 +526,7 @@ begin
   E := Replica;
   try
     ChecaInt('nada vivo', 0, E.Entries.Count);
-    ChecaInt('uma aposentadoria', 1, E.Stats.Aposentadas);
+    ChecaInt('uma aposentadoria', 1, E.Stats.Retired);
   finally
     E.Free;
   end;
@@ -678,7 +678,7 @@ begin
 
   E := AmqpReplayWal(FDir);
   try
-    ChecaNao('a leitura NAO chegou ao fim inteira', E.Stats.Parada = awsFim);
+    ChecaNao('a leitura NAO chegou ao fim inteira', E.Stats.StopReason = awsEnd);
     ChecaInt('a fila do prefixo sobreviveu', 1, E.Queues.Count);
     // A ultima colocacao caiu junto com a cauda; a primeira continua la'.
     ChecaInt('uma colocacao viva', 1, E.Entries.Count);
@@ -708,9 +708,9 @@ begin
   // antes de o primeiro byte ter saido.
   ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
   ChecaOk('o segmento ativo passou do primeiro',
-    FJournal.SegmentoAtivo > 1);
+    FJournal.ActiveSegment > 1);
   ChecaOk('e as rotacoes foram contadas',
-    FJournal.Stats.Rotacoes >= 1);
+    FJournal.Stats.Rotations >= 1);
 end;
 
 procedure TRecoveryReplayTests.Rotaciona_NaoParteOLoteEntreDoisArquivos;
@@ -795,7 +795,7 @@ begin
     LUltimo := Grava(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ConteudoDe(I, 'x')));
   ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
-  ChecaOk('rotacionou', FJournal.SegmentoAtivo > 1);
+  ChecaOk('rotacionou', FJournal.ActiveSegment > 1);
 
   LDepois := Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(ConteudoDe(99, 'y')));
   ChecaOk('o registro de depois da rotacao ficou duravel',
@@ -821,7 +821,7 @@ begin
   end;
   E := Replica;
   try
-    ChecaOk('leu mais de um segmento', E.Stats.Segmentos > 1);
+    ChecaOk('leu mais de um segmento', E.Stats.Segments > 1);
     ChecaInt('a fila veio', 1, E.Queues.Count);
     ChecaInt('e as 20 colocacoes tambem', 20, E.Entries.Count);
     ChecaStr('na ordem do log, da primeira', 'corpo-1',
@@ -846,7 +846,7 @@ begin
     LUltimo := Grava(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ConteudoDe(I, 'x')));
   ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
-  LSegDepois := FJournal.SegmentoAtivo;
+  LSegDepois := FJournal.ActiveSegment;
   ChecaOk('rotacionou antes de fechar', LSegDepois > 1);
   FJournal.Stop;
   FreeAndNil(FJournal);
@@ -854,7 +854,7 @@ begin
   FJournal := TAMQPJournal.Create(FDir);
   FJournal.Start;
   ChecaInt('reabriu no ultimo segmento, nao no primeiro',
-    Integer(LSegDepois), Integer(FJournal.SegmentoAtivo));
+    Integer(LSegDepois), Integer(FJournal.ActiveSegment));
 end;
 
 { --- compactacao (WS7 da Fase 4, D26) --- }
@@ -877,11 +877,11 @@ begin
   for I := 1 to 28 do
     Aposenta(I * 2, 'q.a');
   ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
-  LAntes := FJournal.TamanhoTotal;
+    FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
+  LAntes := FJournal.TotalSize;
 
-  ChecaOk('compactou', FJournal.Compacta);
-  LDepois := FJournal.TamanhoTotal;
+  ChecaOk('compactou', FJournal.Compact);
+  LDepois := FJournal.TotalSize;
   ChecaOk('o log encolheu', LDepois < LAntes);
 
   E := Replica;
@@ -920,7 +920,7 @@ begin
   LSegsAntes := AmqpWalListSegments(FDir);
   ChecaOk('havia varios segmentos', Length(LSegsAntes) > 2);
 
-  ChecaOk('compactou', FJournal.Compacta);
+  ChecaOk('compactou', FJournal.Compact);
   LSegsDepois := AmqpWalListSegments(FDir);
   // Nenhuma colocacao viva (so' conteudo solto, que ninguem referencia): sobra
   // o segmento novo com a topologia e mais nada.
@@ -928,7 +928,7 @@ begin
   ChecaOk('e ele e mais novo que todos os apagados',
     LSegsDepois[0] > LSegsAntes[High(LSegsAntes)]);
   ChecaOk('os apagados foram contados',
-    FJournal.Stats.SegmentosApagados >= Length(LSegsAntes));
+    FJournal.Stats.DeletedSegments >= Length(LSegsAntes));
 end;
 
 procedure TRecoveryReplayTests.Compacta_PreservaOsIdentificadores;
@@ -942,8 +942,8 @@ begin
   Conteudo(7, 'x');
   Coloca(9, 7, 'q.a');
   ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compacta);
+    FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compact);
   E := Replica;
   try
     ChecaInt('uma colocacao', 1, E.Entries.Count);
@@ -992,7 +992,7 @@ begin
   E := Replica;
   try
     ChecaInt('UMA colocacao, nao duas', 1, E.Entries.Count);
-    ChecaInt('e a repetida foi contada', 1, E.Stats.Duplicadas);
+    ChecaInt('e a repetida foi contada', 1, E.Stats.Duplicates);
   finally
     E.Free;
   end;
@@ -1012,8 +1012,8 @@ begin
   Conteudo(3, 'segunda');
   Coloca(4, 3, 'q.a', 7);
   ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compacta);
+    FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compact);
   E := Replica;
   try
     ChecaInt('as duas', 2, E.Entries.Count);
@@ -1041,8 +1041,8 @@ begin
     Aposenta(I * 2, 'q.a');
   end;
   ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compacta);
+    FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compact);
   E := Replica;
   try
     ChecaInt('nenhuma colocacao', 0, E.Entries.Count);
@@ -1079,18 +1079,18 @@ begin
       AmqpEncodeRecDequeue(DequeueDe(I * 2, 'q.a')));
   end;
   ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  LAntes := FJournal.TamanhoTotal;
+  LAntes := FJournal.TotalSize;
   FJournal.Stop;
   FreeAndNil(FJournal);
 
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    ChecaOk('o log esta acima do limiar', J.TamanhoTotal >= 1500);
-    ChecaOk('compactou', J.Compacta);
-    LDepois := J.TamanhoTotal;
+    ChecaOk('o log esta acima do limiar', J.TotalSize >= 1500);
+    ChecaOk('compactou', J.Compact);
+    LDepois := J.TotalSize;
     ChecaOk('e encolheu', LDepois < LAntes);
-    ChecaOk('apagando segmento', J.Stats.SegmentosApagados >= 1);
+    ChecaOk('apagando segmento', J.Stats.DeletedSegments >= 1);
   finally
     J.Stop;
     J.Free;
@@ -1125,12 +1125,12 @@ begin
       LRecs[0].Payload := AmqpEncodeRecContent(ConteudoDe(I, 'x'));
       J.Submit(LRecs);
     end;
-    ChecaOk('tudo duravel', J.WaitDurable(J.Stats.ProximoLsn - 1, 5000));
+    ChecaOk('tudo duravel', J.WaitDurable(J.Stats.NextLsn - 1, 5000));
     LSegsAntes := AmqpWalListSegments(FDir);
     ChecaOk('havia varios segmentos', Length(LSegsAntes) > 1);
 
     J.ReprovaOSync;
-    ChecaNao('a compactacao se recusa a concluir', J.Compacta);
+    ChecaNao('a compactacao se recusa a concluir', J.Compact);
     LSegsDepois := AmqpWalListSegments(FDir);
     ChecaOk('e NENHUM segmento velho foi apagado',
       Length(LSegsDepois) >= Length(LSegsAntes));
@@ -1166,8 +1166,8 @@ begin
   Coloca(3, 1, 'q.b');
   Coloca(4, 1, 'q.c');
   ChecaOk('tudo duravel',
-    FJournal.WaitDurable(FJournal.Stats.ProximoLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compacta);
+    FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
+  ChecaOk('compactou', FJournal.Compact);
   FJournal.Stop;
   FreeAndNil(FJournal);
 
@@ -1209,7 +1209,7 @@ begin
     LLsn := Grava(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ConteudoDe(I, StringOfChar('x', 200))));
   ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  ChecaNao('e o journal nunca se declara cheio', FJournal.Cheio);
+  ChecaNao('e o journal nunca se declara cheio', FJournal.IsFull);
 end;
 
 procedure TRecoveryReplayTests.Teto_Estourado_MarcaCheio;
@@ -1218,12 +1218,12 @@ var
   LLsn: UInt64;
 begin
   FJournal.MaxJournalBytes := 2000;
-  ChecaNao('comeca vazio', FJournal.Cheio);
+  ChecaNao('comeca vazio', FJournal.IsFull);
   for I := 1 to 40 do
     LLsn := Grava(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ConteudoDe(I, StringOfChar('x', 200))));
   ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  ChecaOk('passou do teto e se declara cheio', FJournal.Cheio);
+  ChecaOk('passou do teto e se declara cheio', FJournal.IsFull);
   ChecaOk('e o tamanho relatado bate com o teto',
     FJournal.Stats.Bytes >= 2000);
 end;
@@ -1243,7 +1243,7 @@ begin
   Conteudo(1, 'x');
   Coloca(2, 1, 'q.a');
   FJournal.MaxJournalBytes := 1; // cheio desde ja
-  ChecaOk('cheio', FJournal.Cheio);
+  ChecaOk('cheio', FJournal.IsFull);
   LLsn := FJournal.SubmitNoWait(RegistroDe(AMQP_REC_DEQUEUE,
     AmqpEncodeRecDequeue(DequeueDe(2, 'q.a'))));
   ChecaOk('o DEQ foi aceito mesmo com o log cheio', LLsn > 0);

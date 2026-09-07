@@ -1,4 +1,4 @@
-unit AMQP.Transport;
+﻿unit AMQP.Transport;
 
 {$I amqp.inc}
 

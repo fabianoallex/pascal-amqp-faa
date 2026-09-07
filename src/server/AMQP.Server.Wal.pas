@@ -147,14 +147,14 @@ type
     inteiro" de "descartei 37 bytes". }
   TAMQPWalStop = (
     /// Chegou ao fim do arquivo com todos os registros integros.
-    awsFim,
+    awsEnd,
     /// Faltavam bytes para completar a moldura ou o payload do ultimo.
-    awsCauda,
+    awsTruncated,
     /// O CRC do ultimo registro nao bateu -- escrita interrompida no meio.
     awsCrc,
     /// O `len` era maior que o teto (o caso de "maior que o que resta" e'
     /// indistinguivel de cauda, e sai como awsCauda).
-    awsTamanho,
+    awsSize,
     /// O LSN nao cresceu. So' acontece com lixo que passou pelo CRC (ou com
     /// arquivo remontado a mao); o prefixo valido termina aqui.
     awsLsn
@@ -217,13 +217,13 @@ type
     FEndOffset: Int64;
     FLastLsn: UInt64;
     FStop: TAMQPWalStop;
-    FDescartados: Int64;
+    FDiscarded: Int64;
     /// Le o arquivo inteiro e valida o cabecalho. Levanta se nao for um
     /// segmento deste formato -- e' a UNICA familia de erro que a leitura
     /// levanta, porque um arquivo estranho no DataDir e' erro de operacao, nao
     /// consequencia de queda.
-    function LeEValidaCabecalho: TBytes;
-    function Varre(const ABuf: TBytes; AColeta: Boolean;
+    function ReadAndValidateHeader: TBytes;
+    function Scan(const ABuf: TBytes; ACollect: Boolean;
       out ARecords: TAMQPWalRecords; out AStop: TAMQPWalStop;
       out AEndOffset: Int64; out ALastLsn: UInt64): Integer;
   public
@@ -257,7 +257,7 @@ type
     property Stop: TAMQPWalStop read FStop;
     /// Quantos bytes de cauda torta a abertura encontrou (e truncou, se
     /// ATrim). Zero e' o caso de um segmento fechado com saude.
-    property BytesDescartados: Int64 read FDescartados;
+    property BytesDescartados: Int64 read FDiscarded;
   end;
 
   { Um dono por diretorio de dados.
@@ -417,12 +417,12 @@ end;
 function AmqpWalListSegments(const ADir: string): TArray<Cardinal>;
 var
   LRec: TSearchRec;
-  LLista: TList<Cardinal>;
+  LList: TList<Cardinal>;
   LNo, LTmp: Cardinal;
   I, J: Integer;
 begin
   Result := nil;
-  LLista := TList<Cardinal>.Create;
+  LList := TList<Cardinal>.Create;
   try
     if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*'
       + AMQP_WAL_SEGMENT_EXT, faAnyFile, LRec) = 0 then
@@ -431,7 +431,7 @@ begin
         repeat
           if (LRec.Attr and faDirectory) = 0 then
             if AmqpWalParseSegmentName(LRec.Name, LNo) then
-              LLista.Add(LNo);
+              LList.Add(LNo);
         until FindNext(LRec) <> 0;
       finally
         // QUALIFICADO: com a unit Windows em escopo (ramo Delphi), o
@@ -441,11 +441,11 @@ begin
         SysUtils.FindClose(LRec);
       end;
     end;
-    SetLength(Result, LLista.Count);
-    for I := 0 to LLista.Count - 1 do
-      Result[I] := LLista[I];
+    SetLength(Result, LList.Count);
+    for I := 0 to LList.Count - 1 do
+      Result[I] := LList[I];
   finally
-    LLista.Free;
+    LList.Free;
   end;
   // Ordenacao por insercao, na mao: TArray.Sort<T> nao existe no
   // Generics.Collections do FPC 3.2 (tabela de proibidos do CLAUDE.md). Sao
@@ -554,26 +554,26 @@ end;
 
 function TAMQPWalOsFile.Append(const ABytes: TBytes): Int64;
 var
-  LEscrito, LTotal, LResto: Integer;
+  LWritten, LTotal, LRemaining: Integer;
 begin
   Result := FileSeek(FHandle, Int64(0), 2 { fim });
   LTotal := 0;
-  LResto := Length(ABytes);
-  while LResto > 0 do
+  LRemaining := Length(ABytes);
+  while LRemaining > 0 do
   begin
-    LEscrito := FileWrite(FHandle, ABytes[LTotal], LResto);
-    if LEscrito <= 0 then
-      raise EAMQPWal.CreateFmt('escrita falhou em %s apos %d de %d bytes: %s',
+    LWritten := FileWrite(FHandle, ABytes[LTotal], LRemaining);
+    if LWritten <= 0 then
+      raise EAMQPWal.CreateFmt('write failed at %s after %d of %d bytes: %s',
         [FPath, LTotal, Length(ABytes), SysErrorMessage(AmqpLastOsError)]);
-    Inc(LTotal, LEscrito);
-    Dec(LResto, LEscrito);
+    Inc(LTotal, LWritten);
+    Dec(LRemaining, LWritten);
   end;
 end;
 
 function TAMQPWalOsFile.ReadAll: TBytes;
 var
   LSize: Int64;
-  LLido, LTotal, LResto: Integer;
+  LRead, LTotal, LRemaining: Integer;
 begin
   Result := nil;
   LSize := Size;
@@ -585,19 +585,19 @@ begin
   SetLength(Result, Integer(LSize));
   FileSeek(FHandle, Int64(0), 0 { inicio });
   LTotal := 0;
-  LResto := Integer(LSize);
-  while LResto > 0 do
+  LRemaining := Integer(LSize);
+  while LRemaining > 0 do
   begin
-    LLido := FileRead(FHandle, Result[LTotal], LResto);
-    if LLido <= 0 then
+    LRead := FileRead(FHandle, Result[LTotal], LRemaining);
+    if LRead <= 0 then
     begin
       // Arquivo encolheu debaixo de nos -- nao deveria, ha um dono so'.
       // Devolve o que deu; a varredura trata o resto como cauda.
       SetLength(Result, LTotal);
       Exit;
     end;
-    Inc(LTotal, LLido);
-    Dec(LResto, LLido);
+    Inc(LTotal, LRead);
+    Dec(LRemaining, LRead);
   end;
 end;
 
@@ -657,8 +657,8 @@ begin
 
   FEndOffset := AMQP_WAL_SEG_HEADER_SIZE;
   FLastLsn := 0;
-  FStop := awsFim;
-  FDescartados := 0;
+  FStop := awsEnd;
+  FDiscarded := 0;
 end;
 
 constructor TAMQPWalSegment.OpenExisting(const AFile: IAMQPWalFile;
@@ -671,10 +671,10 @@ begin
   if AFile = nil then
     raise EAMQPWal.Create('segment has no file');
   FFile := AFile;
-  LBuf := LeEValidaCabecalho;
-  Varre(LBuf, False, LRecs, FStop, FEndOffset, FLastLsn);
-  FDescartados := Int64(Length(LBuf)) - FEndOffset;
-  if ATrim and (FDescartados > 0) then
+  LBuf := ReadAndValidateHeader;
+  Scan(LBuf, False, LRecs, FStop, FEndOffset, FLastLsn);
+  FDiscarded := Int64(Length(LBuf)) - FEndOffset;
+  if ATrim and (FDiscarded > 0) then
   begin
     FFile.TruncateTo(FEndOffset);
     FFile.Sync;
@@ -687,7 +687,7 @@ begin
   inherited Destroy;
 end;
 
-function TAMQPWalSegment.LeEValidaCabecalho: TBytes;
+function TAMQPWalSegment.ReadAndValidateHeader: TBytes;
 var
   I: Integer;
   LVer: Word;
@@ -707,34 +707,34 @@ begin
   FSegNo := PegaU32(Result, 12);
 end;
 
-function TAMQPWalSegment.Varre(const ABuf: TBytes; AColeta: Boolean;
+function TAMQPWalSegment.Scan(const ABuf: TBytes; ACollect: Boolean;
   out ARecords: TAMQPWalRecords; out AStop: TAMQPWalStop;
   out AEndOffset: Int64; out ALastLsn: UInt64): Integer;
 var
-  LPos, LTam, LCap: Integer;
-  LLsn, LUltimoLsn: UInt64;
+  LPos, LLength, LCap: Integer;
+  LLsn, LLastLsn: UInt64;
   LKind: Byte;
   LLen: Cardinal;
-  LCrcLido, LCrcCalc: Cardinal;
+  LCrcRead, LCrcCalc: Cardinal;
 begin
   ARecords := nil;
-  LTam := Length(ABuf);
+  LLength := Length(ABuf);
   LPos := AMQP_WAL_SEG_HEADER_SIZE;
-  LUltimoLsn := 0;
+  LLastLsn := 0;
   LCap := 0;
   Result := 0;
-  AStop := awsFim;
+  AStop := awsEnd;
 
   while True do
   begin
-    if LPos >= LTam then
+    if LPos >= LLength then
     begin
-      AStop := awsFim;
+      AStop := awsEnd;
       Break;
     end;
-    if LTam - LPos < AMQP_WAL_REC_HEADER_SIZE then
+    if LLength - LPos < AMQP_WAL_REC_HEADER_SIZE then
     begin
-      AStop := awsCauda;
+      AStop := awsTruncated;
       Break;
     end;
 
@@ -746,19 +746,19 @@ begin
     // alocacao guiada por ele, porque ele mesmo pode estar corrompido.
     if LLen > AMQP_WAL_MAX_PAYLOAD then
     begin
-      AStop := awsTamanho;
+      AStop := awsSize;
       Break;
     end;
-    if Int64(LTam - LPos) < Int64(AMQP_WAL_REC_OVERHEAD) + Int64(LLen) then
+    if Int64(LLength - LPos) < Int64(AMQP_WAL_REC_OVERHEAD) + Int64(LLen) then
     begin
-      AStop := awsCauda;
+      AStop := awsTruncated;
       Break;
     end;
 
-    LCrcLido := PegaU32(ABuf, LPos + AMQP_WAL_REC_HEADER_SIZE + Integer(LLen));
+    LCrcRead := PegaU32(ABuf, LPos + AMQP_WAL_REC_HEADER_SIZE + Integer(LLen));
     LCrcCalc := AmqpCrc32($FFFFFFFF, ABuf, LPos,
       AMQP_WAL_REC_HEADER_SIZE + Integer(LLen)) xor $FFFFFFFF;
-    if LCrcLido <> LCrcCalc then
+    if LCrcRead <> LCrcCalc then
     begin
       AStop := awsCrc;
       Break;
@@ -766,13 +766,13 @@ begin
 
     // So' depois do CRC: LSN fora de ordem num registro INTEGRO e' outra coisa
     // (arquivo remontado, bug de quem escreveu), e vale distinguir de lixo.
-    if LLsn <= LUltimoLsn then
+    if LLsn <= LLastLsn then
     begin
       AStop := awsLsn;
       Break;
     end;
 
-    if AColeta then
+    if ACollect then
     begin
       if Result = LCap then
       begin
@@ -789,13 +789,13 @@ begin
     end;
 
     Inc(Result);
-    LUltimoLsn := LLsn;
+    LLastLsn := LLsn;
     Inc(LPos, AMQP_WAL_REC_OVERHEAD + Integer(LLen));
   end;
 
   AEndOffset := LPos;
-  ALastLsn := LUltimoLsn;
-  if AColeta then
+  ALastLsn := LLastLsn;
+  if ACollect then
     SetLength(ARecords, Result);
 end;
 
@@ -842,11 +842,11 @@ function TAMQPWalSegment.ReadPrefix(out ARecords: TAMQPWalRecords;
   out AStop: TAMQPWalStop): Integer;
 var
   LBuf: TBytes;
-  LFim: Int64;
+  LEnd: Int64;
   LLsn: UInt64;
 begin
-  LBuf := LeEValidaCabecalho;
-  Result := Varre(LBuf, True, ARecords, AStop, LFim, LLsn);
+  LBuf := ReadAndValidateHeader;
+  Result := Scan(LBuf, True, ARecords, AStop, LEnd, LLsn);
 end;
 
 { TAMQPWalDirLock }

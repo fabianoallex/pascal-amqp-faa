@@ -322,7 +322,7 @@ begin
       LSeg.Append(I, Byte(I mod 7), Bytes(StringOfChar('x', I)));
     LN := LSeg.ReadPrefix(LRecs, LStop);
     Assert.AreEqual(50, LN, 'leu todos');
-    Assert.IsTrue(LStop = awsFim, 'parou no fim');
+    Assert.IsTrue(LStop = awsEnd, 'parou no fim');
     Assert.AreEqual(Int64(1), Int64(LRecs[0].Lsn), 'primeiro lsn');
     Assert.AreEqual(Int64(50), Int64(LRecs[49].Lsn), 'ultimo lsn');
     Assert.AreEqual(Int64(5 mod 7), Int64(LRecs[4].Kind), 'kind do 5o');
@@ -350,7 +350,7 @@ begin
     LSeg.Append(1, 9, nil);
     LSeg.Append(2, 9, Bytes('depois'));
     Assert.AreEqual(2, LSeg.ReadPrefix(LRecs, LStop), 'dois registros');
-    Assert.IsTrue(LStop = awsFim, 'integro ate o fim');
+    Assert.IsTrue(LStop = awsEnd, 'integro ate o fim');
     Assert.AreEqual(0, Length(LRecs[0].Payload), 'payload vazio');
     Assert.AreEqual('depois', ComoTexto(LRecs[1].Payload),
       'o seguinte continua legivel');
@@ -746,7 +746,7 @@ begin
   try
     Assert.AreEqual(Int64(7), LSeg.BytesDescartados,
       'contou os bytes descartados');
-    Assert.IsTrue(LSeg.Stop = awsCauda, 'motivo foi cauda');
+    Assert.IsTrue(LSeg.Stop = awsTruncated, 'motivo foi cauda');
     Assert.AreEqual(Int64(LAntes), FDuble.Size,
       'e o arquivo encolheu de verdade');
   finally
@@ -783,7 +783,7 @@ begin
   try
     LSeg.Append(3, 0, Bytes('tres'));
     Assert.AreEqual(3, LSeg.ReadPrefix(LRecs, LStop), 'os tres estao la');
-    Assert.IsTrue(LStop = awsFim, 'integro ate o fim');
+    Assert.IsTrue(LStop = awsEnd, 'integro ate o fim');
     Assert.AreEqual(Int64(3), Int64(LRecs[2].Lsn), 'o terceiro e alcancavel');
   finally
     LSeg.Free;
@@ -820,7 +820,7 @@ begin
   LSeg := TAMQPWalSegment.OpenExisting(FArq, False);
   try
     Assert.AreEqual(1, LSeg.ReadPrefix(LRecs, LStop), 'so o primeiro');
-    Assert.IsTrue(LStop = awsTamanho, 'motivo foi tamanho');
+    Assert.IsTrue(LStop = awsSize, 'motivo foi tamanho');
   finally
     LSeg.Free;
   end;
@@ -1084,7 +1084,7 @@ begin
   LSeg := TAMQPWalSegment.OpenExisting(LArq);
   try
     Assert.AreEqual(30, LSeg.ReadPrefix(LRecs, LStop), 'leu do disco');
-    Assert.IsTrue(LStop = awsFim, 'integro');
+    Assert.IsTrue(LStop = awsEnd, 'integro');
     Assert.AreEqual(60, Length(LRecs[29].Payload), 'ultimo payload');
   finally
     LSeg.Free;

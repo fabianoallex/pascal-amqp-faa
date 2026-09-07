@@ -1088,7 +1088,7 @@ begin
   if LTodosOk then
     LTodosOk := FChan.WaitForConfirms(10000);
   ChecaNao('algum publish foi NACK-ado depois de o log encher', LTodosOk);
-  ChecaOk('e a recusa foi contada', FBroker.Journal.Stats.Recusados > 0);
+  ChecaOk('e a recusa foi contada', FBroker.Journal.Stats.Refused > 0);
 end;
 
 procedure TPersistWiringTests.Teto_PublishTransiente_PassaMesmoComOLogCheio;
@@ -1107,7 +1107,7 @@ begin
   for I := 1 to 300 do
     FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
   Sleep(500);
-  ChecaOk('o log encheu', FBroker.Journal.Cheio);
+  ChecaOk('o log encheu', FBroker.Journal.IsFull);
 
   FChan.PublishText('', 'q.tra', 'transiente', False);
   Sleep(300);
@@ -1134,7 +1134,7 @@ begin
     FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
   FChan.WaitForConfirms(10000); // parte vai levar Nack: o log encheu
   Sleep(500);                   // o ator termina de enfileirar o que passou
-  ChecaOk('o log encheu mesmo', FBroker.Journal.Cheio);
+  ChecaOk('o log encheu mesmo', FBroker.Journal.IsFull);
 
   LDecl := TAMQPQueueDeclare.Create('q.dur');
   LDecl.Passive := True;

@@ -86,14 +86,14 @@ type
     // canal e so' a thread de leitura da conexao registra, inserir no fim ja'
     // mantem ordenado -- nao ha ordenacao a fazer.
     FPend: TList<TAMQPPendingConfirm>;
-    function Posta(const APayload: TBytes): Boolean;
+    function TryPost(const APayload: TBytes): Boolean;
   public
     constructor Create(AWriter: TAMQPFrameWriter; AChannelNo: Word);
     destructor Destroy; override;
 
     // --- IAMQPConfirmTracker ---
     function TryDefer(ASeq, ALsn: UInt64; ANack: Boolean): Boolean;
-    procedure Release(AMarca: UInt64);
+    procedure Release(AMark: UInt64);
     procedure FailAll;
     procedure Detach;
     function PendingCount: Integer;
@@ -105,7 +105,7 @@ type
   private
     FLock: TCriticalSection;
     FTrackers: TList<IAMQPConfirmTracker>;
-    FMarca: UInt64; // atomico (Read64/Write64) -- lido sem lock
+    FMark: UInt64; // atomico (Read64/Write64) -- lido sem lock
     /// Uma copia da lista, tomada sob lock, para percorrer FORA dele: a
     /// liberacao chama TryPostFrames, e segurar o lock do registro enquanto
     /// se escreve em N canais poria a thread do journal atras de todos eles.
@@ -115,7 +115,7 @@ type
     /// thread do journal o chama), enquanto isto so' LIBERA -- e' o que a
     /// thread monitora precisa, e escrever a marca de la' a faria andar para
     /// TRAS quando as duas threads se cruzassem.
-    procedure LiberaTodos(ALsn: UInt64);
+    procedure ReleaseAll(ALsn: UInt64);
   public
     constructor Create;
     destructor Destroy; override;
@@ -156,7 +156,7 @@ end;
 
 // Chamado SOB FLock. Nao bloqueia: o que a fila de escrita recusar volta como
 // False e o pendente fica onde esta'.
-function TAMQPConfirmTracker.Posta(const APayload: TBytes): Boolean;
+function TAMQPConfirmTracker.TryPost(const APayload: TBytes): Boolean;
 begin
   Result := (FWriter <> nil)
     and FWriter.TryPostFrames([TAMQPFrame.Create(AMQP_FRAME_METHOD,
@@ -190,11 +190,11 @@ begin
   end;
 end;
 
-procedure TAMQPConfirmTracker.Release(AMarca: UInt64);
+procedure TAMQPConfirmTracker.Release(AMark: UInt64);
 var
-  I, LFeitos, LIdxAck: Integer;
-  LTemAck: Boolean;
-  LUltimoAck: UInt64;
+  I, LDone, LIdxAck: Integer;
+  LHasAck: Boolean;
+  LLastAck: UInt64;
 begin
   FLock.Enter;
   try
@@ -203,52 +203,54 @@ begin
       FPend.Clear; // canal morto: ninguem mais espera estes acks
       Exit;
     end;
-    LFeitos := 0;
-    LTemAck := False;
-    LUltimoAck := 0;
+    LDone := 0;
+    LHasAck := False;
+    LLastAck := 0;
     LIdxAck := -1;
     I := 0;
-    while (I < FPend.Count) and (FPend[I].Lsn <= AMarca) do
+    while (I < FPend.Count) and (FPend[I].Lsn <= AMark) do
     begin
       if FPend[I].Nack then
       begin
         // O nack corta o colapso: o que estava acumulado sai primeiro, com o
         // seq ANTERIOR, e o nack sai sozinho.
-        if LTemAck then
+        if LHasAck then
         begin
-          if not Posta(BuildBasicAck(LUltimoAck, True)) then
+          if not TryPost(BuildBasicAck(LLastAck, True)) then
             Break;
-          LFeitos := LIdxAck + 1;
-          LTemAck := False;
+          LDone := LIdxAck + 1;
+          LHasAck := False;
         end;
-        if not Posta(BuildBasicNack(FPend[I].Seq, False, False)) then
+        if not TryPost(BuildBasicNack(FPend[I].Seq, False, False)) then
           Break;
-        LFeitos := I + 1;
+        LDone := I + 1;
       end
       else
       begin
         // Acumula: um unico Basic.Ack com multiple=true resolve todos.
-        LTemAck := True;
-        LUltimoAck := FPend[I].Seq;
+        LHasAck := True;
+        LLastAck := FPend[I].Seq;
         LIdxAck := I;
       end;
       Inc(I);
     end;
     // Aninhado, e nao 'and': o Posta tem EFEITO, e depender de curto-circuito
     // para nao o chamar seria depender de uma diretiva de compilacao.
-    if LTemAck then
-      if Posta(BuildBasicAck(LUltimoAck, True)) then
-        LFeitos := LIdxAck + 1;
-    for I := 1 to LFeitos do
+    if LHasAck then
+      if TryPost(BuildBasicAck(LLastAck, True)) then
+        LDone := LIdxAck + 1;
+
+    for I := 1 to LDone do
       FPend.Delete(0);
   finally
     FLock.Leave;
   end;
 end;
 
+
 procedure TAMQPConfirmTracker.FailAll;
 var
-  I, LFeitos: Integer;
+  I, LDone: Integer;
 begin
   FLock.Enter;
   try
@@ -261,14 +263,14 @@ begin
     // esperando disco vira nack -- inclusive o que ja' estaria duravel, porque
     // a marca nao vai mais andar e o publicador ficaria pendurado. Nack e' o
     // frame honesto aqui: "o broker nao conseguiu tratar a mensagem".
-    LFeitos := 0;
+    LDone := 0;
     for I := 0 to FPend.Count - 1 do
     begin
-      if not Posta(BuildBasicNack(FPend[I].Seq, False, False)) then
+      if not TryPost(BuildBasicNack(FPend[I].Seq, False, False)) then
         Break;
-      LFeitos := I + 1;
+      LDone := I + 1;
     end;
-    for I := 1 to LFeitos do
+    for I := 1 to LDone do
       FPend.Delete(0);
   finally
     FLock.Leave;
@@ -303,7 +305,7 @@ begin
   inherited Create;
   FLock := TCriticalSection.Create;
   FTrackers := TList<IAMQPConfirmTracker>.Create;
-  FMarca := 0;
+  FMark := 0;
 end;
 
 destructor TAMQPConfirmRegistry.Destroy;
@@ -357,7 +359,7 @@ end;
 
 function TAMQPConfirmRegistry.Watermark: UInt64;
 begin
-  Result := AmqpAtomicRead64(FMarca);
+  Result := AmqpAtomicRead64(FMark);
 end;
 
 function TAMQPConfirmRegistry.TrackerCount: Integer;
@@ -370,7 +372,7 @@ begin
   end;
 end;
 
-procedure TAMQPConfirmRegistry.LiberaTodos(ALsn: UInt64);
+procedure TAMQPConfirmRegistry.ReleaseAll(ALsn: UInt64);
 var
   LTrackers: TArray<IAMQPConfirmTracker>;
   I: Integer;
@@ -383,15 +385,15 @@ end;
 procedure TAMQPConfirmRegistry.RetryPending;
 begin
   // NAO passa pelo Durable: recobrar nao e' avancar a marca.
-  LiberaTodos(Watermark);
+  ReleaseAll(Watermark);
 end;
 
 // --- IAMQPDurabilitySink: roda na THREAD DO JOURNAL, depois de cada fsync ---
 
 procedure TAMQPConfirmRegistry.Durable(ALsn: UInt64);
 begin
-  AmqpAtomicWrite64(FMarca, ALsn);
-  LiberaTodos(ALsn);
+  AmqpAtomicWrite64(FMark, ALsn);
+  ReleaseAll(ALsn);
 end;
 
 procedure TAMQPConfirmRegistry.JournalFailed(const AMessage: string);
