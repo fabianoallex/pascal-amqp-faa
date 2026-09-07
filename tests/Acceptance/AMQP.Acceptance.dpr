@@ -54,6 +54,8 @@ uses
   AMQP.Connection in '..\..\src\AMQP.Connection.pas',
   AMQP.Server.Auth in '..\..\src\server\AMQP.Server.Auth.pas',
   AMQP.Server.Types in '..\..\src\server\AMQP.Server.Types.pas',
+  AMQP.Server.Events in '..\..\src\server\AMQP.Server.Events.pas',
+  AMQP.Server.EventBus in '..\..\src\server\AMQP.Server.EventBus.pas',
   AMQP.Server.Message in '..\..\src\server\AMQP.Server.Message.pas',
   AMQP.Server.Header in '..\..\src\server\AMQP.Server.Header.pas',
   AMQP.Server.Resources in '..\..\src\server\AMQP.Server.Resources.pas',

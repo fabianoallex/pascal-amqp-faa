@@ -17,6 +17,7 @@ uses
   {$ENDIF}
   Classes, consoletestrunner, testregistry,
   AMQP.ServerSkeletonTests,
+  AMQP.ServerEventsTests,
   AMQP.ServerHandshakeTests,
   AMQP.ServerEngineTests,
   AMQP.ServerRoutingTests,

@@ -329,6 +329,43 @@ log pruned; one that never restarts relies on `MaxJournalBytes`.**
 > caveat: they prove the written log is enough to rebuild the state — not that the disk
 > received the bytes.
 
+### Observability (opt-in)
+
+The broker emits structured events about what happens inside it — connections, channels,
+publishes, consumers, acks. You subscribe to what you care about:
+
+```pascal
+uses AMQP.Server.Events;
+
+procedure TMyLog.OnEvent(const AEvent: TAMQPServerEvent);
+begin
+  Writeln(AmqpEventTypeName(AEvent.EventType), ' conn=', AEvent.ConnectionId);
+end;
+
+Broker.Subscribe(Log.OnEvent);   // before Start
+// or, filtered:
+Broker.Subscribe(Log.OnEvent, [seMessagePublished, seMessageAcked]);
+```
+
+With no subscriber the broker is byte for byte the same as before: the hot path tests a
+bitmask and never even builds the event record.
+
+The handler runs on a **dedicated notifier thread** — never on a connection's read thread,
+never on a pool worker. That is what lets it take its time (write to disk, talk to the
+network) without slowing the broker down, and it is why it can never influence routing or
+authentication: if you need to *decide*, implement `IAMQPAuthorizer`.
+
+> **Events are not an audit log, and that is by design.** Delivery is *best-effort*: if the
+> handler cannot keep up, the ring fills and the **newest** event is dropped. The emitter
+> never blocks the broker waiting on an observer. What you lost is not invisible —
+> `EventsDropped` counts every drop, and a value above zero means exactly "the observer did
+> not see everything". Raising `EventQueueCapacity` postpones the problem; it does not
+> remove it.
+
+Full manual, with the table of which fields each event type populates and the handler
+lifetime pitfalls: [`docs/observabilidade.md`](docs/observabilidade.md) (in Portuguese).
+Sample: `samples/Server/AMQPServer.dpr`.
+
 ### What the broker does not do yet
 
 **There is no paging to disk** ("lazy queues"): durability is not paging, and the queue

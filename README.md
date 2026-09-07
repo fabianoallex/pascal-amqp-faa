@@ -329,6 +329,43 @@ depende do `MaxJournalBytes`.**
 > SmokeTest, e os dois trazem o mesmo aviso: eles provam que o log escrito basta para
 > reconstruir o estado — não que o disco recebeu os bytes.
 
+### Observabilidade (opt-in)
+
+O broker emite eventos estruturados sobre o que acontece dentro dele — conexões, canais,
+publicações, consumidores, acks. Você assina o que interessa:
+
+```pascal
+uses AMQP.Server.Events;
+
+procedure TMeuLog.AoEvento(const AEvento: TAMQPServerEvent);
+begin
+  Writeln(AmqpEventTypeName(AEvento.EventType), ' conn=', AEvento.ConnectionId);
+end;
+
+Broker.Subscribe(Log.AoEvento);   // antes do Start
+// ou, filtrando:
+Broker.Subscribe(Log.AoEvento, [seMessagePublished, seMessageAcked]);
+```
+
+Sem nenhum assinante o broker é byte a byte o de sempre: o caminho quente testa uma
+máscara e nem chega a montar o registro do evento.
+
+O handler roda numa **thread notificadora dedicada** — nunca na thread de leitura de uma
+conexão, nunca num worker do pool. É o que permite que ele demore (escrever em disco,
+falar com a rede) sem atrasar o broker, e é por isso que ele nunca pode influenciar
+roteamento ou autenticação: quem precisa *decidir* implementa `IAMQPAuthorizer`.
+
+> **Eventos não são log de auditoria, e isso é por desenho.** A entrega é *best-effort*:
+> se o handler não acompanha a carga, o ring enche e o evento **mais novo** é descartado.
+> O emissor nunca bloqueia o broker para esperar por um observador. O que você perdeu não
+> é invisível — `EventsDropped` conta cada descarte, e um valor maior que zero quer dizer
+> exatamente "o observador não viu tudo". Aumentar `EventQueueCapacity` adia o problema;
+> não o remove.
+
+Manual completo, com a tabela de que campos cada tipo de evento preenche e as armadilhas
+de tempo de vida do handler: [`docs/observabilidade.md`](docs/observabilidade.md). Sample:
+`samples/Server/AMQPServer.dpr`.
+
 ### O que o broker ainda não faz
 
 **Não há paginação para disco** ("lazy queues"): durabilidade não é paginação, e a fila

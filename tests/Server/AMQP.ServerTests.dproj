@@ -138,6 +138,8 @@
         <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Auth.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Types.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Events.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.EventBus.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Channel.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Message.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Header.pas"/>
@@ -156,6 +158,7 @@
         <DCCReference Include="..\..\src\server\AMQP.Server.Confirm.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Recovery.pas"/>
         <DCCReference Include="AMQP.ServerSkeletonTests.pas"/>
+        <DCCReference Include="AMQP.ServerEventsTests.pas"/>
         <DCCReference Include="AMQP.ServerHandshakeTests.pas"/>
         <DCCReference Include="AMQP.ServerEngineTests.pas"/>
         <DCCReference Include="AMQP.ServerRoutingTests.pas"/>

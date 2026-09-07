@@ -1,347 +1,173 @@
-UTF-8
-# Observabilidade do Broker (Fase 4.1)
+﻿# Observabilidade do broker
 
-## Visão geral
+Um broker embutido é uma caixa-preta dentro da sua aplicação: ele aceita conexões, roteia, entrega e descarta sem que nada disso apareça no log da app. A observabilidade abre essa caixa — o `TAMQPServer` emite eventos estruturados, e você assina o que interessa.
 
-A partir da Fase 4.1, o broker AMQP embarcado fornece um **sistema de eventos estruturado** para capturar tudo que acontece internamente. Essencial para:
+As decisões de arquitetura estão travadas no `CLAUDE.md` como **D29–D36**; este documento é o manual de uso. Se você só quer o resumo: **é opt-in, é read-only, é best-effort, e o handler roda numa thread só dele.**
 
-- **Auditoria**: rastrear quem publicou, quem consumiu, quando, de onde
-- **Debugging**: diagnosticar problemas sem quebrar a production
-- **Compliance**: atender requisitos regulatórios (rastreabilidade de operações)
-- **Observabilidade em tempo real**: métricas, alertas, correlação de eventos
-
-## Arquitetura
-
-O sistema é **observer pattern** sem bloquear:
-
-1. Você registra um **handler** (procedure com assinatura `TAMQPServerEventHandler`)
-2. O broker dispara **eventos estruturados** (`TAMQPServerEvent`) em pontos críticos
-3. O handler roda **fora de locks internos** — nunca trava o engine
-4. A ordem dos eventos é **preservada por thread de origem** (thread-safe por conexão)
-
-### Thread-safety
-
-- `Subscribe`/`Unsubscribe` são thread-safe (usam lock interno)
-- Handlers são chamados **fora do lock de subscribers** — vários handlers podem rodar em paralelo
-- Um handler que levanta exceção não afeta os outros
-
-### Zero overhead quando desativado
-
-Sem nenhum subscriber registrado, o broker tem **zero overhead**. O `NotifyEvent` é inlined e rápido em runtime.
-
-## Tipos de evento
+## Começando
 
 ```pascal
+uses AMQP.Server.Events, AMQP.Server.Broker;
+
 type
-  TAMQPServerEventType = (
-    { Ciclo de vida da conexão }
-    seConnectionEstablished,    { Nova conexão TCP aceita }
-    seConnectionAuthenticated,  { SASL OK }
-    seConnectionClosed,         { Conexão fechada }
-
-    { Ciclo de vida do canal }
-    seChannelOpened,
-    seChannelClosed,
-
-    { Publish }
-    seMessagePublished,         { Mensagem chegou via Basic.Publish }
-    seMessagePublishRejected,   { Publish recusado (fila cheia, sem rota) }
-
-    { Enqueue }
-    seMessageEnqueued,          { Mensagem entrou em fila }
-
-    { Consume }
-    seConsumerRegistered,       { Basic.Consume OK }
-    seConsumerCancelled,        { Basic.Cancel OK }
-    seMessageDelivered,         { Mensagem saiu da fila pro consumer }
-
-    { Reconhecimento }
-    seMessageAcked,             { Basic.Ack recebido }
-    seMessageNacked,            { Basic.Nack recebido }
-    seMessageRejected,          { Basic.Reject recebido }
-
-    { Ciclo de vida especial }
-    seMessageExpired,           { TTL expirou }
-    seMessageDeadLettered,      { Entrou em DLX }
-    seMessageDropped,           { Descarte por teto }
-
-    { Durabilidade }
-    seJournalFlushed            { Lote fsync'd (Fase 4) }
-  );
-```
-
-## Campos de `TAMQPServerEvent`
-
-```pascal
-type
-  TAMQPServerEvent = record
-    EventType: TAMQPServerEventType;
-
-    { Relógio }
-    WallTime: TDateTime;   { Hora UTC (para correlação com logs externos) }
-    TickMs: Int64;         { Monotônico em ms (para latência intra-broker) }
-
-    { Contexto de conexão }
-    ConnectionId: UInt64;  { Identificador único }
-    RemoteAddr: string;    { IP:porta do cliente }
-    Username: string;      { Quem se autenticou }
-    VHost: string;         { Virtual host }
-
-    { Contexto de canal }
-    ChannelNumber: Word;   { 0 = conexão; N = canal específico }
-
-    { Contexto de fila/mensagem }
-    QueueName: string;
-    ConsumerTag: string;
-    DeliveryTag: UInt64;   { Numbering para ack/nack }
-    ExchangeName: string;
-    RoutingKey: string;
-
-    { Dados da mensagem }
-    MessageSize: UInt64;
-    MessagePriority: Byte;
-    Redelivered: Boolean;
-    Mandatory: Boolean;
-
-    { TTL (em ms; 0 = sem limite) }
-    MessageExpirationMs: UInt32;
-    QueueExpirationMs: UInt32;
-
-    { Correlação }
-    CorrelationId: string;
-    ReplyTo: string;
-
-    { Razão do evento (quando aplicável) }
-    Reason: string;
-
-    { Durabilidade: LSN do último write }
-    JournalLsn: UInt64;
-  end;
-```
-
-## Uso básico
-
-```pascal
-procedure TMyApp.OnAMQPEvent(const Event: TAMQPServerEvent);
-begin
-  WriteLn(Format('%s: %s',
-    [DateTimeToStr(Event.WallTime),
-     GetEnumName(TypeInfo(TAMQPServerEventType), Ord(Event.EventType))]));
-end;
-
-procedure TMyApp.Start;
-begin
-  FServer := TAMQPServer.Create;
-  FServer.Subscribe(OnAMQPEvent);  { Registra ANTES do Start }
-  FServer.Start;
-end;
-
-procedure TMyApp.Stop;
-begin
-  if FServer.Running then
-  begin
-    FServer.Stop;
-    FServer.Unsubscribe(OnAMQPEvent);  { Opcional: pode unsubscribe antes }
-  end;
-end;
-```
-
-## Caso de uso: Auditoria de combustível
-
-Para o sistema de abastecidas em postos:
-
-```pascal
-procedure TAuditLog.OnAMQPEvent(const Event: TAMQPServerEvent);
-begin
-  case Event.EventType of
-    seMessagePublished:
-      LogSQL('INSERT INTO audit_log (timestamp, event, pdv, queue, size, user) '
-        + 'VALUES (?, ?, ?, ?, ?, ?)',
-        [Event.WallTime, 'PUBLISH', Event.RemoteAddr, Event.QueueName,
-         Event.MessageSize, Event.Username]);
-
-    seMessageDelivered:
-      begin
-        LogSQL('INSERT INTO audit_log ... VALUES (?, ?, ?, ?, ?, ?)',
-          [Event.WallTime, 'DELIVER', Event.ConsumerTag, Event.QueueName, 0,
-           '']);
-        { Marca que esta abastecida foi consumida por este PDV. }
-        FConsumedBy[Event.DeliveryTag] := Event.ConsumerTag;
-      end;
-
-    seMessageAcked:
-      begin
-        LogSQL('INSERT INTO audit_log ... VALUES (?, ?, ?, ?, ?, ?)',
-          [Event.WallTime, 'ACK', FConsumedBy[Event.DeliveryTag],
-           Event.QueueName, 0, '']);
-        { A abastecida foi confirmada — não pode ser reutilizada. }
-        FAbastecidaUsada[Event.DeliveryTag] := True;
-      end;
-
-    seMessageNacked:
-      begin
-        LogSQL('INSERT INTO audit_log ... VALUES (?, ?, ?, ?, ?, ?)',
-          [Event.WallTime, 'NACK', FConsumedBy[Event.DeliveryTag],
-           Event.QueueName, 0, Event.Reason]);
-        { A abastecida volta disponível. }
-        FConsumedBy.Remove(Event.DeliveryTag);
-      end;
-
-    seMessageExpired:
-      Alert(Format('Abastecida expirou sem confirma: %s', [Event.QueueName]));
-
-    seConnectionClosed:
-      Alert(Format('PDV desconectou abruptamente: %s', [Event.RemoteAddr]));
-  end;
-end;
-```
-
-## Padrões comuns
-
-### 1. Logging estruturado
-
-Escrever em arquivo ou banco de dados:
-
-```pascal
-procedure TLogger.OnEvent(const Event: TAMQPServerEvent);
-var
-  LJson: string;
-begin
-  { Serializar para JSON ou formato estruturado. }
-  LJson := Format(
-    '{"timestamp":"%s","event":"%s","connection":"%s","queue":"%s",'
-    + '"user":"%s","delivery_tag":%d}',
-    [FormatDateTime('yyyy-mm-dd hh:mm:ss.zzz', Event.WallTime),
-     GetEnumName(TypeInfo(TAMQPServerEventType), Ord(Event.EventType)),
-     Event.ConnectionId, Event.QueueName, Event.Username, Event.DeliveryTag]);
-  AppendToLogFile('/var/log/broker.log', LJson);
-end;
-```
-
-### 2. Rastreamento de latência
-
-Medir tempo entre eventos para diagnosticar gargalos:
-
-```pascal
-procedure TLatencyTracker.OnEvent(const Event: TAMQPServerEvent);
-begin
-  case Event.EventType of
-    seMessagePublished:
-      FPublishTime[Event.DeliveryTag] := Event.TickMs;
-
-    seMessageDelivered:
-      begin
-        if FPublishTime.ContainsKey(Event.DeliveryTag) then
-        begin
-          LDelta := Event.TickMs - FPublishTime[Event.DeliveryTag];
-          WriteLn(Format('Latencia publish -> deliver: %d ms', [LDelta]));
-        end;
-      end;
-  end;
-end;
-```
-
-### 3. Detecção de anomalias
-
-Identificar padrões estranhos:
-
-```pascal
-procedure TAnomalyDetector.OnEvent(const Event: TAMQPServerEvent);
-begin
-  if Event.EventType = seMessageNacked then
-  begin
-    Inc(FNackCount[Event.ConsumerTag]);
-    if FNackCount[Event.ConsumerTag] > 10 then
-      Alert(Format('Consumidor %s rejeitando muitas mensagens',
-        [Event.ConsumerTag]));
+  TMeuLog = class
+  public
+    procedure AoEvento(const AEvento: TAMQPServerEvent);
   end;
 
-  if Event.EventType = seMessageDelivered then
-    if Event.Redelivered then
-      Inc(FRedeliveryCount[Event.QueueName]);
-
-  if Event.EventType = seMessageExpired then
-  begin
-    Alert(Format('Mensagem em %s expirou — aumentar TTL?',
-      [Event.QueueName]));
-  end;
+procedure TMeuLog.AoEvento(const AEvento: TAMQPServerEvent);
+begin
+  // Roda na thread notificadora do broker. Uma só, sempre a mesma.
+  Writeln(AmqpEventTypeName(AEvento.EventType), ' conn=', AEvento.ConnectionId);
 end;
+
+// ...
+Broker := TAMQPServer.Create;
+Log := TMeuLog.Create;
+Broker.Subscribe(Log.AoEvento);   // antes do Start: você quer o 1º evento
+Broker.Start;
+// ...
+Broker.Stop;
+Broker.Unsubscribe(Log.AoEvento); // ANTES de liberar o Log — ver "Armadilhas"
 ```
 
-### 4. Métricas em tempo real
+Sem nenhum `Subscribe`, o broker é byte a byte o de sempre: o caminho quente testa uma máscara e nem chega a montar o registro do evento. Ninguém paga por não observar.
 
-Coletar estatísticas:
+Para filtrar por tipo — o que evita montar registro que você vai descartar:
 
 ```pascal
-procedure TMetrics.OnEvent(const Event: TAMQPServerEvent);
-begin
-  case Event.EventType of
-    seMessagePublished:
-      begin
-        Inc(FTotalPublished);
-        FTotalBytes := FTotalBytes + Event.MessageSize;
-      end;
-
-    seMessageAcked:
-      Inc(FTotalAcked);
-
-    seMessageNacked, seMessageRejected:
-      Inc(FTotalNacked);
-
-    seMessageDropped:
-      begin
-        Inc(FDropped);
-        Alert(Format('Mensagem descartada por teto: %s', [Event.Reason]));
-      end;
-  end;
-end;
-
-procedure TMetrics.PrintStats;
-begin
-  WriteLn(Format(
-    'Total published: %d | Acked: %d | Nacked: %d | Dropped: %d | Bytes: %d',
-    [FTotalPublished, FTotalAcked, FTotalNacked, FDropped, FTotalBytes]));
-end;
+Broker.Subscribe(Log.AoEvento,
+  [seConnectionAuthenticated, seMessagePublished, seMessageAcked]);
 ```
 
-## Performance
+Assinar o **mesmo método** de novo **substitui** a máscara anterior; não duplica a entrega.
 
-- **Sem subscribers**: zero overhead (a chamada `NotifyEvent` é inlined)
-- **Com 1 subscriber**: ~1–2 µs por evento (snapshot de handlers + uma chamada de procedure)
-- **Com 10 subscribers**: ~10–20 µs (linear com número de handlers)
-- **Handler lento**: não trava o engine (rodam fora do lock)
+Sample completo, com relatório de descartes no fim: `samples/Server/AMQPServer.dpr` (`lazbuild samples\Server\AMQPServer.lpi`, ou o `.dproj` no IDE Delphi).
 
-## Limitações atuais (Fase 4.1)
+## O contrato, em quatro linhas
 
-1. Os eventos disparam **na thread de origem** (thread de leitura da conexão, thread do ator da fila, thread de journal). Você é responsável por sincronização se o handler compartilhar estado.
+1. **Read-only.** Nenhum handler influencia roteamento, autenticação, ack ou descarte. Quem precisa *decidir* implementa `IAMQPAuthorizer` — que existe exatamente para isso. Levantar exceção dentro do handler não cancela coisa alguma; só é contado.
+2. **Assíncrono, sempre.** *Todo* evento é copiado para um ring limitado e entregue por uma thread dedicada — inclusive os que nascem na thread de leitura da conexão. Seu handler nunca roda na thread de leitura nem num worker do pool.
+3. **Best-effort: pode perder.** Ring cheio ⇒ o evento **mais novo** é descartado e contado. O emissor nunca bloqueia e nunca levanta.
+4. **Ordem por origem.** Eventos da mesma conexão (ou da mesma fila) chegam na ordem em que aconteceram. Entre conexões diferentes, a ordem relativa não é promessa de API.
 
-2. **Sem filtragem built-in**: você recebe TODOS os eventos. Filter inside your handler:
+### Por que o handler não roda inline
 
-   ```pascal
-   if Event.EventType <> seJournalFlushed then  { skip boring events }
-     LogEvent(Event);
-   ```
+Porque não existe metade segura. As três alternativas ao ring foram medidas contra a arquitetura e cada uma quebra algo diferente:
 
-3. **Sem buffering**: cada evento é despachado immediately. Se seu handler for muito lento, ele bloqueia a thread de origem. Use uma fila assíncrona:
+| onde rodar o handler | o que quebra |
+|---|---|
+| worker do `AmqpPool` | é o **mesmo pool** que roda os atores das filas — handler lento starva o ator |
+| thread monitora | põe heartbeat, prazo de Close-Ok, varredura de TTL e reap atrás do handler |
+| inline na thread de leitura | trava o processamento de frames daquela conexão, **heartbeat incluso**, até o cliente derrubá-la |
 
-   ```pascal
-   procedure TAsyncLogger.OnEvent(const Event: TAMQPServerEvent);
-   begin
-     FQueue.Enqueue(Event);  { post async, handler sai rápido }
-   end;
-   ```
+O que muda entre elas é o raio do estrago, não se há estrago. Uma thread notificadora dedicada dá um contrato, uma ordem e uma política de exceção — e como o registro do evento é uma cópia por valor, o assíncrono custa uma cópia, não um risco de ponteiro solto.
 
-4. **Sem persistência integrada**: você é responsável por armazenar. Use banco de dados, arquivo, Elasticsearch, etc.
+### Isto não é log de auditoria
 
-## Roadmap futuro
+A perda sob pressão é por desenho, não por falta de capricho. Se o seu handler não acompanha a carga, você perde eventos — e o único jeito de saber é olhar o contador:
 
-- Fase 4.2: Filtros built-in (só observar certos tipos de evento ou filas)
-- Fase 4.3: Ring buffer circular de últimos N eventos (sem I/O)
-- Fase 4.4: Integração com OpenTelemetry (traces distribuídos)
+```pascal
+if Broker.EventsDropped > 0 then
+  ...; // o observador não viu tudo
+```
 
-## Veja também
+Para auditoria de verdade, o handler tem de ser rápido (enfileirar num buffer seu e voltar) e você ainda precisa tratar `EventsDropped > 0` como lacuna conhecida. Aumentar o ring adia o problema; não o remove:
 
-- `AMQP.Server.Events` — unit com os tipos
-- `samples\Server\ObservabilityExample.pas` — exemplo completo
-- `tests\Server\AMQP.Server.Events.Test.pas` — testes unitários
-- `CLAUDE.md` — decisões travadas (D19–D28, Fase 4)
+```pascal
+Broker.EventQueueCapacity := 65536; // só antes do Start
+```
+
+## Os tipos de evento
+
+Emitidos hoje:
+
+| tipo | quando |
+|---|---|
+| `seConnectionEstablished` | socket aceito, antes de qualquer byte de AMQP (e antes do handshake TLS) |
+| `seConnectionAuthenticated` | SASL PLAIN aceito **e** vhost aberto (o `Open-Ok` saiu) |
+| `seConnectionClosed` | a thread de leitura saiu, depois de todo o teardown |
+| `seChannelOpened` | `Channel.Open-Ok` enviado |
+| `seChannelClosed` | canal fechado — pelo cliente, por erro, ou pelo teardown da conexão |
+| `seMessagePublished` | conteúdo remontado e roteado (inclusive quando não achou fila) |
+| `seMessagePublishRejected` | recusado por fila cheia com `x-overflow: reject-publish` |
+| `seConsumerRegistered` | `Basic.Consume` aceito |
+| `seConsumerCancelled` | `Basic.Cancel` de um consumidor existente |
+| `seMessageAcked` / `seMessageNacked` / `seMessageRejected` | `Basic.Ack` / `.Nack` / `.Reject` recebido |
+
+Declarados, **ainda sem emissor** (são o Inc. 2 desta fase): `seMessageEnqueued`, `seMessageDelivered`, `seMessageExpired`, `seMessageDeadLettered`, `seMessageDropped`, `seJournalFlushed`. Assiná-los já compila e não é erro — eles simplesmente não chegam ainda.
+
+> O **teto é de 32 tipos** (18 usados). A máscara de assinatura é um `Cardinal` lido sem lock no caminho quente; passar de 32 é mudar o tipo da máscara, e é decisão consciente. A **ordem do enum é API**: tipo novo entra no fim.
+
+## Que campos cada tipo preenche
+
+O registro é **flat** e o emissor sempre parte de um registro zerado, então **o que a linha não lista sai zerado** — string vazia, numérico 0, `False`. Não é "indefinido": é zero, e os testes asseram isso.
+
+Todos os eventos trazem `EventType`, `WallMs`, `TickMs`, `ConnectionId`, `RemoteAddr`, `Username` e `VHost` — com a ressalva de que `seConnectionEstablished` nasce antes do handshake, então nele `Username` e `VHost` ainda estão vazios.
+
+| tipo | além do contexto de conexão |
+|---|---|
+| `seConnectionEstablished` | — (`Username`/`VHost` vazios: ainda não houve handshake) |
+| `seConnectionAuthenticated` | — (é aqui que `Username` e `VHost` passam a valer) |
+| `seConnectionClosed` | `Reason` = erro que derrubou a conexão (vazio = fechamento limpo) |
+| `seChannelOpened` | `ChannelNumber` |
+| `seChannelClosed` | `ChannelNumber`; `Reason` = `connection teardown` quando o canal morreu junto com a conexão, vazio quando foi o cliente que o fechou |
+| `seMessagePublished` | `ChannelNumber`, `ExchangeName`, `RoutingKey`, `MessageSize`, `Mandatory`, `Lsn`; `Reason` = `unroutable` se não achou fila |
+| `seMessagePublishRejected` | `ChannelNumber`, `ExchangeName`, `RoutingKey`, `MessageSize`, `Mandatory`; `Reason` = `reject-publish` |
+| `seConsumerRegistered` | `ChannelNumber`, `QueueName`, `ConsumerTag` |
+| `seConsumerCancelled` | `ChannelNumber`, `QueueName`, `ConsumerTag` |
+| `seMessageAcked` | `ChannelNumber`, `DeliveryTag`, `Multiple`, `Count` (quantas entregas o ack resolveu) |
+| `seMessageNacked` | idem, mais `Requeue` |
+| `seMessageRejected` | `ChannelNumber`, `DeliveryTag`, `Requeue`, `Count` |
+
+Duas amarras que valem para todos:
+
+- **o corpo da mensagem nunca entra no evento**, só `MessageSize`. Carregá-lo poria uma cópia de buffer no caminho mais quente que existe;
+- **`WallMs` é epoch em ms UTC** (`Int64`), não `TDateTime` — para correlacionar com log externo. `TickMs` é monotônico e serve para medir latência; ele **não** sobrevive a um restart.
+
+**Sem rota não é publish recusado.** Uma mensagem que não achou fila é um publish bem-sucedido: leva `ack`, e leva `Basic.Return` se foi `mandatory`. Ela sai como `seMessagePublished` com `Reason = 'unroutable'`. `seMessagePublishRejected` é outra coisa — fila cheia declarada com `x-overflow: reject-publish`, que leva `Basic.Nack`. Contar as duas juntas dá um número que não significa nada.
+
+## Armadilhas
+
+**Desassine antes de destruir.** O handler é um método de objeto — um par (código, instância). Se você liberar a instância sem `Unsubscribe`, a notificadora chama um ponteiro morto: vira `EAccessViolation`, que é capturada e contada, mas o evento se perde e o sintoma aparece longe da causa.
+
+```pascal
+Broker.Unsubscribe(Log.AoEvento);
+Log.Free;
+```
+
+**Não chame `DrainEvents` de dentro de um handler.** Ele espera o handler corrente terminar — e esse handler seria você.
+
+**Exceção no handler não sobe.** Ela é capturada, contada em `EventsFailed`, registrada em `LastEventFailure`, e o laço segue para o próximo handler e para o próximo evento. A notificadora nunca morre por causa de um assinante. Se o seu handler pode falhar, verifique o contador:
+
+```pascal
+if Broker.EventsFailed > 0 then
+  Writeln('handler falhou: ', Broker.LastEventFailure);
+```
+
+**Não é preciso lock dentro do handler** para estado que só ele toca: a notificadora é uma thread só, então o handler nunca roda concorrente consigo mesmo. Estado compartilhado com *outras* threads da sua app, aí sim, é sua responsabilidade.
+
+## Em teste: espere pela condição, não pelo relógio
+
+A entrega é assíncrona, então `Publish` seguido de "o evento chegou?" é uma corrida. Duas barreiras, e a escolha entre elas importa:
+
+- para asserir **presença**, espere o evento (o seu sink de captura conta e sinaliza). `DrainEvents` sozinho **não serve**: ele espera o ring esvaziar, e um ring que ainda não recebeu o evento já está vazio — publish do cliente não tem round-trip, então drenar logo depois dele devolve `True` antes de o broker ter lido o frame;
+- para asserir **ausência**, `DrainEvents` é a barreira certa, precedida de uma operação **com** round-trip (um `Channel.Close`, por exemplo): quando ela volta, o broker já passou por todos os pontos de emissão.
+
+`tests\Server\AMQP.ServerEventsTests.pas` (e o espelho FPCUnit) mostram as duas formas.
+
+## Referência da API
+
+| membro de `TAMQPServer` | o que faz |
+|---|---|
+| `Subscribe(AHandler)` | assina todos os tipos |
+| `Subscribe(AHandler, ATypes)` | assina os tipos do conjunto; re-assinar substitui a máscara |
+| `Unsubscribe(AHandler)` | remove — obrigatório antes de destruir o dono do método |
+| `EventQueueCapacity` | tamanho do ring, em eventos (default 4096). Só antes do `Start` |
+| `DrainEvents(ATimeoutMs)` | espera o ring esvaziar e o handler corrente terminar. `False` = estourou o prazo |
+| `EventsEmitted` | quantos entraram no ring |
+| `EventsDropped` | quantos foram descartados por ring cheio |
+| `EventsFailed` | quantas exceções de handler foram capturadas |
+| `LastEventFailure` | classe e mensagem da última (`''` se nenhuma) |
+
+Funções de `AMQP.Server.Events`: `AmqpNewEvent` (registro zerado com tipo e relógios — use se for emitir eventos seus), `AmqpEventMask` (conjunto → máscara) e `AmqpEventTypeName` (nome curto do tipo, para log).

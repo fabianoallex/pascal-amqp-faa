@@ -34,6 +34,7 @@ uses
   AMQP.Server.Auth,
   AMQP.Server.Types,
   AMQP.Server.Events,
+  AMQP.Server.EventBus,
   AMQP.Server.Engine,
   AMQP.Server.Journal,
   AMQP.Server.Confirm,
@@ -109,8 +110,7 @@ type
     FRunning: Boolean;
     FStopping: Boolean;
     FTotalAccepted: Integer; // atômico
-    FObservers: TList<TAMQPServerEventHandler>;
-    FObserversLock: TCriticalSection;
+    FEventBus: TAMQPEventBus; // dono; vive do constructor ao destructor
     function ConnConfig: TAMQPServerConnConfig;
     procedure AcceptLoop;
     procedure MonitorLoop;
@@ -119,8 +119,8 @@ type
     procedure ReapDead;
     procedure SetMaxQueueLength(AValue: Integer);
     procedure SetDataDir(const AValue: string);
-  protected
-    procedure NotifyEvent(const Event: TAMQPServerEvent);
+    function GetEventQueueCapacity: Integer;
+    procedure SetEventQueueCapacity(AValue: Integer);
   public
     constructor Create;
     destructor Destroy; override;
@@ -128,13 +128,45 @@ type
     procedure Start;
     procedure Stop;
 
-    /// Registra um handler para receber eventos de observabilidade. Thread-safe.
-    /// Pode ser chamado antes ou durante o Start. Os handlers são CÓPIAS de
-    /// referência — não serão chamados se o objeto que contém o método for
-    /// destruído (cabe ao owner gerenciar).
-    procedure Subscribe(Handler: TAMQPServerEventHandler);
+    // --- observabilidade (Fase 4.1, D29-D36) ---
+    /// Registra um handler para TODOS os tipos de evento. Thread-safe, e
+    /// pode ser chamado antes ou depois do Start.
+    ///
+    /// O handler roda na thread notificadora do broker -- nunca na thread de
+    /// leitura de uma conexao, nunca num worker do pool (D30). Ele pode
+    /// demorar sem travar nada, mas enquanto demora o ring enche e passa a
+    /// DESCARTAR eventos, contados em EventsDropped (D31).
+    ///
+    /// Chame Unsubscribe ANTES de destruir o objeto dono do metodo: um
+    /// handler orfao vira AV, que a notificadora conta e sobrevive (D33), mas
+    /// o sintoma aparece longe da causa.
+    procedure Subscribe(AHandler: TAMQPServerEventHandler); overload;
+    /// Idem, filtrando os tipos. Assinar o mesmo metodo de novo SUBSTITUI a
+    /// mascara anterior, em vez de duplicar a entrega.
+    procedure Subscribe(AHandler: TAMQPServerEventHandler;
+      const ATypes: TAMQPServerEventTypes); overload;
     /// Remove um handler previamente registrado. Thread-safe.
-    procedure Unsubscribe(Handler: TAMQPServerEventHandler);
+    procedure Unsubscribe(AHandler: TAMQPServerEventHandler);
+
+    /// Espera a notificadora entregar tudo que ja' foi emitido. E' a barreira
+    /// da D35 -- teste espera por ela, nao por Sleep. False = estourou o
+    /// prazo. NAO chamar de dentro de um handler.
+    function DrainEvents(ATimeoutMs: Cardinal = 2000): Boolean;
+    /// Quantos eventos entraram no ring desde o Create.
+    function EventsEmitted: Int64;
+    /// Quantos foram DESCARTADOS por ring cheio. Um valor > 0 quer dizer que
+    /// o observador nao viu tudo -- e' o preco do best-effort da D31, e a
+    /// unica forma de saber que ele foi pago.
+    function EventsDropped: Int64;
+    /// Quantas excecoes de handler a notificadora capturou (D33).
+    function EventsFailed: Int64;
+    /// Classe e mensagem da ultima excecao de handler ('' se nenhuma).
+    function LastEventFailure: string;
+
+    /// Tamanho do ring de eventos, em eventos (default
+    /// AMQP_EVENT_QUEUE_CAPACITY). So' pode mudar antes do Start.
+    property EventQueueCapacity: Integer read GetEventQueueCapacity
+      write SetEventQueueCapacity;
 
     /// Nº de conexões vivas neste momento.
     function ConnectionCount: Integer;
@@ -260,8 +292,10 @@ begin
   FEngine := TAMQPEngine.Create;
   FSink := FEngine;
   FMonitorStop := TEvent.Create(nil, True, False, '');
-  FObservers := TList<TAMQPServerEventHandler>.Create;
-  FObserversLock := TCriticalSection.Create;
+  // O barramento nasce com o servidor (e nao no Start) para o Subscribe
+  // funcionar antes de o broker subir -- que e' o caso normal: quem observa
+  // quer o primeiro evento, nao o segundo.
+  FEventBus := TAMQPEventBus.Create;
   FBindAddress := '0.0.0.0';
   FPort := 5672;
   FBacklog := 64;
@@ -286,7 +320,7 @@ begin
   Result.Tls := FUseTls;
   Result.TlsCertFile := FTlsCertFile;
   Result.TlsKeyFile := FTlsKeyFile;
-  Result.EventSink := Self;
+  Result.Events := FEventBus;
 end;
 
 destructor TAMQPServer.Destroy;
@@ -296,8 +330,7 @@ begin
   FDead.Free;
   FVHosts.Free;
   FMonitorStop.Free;
-  FObservers.Free;
-  FObserversLock.Free;
+  FEventBus.Free; // o destructor dele para a notificadora
   FLock.Free;
   FAuth := nil;
   FAuthorizer := nil;
@@ -369,6 +402,10 @@ begin
       and (FJournal.TotalSize >= FJournal.CompactAbove) then
       FJournal.Compact;
   end;
+  // A notificadora sobe ANTES do listener: assim o primeiro
+  // seConnectionEstablished ja' encontra quem o entregue.
+  FEventBus.Start;
+
   FListener := TAMQPTcpListener.Create;
   FListener.Listen(FBindAddress, FPort, FBacklog);
   FPort := FListener.Port; // efetiva (relevante se veio 0)
@@ -450,6 +487,11 @@ begin
   // O registro so cai depois do journal: enquanto a thread do journal vive,
   // ela pode estar dentro de um Release.
   FConfirms := nil;
+
+  // A notificadora desce por ULTIMO, e de proposito: os eventos de
+  // fechamento de canal e de conexao nascem durante o teardown acima, e o
+  // Stop dela entrega o que ja' esta' no ring antes de a thread sair.
+  FEventBus.Stop;
 
   FRunning := False;
 end;
@@ -625,47 +667,55 @@ begin
   end;
 end;
 
-procedure TAMQPServer.Subscribe(Handler: TAMQPServerEventHandler);
+function TAMQPServer.GetEventQueueCapacity: Integer;
 begin
-  FObserversLock.Enter;
-  try
-    if FObservers.IndexOf(Handler) < 0 then
-      FObservers.Add(Handler);
-  finally
-    FObserversLock.Leave;
-  end;
+  Result := FEventBus.Capacity;
 end;
 
-procedure TAMQPServer.Unsubscribe(Handler: TAMQPServerEventHandler);
+procedure TAMQPServer.SetEventQueueCapacity(AValue: Integer);
 begin
-  FObserversLock.Enter;
-  try
-    FObservers.Remove(Handler);
-  finally
-    FObserversLock.Leave;
-  end;
+  FEventBus.Capacity := AValue;
 end;
 
-procedure TAMQPServer.NotifyEvent(const Event: TAMQPServerEvent);
-var
-  LHandlers: TArray<TAMQPServerEventHandler>;
-  I: Integer;
+procedure TAMQPServer.Subscribe(AHandler: TAMQPServerEventHandler);
 begin
-  FObserversLock.Enter;
-  try
-    SetLength(LHandlers, FObservers.Count);
-    for I := 0 to FObservers.Count - 1 do
-      LHandlers[I] := FObservers[I];
-  finally
-    FObserversLock.Leave;
-  end;
-  // Chamar fora do lock: o handler pode chamar Subscribe/Unsubscribe, ou ser
-  // lento, ou até levantar exceção.
-  for I := 0 to High(LHandlers) do
-    try
-      LHandlers[I](Event);
-    except
-    end;
+  FEventBus.Subscribe(AHandler);
+end;
+
+procedure TAMQPServer.Subscribe(AHandler: TAMQPServerEventHandler;
+  const ATypes: TAMQPServerEventTypes);
+begin
+  FEventBus.Subscribe(AHandler, ATypes);
+end;
+
+procedure TAMQPServer.Unsubscribe(AHandler: TAMQPServerEventHandler);
+begin
+  FEventBus.Unsubscribe(AHandler);
+end;
+
+function TAMQPServer.DrainEvents(ATimeoutMs: Cardinal): Boolean;
+begin
+  Result := FEventBus.Drain(ATimeoutMs);
+end;
+
+function TAMQPServer.EventsEmitted: Int64;
+begin
+  Result := FEventBus.EmittedCount;
+end;
+
+function TAMQPServer.EventsDropped: Int64;
+begin
+  Result := FEventBus.DroppedCount;
+end;
+
+function TAMQPServer.EventsFailed: Int64;
+begin
+  Result := FEventBus.FailedCount;
+end;
+
+function TAMQPServer.LastEventFailure: string;
+begin
+  Result := FEventBus.LastFailure;
 end;
 
 end.

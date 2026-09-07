@@ -59,6 +59,7 @@ uses
   AMQP.Queue.Methods,
   AMQP.Basic.Methods,
   AMQP.Server.Auth,
+  AMQP.Server.Events,
   AMQP.Server.Types,
   AMQP.Server.Channel,
   AMQP.Server.Delivery,
@@ -145,6 +146,16 @@ type
 
     procedure SetupTransport;
     function ReadProtocolHeader: Boolean;
+
+    // --- observabilidade (Fase 4.1) ---
+    // NewEvent ja' preenche o contexto da conexao, para o sitio de emissao
+    // so' cuidar do que e' proprio do evento. Emit NUNCA bloqueia e NUNCA
+    // levanta (D31), entao nenhum destes tres precisa de try/except.
+    function WantsEvent(AType: TAMQPServerEventType): Boolean;
+    function NewEvent(AType: TAMQPServerEventType): TAMQPServerEvent;
+    procedure EmitEvent(const AEvent: TAMQPServerEvent);
+    /// Atalho para o evento que so' tem contexto de conexao e canal.
+    procedure EmitSimpleEvent(AType: TAMQPServerEventType; AChannel: Word);
     procedure RunReadLoop;
     function CurrentMaxPayload: Cardinal;
 
@@ -491,6 +502,10 @@ begin
     // canal se foram e que as nao-confirmadas dele voltam para a fila.
     ReleaseChannelResources(LCh);
     LCh.Free;
+    // Aqui, e nao nos tres sitios que chamam DropChannel: e' o funil por onde
+    // TODO fechamento de canal passa -- Close do cliente, Close-Ok de um
+    // Close nosso, e o teardown da conexao.
+    EmitSimpleEvent(seChannelClosed, AId);
   end;
 end;
 
@@ -515,6 +530,8 @@ var
   LAll: TArray<TAMQPServerChannel>;
   LCh: TAMQPServerChannel;
   I: Integer;
+  LId: Word;
+  LEv: TAMQPServerEvent;
 begin
   LAll := nil;
   FChLock.Enter;
@@ -532,8 +549,21 @@ begin
   end;
   for I := 0 to High(LAll) do
   begin
+    LId := LAll[I].Id;
     ReleaseChannelResources(LAll[I]);
     LAll[I].Free;
+    // Canal que morre JUNTO com a conexao tambem fecha, e tambem emite. Sem
+    // isto um observador que conte aberturas contra fechamentos acusaria
+    // vazamento de canal a cada conexao derrubada -- foi o que a corrida do
+    // sample contra o SmokeTest mostrou (3 aberturas, 2 fechamentos).
+    // Reason distingue este caminho do Channel.Close pedido pelo cliente.
+    if WantsEvent(seChannelClosed) then
+    begin
+      LEv := NewEvent(seChannelClosed);
+      LEv.ChannelNumber := LId;
+      LEv.Reason := 'connection teardown';
+      EmitEvent(LEv);
+    end;
   end;
 end;
 
@@ -768,7 +798,9 @@ begin
     FEngine.EnsureVHost(FVirtualHost);
   PostMethod(AMQP_CHANNEL_CONNECTION, BuildOpenOk);
   FState := amqssOpen;
-  // TODO Fase 4.2: disparar seConnectionAuthenticated via FConfig.EventSink
+  // Aqui, e nao no fim do Start-Ok: so' depois do Open-Ok o usuario E o vhost
+  // estao ambos definidos, e e' o par que interessa a quem audita.
+  EmitSimpleEvent(seConnectionAuthenticated, 0);
 end;
 
 { --- despacho ------------------------------------------------------------- }
@@ -859,6 +891,7 @@ begin
         AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN);
     AddChannel(AFrame.Channel);
     PostMethod(AFrame.Channel, BuildChannelOpenOk);
+    EmitSimpleEvent(seChannelOpened, AFrame.Channel);
     Exit;
   end;
 
@@ -1458,6 +1491,7 @@ var
   LRefs: TArray<TAMQPOutstanding>;
   LQueue: TAMQPServerQueue;
   I: Integer;
+  LEv: TAMQPServerEvent;
 begin
   Result := True;
   case AId.MethodId of
@@ -1500,6 +1534,14 @@ begin
               LConsume.Exclusive, AChannel.DeliveryTarget, FConnId),
             'queue ' + LQueueName, AId.ClassId, AId.MethodId);
           AChannel.AddConsumerTag(LTag, LQueueName);
+          if WantsEvent(seConsumerRegistered) then
+          begin
+            LEv := NewEvent(seConsumerRegistered);
+            LEv.ChannelNumber := AChannel.Id;
+            LEv.QueueName := LQueueName;
+            LEv.ConsumerTag := LTag;
+            EmitEvent(LEv);
+          end;
         end;
         if not LConsume.NoWait then
           PostMethod(AChannel.Id, BuildBasicConsumeOk(LTag));
@@ -1519,6 +1561,14 @@ begin
             // WS7: se a fila e' auto-delete e este era o ultimo consumidor,
             // ela some agora.
             FEngine.MaybeAutoDeleteQueue(FVirtualHost, LQueueName);
+            if WantsEvent(seConsumerCancelled) then
+            begin
+              LEv := NewEvent(seConsumerCancelled);
+              LEv.ChannelNumber := AChannel.Id;
+              LEv.QueueName := LQueueName;
+              LEv.ConsumerTag := LCancel.ConsumerTag;
+              EmitEvent(LEv);
+            end;
           end;
         end;
         if not LCancel.NoWait then
@@ -1580,6 +1630,17 @@ begin
         // devolve as entregas resolvidas COM a fila de origem de cada uma.
         LRefs := AChannel.Delivery.NoteResolved(LAck.DeliveryTag,
           LAck.Multiple);
+        if WantsEvent(seMessageAcked) then
+        begin
+          LEv := NewEvent(seMessageAcked);
+          LEv.ChannelNumber := AChannel.Id;
+          LEv.DeliveryTag := LAck.DeliveryTag;
+          LEv.Multiple := LAck.Multiple;
+          // Quantas entregas o ack resolveu de fato -- com multiple=true um
+          // unico frame pode fechar dezenas, e o numero e' o que interessa.
+          LEv.Count := Length(LRefs);
+          EmitEvent(LEv);
+        end;
         if FEngine <> nil then
           for I := 0 to High(LRefs) do
           begin
@@ -1595,6 +1656,16 @@ begin
           Exit;
         LRefs := AChannel.Delivery.NoteResolved(LNack.DeliveryTag,
           LNack.Multiple);
+        if WantsEvent(seMessageNacked) then
+        begin
+          LEv := NewEvent(seMessageNacked);
+          LEv.ChannelNumber := AChannel.Id;
+          LEv.DeliveryTag := LNack.DeliveryTag;
+          LEv.Multiple := LNack.Multiple;
+          LEv.Requeue := LNack.Requeue;
+          LEv.Count := Length(LRefs);
+          EmitEvent(LEv);
+        end;
         if FEngine <> nil then
           for I := 0 to High(LRefs) do
           begin
@@ -1610,6 +1681,15 @@ begin
         if AChannel.Delivery = nil then
           Exit;
         LRefs := AChannel.Delivery.NoteResolved(LReject.DeliveryTag, False);
+        if WantsEvent(seMessageRejected) then
+        begin
+          LEv := NewEvent(seMessageRejected);
+          LEv.ChannelNumber := AChannel.Id;
+          LEv.DeliveryTag := LReject.DeliveryTag;
+          LEv.Requeue := LReject.Requeue;
+          LEv.Count := Length(LRefs);
+          EmitEvent(LEv);
+        end;
         if FEngine <> nil then
           for I := 0 to High(LRefs) do
           begin
@@ -1680,6 +1760,7 @@ var
   LRejected: Boolean;
   LTtlMs: Int64;
   LLsn: UInt64;
+  LEv: TAMQPServerEvent;
 begin
   try
     LMsg := AChannel.CurrentMessage(FUserId);
@@ -1727,6 +1808,41 @@ begin
           ConfirmPublish(AChannel, LSeq, 0, True);
         raise;
       end;
+    end;
+
+    // O evento sai DEPOIS do roteamento (so' entao se sabe se roteou e qual
+    // LSN saiu) e ANTES do Return/Ack, mantendo a ordem observada igual a'
+    // ordem dos frames. Publish recusado por x-overflow e publish sem rota
+    // sao coisas diferentes: o primeiro e' seMessagePublishRejected, o
+    // segundo e' um publish bem-sucedido que nao achou fila.
+    if LRejected then
+    begin
+      if WantsEvent(seMessagePublishRejected) then
+      begin
+        LEv := NewEvent(seMessagePublishRejected);
+        LEv.ChannelNumber := AChannel.Id;
+        LEv.ExchangeName := LMsg.Exchange;
+        LEv.RoutingKey := LMsg.RoutingKey;
+        LEv.MessageSize := UInt64(Length(LMsg.Body));
+        LEv.Mandatory := LMsg.Mandatory;
+        LEv.Reason := 'reject-publish';
+        EmitEvent(LEv);
+      end;
+    end
+    else if WantsEvent(seMessagePublished) then
+    begin
+      LEv := NewEvent(seMessagePublished);
+      LEv.ChannelNumber := AChannel.Id;
+      LEv.ExchangeName := LMsg.Exchange;
+      LEv.RoutingKey := LMsg.RoutingKey;
+      LEv.MessageSize := UInt64(Length(LMsg.Body));
+      LEv.Mandatory := LMsg.Mandatory;
+      LEv.Lsn := LLsn;
+      if not LRouted then
+        // Sem rota NAO e' erro (leva ack, e Return se mandatory). O motivo
+        // vai no Reason para quem audita nao ter de deduzi-lo.
+        LEv.Reason := 'unroutable';
+      EmitEvent(LEv);
     end;
 
     // ORDEM: o Return sai ANTES do Ack. O cliente pode liberar o estado do
@@ -1828,6 +1944,44 @@ end;
 // Monta o transporte na thread DESTA conexão: em TLS, o handshake é síncrono e
 // pode demorar (ou nunca terminar, se o peer sumir). Só depois dele o writer
 // nasce, porque tudo o que ele escreve tem de sair cifrado.
+{ --- observabilidade (Fase 4.1) ------------------------------------------- }
+
+function TAMQPServerConnection.WantsEvent(
+  AType: TAMQPServerEventType): Boolean;
+begin
+  // Sem sink (ou sem assinante para o tipo) o sitio de emissao nem monta o
+  // record -- e' o que faz a D29 valer: quem nao observa nao paga.
+  Result := (FConfig.Events <> nil) and FConfig.Events.Wants(AType);
+end;
+
+function TAMQPServerConnection.NewEvent(
+  AType: TAMQPServerEventType): TAMQPServerEvent;
+begin
+  Result := AmqpNewEvent(AType);
+  Result.ConnectionId := UInt64(FConnId);
+  Result.RemoteAddr := FPeer;
+  Result.Username := FUserId;
+  Result.VHost := FVirtualHost;
+end;
+
+procedure TAMQPServerConnection.EmitEvent(const AEvent: TAMQPServerEvent);
+begin
+  if FConfig.Events <> nil then
+    FConfig.Events.Emit(AEvent);
+end;
+
+procedure TAMQPServerConnection.EmitSimpleEvent(
+  AType: TAMQPServerEventType; AChannel: Word);
+var
+  LEv: TAMQPServerEvent;
+begin
+  if not WantsEvent(AType) then
+    Exit;
+  LEv := NewEvent(AType);
+  LEv.ChannelNumber := AChannel;
+  EmitEvent(LEv);
+end;
+
 procedure TAMQPServerConnection.SetupTransport;
 begin
   if FConfig.Tls then
@@ -1907,9 +2061,14 @@ end;
 procedure TAMQPServerConnection.RunReadLoop;
 var
   LFrame: TAMQPFrame;
+  LClosedEv: TAMQPServerEvent;
 begin
   try
     try
+      // ANTES do SetupTransport: um handshake TLS que falha tambem gera o
+      // par established/closed, e e' exatamente o caso que se quer observar.
+      EmitSimpleEvent(seConnectionEstablished, 0);
+
       SetupTransport; // handshake TLS aqui, se for o caso
 
       FProtocolOk := ReadProtocolHeader;
@@ -2018,6 +2177,15 @@ begin
         on E: Exception do
           ; // teardown nao pode falhar por causa disto
       end;
+    // Depois do teardown e ANTES do OnClosed: o broker move a conexao para a
+    // lista de reap la' dentro, e o evento tem de sair enquanto os campos
+    // desta conexao ainda valem.
+    if WantsEvent(seConnectionClosed) then
+    begin
+      LClosedEv := NewEvent(seConnectionClosed);
+      LClosedEv.Reason := FError;
+      EmitEvent(LClosedEv);
+    end;
     if Assigned(FOnClosed) then
       FOnClosed(Self);
   end;

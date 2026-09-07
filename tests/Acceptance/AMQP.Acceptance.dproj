@@ -136,6 +136,8 @@
         <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Auth.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Types.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.Events.pas"/>
+        <DCCReference Include="..\..\src\server\AMQP.Server.EventBus.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Message.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Header.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Resources.pas"/>
