@@ -777,6 +777,19 @@ A frente nasceu de um WIP do Haiku (commit `755a3a7`, branch `feat/broker-observ
   Achados menores: as duas `TAMQPFieldTable` dos testes novos vazavam (quem cria a tabela, libera — o `DeclareQueue` não vira dono dela), e o `seJournalFlushed` ficou com teste próprio (`JournalDuravel_EmiteFlush`), que exigiu o primeiro helper de RTL por dialeto desta suíte (`DirTempDeTeste`: `TPath.GetTempPath` de um lado, `GetTempDir` do outro).
 
   **Validação de ponta a ponta**: sample como broker + `SmokeTest` (FPC) contra ele, com `--tipos todos` — **PASS nos 9 passos**, **62 eventos de 13 tipos**, incluindo os de ator (`MessageEnqueued`, `MessageDelivered`, `MessageExpired`, `MessageDeadLettered`), `EventsDropped = 0` e `EventsFailed = 0`. As aberturas e fechamentos de canal agora **batem 3 a 3**, que é a confirmação do defeito 2 do Inc. 1 ter ficado corrigido.
+
+  **Validação Delphi, com contagem** (compilado no IDE — a CE não tem CLI —, e os `.exe` rodados daqui): server **457/457 Debug** e **461/461 OpenSSL**, cada um em **3 execuções seguidas, 0 Leaked**; unitária **121/121**; integração **28/28** nos dois modes (contra o RabbitMQ do docker); aceitação **28/28** nas duas passagens. O 457 do Delphi bate **exatamente** com o 457 do FPCUnit, e a diferença de 4 do mode OpenSSL é a mesma de sempre (os testes de TLS server-side, que só existem lá).
+
+### A Fase 4.1 fecha aqui
+
+Dois incrementos, os **18 tipos de evento com emissor**, contrato único (best-effort, descarta o mais novo, conta), uma thread notificadora, e a política de exceção que nunca engole nada. O que a frente ensinou e que não estava no plano:
+
+- **`Drain` não é barreira para asserção de presença** — um ring que ainda não recebeu o evento já está vazio (Inc. 1);
+- **canal que morre com a conexão também fecha** — e quem achou foi contar tipos num tráfego real, não um teste (Inc. 1);
+- **unit fora do `.lpk` compila e mata o programa em runtime**, e o dia em que ela declara uma interface o preço vence de uma vez (Inc. 2);
+- **quem é apontado por interface morre por último** — o barramento tem de sobreviver à engine, às filas e ao journal (Inc. 2).
+
+Os dois primeiros viraram teste; o terceiro virou checagem no `verifica_espelhos.py`; o quarto virou comentário no destrutor, que é onde alguém vai reler.
 - **Docs.** Não iniciado. Os oito arquivos do WIP saem; entra `docs/observabilidade.md` (PT, canônico) com a tabela congelada de campo-por-tipo da D34, e a seção de API nos dois READMEs.
 
 ## Verificador de espelhos
