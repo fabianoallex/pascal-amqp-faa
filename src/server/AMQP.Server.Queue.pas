@@ -74,6 +74,7 @@ uses
   SyncObjs,
   Generics.Collections,
   AMQP.Threading,
+  AMQP.Server.Events,
   AMQP.Server.Message,
   AMQP.Server.Header,
   AMQP.Server.Resources,
@@ -381,6 +382,7 @@ type
     FDeadLettered: Int64;
     FDeadLetterSink: IAMQPDeadLetterSink;
     FJournal: TAMQPJournal;
+    FEvents: IAMQPEventSink;
     FVHostName: string;
     FDurable: Boolean;
     /// Trava de mao unica: vira True no primeiro enqueue com prazo e nunca
@@ -394,6 +396,21 @@ type
 
     procedure ScheduleLocked;
     procedure Post(ACmd: TAMQPQueueCommand);
+    { --- observabilidade (Fase 4.1, Inc. 2) ---
+      Emitir do ATOR so' e' legitimo porque Emit nao bloqueia e nao levanta
+      (D31): ele copia para o ring e volta. Era esta a duvida que a D30
+      resolveu -- chamar handler de usuario daqui bloquearia o worker do pool,
+      que e' o MESMO pool dos outros atores.
+
+      O ator nao conhece conexao, usuario nem endereco: quem publica e quem
+      consome ficam do outro lado da caixa, de proposito. Entao evento de
+      origem-ator sai com ConnectionId=0 e RemoteAddr/Username vazios, e o
+      que identifica e' VHost+QueueName (+ConsumerTag na entrega). Quem
+      precisar amarrar consumidor a conexao junta pelo ConsumerTag, que o
+      seConsumerRegistered do Inc. 1 carrega com a conexao junto. }
+    function WantsEvent(AType: TAMQPServerEventType): Boolean;
+    procedure EmitMessageEvent(AType: TAMQPServerEventType;
+      const AEntry: TAMQPQueueEntry; const AReason: string);
     procedure PostSync(ACmd: TAMQPQueueCommand);
     // --- helpers do ator (nunca chamados de fora dele) ---
     function ReadyCount: Integer;
@@ -584,6 +601,9 @@ type
     /// Journal de durabilidade (Fase 4). nil = nada desta fila vai ao disco.
     /// A fila NAO e' dona; quem injeta e' a engine, na criacao.
     property Journal: TAMQPJournal read FJournal write FJournal;
+    /// Para onde o ator emite eventos de observabilidade. nil = desligado
+    /// (D29), e ai' nem o record e' montado. Semeado pela engine.
+    property Events: IAMQPEventSink read FEvents write FEvents;
     /// vhost em que esta fila mora -- entra nos registros de colocacao, porque
     /// a fila sozinha nao e' identidade (dois vhosts podem ter 'q').
     property VHostName: string read FVHostName write FVHostName;
@@ -1244,6 +1264,9 @@ end;
 procedure TAMQPServerQueue.DiscardExpired(AEntry: TAMQPQueueEntry);
 begin
   Inc(FExpired);
+  // ANTES do DeadLetterWith, que consome a referencia da entrada: depois dele
+  // AEntry.Msg pode ja' ter sido liberada.
+  EmitMessageEvent(seMessageExpired, AEntry, AMQP_DEATH_EXPIRED);
   DeadLetterWith(AEntry, AMQP_DEATH_EXPIRED);
 end;
 
@@ -1256,6 +1279,7 @@ var
   LNew: TAMQPMessage;
   LDlx, LKey, LOrigExpiration: string;
   LPayload: TBytes;
+  LEv: TAMQPServerEvent;
 begin
   Result := False;
   // O try/FINALLY externo existe por uma razao especifica: `Exit` dentro de um
@@ -1299,6 +1323,23 @@ begin
         FDeadLetterSink.DeadLetter(LDlx, LKey, LNew, AEntry.Priority,
           AEntry.ContentId);
         Inc(FDeadLettered);
+        // So' aqui, e nao no topo do DeadLetterWith: o evento diz que a
+        // mensagem FOI republicada no DLX. Fila sem DLX, ou republicacao que
+        // falhou, e' descarte -- e sai como seMessageDropped, no chamador.
+        if WantsEvent(seMessageDeadLettered) then
+        begin
+          LEv := AmqpNewEvent(seMessageDeadLettered);
+          LEv.VHost := FVHostName;
+          LEv.QueueName := FName;
+          LEv.Priority := AEntry.Priority;
+          LEv.Redelivered := AEntry.Redelivered;
+          LEv.Reason := AReason;
+          LEv.MessageSize := UInt64(AEntry.Msg.BodySize);
+          // Para onde ela FOI -- e' o que distingue este evento do descarte.
+          LEv.ExchangeName := LDlx;
+          LEv.RoutingKey := LKey;
+          FEvents.Emit(LEv);
+        end;
         Result := True;
       finally
         if LNew <> nil then
@@ -1402,6 +1443,7 @@ var
   LEntry: TAMQPQueueEntry;
   LUnacked: TAMQPUnackedEntry;
   LTag: UInt64;
+  LDelivEv: TAMQPServerEvent;
 begin
   // ANTES de qualquer coisa, e ANTES do early-exit por falta de consumidor:
   // uma fila sem consumidor nenhum tambem tem de vencer no prazo (D13), e e'
@@ -1433,6 +1475,23 @@ begin
     begin
       TakeReady(LEntry); // so' sai do estoque depois de o lote ser aceito
       Inc(FDelivered);
+      if WantsEvent(seMessageDelivered) then
+      begin
+        LDelivEv := AmqpNewEvent(seMessageDelivered);
+        LDelivEv.VHost := FVHostName;
+        LDelivEv.QueueName := FName;
+        LDelivEv.ConsumerTag := LCons.ConsumerTag;
+        LDelivEv.DeliveryTag := LTag;
+        LDelivEv.Priority := LEntry.Priority;
+        LDelivEv.Redelivered := LEntry.Redelivered;
+        LDelivEv.MessageSize := UInt64(LEntry.Msg.BodySize);
+        LDelivEv.ExchangeName := LEntry.Msg.Exchange;
+        LDelivEv.RoutingKey := LEntry.Msg.RoutingKey;
+        // NoAck: a entrega ja' encerra a vida da mensagem aqui.
+        if LCons.NoAck then
+          LDelivEv.Reason := 'no-ack';
+        FEvents.Emit(LDelivEv);
+      end;
       if LCons.NoAck then
       begin
         // Sem ack nao ha volta: a colocacao acaba aqui, no disco tambem.
@@ -1563,6 +1622,8 @@ begin
         Continue;
       TrackBytes(LEntry, -1);
       Inc(FDropped);
+      // ANTES do DeadLetterWith, que consome a referencia.
+      EmitMessageEvent(seMessageDropped, LEntry, AMQP_DEATH_MAXLEN);
       // 'maxlen': o descarte por teto tambem e' morte, e vai para o DLX como
       // as outras. MorreCom consome a referencia.
       DeadLetterWith(LEntry, AMQP_DEATH_MAXLEN);
@@ -1643,6 +1704,37 @@ begin
   Result.EverHadConsumer := FEverHadConsumer;
 end;
 
+{ --- observabilidade (Fase 4.1, Inc. 2) ----------------------------------- }
+
+function TAMQPServerQueue.WantsEvent(AType: TAMQPServerEventType): Boolean;
+begin
+  Result := (FEvents <> nil) and FEvents.Wants(AType);
+end;
+
+procedure TAMQPServerQueue.EmitMessageEvent(AType: TAMQPServerEventType;
+  const AEntry: TAMQPQueueEntry; const AReason: string);
+var
+  LEv: TAMQPServerEvent;
+begin
+  if not WantsEvent(AType) then
+    Exit;
+  LEv := AmqpNewEvent(AType);
+  LEv.VHost := FVHostName;
+  LEv.QueueName := FName;
+  LEv.Priority := AEntry.Priority;
+  LEv.Redelivered := AEntry.Redelivered;
+  LEv.Reason := AReason;
+  // O TAMANHO, nunca o corpo (D34): carregar o corpo poria uma copia de
+  // buffer no caminho mais quente que existe e derrubaria o COW da D1.
+  if AEntry.Msg <> nil then
+  begin
+    LEv.MessageSize := UInt64(AEntry.Msg.BodySize);
+    LEv.ExchangeName := AEntry.Msg.Exchange;
+    LEv.RoutingKey := AEntry.Msg.RoutingKey;
+  end;
+  FEvents.Emit(LEv);
+end;
+
 { --- o despacho de comandos, na thread do ator --- }
 
 procedure TAMQPServerQueue.ExecuteCommand(ACmd: TAMQPQueueCommand);
@@ -1665,6 +1757,7 @@ begin
         ACmd.Msg := nil; // a referencia passou para o estoque
         TrackBytes(LEntry, +1);
         FStock[LEntry.Priority].Enqueue(LEntry);
+        EmitMessageEvent(seMessageEnqueued, LEntry, '');
         // A ORDEM importa: expira antes de aplicar o teto, senao uma mensagem
         // ja vencida ocuparia vaga e faria descartar uma viva.
         ExpireMessages;

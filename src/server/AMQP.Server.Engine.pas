@@ -52,6 +52,7 @@ uses
   AMQP.Server.Resources,
   AMQP.Server.Queue,
   AMQP.Server.VHost,
+  AMQP.Server.Events,
   AMQP.Server.Journal,
   AMQP.Server.Records,
   AMQP.Server.Recovery;
@@ -114,6 +115,7 @@ type
     FQueues: TDictionary<string, TAMQPServerQueue>;
     FMaxQueueLength: Integer;
     FJournal: TAMQPJournal;
+    FEvents: IAMQPEventSink;
     FNextId: UInt64;
     /// True enquanto o Recupera esta aplicando o log. Enquanto for True o
     /// journal fica MUDO: o que se declara e enfileira agora VEIO do log, e
@@ -270,6 +272,9 @@ type
     /// NADA de topologia vai para o disco (D19) -- o caminho fica identico ao
     /// da Fase 3. Injetado pelo TAMQPServer no Start; a engine nao e' dona.
     property Journal: TAMQPJournal read FJournal write FJournal;
+    /// Sink de observabilidade repassado a CADA fila nova (Fase 4.1, Inc. 2).
+    /// A engine nao emite nada por conta propria -- quem emite e' o ator.
+    property Events: IAMQPEventSink read FEvents write FEvents;
 
     /// Aplica ao broker o estado que o replay leu. Roda DENTRO do Start,
     /// antes de o socket de escuta abrir: ninguem pode falar com um broker
@@ -637,6 +642,7 @@ begin
       // razao pela qual a politica vem de la').
       LQueue.VHostName := AVHost;
       LQueue.Journal := FJournal;
+      LQueue.Events := FEvents;
       if LDef <> nil then
         LQueue.Durable := LDef.Durable and (not LDef.Exclusive)
       else

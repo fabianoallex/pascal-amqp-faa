@@ -26,6 +26,14 @@
         <UnitName Value="AMQP.Server.Types"/>
       </Item>
       <Item>
+        <Filename Value="..\src\server\AMQP.Server.Events.pas"/>
+        <UnitName Value="AMQP.Server.Events"/>
+      </Item>
+      <Item>
+        <Filename Value="..\src\server\AMQP.Server.EventBus.pas"/>
+        <UnitName Value="AMQP.Server.EventBus"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\server\AMQP.Server.Channel.pas"/>
         <UnitName Value="AMQP.Server.Channel"/>
       </Item>

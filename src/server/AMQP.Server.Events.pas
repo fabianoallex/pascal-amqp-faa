@@ -148,6 +148,37 @@ type
     Reason: string;
   end;
 
+  { Para onde vao os eventos de observabilidade (Fase 4.1, D32).
+
+    Vive AQUI, e nao em AMQP.Server.Types como a D32 dizia primeiro,
+    porque o ator da fila e a thread do journal tambem emitem (Inc. 2) e
+    nenhuma das duas units usa Types -- declara-la la' obrigaria Queue e
+    Journal a puxar Auth, FrameIO e Basic.Methods para alcancar uma
+    interface. A regra da casa aponta para ca' de qualquer jeito: assim
+    como IAMQPMessageSink vive junto de TAMQPServerMessage, esta vive
+    junto de TAMQPServerEvent.
+
+    E' a forma da casa -- interface aqui, como IAMQPMessageSink e
+    IAMQPConfirmRegistry --, e nao o TObject com cast que o WIP usava para
+    fugir de ciclo de unit. nil = observabilidade desligada, exatamente como
+    Confirms = nil significa "sem durabilidade".
+
+    Implementada pelo TAMQPEventBus (AMQP.Server.EventBus), que e' quem sabe
+    o contrato de entrega da D31. Quem CHAMA so' precisa saber duas coisas:
+
+    - Wants e' baratissimo (leitura atomica de mascara) e serve para nao
+      montar o record quando ninguem quer o tipo. Chamar Emit sem Wants nao
+      e' erro, so' e' desperdicio;
+    - Emit NUNCA bloqueia, NUNCA levanta e PODE DESCARTAR. Nenhum chamador
+      precisa tratar erro, e nenhum chamador pode contar com a entrega. }
+  IAMQPEventSink = interface
+    ['{7B3C1D48-0A62-4F95-8E17-2C5D9B4A6E03}']
+    /// True se algum assinante quer este tipo de evento.
+    function Wants(AType: TAMQPServerEventType): Boolean;
+    /// Enfileira o evento para a thread notificadora. Ver o contrato acima.
+    procedure Emit(const AEvent: TAMQPServerEvent);
+  end;
+
   { Assinante. Método de objeto (o FPC 3.2 não tem closure -- CLAUDE.md).
 
     CONTRATO DO HANDLER, em três linhas:

@@ -80,8 +80,6 @@ Broker.EventQueueCapacity := 65536; // só antes do Start
 
 ## Os tipos de evento
 
-Emitidos hoje:
-
 | tipo | quando |
 |---|---|
 | `seConnectionEstablished` | socket aceito, antes de qualquer byte de AMQP (e antes do handshake TLS) |
@@ -94,8 +92,28 @@ Emitidos hoje:
 | `seConsumerRegistered` | `Basic.Consume` aceito |
 | `seConsumerCancelled` | `Basic.Cancel` de um consumidor existente |
 | `seMessageAcked` / `seMessageNacked` / `seMessageRejected` | `Basic.Ack` / `.Nack` / `.Reject` recebido |
+| `seMessageEnqueued` | a mensagem entrou numa fila |
+| `seMessageDelivered` | saiu da fila para um consumidor (não conta `Basic.Get`) |
+| `seMessageExpired` | venceu por TTL (de mensagem ou de fila — o menor vence) |
+| `seMessageDeadLettered` | foi republicada num dead-letter exchange |
+| `seMessageDropped` | descartada por teto de fila (`x-max-length`/`-bytes`) |
+| `seJournalFlushed` | um **lote** do WAL ficou durável (só com `DataDir`) |
 
-Declarados, **ainda sem emissor** (são o Inc. 2 desta fase): `seMessageEnqueued`, `seMessageDelivered`, `seMessageExpired`, `seMessageDeadLettered`, `seMessageDropped`, `seJournalFlushed`. Assiná-los já compila e não é erro — eles simplesmente não chegam ainda.
+### De onde cada evento nasce, e por que isso aparece nos campos
+
+Os eventos vêm de três lugares diferentes do broker, e o que cada um **sabe** é diferente:
+
+| origem | tipos | o que sabe |
+|---|---|---|
+| thread de leitura da conexão | conexão, canal, consumidor, publish, ack/nack/reject | tudo: conexão, usuário, vhost, canal |
+| **ator da fila** (worker do pool) | enqueue, delivered, expired, dead-lettered, dropped | fila e vhost — **não** conexão nem usuário |
+| thread do journal | `seJournalFlushed` | o lote: LSN e quantos registros |
+
+O ator vive do outro lado da caixa de comandos, de propósito: é o que permite que ele nunca espere por I/O. Ele não conhece quem publicou nem quem consome, então **evento de origem-ator sai com `ConnectionId = 0` e `RemoteAddr`/`Username` vazios**. Isso não é campo faltando por descuido — é a separação que a arquitetura impõe, e a D34 manda que o não-populado saia zerado em vez de lixo.
+
+Para amarrar uma entrega a uma conexão, junte pelo **`ConsumerTag`**: `seConsumerRegistered` (que nasce na thread de leitura) traz o par tag ↔ conexão, e `seMessageDelivered` traz a tag.
+
+Um evento por **lote** de journal, nunca por registro: o group commit existe porque o `fsync` é caro, e um evento por registro custaria mais que o `fsync` que ele observa.
 
 > O **teto é de 32 tipos** (18 usados). A máscara de assinatura é um `Cardinal` lido sem lock no caminho quente; passar de 32 é mudar o tipo da máscara, e é decisão consciente. A **ordem do enum é API**: tipo novo entra no fim.
 
@@ -119,11 +137,21 @@ Todos os eventos trazem `EventType`, `WallMs`, `TickMs`, `ConnectionId`, `Remote
 | `seMessageAcked` | `ChannelNumber`, `DeliveryTag`, `Multiple`, `Count` (quantas entregas o ack resolveu) |
 | `seMessageNacked` | idem, mais `Requeue` |
 | `seMessageRejected` | `ChannelNumber`, `DeliveryTag`, `Requeue`, `Count` |
+| `seMessageEnqueued` | `QueueName`, `MessageSize`, `Priority`, `Redelivered`, `ExchangeName`, `RoutingKey` |
+| `seMessageDelivered` | idem, mais `ConsumerTag` e `DeliveryTag`; `Reason` = `no-ack` quando o consumidor não confirma |
+| `seMessageExpired` | `QueueName`, `MessageSize`, `Priority`, `ExchangeName`, `RoutingKey`; `Reason` = `expired` |
+| `seMessageDeadLettered` | `QueueName` (a de **origem**), `MessageSize`, `Priority`; `ExchangeName`/`RoutingKey` = para **onde foi** (o DLX); `Reason` = a razão do `x-death` |
+| `seMessageDropped` | `QueueName`, `MessageSize`, `Priority`, `ExchangeName`, `RoutingKey`; `Reason` = `maxlen` |
+| `seJournalFlushed` | `Lsn` (marca d'água que ficou durável) e `Count` (registros no lote). Sem fila, sem conexão |
+
+Nos cinco de origem-ator, `VHost` e `QueueName` valem e o contexto de conexão sai zerado — ver a seção anterior.
 
 Duas amarras que valem para todos:
 
 - **o corpo da mensagem nunca entra no evento**, só `MessageSize`. Carregá-lo poria uma cópia de buffer no caminho mais quente que existe;
 - **`WallMs` é epoch em ms UTC** (`Int64`), não `TDateTime` — para correlacionar com log externo. `TickMs` é monotônico e serve para medir latência; ele **não** sobrevive a um restart.
+
+**Morrer no DLX não é o mesmo que ser descartada.** Uma mensagem que vence, ou que é empurrada para fora pelo teto, emite primeiro o evento do motivo (`seMessageExpired` ou `seMessageDropped`) e, **se a fila tiver um dead-letter exchange e a republicação der certo**, emite também `seMessageDeadLettered`. Sem DLX — ou com uma republicação que falhou — só o primeiro sai. Contar `seMessageDeadLettered` para medir perda subestima; contar `seMessageExpired` + `seMessageDropped` mede o que de fato saiu da fila por conta própria.
 
 **Sem rota não é publish recusado.** Uma mensagem que não achou fila é um publish bem-sucedido: leva `ack`, e leva `Basic.Return` se foi `mandatory`. Ela sai como `seMessagePublished` com `Reason = 'unroutable'`. `seMessagePublishRejected` é outra coisa — fila cheia declarada com `x-overflow: reject-publish`, que leva `Basic.Nack`. Contar as duas juntas dá um número que não significa nada.
 

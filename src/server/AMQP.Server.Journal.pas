@@ -111,6 +111,7 @@ uses
   SyncObjs,
   Generics.Collections,
   AMQP.Threading,
+  AMQP.Server.Events,
   AMQP.Server.Wal,
   AMQP.Server.Records,
   AMQP.Server.Recovery;
@@ -230,6 +231,7 @@ type
     FPendings: TQueue<TAMQPJournalItem>;
     FPendingBytes: Int64;
     FMaxPendingBytes: Int64;
+    FEvents: IAMQPEventSink;
     FMaxSegmentBytes: Int64;
     FCompactAbove: Int64;
     FMaxJournalBytes: Int64;
@@ -321,6 +323,11 @@ type
     property DurabilitySink: IAMQPDurabilitySink read FSink write FSink;
     property MaxPendingBytes: Int64 read FMaxPendingBytes
       write FMaxPendingBytes;
+    /// Sink de observabilidade (Fase 4.1, Inc. 2). Emite UM evento por LOTE
+    /// que ficou duravel, nunca um por registro: o group commit da D25 existe
+    /// justamente porque o fsync e' caro, e um evento por registro custaria
+    /// mais que o fsync que ele observa (nao-objetivo da D36).
+    property Events: IAMQPEventSink read FEvents write FEvents;
     /// Quanto um segmento cresce antes de o journal fechar e abrir o proximo
     /// (D26). Mexer nisto so' faz sentido em teste: o default e' o do WAL.
     property MaxSegmentBytes: Int64 read FMaxSegmentBytes
@@ -920,6 +927,7 @@ var
   LMaxLsn: UInt64;
   LSink: IAMQPDurabilitySink;
   LSyncOk: Boolean;
+  LEv: TAMQPServerEvent;
 begin
   Result := True;
   LBatch := nil;
@@ -1021,6 +1029,16 @@ begin
 
   if not LSyncOk then
     Exit(True);
+
+  if (FEvents <> nil) and FEvents.Wants(seJournalFlushed) then
+  begin
+    // Depois do fsync E de a marca d'agua ter andado: antes disso nada e'
+    // duravel, e o evento estaria prometendo o que o disco nao confirmou.
+    LEv := AmqpNewEvent(seJournalFlushed);
+    LEv.Lsn := LMaxLsn;
+    LEv.Count := LN; // quantos registros este fsync cobriu
+    FEvents.Emit(LEv);
+  end;
 
   LSink := FSink;
   if LSink <> nil then

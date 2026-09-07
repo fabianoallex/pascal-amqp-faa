@@ -296,6 +296,9 @@ begin
   // funcionar antes de o broker subir -- que e' o caso normal: quem observa
   // quer o primeiro evento, nao o segundo.
   FEventBus := TAMQPEventBus.Create;
+  // A engine repassa o sink a cada fila que cria (Inc. 2). Semeado aqui, e
+  // nao no Start, porque fila pode nascer antes dele (recuperacao).
+  FEngine.Events := FEventBus;
   FBindAddress := '0.0.0.0';
   FPort := 5672;
   FBacklog := 64;
@@ -330,7 +333,6 @@ begin
   FDead.Free;
   FVHosts.Free;
   FMonitorStop.Free;
-  FEventBus.Free; // o destructor dele para a notificadora
   FLock.Free;
   FAuth := nil;
   FAuthorizer := nil;
@@ -339,6 +341,14 @@ begin
   // sendo alimentado. O destrutor da engine para os atores antes de liberar.
   FreeAndNil(FJournal);
   FEngine.Free;
+  // O BARRAMENTO POR ULTIMO, depois da engine e do journal. A engine, cada
+  // FILA que ela possui e o journal guardam um IAMQPEventSink apontando para
+  // ele; liberar o barramento antes faz o destrutor de cada um desses campos
+  // chamar _Release em memoria ja' liberada -- access violation na saida, com
+  // o broker inteiro funcionando ate' ali. E' a mesma regra de tempo de vida
+  // que a documentacao manda o usuario seguir (Unsubscribe antes de destruir
+  // o dono do handler), so' que aplicada de dentro para fora.
+  FEventBus.Free; // o destructor dele para a notificadora
   inherited;
 end;
 
@@ -367,6 +377,7 @@ begin
   begin
     FJournal := TAMQPJournal.Create(FDataDir);
     FJournal.MaxJournalBytes := FMaxJournalBytes;
+    FJournal.Events := FEventBus;
     // O registro de confirms E' o IAMQPDurabilitySink do journal: e' assim que
     // "a marca d'agua andou" vira "estes canais podem confirmar" (D24).
     // Injetado ANTES do Start, como a propriedade pede.

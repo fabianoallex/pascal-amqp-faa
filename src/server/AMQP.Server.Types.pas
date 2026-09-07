@@ -24,7 +24,7 @@ uses
   SyncObjs,
   AMQP.Threading,     // atomics
   AMQP.Basic.Methods, // TAMQPBasicProperties
-  AMQP.Server.Events, // TAMQPServerEvent (IAMQPEventSink)
+  AMQP.Server.Events, // IAMQPEventSink (TAMQPServerConnConfig.Events)
   AMQP.Server.Auth,
   AMQP.Server.FrameIO; // TAMQPFrameWriter (o rastreador de confirms escreve
                        // no canal do publicador)
@@ -85,29 +85,6 @@ type
     /// Preenchido pelo TAMQPServerChannel a partir dos bytes que a conexão
     /// leu no frame de header (ver AMQP.Server.Channel.SetContentHeader).
     HeaderPayload: TBytes;
-  end;
-
-  { Para onde vao os eventos de observabilidade (Fase 4.1, D32).
-
-    E' a forma da casa -- interface aqui, como IAMQPMessageSink e
-    IAMQPConfirmRegistry --, e nao o TObject com cast que o WIP usava para
-    fugir de ciclo de unit. nil = observabilidade desligada, exatamente como
-    Confirms = nil significa "sem durabilidade".
-
-    Implementada pelo TAMQPEventBus (AMQP.Server.EventBus), que e' quem sabe
-    o contrato de entrega da D31. Quem CHAMA so' precisa saber duas coisas:
-
-    - Wants e' baratissimo (leitura atomica de mascara) e serve para nao
-      montar o record quando ninguem quer o tipo. Chamar Emit sem Wants nao
-      e' erro, so' e' desperdicio;
-    - Emit NUNCA bloqueia, NUNCA levanta e PODE DESCARTAR. Nenhum chamador
-      precisa tratar erro, e nenhum chamador pode contar com a entrega. }
-  IAMQPEventSink = interface
-    ['{7B3C1D48-0A62-4F95-8E17-2C5D9B4A6E03}']
-    /// True se algum assinante quer este tipo de evento.
-    function Wants(AType: TAMQPServerEventType): Boolean;
-    /// Enfileira o evento para a thread notificadora. Ver o contrato acima.
-    procedure Emit(const AEvent: TAMQPServerEvent);
   end;
 
   { Destino de uma mensagem publicada. A Fase 1 usa TAMQPNullMessageSink (que

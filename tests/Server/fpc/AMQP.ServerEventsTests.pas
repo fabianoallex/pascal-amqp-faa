@@ -47,10 +47,13 @@ interface
 uses
   fpcunit, testregistry, SysUtils, Classes, SyncObjs,
   AMQP.Threading,
+  AMQP.Wire,
   AMQP.Connection,
   AMQP.Queue.Methods,
   AMQP.Server.Events,
   AMQP.Server.EventBus,
+  AMQP.Server.Queue,
+  AMQP.Server.Engine,
   AMQP.Server.Broker;
 
 type
@@ -83,6 +86,15 @@ type
     property Chamadas: Integer read FChamadas;
   end;
 
+  { Handler LENTO -- o dube do ancora da D2 (Inc. 2). }
+  TLerdo = class
+  private
+    FChamadas: Integer;
+  public
+    procedure Handle(const AEvent: TAMQPServerEvent);
+    property Chamadas: Integer read FChamadas;
+  end;
+
   TEventBusTests = class(TTestCase)
   private
     FBus: TAMQPEventBus;
@@ -107,6 +119,9 @@ type
     FConn: TAMQPConnection;
     FCap: TCaptura;
     procedure SobeEConecta(AAssina: Boolean);
+    procedure ConectaCliente;
+    procedure ConsumidorDeTeste(AChannel: TAMQPChannel;
+      const ADelivery: TAMQPDelivery);
   protected
     procedure Setup; override;
     procedure TearDown; override;
@@ -119,6 +134,12 @@ type
     procedure Conexao_EmiteFechamentoNoTeardown;
     procedure CanalMorreComAConexao_EmiteFechamento;
     procedure SemAssinante_BrokerNaoEmiteNada;
+    procedure Enqueue_EDelivery_EmitemDoAtor;
+    procedure Consumo_EmiteEntregaComTag;
+    procedure TtlVencido_EmiteExpirada;
+    procedure TetoDeFila_EmiteDescarte;
+    procedure HandlerLento_NaoTravaOAtor;
+    procedure JournalDuravel_EmiteFlush;
   end;
 
 implementation
@@ -143,6 +164,15 @@ end;
 procedure ChecaNao(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertFalse(AMsg, ACond);
+end;
+
+// RTL por dialeto (regra do CLAUDE.md): o corpo dos testes e' compartilhado,
+// mas tudo que chama a RTL tem de ser escrito de cada lado. Aqui e' o
+// GetTempDir do FPC contra o TPath.GetTempPath do Delphi.
+function DirTempDeTeste: string;
+begin
+  Result := IncludeTrailingPathDelimiter(GetTempDir) + 'amqpobs-'
+    + FormatDateTime('yyyymmddhhnnsszzz', Now);
 end;
 
 // --- dublês -----------------------------------------------------------------
@@ -265,6 +295,14 @@ procedure TLevanta.Handle(const AEvent: TAMQPServerEvent);
 begin
   Inc(FChamadas);
   raise Exception.Create('handler de teste explodiu');
+end;
+
+{ Handler LENTO -- o dube do ancora da D2. Dorme a cada evento, de proposito:
+  e' o unico jeito de provar que o ator nao espera por ele. }
+procedure TLerdo.Handle(const AEvent: TAMQPServerEvent);
+begin
+  Inc(FChamadas);
+  Sleep(40);
 end;
 
 { Declara fila simples. A API do cliente e' por record -- e' o mesmo helper
@@ -485,17 +523,32 @@ end;
 { Sobe o broker (assinando antes do Start, que e' o caso normal) e conecta um
   cliente de verdade nele. }
 procedure TServerEventTests.SobeEConecta(AAssina: Boolean);
-var
-  LParams: TAMQPConnectionParams;
 begin
   if AAssina then
     FBroker.Subscribe(FCap.Handle);
   FBroker.Start;
+  ConectaCliente;
+end;
+
+{ Separado do SobeEConecta porque ha' teste que precisa configurar o broker
+  ANTES do Start (a capacidade do ring, por exemplo) e conectar depois. }
+procedure TServerEventTests.ConectaCliente;
+var
+  LParams: TAMQPConnectionParams;
+begin
   LParams := TAMQPConnectionParams.Localhost;
   LParams.Host := '127.0.0.1';
   LParams.Port := FBroker.Port;
   FConn := TAMQPConnection.Create(LParams);
   FConn.Open;
+end;
+
+{ Consumidor de teste: so' precisa existir para a fila ter para quem
+  entregar. O que se assere e' o EVENTO, nao o que chega aqui. }
+procedure TServerEventTests.ConsumidorDeTeste(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery);
+begin
+  AChannel.Ack(ADelivery.DeliveryTag, False);
 end;
 
 procedure TServerEventTests.Conexao_EmiteEstabelecidaEAutenticada;
@@ -663,6 +716,202 @@ begin
   ChecaInt('nada emitido', 0, Integer(FBroker.EventsEmitted));
   ChecaInt('e nada descartado', 0, Integer(FBroker.EventsDropped));
   ChecaInt('e nenhum handler falhou', 0, Integer(FBroker.EventsFailed));
+end;
+
+procedure TServerEventTests.Enqueue_EDelivery_EmitemDoAtor;
+var
+  LCh: TAMQPChannel;
+  LEv: TAMQPServerEvent;
+  LMsg: TAMQPGetResult;
+begin
+  // Estes dois nascem num worker do AmqpPool, dentro do ator -- nao na thread
+  // de leitura. Que eles cheguem e' a prova de que o marshalling da D30 vale
+  // para as duas origens, com o MESMO contrato.
+  SobeEConecta(True);
+  LCh := FConn.CreateChannel;
+  DeclaraFila(LCh, 'obs.ator');
+  LCh.PublishText('', 'obs.ator', 'do ator');
+  ChecaOk('chegou o enqueue', FCap.Espera(seMessageEnqueued, 1, 3000));
+
+  ChecaOk('achou o enqueue', FCap.Primeiro(seMessageEnqueued, LEv));
+  ChecaStr('com a fila', 'obs.ator', LEv.QueueName);
+  ChecaStr('e o vhost', '/', LEv.VHost);
+  ChecaInt('e o tamanho', 7, Integer(LEv.MessageSize));
+  // O ator vive do outro lado da caixa: ele nao conhece conexao nem usuario,
+  // e a D34 manda que campo nao populado saia ZERADO em vez de lixo.
+  ChecaInt('ator nao conhece a conexao', 0, Integer(LEv.ConnectionId));
+  ChecaStr('nem o usuario', '', LEv.Username);
+
+  LMsg := LCh.BasicGet('obs.ator', True);
+  ChecaOk('veio mensagem', LMsg.Found);
+end;
+
+procedure TServerEventTests.Consumo_EmiteEntregaComTag;
+var
+  LCh: TAMQPChannel;
+  LEv: TAMQPServerEvent;
+  LTag: string;
+begin
+  SobeEConecta(True);
+  LCh := FConn.CreateChannel;
+  DeclaraFila(LCh, 'obs.entrega');
+  LTag := LCh.Consume('obs.entrega', ConsumidorDeTeste);
+  ChecaOk('consumidor registrado', LTag <> '');
+  LCh.PublishText('', 'obs.entrega', 'entrega');
+  ChecaOk('chegou a entrega', FCap.Espera(seMessageDelivered, 1, 3000));
+
+  ChecaOk('achou a entrega', FCap.Primeiro(seMessageDelivered, LEv));
+  ChecaStr('com a fila', 'obs.entrega', LEv.QueueName);
+  ChecaStr('e a tag do consumidor', LTag, LEv.ConsumerTag);
+  ChecaOk('e a tag de entrega', LEv.DeliveryTag > 0);
+  ChecaInt('e o tamanho', 7, Integer(LEv.MessageSize));
+end;
+
+procedure TServerEventTests.TtlVencido_EmiteExpirada;
+var
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LArgs: TAMQPFieldTable;
+  LEv: TAMQPServerEvent;
+begin
+  SobeEConecta(True);
+  LCh := FConn.CreateChannel;
+  LArgs := TAMQPFieldTable.Create;
+  // x-message-ttl curtissimo: a varredura do tick da monitora vence a
+  // mensagem sozinha, sem consumidor nenhum (D13).
+  LArgs.Put('x-message-ttl', 1);
+  LDecl := TAMQPQueueDeclare.Create('obs.ttl', False);
+  LDecl.Arguments := LArgs;
+  try
+    LCh.DeclareQueue(LDecl);
+  finally
+    LArgs.Free; // quem cria a tabela, libera -- o declare nao vira dono dela
+  end;
+  LCh.PublishText('', 'obs.ttl', 'vou vencer');
+
+  ChecaOk('chegou a expiracao', FCap.Espera(seMessageExpired, 1, 5000));
+  ChecaOk('achou a expiracao', FCap.Primeiro(seMessageExpired, LEv));
+  ChecaStr('na fila certa', 'obs.ttl', LEv.QueueName);
+  ChecaStr('com a razao do x-death', 'expired', LEv.Reason);
+end;
+
+procedure TServerEventTests.TetoDeFila_EmiteDescarte;
+var
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LArgs: TAMQPFieldTable;
+  LEv: TAMQPServerEvent;
+  I: Integer;
+begin
+  SobeEConecta(True);
+  LCh := FConn.CreateChannel;
+  LArgs := TAMQPFieldTable.Create;
+  LArgs.Put('x-max-length', 2);
+  LDecl := TAMQPQueueDeclare.Create('obs.teto', False);
+  LDecl.Arguments := LArgs;
+  try
+    LCh.DeclareQueue(LDecl);
+  finally
+    LArgs.Free; // quem cria a tabela, libera -- o declare nao vira dono dela
+  end;
+  for I := 1 to 5 do
+    LCh.PublishText('', 'obs.teto', 'enche');
+
+  ChecaOk('chegou o descarte', FCap.Espera(seMessageDropped, 1, 3000));
+  ChecaOk('achou o descarte', FCap.Primeiro(seMessageDropped, LEv));
+  ChecaStr('na fila certa', 'obs.teto', LEv.QueueName);
+  ChecaStr('com a razao do x-death', 'maxlen', LEv.Reason);
+end;
+
+procedure TServerEventTests.HandlerLento_NaoTravaOAtor;
+var
+  LCh: TAMQPChannel;
+  LLerdo: TLerdo;
+  I, LEnfileiradas: Integer;
+  LStats: TAMQPQueueStats;
+  LFila: TAMQPServerQueue;
+begin
+  // O ANCORA DA D2, e o teste que justifica a Fase 4.1 inteira ter um ring.
+  //
+  // O handler dorme 40 ms por evento. O ring tem 8 vagas. Publicamos 200
+  // mensagens: o ator produz eventos MUITO mais rapido do que o handler
+  // consome, entao o ring enche e passa a descartar (D31).
+  //
+  // O que se assere NAO e' que os eventos chegaram -- e' que o ATOR NAO
+  // ESPEROU por eles: as 200 mensagens tem de estar na fila. A mutacao que
+  // derruba este teste e' trocar o Emit nao-bloqueante por qualquer espera --
+  // o ator ficaria preso atras do handler, as 200 nao entrariam no prazo, e o
+  // pool inteiro (que e' o MESMO dos outros atores) iria junto.
+  FBroker.EventQueueCapacity := 8;
+  LLerdo := TLerdo.Create;
+  try
+    FBroker.Subscribe(LLerdo.Handle, [seMessageEnqueued]);
+    FBroker.Start;
+    ConectaCliente;
+
+    LCh := FConn.CreateChannel;
+    DeclaraFila(LCh, 'obs.lenta');
+    for I := 1 to 200 do
+      LCh.PublishText('', 'obs.lenta', 'carga');
+
+    // A fila e' a testemunha: se o ator tivesse esperado pelo handler, as 200
+    // nao estariam la' dentro deste prazo (200 x 40 ms = 8 s so' de handler).
+    LFila := nil;
+    LEnfileiradas := 0;
+    LFila := FBroker.Engine.FindQueue('/', 'obs.lenta');
+    ChecaOk('a fila existe', LFila <> nil);
+    for I := 1 to 100 do
+    begin
+      LStats := LFila.Stats;
+      LEnfileiradas := LStats.MessageCount;
+      if LEnfileiradas >= 200 then
+        Break;
+      Sleep(20);
+    end;
+    ChecaInt('o ator enfileirou tudo sem esperar o handler', 200,
+      LEnfileiradas);
+
+    // E o preco do best-effort aparece: com o handler a 40 ms por evento e 8
+    // vagas, houve descarte. Isto e' a D31 cobrando, nao um defeito.
+    ChecaOk('e houve descarte contado', FBroker.EventsDropped > 0);
+  finally
+    FBroker.Unsubscribe(LLerdo.Handle);
+    // Parar o broker ANTES de liberar o handler lento: o Stop drena o ring, e
+    // drenar chama o handler. Liberar antes seria o AV que a D33 descreve.
+    FBroker.Stop;
+    LLerdo.Free;
+  end;
+end;
+
+procedure TServerEventTests.JournalDuravel_EmiteFlush;
+var
+  LCh: TAMQPChannel;
+  LDecl: TAMQPQueueDeclare;
+  LEv: TAMQPServerEvent;
+begin
+  // O unico evento que nasce na THREAD DO JOURNAL. Ele so' existe com
+  // DataDir: sem durabilidade nao ha fsync, e sem fsync nao ha lote que
+  // ficou duravel.
+  //
+  // UM evento por LOTE, nunca por registro (D25/D36): o group commit existe
+  // porque o fsync e' caro, e um evento por registro custaria mais que o
+  // fsync que ele observa.
+  FBroker.DataDir := DirTempDeTeste;
+  SobeEConecta(True);
+  LCh := FConn.CreateChannel;
+  // A regra classica dos tres (D20): fila DURAVEL + mensagem PERSISTENTE +
+  // broker com DataDir. Faltando qualquer uma, nada toca o journal.
+  LDecl := TAMQPQueueDeclare.Create('obs.wal', True);
+  LCh.DeclareQueue(LDecl);
+  LCh.PublishText('', 'obs.wal', 'vai pro disco', True);
+
+  ChecaOk('chegou o flush', FCap.Espera(seJournalFlushed, 1, 5000));
+  ChecaOk('achou o flush', FCap.Primeiro(seJournalFlushed, LEv));
+  ChecaOk('com a marca d''agua', LEv.Lsn > 0);
+  ChecaOk('e com registros no lote', LEv.Count > 0);
+  // Evento da thread do journal nao tem fila nem conexao: ele fala do LOTE.
+  ChecaStr('sem fila', '', LEv.QueueName);
+  ChecaInt('e sem conexao', 0, Integer(LEv.ConnectionId));
 end;
 
 initialization

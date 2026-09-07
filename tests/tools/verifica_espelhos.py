@@ -282,12 +282,22 @@ def projetos_delphi_com_server():
 
 
 def verifica_units_do_server():
-    """Toda unit de src/server tem de estar em TODO .dpr que usa o sub-modulo.
+    r"""Toda unit de src/server tem de estar em TODO .dpr que usa o sub-modulo
+    E no pacote pascal_amqp_faa_server.lpk.
 
-    O FPC nao pega isto: la as units do server vem do pacote
-    pascal_amqp_faa_server.lpk, entao basta acrescentar ao .lpk. No Delphi cada
-    projeto lista as units uma a uma, e a que faltar so' aparece como
-    "F2613 Unit not found" na IDE.
+    No Delphi cada projeto lista as units uma a uma, e a que faltar aparece
+    como "F2613 Unit not found" na IDE.
+
+    NO FPC O SINTOMA E' MUITO PIOR, e por isso o .lpk entrou nesta checagem.
+    Uma unit de src/server que NAO esta' no .lpk ainda compila -- o
+    OtherUnitFiles do pacote aponta para ..\src\server, entao o compilador a
+    acha. So' que ela e' compilada DUAS VEZES, uma dentro do pacote e outra
+    dentro de cada projeto, com .ppu distintos. Enquanto a unit so' tem tipos,
+    passa despercebido. No dia em que ela declara uma INTERFACE usada por
+    units do pacote, os dois lados passam a discordar do layout dela e o
+    programa morre de access violation em tempo de execucao, com tudo
+    compilando limpo. Foi exatamente o que aconteceu com AMQP.Server.Events no
+    Inc. 2 da Fase 4.1: 142 erros e nenhuma mensagem do compilador.
     """
     problemas = []
     srv = os.path.join(RAIZ, 'src', 'server')
@@ -308,6 +318,17 @@ def verifica_units_do_server():
             if faltam2:
                 problemas.append((rel(dproj),
                                   'unit no .dpr mas nao no .dproj: ' + ', '.join(faltam2)))
+
+    # O pacote do FPC. Ver o docstring: unit fora dele compila e quebra em
+    # runtime, que e' o pior dos dois mundos.
+    lpk = os.path.join(RAIZ, 'packages', 'pascal_amqp_faa_server.lpk')
+    if os.path.exists(lpk):
+        tl = le(lpk)
+        faltam3 = [u for u in units if ('<UnitName Value="%s"/>' % u) not in tl]
+        if faltam3:
+            problemas.append((rel(lpk),
+                              'unit de src/server nao listada no pacote: '
+                              + ', '.join(faltam3)))
     return problemas
 
 
@@ -521,7 +542,7 @@ def main():
     else:
         print('    ok')
 
-    print('[3] units de src/server listadas em todo projeto Delphi')
+    print('[3] units de src/server listadas em todo projeto Delphi e no .lpk')
     su = verifica_units_do_server()
     if su:
         falhou = True
