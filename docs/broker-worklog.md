@@ -729,6 +729,35 @@ O achado da WS3 (dois testes de heartbeat travando no Linux) virou frente própr
 
 **Estado no Linux:** suíte do server **358/358**, 0 falhas. Regressão no Windows intacta: server 358/358 (Default) e 362/362 (`openssl`) com 0 blocos vazados, integração 28/28, aceitação 28/28, SmokeTest PASS. **Validação Delphi (IDE): Build All limpo no grupo, server 358/358 (Debug) e 362/362 (OpenSSL), aceitação 28/28 nos dois configs, `Tests Leaked : 0` em todas** — o número que importava aqui, porque a correção acrescentou uma `TCriticalSection` por conexão e uma por writer.
 
+## Fase 4.1 — observabilidade
+
+Planejada em 2026-09-06, em sessão própria e em Opus. **As decisões D29–D36 estão no `CLAUDE.md`** — ler de lá, não re-derivar.
+
+**Escopo:** `IAMQPEventSink` em `AMQP.Server.Types` · ring limitado + `TAMQPEventNotifierThread` · emissores nos pontos de ciclo de vida (conexão, canal, consumidor, ack) e nos de origem-ator (enqueue, deliver, expire, dead-letter, drop) · máscara de tipos por assinante · contadores de emitido/descartado/falho · sink de captura com barreira de dreno e espelho FPCUnit↔DUnitX · `docs/observabilidade.md` + seção nos dois READMEs.
+**Fora:** agregação e métricas prontas (Prometheus, histogramas) — o broker emite fato bruto · persistir evento (isto **não** é log de auditoria; a D31 admite perda por desenho) · evento por registro de journal (só por lote) · tracing distribuído.
+
+### O ponto de partida: um WIP que compilava e não emitia nada
+
+A frente nasceu de um WIP do Haiku (commit `755a3a7`, branch `feat/broker-observabilidade`, empilhada sobre a i18n): `AMQP.Server.Events` com `TAMQPServerEventType` (18 tipos) e um record de ~25 campos, `TAMQPServer.Subscribe/Unsubscribe/NotifyEvent`, um `EventSink: TObject` no `TAMQPServerConnConfig`, um sample e **oito** arquivos de doc. Compilava. Não emitia **nada** — `NotifyEvent` não tinha um único call site, só um `// TODO Fase 4.2` no `AMQP.Server.Connection.pas`. Os defeitos, na ordem em que importam:
+
+1. **Choque frontal com a D2, varrido para baixo do tapete pelos docs.** Os eventos de origem-ator (`seMessageEnqueued`/`Delivered`/`Expired`/`DeadLettered`/`Dropped`) nascem num worker do `AmqpPool`; chamar handler de usuário síncrono ali bloqueia o ator. Os docs do WIP afirmavam "sem bloquear o engine: callbacks rodam fora do crítico" — o que é verdade sobre *locks* e falso sobre a *thread*.
+2. **Contrato de entrega indefinido.** Best-effort? pode perder? que ordem? Nada disso estava escrito, e sem isso não há como escrever teste que signifique alguma coisa.
+3. **`EventSink: TObject` com cast** para fugir de ciclo de unit, quando o padrão da casa para exatamente isso é interface em `AMQP.Server.Types` (`IAMQPMessageSink`, `IAMQPConfirmRegistry`, `IAMQPDeliveryTarget`).
+4. **`except end`** no despacho, engolindo qualquer exceção de handler sem contar nem expor.
+5. **Testes placeholder** (`Assert.Pass`; o `TestSubscribeSingleHandler` checava `ConnectionCount`, que não tem relação com o que o teste diz medir), sem espelho FPCUnit.
+6. **`AMQP.Server.Events` fora de todo `.dpr`/`.dproj`** — a checagem [3] do `verifica_espelhos.py` falha.
+7. **Oito arquivos de doc** em tom de entrega/marketing na raiz e em `docs/`, mais artefatos de build do sample sem `.gitignore`.
+
+**A decisão de método:** não estender esse WIP. As D29–D36 o reescrevem, e a branch é reaproveitada só como ponto de partida do histórico.
+
+**A pergunta que a sessão de decisão existiu para responder** era o modelo de thread, e a resposta mudou o plano de implementação. A proposta inicial era híbrida — lifecycle **inline** na thread de leitura (os eventos "seguros"), só origem-ator marshalada. Medida contra o que a codebase já sabe, a metade "segura" não é segura: um handler lento numa thread de leitura trava o processamento de frames daquela conexão, **heartbeat incluso**, até o cliente derrubá-la. É estrago menor que a starvation do ator, não estrago nenhum. E o que torna o assíncrono barato já estava decidido: o record é **flat, cópia por valor**, sem ponteiro para objeto que possa morrer antes da entrega — então não existe razão de lifetime para chamar handler algum inline. Daí a D30 (uniforme) e o corolário que simplificou o plano: **os dois incrementos passam a diferir apenas em *quais* eventos são emitidos, não em mecanismo**, e nenhum teste do Inc. 1 precisa ser reescrito no Inc. 2 por mudança de contrato.
+
+### Progresso
+
+- **Inc. 1 — o mecanismo e os eventos de ciclo de vida.** Não iniciado. `IAMQPEventSink` em `AMQP.Server.Types` (matando o `EventSink: TObject`), ring + `TAMQPEventNotifierThread` com a política da D31 (descarta o mais novo, conta), `Subscribe` com máscara de tipos, política de exceção da D33; emissores de conexão/canal/consumidor/ack; testes reais com sink de captura e `DrainEvents` (D35) e espelho FPCUnit desde o primeiro commit; `AMQP.Server.Events` em todo `.dpr`/`.dproj` (fecha a checagem [3]); `.gitignore` dos artefatos do sample.
+- **Inc. 2 — os eventos de origem-ator.** Não iniciado. `seMessageEnqueued`/`Delivered`/`Expired`/`DeadLettered`/`Dropped` mais `seJournalFlushed` por lote; o teste-âncora é o **handler lento sobre fila com carga**, provando que o ator continua avançando e que `DroppedEventCount` sobe — a prova da D2, e a mutação que tem de derrubá-lo é trocar o ring por chamada inline.
+- **Docs.** Não iniciado. Os oito arquivos do WIP saem; entra `docs/observabilidade.md` (PT, canônico) com a tabela congelada de campo-por-tipo da D34, e a seção de API nos dois READMEs.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**
