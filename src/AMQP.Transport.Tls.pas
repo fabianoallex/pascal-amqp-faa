@@ -291,7 +291,7 @@ begin
   LStatus := AcquireCredentialsHandleW(nil, UNISP_NAME, SECPKG_CRED_OUTBOUND,
     nil, @LCred, nil, nil, @FCred, nil);
   if StatusFailed(LStatus) then
-    raise EAMQPTls.CreateFmt('AcquireCredentialsHandle falhou (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('AcquireCredentialsHandle failed (0x%.8x)', [Cardinal(LStatus)]);
   FCredValid := True;
 end;
 
@@ -305,7 +305,7 @@ begin
     SetLength(FCipher, FCipherLen + RAW_CHUNK);
   LRead := FUnderlying.Read(FCipher[FCipherLen], RAW_CHUNK);
   if LRead <= 0 then
-    raise EAMQPTls.Create('conexão fechada durante TLS');
+    raise EAMQPTls.Create('connection closed during TLS');
   Inc(FCipherLen, LRead);
 end;
 
@@ -320,7 +320,7 @@ begin
   begin
     LNow := FUnderlying.Write(P[LWritten], ALen - LWritten);
     if LNow <= 0 then
-      raise EAMQPTls.Create('falha ao enviar dados TLS');
+      raise EAMQPTls.Create('TLS data send failed');
     Inc(LWritten, LNow);
   end;
 end;
@@ -356,7 +356,7 @@ begin
     // para não vazar o buffer do SSPI no caminho de falha.
     if LOutBuf[0].pvBuffer <> nil then
       FreeContextBuffer(LOutBuf[0].pvBuffer);
-    raise EAMQPTls.CreateFmt('InitializeSecurityContext inicial falhou (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('Initial InitializeSecurityContext failed (0x%.8x)', [Cardinal(LStatus)]);
   end;
   FCtxtValid := True; // contexto criado
   if (LOutBuf[0].cbBuffer > 0) and (LOutBuf[0].pvBuffer <> nil) then
@@ -429,13 +429,13 @@ begin
       Continue;
     end;
 
-    raise EAMQPTls.CreateFmt('handshake TLS falhou (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('TLS handshake failed (0x%.8x)', [Cardinal(LStatus)]);
   end;
 
   // Tamanhos para cifrar/decifrar (header/trailer/máx por record).
   LStatus := QueryContextAttributesW(@FCtxt, SECPKG_ATTR_STREAM_SIZES, @FStreamSizes);
   if StatusFailed(LStatus) then
-    raise EAMQPTls.CreateFmt('QueryContextAttributes(STREAM_SIZES) falhou (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('QueryContextAttributes(STREAM_SIZES) failed (0x%.8x)', [Cardinal(LStatus)]);
 end;
 
 // Decifra do FCipher até haver plaintext em FPlain (ou sinaliza EOF via exceção
@@ -484,10 +484,10 @@ begin
 
     if StatusIs(LStatus, SEC_I_RENEGOTIATE) then
       // RabbitMQ não renegocia; não suportado nesta versão.
-      raise EAMQPTls.Create('renegociação TLS solicitada pelo servidor não suportada');
+      raise EAMQPTls.Create('TLS renegotiation requested by server is not supported');
 
     if not StatusIs(LStatus, SEC_E_OK) then
-      raise EAMQPTls.CreateFmt('DecryptMessage falhou (0x%.8x)', [Cardinal(LStatus)]);
+      raise EAMQPTls.CreateFmt('DecryptMessage failed (0x%.8x)', [Cardinal(LStatus)]);
 
     // Encontra o buffer de dados decifrados e eventual sobra (próximo record).
     LData := nil;
@@ -592,7 +592,7 @@ begin
 
     LStatus := EncryptMessage(@FCtxt, 0, @LDesc, 0);
     if StatusFailed(LStatus) then
-      raise EAMQPTls.CreateFmt('EncryptMessage falhou (0x%.8x)', [Cardinal(LStatus)]);
+      raise EAMQPTls.CreateFmt('EncryptMessage failed (0x%.8x)', [Cardinal(LStatus)]);
 
     // EncryptMessage ajusta os cbBuffer; envia os três contíguos.
     LTotal := Integer(LBuf[0].cbBuffer) + Integer(LBuf[1].cbBuffer) +
@@ -606,7 +606,7 @@ end;
 
 function TAMQPSchannelStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
 begin
-  raise EAMQPTls.Create('TAMQPSchannelStream não suporta Seek');
+  raise EAMQPTls.Create('TAMQPSchannelStream does not support Seek');
 end;
 
 procedure TAMQPSchannelStream.ShutdownTls;

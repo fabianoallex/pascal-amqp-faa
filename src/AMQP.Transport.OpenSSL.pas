@@ -278,7 +278,7 @@ function SslMustGet(AHandle: TSslLibHandle; const AName, ALib: string): Pointer;
 begin
   Result := SslGetProc(AHandle, AName);
   if Result = nil then
-    raise EAMQPTls.CreateFmt('símbolo %s não encontrado em %s (OpenSSL incompatível?)',
+    raise EAMQPTls.CreateFmt('symbol %s not found in %s (incompatible OpenSSL?)',
       [AName, ALib]);
 end;
 
@@ -323,7 +323,7 @@ begin
     end;
     if LSslName = '' then
       raise EAMQPTls.CreateFmt(
-        'OpenSSL não encontrado (tentados: %s). Instale libssl/libcrypto ou desabilite UseTls.',
+        'OpenSSL not found (tried: %s); install libssl/libcrypto or disable UseTls',
         [LTried]);
 
     try
@@ -534,23 +534,23 @@ begin
   p_SSL_CTX_set_verify(FCtx, SSL_VERIFY_NONE, nil);
 
   if FCertFile = '' then
-    raise EAMQPTls.Create('TLS do servidor exige um certificado (CertFile)');
+    raise EAMQPTls.Create('server TLS requires a certificate (CertFile)');
   if FKeyFile = '' then
-    raise EAMQPTls.Create('TLS do servidor exige uma chave privada (KeyFile)');
+    raise EAMQPTls.Create('server TLS requires a private key (KeyFile)');
 
   // _chain_file (e não _certificate_file): aceita a cadeia inteira num PEM só,
   // que é como os certs de teste em docker\certs são gerados.
   if p_SSL_CTX_use_certificate_chain_file(FCtx, PAnsiChar(FCertFile)) <> 1 then
-    raise EAMQPTls.CreateFmt('não foi possível carregar o certificado "%s" (%s)',
+    raise EAMQPTls.CreateFmt('could not load certificate "%s" (%s)',
       [string(FCertFile), LastSslErrorText]);
   if p_SSL_CTX_use_PrivateKey_file(FCtx, PAnsiChar(FKeyFile),
        SSL_FILETYPE_PEM) <> 1 then
-    raise EAMQPTls.CreateFmt('não foi possível carregar a chave privada "%s" (%s)',
+    raise EAMQPTls.CreateFmt('could not load private key "%s" (%s)',
       [string(FKeyFile), LastSslErrorText]);
   // Erro de configuração clássico: cert e chave de pares diferentes. Melhor
   // falhar aqui, no Start do broker, que num handshake obscuro depois.
   if p_SSL_CTX_check_private_key(FCtx) <> 1 then
-    raise EAMQPTls.CreateFmt('a chave privada não corresponde ao certificado (%s)',
+    raise EAMQPTls.CreateFmt('private key does not match the certificate (%s)',
       [LastSslErrorText]);
 
   // Mesma ordem de criação do caminho cliente (ver SetupSsl): BIOs, SSL,
@@ -600,7 +600,7 @@ begin
   begin
     LNow := FUnderlying.Write(AData[LWritten], Length(AData) - LWritten);
     if LNow <= 0 then
-      raise EAMQPTls.Create('falha ao enviar dados TLS');
+      raise EAMQPTls.Create('TLS data send failed');
     Inc(LWritten, LNow);
   end;
 end;
@@ -681,7 +681,7 @@ begin
     case LErr of
       SSL_ERROR_WANT_READ:
         if not ReadRawIntoBio then
-          raise EAMQPTls.Create('conexão fechada durante o handshake TLS');
+          raise EAMQPTls.Create('connection closed during TLS handshake');
       SSL_ERROR_WANT_WRITE:
         ; // já drenado pelo FlushBioOut acima
     else
@@ -690,7 +690,7 @@ begin
         LVerify := p_SSL_get_verify_result(FSsl);
         if FVerifyPeer and (LVerify <> X509_V_OK) then
           raise EAMQPTls.CreateFmt(
-            'validação do certificado do servidor falhou (X509 err %d; %s)',
+            'server certificate validation failed (X509 err %d; %s)',
             [Integer(LVerify), SslFailureText(LErr)]);
         if FIsServer then
           // Do lado servidor o mais comum é o cliente desistir por não confiar
@@ -794,12 +794,12 @@ begin
           Sleep(5);
           Inc(LWaitedMs, 5);
           if LWaitedMs > 10000 then
-            raise EAMQPTls.Create('timeout aguardando dados do servidor durante escrita TLS');
+            raise EAMQPTls.Create('timeout waiting for server data during TLS write');
         end;
         SSL_ERROR_WANT_WRITE:
           ; // saída já drenada; re-tenta
       else
-        raise EAMQPTls.CreateFmt('falha ao enviar dados TLS (%s)', [SslFailureText(LErr)]);
+        raise EAMQPTls.CreateFmt('TLS data send failed (%s)', [SslFailureText(LErr)]);
       end;
     until False;
 
@@ -811,7 +811,7 @@ end;
 
 function TAMQPOpenSslStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
 begin
-  raise EAMQPTls.Create('TAMQPOpenSslStream não suporta Seek');
+  raise EAMQPTls.Create('TAMQPOpenSslStream does not support Seek');
 end;
 
 procedure TAMQPOpenSslStream.ShutdownTls;

@@ -126,7 +126,7 @@ type
   end;
 
 /// Backend TLS deste build (decidido em compilacao): 'OpenSSL', 'SChannel'
-/// ou 'nenhum'. Util para exibir em UI/log qual motor um build usa.
+/// ou 'none'. Util para exibir em UI/log qual motor um build usa.
 function AmqpTlsBackendName: string;
 
 /// Como AmqpTlsBackendName, mas com o detalhe de runtime quando o backend ja
@@ -160,7 +160,7 @@ begin
     {$IFDEF AMQP_WINDOWS}
   Result := 'SChannel';
     {$ELSE}
-  Result := 'nenhum';
+  Result := 'none';
     {$ENDIF}
   {$ENDIF}
 end;
@@ -273,7 +273,7 @@ begin
   else if FSock <> nil then
     LFd := FSock.Handle
   else
-    raise EAMQPTransport.Create('socket nao conectado');
+    raise EAMQPTransport.Create('socket is not connected');
   {$IF Defined(UNIX) and Declared(MSG_NOSIGNAL)}
   // MSG_NOSIGNAL: send() num socket ja encerrado devolve erro (EPIPE) em vez
   // de matar o processo com SIGPIPE (ver smoke test --tls no Linux).
@@ -285,7 +285,7 @@ end;
 {$ELSE}
 begin
   if FSock = nil then
-    raise EAMQPTransport.Create('socket nao conectado');
+    raise EAMQPTransport.Create('socket is not connected');
   Result := FSock.Send(Buffer, ACount);
 end;
 {$ENDIF}
@@ -401,7 +401,7 @@ var
 begin
   FListenFd := fpSocket(AF_INET, SOCK_STREAM, 0);
   if FListenFd < 0 then
-    raise EAMQPTransport.CreateFmt('fpSocket falhou (%d)', [SocketError]);
+    raise EAMQPTransport.CreateFmt('fpSocket failed (%d)', [SocketError]);
 
   LOpt := 1;
   fpSetSockOpt(FListenFd, SOL_SOCKET, SO_REUSEADDR, @LOpt, SizeOf(LOpt));
@@ -415,11 +415,11 @@ begin
     LAddr.sin_addr := StrToNetAddr(ABindAddr); // já em ordem de rede
 
   if fpBind(FListenFd, @LAddr, SizeOf(LAddr)) <> 0 then
-    raise EAMQPTransport.CreateFmt('bind em %s:%d falhou (%d)',
+    raise EAMQPTransport.CreateFmt('bind on %s:%d failed (%d)',
       [ABindAddr, APort, SocketError]);
 
   if fpListen(FListenFd, ABacklog) <> 0 then
-    raise EAMQPTransport.CreateFmt('listen falhou (%d)', [SocketError]);
+    raise EAMQPTransport.CreateFmt('listen failed (%d)', [SocketError]);
 
   // Porta efetiva (relevante quando APort = 0).
   LLen := SizeOf(LAddr);
@@ -541,7 +541,7 @@ end;
 
 function TAMQPSocketStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
 begin
-  raise EAMQPTransport.Create('TAMQPSocketStream nao suporta Seek');
+  raise EAMQPTransport.Create('TAMQPSocketStream does not support Seek');
 end;
 
 end.

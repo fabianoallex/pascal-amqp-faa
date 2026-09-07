@@ -178,9 +178,9 @@ var
   LUser, LPass: string;
 begin
   if not SameText(AMechanism, AMQP_MECH_PLAIN) then
-    Exit(TAMQPAuthResult.Deny('mecanismo nao suportado: ' + AMechanism));
+    Exit(TAMQPAuthResult.Deny('unsupported mechanism: ' + AMechanism));
   if not AmqpParsePlainResponse(AResponse, LUser, LPass) then
-    Exit(TAMQPAuthResult.Deny('resposta PLAIN malformada'));
+    Exit(TAMQPAuthResult.Deny('malformed PLAIN response'));
   if LUser = '' then
     LUser := 'anonymous';
   Result := TAMQPAuthResult.Allow(LUser);
@@ -205,7 +205,7 @@ begin
   FUsers := TDictionary<string, string>.Create;
   if Odd(Length(APairs)) then
     raise EArgumentException.Create(
-      'TAMQPStaticAuthenticator: numero impar de itens (esperado user,pass,...)');
+      'TAMQPStaticAuthenticator: odd number of items (expected user,pass,...)');
   I := 0;
   while I < Length(APairs) do
   begin
@@ -256,9 +256,9 @@ var
   LFound: Boolean;
 begin
   if not SameText(AMechanism, AMQP_MECH_PLAIN) then
-    Exit(TAMQPAuthResult.Deny('mecanismo nao suportado: ' + AMechanism));
+    Exit(TAMQPAuthResult.Deny('unsupported mechanism: ' + AMechanism));
   if not AmqpParsePlainResponse(AResponse, LUser, LPass) then
-    Exit(TAMQPAuthResult.Deny('resposta PLAIN malformada'));
+    Exit(TAMQPAuthResult.Deny('malformed PLAIN response'));
 
   FLock.Enter;
   try

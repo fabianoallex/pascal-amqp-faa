@@ -417,7 +417,7 @@ begin
   if (LLastRead <> 0) and ((LNow - LLastRead) > (2 * LIntervalMs)) then
   begin
     if FError = '' then
-      FError := Format('peer sem enviar frames há mais de %d ms (heartbeat)',
+      FError := Format('peer has not sent frames for more than %d ms (heartbeat)',
         [2 * LIntervalMs]);
     Shutdown;
     Exit;
@@ -440,7 +440,7 @@ begin
      (AmqpTickMs > FCloseDeadline) then
   begin
     if FError = '' then
-      FError := 'cliente não respondeu ao Connection.Close no prazo';
+      FError := 'client did not respond to Connection.Close within the deadline';
     Shutdown;
   end;
 end;
@@ -688,7 +688,7 @@ begin
       // Format (e não '+'): concatenar literal UTF-8 com AnsiString dispara
       // conversão implícita no FPC.
       LRes := TAMQPAuthResult.Deny(
-        Format('mecanismo não suportado: %s', [LStartOk.Mechanism]))
+        Format('unsupported mechanism: %s', [LStartOk.Mechanism]))
     else
       LRes := FConfig.Auth.Authenticate(LStartOk.Mechanism, LStartOk.Response,
         FPeer, FConfig.Tls);
@@ -703,7 +703,7 @@ begin
     // comportamento histórico dos brokers).
     if not FAuthFailureClose then
       raise EAMQPServerAbort.Create(
-        Format('autenticação recusada: %s', [LRes.FailReason]));
+        Format('authentication refused: %s', [LRes.FailReason]));
     if LBadMech then
       raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED, LRes.FailReason,
         AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START_OK);
@@ -727,21 +727,21 @@ begin
   if (FConfig.ChannelMax > 0) and
      ((LTune.ChannelMax = 0) or (LTune.ChannelMax > FConfig.ChannelMax)) then
     raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED,
-      Format('channel-max negociado inválido: %d (máximo %d)',
+      Format('invalid negotiated channel-max: %d (maximum %d)',
         [LTune.ChannelMax, FConfig.ChannelMax]),
       AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK);
 
   if (FConfig.FrameMax > 0) and
      ((LTune.FrameMax = 0) or (LTune.FrameMax > FConfig.FrameMax)) then
     raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED,
-      Format('frame-max negociado inválido: %u (máximo %u)',
+      Format('invalid negotiated frame-max: %u (maximum %u)',
         [LTune.FrameMax, FConfig.FrameMax]),
       AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK);
 
   // Piso da spec (4.2.5): todo peer tem de aceitar 4096 octetos.
   if (LTune.FrameMax <> 0) and (LTune.FrameMax < AMQP_FRAME_MIN_SIZE) then
     raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED,
-      Format('frame-max abaixo do mínimo da spec: %u (mínimo %d)',
+      Format('frame-max below spec minimum: %u (minimum %d)',
         [LTune.FrameMax, AMQP_FRAME_MIN_SIZE]),
       AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK);
 
@@ -758,7 +758,7 @@ begin
   LOpen := DecodeOpen(AReader);
   if (FConfig.VHosts = nil) or (not FConfig.VHosts.Contains(LOpen.VirtualHost)) then
     raise EAMQPConnectionError.Create(AMQP_NOT_ALLOWED,
-      Format('vhost "%s" não existe neste broker', [LOpen.VirtualHost]),
+      Format('virtual host "%s" does not exist on this broker', [LOpen.VirtualHost]),
       AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN);
 
   FVirtualHost := LOpen.VirtualHost;
@@ -815,7 +815,7 @@ begin
   // Fora de ordem (ou método só-servidor, como Blocked/Unblocked, vindo do
   // cliente): a spec manda COMMAND_INVALID.
   raise EAMQPConnectionError.Create(AMQP_COMMAND_INVALID,
-    Format('método %d/%d inesperado no canal 0 neste ponto do handshake',
+    Format('unexpected method %d/%d on channel 0 at this point of the handshake',
       [AId.ClassId, AId.MethodId]), AId.ClassId, AId.MethodId);
 end;
 
@@ -841,7 +841,7 @@ begin
   // que o estado de montagem vive no canal.
   if (LCh <> nil) and (LCh.AsmState <> amqasIdle) then
     raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
-      Format('método %d/%d no canal %d no meio de um conteúdo',
+      Format('method %d/%d on channel %d in the middle of a content body',
         [AId.ClassId, AId.MethodId, AFrame.Channel]), AId.ClassId, AId.MethodId);
 
   if AId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN) then
@@ -849,11 +849,11 @@ begin
     DecodeChannelOpen(AReader);
     if LCh <> nil then
       raise EAMQPConnectionError.Create(AMQP_CHANNEL_ERROR,
-        Format('segundo Channel.Open no canal %d', [AFrame.Channel]),
+        Format('second Channel.Open on channel %d', [AFrame.Channel]),
         AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN);
     if (FNegotiated.ChannelMax > 0) and (AFrame.Channel > FNegotiated.ChannelMax) then
       raise EAMQPConnectionError.Create(AMQP_CHANNEL_ERROR,
-        Format('canal %d acima do channel-max negociado (%d)',
+        Format('channel %d exceeds negotiated channel-max (%d)',
           [AFrame.Channel, FNegotiated.ChannelMax]),
         AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN);
     AddChannel(AFrame.Channel);
@@ -865,7 +865,7 @@ begin
   // de CONEXÃO (504), não de canal — não há canal onde mandar o Channel.Close.
   if LCh = nil then
     raise EAMQPConnectionError.Create(AMQP_CHANNEL_ERROR,
-      Format('método %d/%d no canal %d, que não está aberto',
+      Format('method %d/%d on channel %d, which is not open',
         [AId.ClassId, AId.MethodId, AFrame.Channel]), AId.ClassId, AId.MethodId);
 
   if AId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE) then
@@ -879,7 +879,7 @@ begin
   if AId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE_OK) then
     // Close-Ok sem Close nosso: o canal não estava fechando.
     raise EAMQPConnectionError.Create(AMQP_COMMAND_INVALID,
-      Format('Channel.Close-Ok inesperado no canal %d', [AFrame.Channel]),
+      Format('unexpected Channel.Close-Ok on channel %d', [AFrame.Channel]),
       AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE_OK);
 
   if AId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_FLOW) then
@@ -898,7 +898,7 @@ begin
   // Exchange/Queue/Basic/Confirm/Tx: WS5.
   if not DispatchChannelMethod(LCh, AId, AReader) then
     raise EAMQPChannelError.Create(AFrame.Channel, AMQP_NOT_IMPLEMENTED,
-      Format('método %d/%d ainda não implementado por este broker',
+      Format('method %d/%d is not implemented by this broker',
         [AId.ClassId, AId.MethodId]), AId.ClassId, AId.MethodId);
 end;
 
@@ -915,7 +915,7 @@ begin
     begin
       if LId.ClassId <> AMQP_CLASS_CONNECTION then
         raise EAMQPConnectionError.Create(AMQP_COMMAND_INVALID,
-          Format('classe %d não é permitida no canal 0', [LId.ClassId]),
+          Format('class %d is not allowed on channel 0', [LId.ClassId]),
           LId.ClassId, LId.MethodId);
       HandleConnectionMethod(LId, LReader);
       Exit;
@@ -924,13 +924,13 @@ begin
     // Canal != 0 só depois do Open-Ok.
     if FState <> amqssOpen then
       raise EAMQPConnectionError.Create(AMQP_COMMAND_INVALID,
-        Format('método %d/%d no canal %d antes do Connection.Open-Ok',
+        Format('method %d/%d on channel %d before Connection.Open-Ok',
           [LId.ClassId, LId.MethodId, AFrame.Channel]),
         LId.ClassId, LId.MethodId);
 
     if LId.ClassId = AMQP_CLASS_CONNECTION then
       raise EAMQPConnectionError.Create(AMQP_COMMAND_INVALID,
-        'métodos de Connection só valem no canal 0',
+        'Connection methods are only valid on channel 0',
         LId.ClassId, LId.MethodId);
 
     HandleChannelFrame(AFrame, LId, LReader);
@@ -945,21 +945,21 @@ var
 begin
   if (AFrame.Channel = AMQP_CHANNEL_CONNECTION) or (FState <> amqssOpen) then
     raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
-      Format('frame de conteúdo (tipo %d) no canal %d fora de contexto',
+      Format('content frame (type %d) on channel %d out of context',
         [AFrame.FrameType, AFrame.Channel]), 0, 0);
 
   LCh := FindChannel(AFrame.Channel);
   if LCh = nil then
     raise EAMQPConnectionError.Create(AMQP_CHANNEL_ERROR,
-      Format('conteúdo no canal %d, que não está aberto', [AFrame.Channel]),
+      Format('content on channel %d, which is not open', [AFrame.Channel]),
       0, 0);
   if LCh.State = amqchClosing then
     Exit; // descartado até o Close-Ok
 
   if not DispatchContent(LCh, AFrame) then
     raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
-      Format('frame de conteúdo (tipo %d) fora de sequência no canal %d ' +
-        '(estado da montagem: %d)',
+      Format('content frame (type %d) out of sequence on channel %d ' +
+        '(assembly state: %d)',
         [AFrame.FrameType, AFrame.Channel, Ord(LCh.AsmState)]), 0, 0);
 end;
 
@@ -970,7 +970,7 @@ begin
       begin
         if AFrame.Channel <> AMQP_CHANNEL_CONNECTION then
           raise EAMQPConnectionError.Create(AMQP_FRAME_ERROR,
-            'heartbeat fora do canal 0', 0, 0);
+            'Heartbeat outside of channel 0', 0, 0);
         // Nada a responder: heartbeat não se ecoa. Cada lado emite pelo
         // próprio timer (ver HeartbeatTick); receber já valeu por si, porque o
         // FLastReadTick foi atualizado no loop de leitura.
@@ -981,7 +981,7 @@ begin
       HandleContentFrame(AFrame);
   else
     raise EAMQPConnectionError.Create(AMQP_FRAME_ERROR,
-      Format('tipo de frame desconhecido: %d', [AFrame.FrameType]), 0, 0);
+      Format('unknown frame type: %d', [AFrame.FrameType]), 0, 0);
   end;
 end;
 
@@ -1791,11 +1791,11 @@ begin
     // consome e descarta esse campo.
     if Length(AFrame.Payload) < 2 then
       raise EAMQPConnectionError.Create(AMQP_FRAME_ERROR,
-        'content-header truncado', 0, 0);
+        'Truncated content-header', 0, 0);
     LClassId := (Word(AFrame.Payload[0]) shl 8) or Word(AFrame.Payload[1]);
     if LClassId <> AMQP_CLASS_BASIC then
       raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
-        Format('content-header da classe %d apos Basic.Publish', [LClassId]),
+        Format('content-header for class %d after Basic.Publish', [LClassId]),
         0, 0);
 
     LReader := TAMQPReader.Create(AFrame.Payload);
@@ -1847,8 +1847,8 @@ begin
     // SChannel do lado servidor ainda não existe (ver CLAUDE.md); no Windows
     // sem OpenSSL o broker não tem como aceitar TLS.
     raise EAMQPTls.Create(
-      'TLS do servidor exige um build com -dAMQP_OPENSSL ' +
-      '(o backend SChannel só implementa o lado cliente)');
+      'Server TLS requires a build with -dAMQP_OPENSSL ' +
+      '(the SChannel backend only implements the client side)');
     {$ENDIF}
   end
   else
@@ -1881,7 +1881,7 @@ begin
         FStream.Write(AMQP_PROTOCOL_HEADER[0], Length(AMQP_PROTOCOL_HEADER));
       except
       end;
-      FError := 'protocol-header inválido';
+      FError := 'invalid protocol-header';
       Exit(False);
     end;
   Result := True;

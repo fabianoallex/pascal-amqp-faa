@@ -869,7 +869,7 @@ var
 begin
   // Assume FWriteLock já adquirido (envio de grupo de frames, ex.: Publish).
   if not Assigned(FStream) then
-    raise EAMQPConnection.Create('conexão indisponível no momento (reconectando?)');
+    raise EAMQPConnection.Create('connection unavailable right now (reconnecting?)');
   LFrame := TAMQPFrame.Create(AFrameType, AChannel, APayload);
   LFrame.WriteTo(FStream);
   // Atômico: lido pela thread de heartbeat; no Win32 um store de 64 bits não é
@@ -911,7 +911,7 @@ begin
   LFrame := NextFrame;
   if not LFrame.IsMethod then
     raise EAMQPConnection.CreateFmt(
-      'frame inesperado (tipo %d, canal %d)', [LFrame.FrameType, LFrame.Channel]);
+      'unexpected frame (type %d, channel %d)', [LFrame.FrameType, LFrame.Channel]);
 
   Result := TAMQPReader.Create(LFrame.Payload);
   try
@@ -919,11 +919,11 @@ begin
     if AId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE) then
     begin
       LConnClose := DecodeClose(Result);
-      raise EAMQPConnection.CreateFmt('conexão recusada pelo servidor: %d %s',
+      raise EAMQPConnection.CreateFmt('connection refused by server: %d %s',
         [LConnClose.ReplyCode, LConnClose.ReplyText]);
     end;
     if LFrame.Channel <> AExpectChannel then
-      raise EAMQPConnection.CreateFmt('resposta em canal inesperado: %d (esperava %d)',
+      raise EAMQPConnection.CreateFmt('unexpected channel response: %d (expected %d)',
         [LFrame.Channel, AExpectChannel]);
   except
     Result.Free;
@@ -940,7 +940,7 @@ begin
   try
     if not LId.Matches(AClassId, AMethodId) then
       raise EAMQPConnection.CreateFmt(
-        'resposta inesperada: método %d/%d (esperava %d/%d)',
+        'unexpected response: method %d/%d (expected %d/%d)',
         [LId.ClassId, LId.MethodId, AClassId, AMethodId]);
   except
     Result.Free;
@@ -967,7 +967,7 @@ begin
   try
     if not LStart.SupportsMechanism(AMQP_AUTH_PLAIN) then
       raise EAMQPConnection.CreateFmt(
-        'servidor não oferece o mecanismo %s (oferece: %s)',
+        'server does not offer mechanism %s (offers: %s)',
         [AMQP_AUTH_PLAIN, LStart.Mechanisms]);
 
     LProps := BuildClientProperties;
@@ -1044,7 +1044,7 @@ begin
     LTarget := ''; // evita warning de variável não usada
     CloseSocketStream;
     raise EAMQPConnection.Create(
-      'TLS não suportado neste build/plataforma (Windows usa SChannel; nas demais, compile com AMQP_OPENSSL)');
+      'TLS not supported in this build/platform (Windows uses SChannel; elsewhere, compile with AMQP_OPENSSL)');
     {$ENDIF}
   end;
 
@@ -1071,7 +1071,7 @@ end;
 procedure TAMQPConnection.Open;
 begin
   if FIsOpen then
-    raise EAMQPConnection.Create('conexão já está aberta');
+    raise EAMQPConnection.Create('connection is already open');
   EstablishConnection;
 end;
 
@@ -1172,9 +1172,9 @@ begin
   // Acorda quem estiver esperando Close-Ok e qualquer RPC pendente nos canais.
   FCloseOkEvent.SetEvent;
   if AError <> '' then
-    LMsg := 'conexão encerrada: ' + AError
+    LMsg := 'connection closed: ' + AError
   else
-    LMsg := 'conexão encerrada';
+    LMsg := 'connection closed';
   FChannelsLock.Enter;
   try
     LChannels := FChannels.Values.ToArray;
@@ -1391,7 +1391,7 @@ var
   LChan: TAMQPChannel;
 begin
   if not FIsOpen then
-    raise EAMQPConnection.Create('conexão não está aberta');
+    raise EAMQPConnection.Create('connection is not open');
 
   // Alocação do id + inserção no dicionário sob o mesmo lock (evita duas threads
   // gerarem o mesmo channel-id e o segundo Add levantar/vazar o canal).
@@ -1399,7 +1399,7 @@ begin
   try
     if (FNegotiated.ChannelMax > 0) and (FNextChannel >= FNegotiated.ChannelMax) then
       raise EAMQPConnection.CreateFmt(
-        'limite de canais atingido (%d); reuso de canais ainda não implementado',
+        'channel limit reached (%d); channel reuse is not yet implemented',
         [FNegotiated.ChannelMax]);
     Inc(FNextChannel);
     LChan := TAMQPChannel.Create(Self, FNextChannel);
@@ -1669,20 +1669,20 @@ begin
   FRpcLock.Enter;
   try
     if FClosed then
-      raise EAMQPChannel.Create('canal fechado');
+      raise EAMQPChannel.Create('channel is closed');
     FRpcKind := rkNone;
     FRpcError := '';
     FRpcEvent.ResetEvent;
     FConnection.SendMethod(FChannelId, ARequest);
     if FRpcEvent.WaitFor(AMQP_RPC_TIMEOUT_MS) <> wrSignaled then
-      raise EAMQPChannel.Create('timeout aguardando resposta do servidor');
+      raise EAMQPChannel.Create('timeout waiting for server response');
     case FRpcKind of
       rkMethod:
         Result := FRpcMethodPayload;
       rkError:
         raise EAMQPChannel.Create(FRpcError);
     else
-      raise EAMQPChannel.Create('resposta de RPC inesperada');
+      raise EAMQPChannel.Create('unexpected RPC response');
     end;
   finally
     FRpcLock.Leave;
@@ -2000,13 +2000,13 @@ begin
   FRpcLock.Enter;
   try
     if FClosed then
-      raise EAMQPChannel.Create('canal fechado');
+      raise EAMQPChannel.Create('channel is closed');
     FRpcKind := rkNone;
     FRpcError := '';
     FRpcEvent.ResetEvent;
     FConnection.SendMethod(FChannelId, BuildBasicGet(AQueue, ANoAck));
     if FRpcEvent.WaitFor(AMQP_RPC_TIMEOUT_MS) <> wrSignaled then
-      raise EAMQPChannel.Create('timeout aguardando resposta do servidor');
+      raise EAMQPChannel.Create('timeout waiting for server response');
     case FRpcKind of
       rkMessage:
         Result := FRpcMessage;      // Get-Ok (Found=True veio da montagem)
@@ -2018,7 +2018,7 @@ begin
       rkError:
         raise EAMQPChannel.Create(FRpcError);
     else
-      raise EAMQPChannel.Create('resposta de RPC inesperada');
+      raise EAMQPChannel.Create('unexpected RPC response');
     end;
   finally
     FRpcLock.Leave;
@@ -2060,9 +2060,9 @@ var
   LRemaining: Int64;
 begin
   if not FConfirmMode then
-    raise EAMQPChannel.Create('canal não está em modo confirm (chame ConfirmSelect)');
+    raise EAMQPChannel.Create('channel is not in confirm mode (call ConfirmSelect)');
   if ASeqNo = 0 then
-    raise EAMQPChannel.Create('seq-no inválido (0) em WaitForConfirm');
+    raise EAMQPChannel.Create('invalid seq-no (0) in WaitForConfirm');
   LDeadline := AmqpTickMs + ATimeoutMs;
   FConfirmMon.Enter;
   try
@@ -2094,7 +2094,7 @@ var
   LRemaining: Int64;
 begin
   if not FConfirmMode then
-    raise EAMQPChannel.Create('canal não está em modo confirm (chame ConfirmSelect)');
+    raise EAMQPChannel.Create('channel is not in confirm mode (call ConfirmSelect)');
   LDeadline := AmqpTickMs + ATimeoutMs;
   FConfirmMon.Enter;
   try
@@ -2499,7 +2499,7 @@ begin
     begin
       LClose := DecodeChannelClose(LReader);
       FConnection.SendMethod(FChannelId, BuildChannelCloseOk);
-      SignalError(Format('canal %d fechado pelo servidor: %d %s',
+      SignalError(Format('channel %d closed by server: %d %s',
         [FChannelId, LClose.ReplyCode, LClose.ReplyText]));
     end
     else

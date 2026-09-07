@@ -197,9 +197,9 @@ begin
   while (FQueue.Count >= FMaxDepth) and (not FStopping) and (not FFailed) do
     FMon.Wait(AMQP_WAIT_INFINITE);
   if FStopping then
-    raise EAMQPTransport.Create('frame writer parado');
+    raise EAMQPTransport.Create('frame writer stopped');
   if FFailed then
-    raise EAMQPTransport.Create('frame writer falhou: ' + FError);
+    raise EAMQPTransport.Create('frame writer failed: ' + FError);
   FQueue.Enqueue(AFrame);
 end;
 
@@ -227,9 +227,9 @@ begin
     while (FQueue.Count >= FMaxDepth) and (not FStopping) and (not FFailed) do
       FMon.Wait(AMQP_WAIT_INFINITE);
     if FStopping then
-      raise EAMQPTransport.Create('frame writer parado');
+      raise EAMQPTransport.Create('frame writer stopped');
     if FFailed then
-      raise EAMQPTransport.Create('frame writer falhou: ' + FError);
+      raise EAMQPTransport.Create('frame writer failed: ' + FError);
     for I := 0 to High(AFrames) do
       FQueue.Enqueue(AFrames[I]);
     FMon.PulseAll;

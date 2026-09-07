@@ -810,11 +810,11 @@ begin
   try
     if (FActorThread <> 0) and (FActorThread = TThread.CurrentThread.ThreadID) then
       raise EAMQPQueueActor.CreateFmt(
-        'comando sincrono (%d) postado de dentro do proprio ator da fila "%s"'
-        + ' -- o ator esperaria por si mesmo', [Ord(ACmd.Kind), FName]);
+        'synchronous command (%d) posted from inside the queue actor "%s"'
+        + ' -- the actor would wait for itself', [Ord(ACmd.Kind), FName]);
     if FStopping then
       raise EAMQPQueueActor.CreateFmt(
-        'comando sincrono (%d) numa fila ja parada ("%s")',
+        'synchronous command (%d) posted to an already stopped queue ("%s")',
         [Ord(ACmd.Kind), FName]);
     ACmd.AddRef; // a caixa tem a sua propria referencia
     FMailbox.Enqueue(ACmd);
@@ -825,8 +825,8 @@ begin
 
   if not ACmd.WaitFor(AMQP_QUEUE_SYNC_TIMEOUT_MS) then
     raise EAMQPQueueActor.CreateFmt(
-      'timeout de %d ms no comando sincrono (%d) da fila "%s" -- o ator nao'
-      + ' foi agendado; verifique saturacao do pool de threads',
+      'timeout of %d ms waiting for synchronous command (%d) of queue "%s"'
+      + ' -- the actor was not scheduled; check thread pool saturation',
       [AMQP_QUEUE_SYNC_TIMEOUT_MS, Ord(ACmd.Kind), FName]);
 end;
 
@@ -906,7 +906,7 @@ begin
       FMon.Wait(100);
     if FScheduled then
       raise EAMQPQueueActor.CreateFmt(
-        'ator da fila "%s" nao terminou em %d ms -- estado NAO liberado',
+        'queue actor "%s" did not finish within %d ms -- state NOT released',
         [FName, AMQP_QUEUE_STOP_TIMEOUT_MS]);
     // Daqui pra baixo somos o unico executor: o ator saiu do laco e nenhum
     // agendamento novo e' possivel.

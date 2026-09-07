@@ -339,7 +339,7 @@ begin
   // senão um peer hostil derruba o broker só anunciando um corpo gigante.
   if UInt64(FBodyLen) + UInt64(LLen) > FBodySize then
     raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
-      Format('corpo excede o body-size declarado (%d): já %d + %d octetos',
+      Format('body exceeds declared body-size (%d): already %d + %d octets',
         [Int64(FBodySize), FBodyLen, LLen]), 0, 0);
 
   if LLen > 0 then

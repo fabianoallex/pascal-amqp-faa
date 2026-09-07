@@ -202,10 +202,10 @@ var
   LDigitos: string;
 begin
   Result := 0;
-  I := Pos('servidor: ', AMensagem);
+  I := Pos('server: ', AMensagem);
   if I <= 0 then
     Exit;
-  Inc(I, Length('servidor: '));
+  Inc(I, Length('server: '));
   LDigitos := '';
   J := I;
   while (J <= Length(AMensagem)) and (AMensagem[J] >= '0')

@@ -191,7 +191,7 @@ function AmqpValuesEqual(const A, B: TValue): Boolean;
 
 /// Le e VALIDA os x-arguments de fila de AArgs (pode ser nil = tabela vazia).
 ///
-/// False = algum argumento e' invalido, e AErro traz a mensagem ja' no
+/// False = algum argumento e' invalido, e AError traz a mensagem ja' no
 /// formato que vai para o reply-text do 406 PRECONDITION_FAILED, NOMEANDO o
 /// argumento ofensor (ex.: "invalid arg 'x-max-priority' for queue: must be
 /// an integer between 0 and 9"). Nomear e' o que separa um erro acionavel de

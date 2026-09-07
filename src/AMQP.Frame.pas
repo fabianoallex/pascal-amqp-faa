@@ -76,7 +76,7 @@ begin
   begin
     LRead := AStream.Read(ABuffer[LTotal], ACount - LTotal);
     if LRead <= 0 then
-      raise EAMQPFrameEOF.Create('fim de stream ao ler frame (conexao fechada?)');
+      raise EAMQPFrameEOF.Create('end of stream while reading frame (connection closed?)');
     Inc(LTotal, LRead);
   end;
 end;
@@ -143,7 +143,7 @@ begin
 
   if (AMaxPayload > 0) and (LSize > AMaxPayload) then
     raise EAMQPFrame.CreateFmt(
-      'payload de frame (%u) excede o maximo negociado (%u)', [LSize, AMaxPayload]);
+      'frame payload (%u) exceeds the negotiated maximum (%u)', [LSize, AMaxPayload]);
 
   if LSize > 0 then
     ReadFull(AStream, Result.Payload, Integer(LSize))
@@ -153,7 +153,7 @@ begin
   ReadFull(AStream, LEnd, 1);
   if LEnd[0] <> AMQP_FRAME_END then
     raise EAMQPFrame.CreateFmt(
-      'octeto frame-end invalido: esperado 0x%.2x, veio 0x%.2x',
+      'invalid frame-end octet: expected 0x%.2x, got 0x%.2x',
       [AMQP_FRAME_END, LEnd[0]]);
 end;
 

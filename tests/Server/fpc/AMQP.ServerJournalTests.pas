@@ -7,7 +7,7 @@
 
   1. Que o group commit AGRUPA. Nao basta "gravou tudo": a D25 inteira e' a
      aposta de que o lote cresce sozinho sob carga, e o numero que mostra isso
-     e' Registros/Syncs. Sem esta medida, uma implementacao que da' um fsync
+     e' Records/Syncs. Sem esta medida, uma implementacao que da' um fsync
      por registro passaria em todos os outros testes.
 
   2. Que o lote e' INDIVISIVEL. Quatro threads submetendo pares (aN, bN) em uma

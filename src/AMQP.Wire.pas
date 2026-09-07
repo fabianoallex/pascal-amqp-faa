@@ -320,7 +320,7 @@ var
 begin
   LBytes := AmqpUtf8Encode(AValue);
   if Length(LBytes) > 255 then
-    raise EAMQPWire.CreateFmt('shortstr excede 255 octetos (%d)', [Length(LBytes)]);
+    raise EAMQPWire.CreateFmt('shortstr exceeds 255 octets (%d)', [Length(LBytes)]);
   WriteOctet(Byte(Length(LBytes)));
   if Length(LBytes) > 0 then
     FStream.Write(LBytes[0], Length(LBytes));
@@ -387,7 +387,7 @@ begin
           WriteOctet(0);
       end
       else
-        raise EAMQPWire.Create('field-table: enum nao suportado (apenas Boolean)');
+        raise EAMQPWire.Create('field-table: unsupported enum (Boolean only)');
 
     tkInteger:
       begin
@@ -431,7 +431,7 @@ begin
           WriteFieldTable(TAMQPFieldTable(LObj));
         end
         else
-          raise EAMQPWire.Create('field-table: objeto nao suportado (apenas TAMQPFieldTable)');
+          raise EAMQPWire.Create('field-table: unsupported object (TAMQPFieldTable only)');
       end;
 
     // Dynamic array. TBytes ('x') e' um caso a' parte porque TAMQPReader
@@ -455,7 +455,7 @@ begin
         WriteFieldArray(AValue);
       end;
   else
-    raise EAMQPWire.CreateFmt('field-table: TValue.Kind nao suportado (%d)', [Ord(AValue.Kind)]);
+    raise EAMQPWire.CreateFmt('field-table: unsupported TValue.Kind (%d)', [Ord(AValue.Kind)]);
   end;
 end;
 
@@ -534,7 +534,7 @@ begin
   else
     FEnd := AOffset + ACount;
   if FEnd > Length(AData) then
-    raise EAMQPWire.Create('TAMQPReader: intervalo excede o buffer');
+    raise EAMQPWire.Create('TAMQPReader: range exceeds buffer');
 end;
 
 procedure TAMQPReader.ResetBits;
@@ -545,7 +545,7 @@ end;
 function TAMQPReader.ReadRawByte: Byte;
 begin
   if FPos >= FEnd then
-    raise EAMQPWire.Create('leitura alem do fim do buffer');
+    raise EAMQPWire.Create('read beyond the end of the buffer');
   Result := FData[FPos];
   Inc(FPos);
 end;
@@ -592,9 +592,9 @@ function TAMQPReader.ReadRaw(ACount: Integer): TBytes;
 begin
   ResetBits;
   if ACount < 0 then
-    raise EAMQPWire.Create('ReadRaw: contagem negativa');
+    raise EAMQPWire.Create('ReadRaw: negative count');
   if FPos + ACount > FEnd then
-    raise EAMQPWire.Create('ReadRaw: leitura alem do fim do buffer');
+    raise EAMQPWire.Create('ReadRaw: read beyond the end of the buffer');
   Result := Copy(FData, FPos, ACount);
   Inc(FPos, ACount);
 end;
@@ -693,7 +693,7 @@ begin
         Result := TValue.From<TAMQPValueArray>(LArr);
       end;
   else
-    raise EAMQPWire.CreateFmt('field-value: tag desconhecida (%d / %s)',
+    raise EAMQPWire.CreateFmt('field-value: unknown tag (%d / %s)',
       [LTag, string(Chr(LTag))]);
   end;
 end;
@@ -705,7 +705,7 @@ var
 begin
   LTableEnd := FPos + Integer(ReadLongUInt);
   if LTableEnd > FEnd then
-    raise EAMQPWire.Create('field-table: tamanho excede o buffer');
+    raise EAMQPWire.Create('field-table: size exceeds buffer');
   Result := TAMQPFieldTable.Create;
   try
     while FPos < LTableEnd do

@@ -525,20 +525,20 @@ begin
   if ACreate then
   begin
     if FileExists(APath) then
-      raise EAMQPWal.CreateFmt('segmento ja existe: %s', [APath]);
+      raise EAMQPWal.CreateFmt('segment already exists: %s', [APath]);
     H := FileCreate(APath);
     if H = THandle(-1) then
-      raise EAMQPWal.CreateFmt('nao consegui criar %s: %s',
+      raise EAMQPWal.CreateFmt('failed to create %s: %s',
         [APath, SysErrorMessage(AmqpLastOsError)]);
     FileClose(H);
   end
   else
     if not FileExists(APath) then
-      raise EAMQPWal.CreateFmt('segmento nao existe: %s', [APath]);
+      raise EAMQPWal.CreateFmt('segment does not exist: %s', [APath]);
 
   FHandle := FileOpen(APath, fmOpenReadWrite or fmShareDenyNone);
   if FHandle = THandle(-1) then
-    raise EAMQPWal.CreateFmt('nao consegui abrir %s: %s',
+    raise EAMQPWal.CreateFmt('failed to open %s: %s',
       [APath, SysErrorMessage(AmqpLastOsError)]);
 end;
 
@@ -580,7 +580,7 @@ begin
   if LSize <= 0 then
     Exit;
   if LSize > MaxInt then
-    raise EAMQPWal.CreateFmt('segmento grande demais para ler de uma vez: '
+    raise EAMQPWal.CreateFmt('segment too large to read at once: '
       + '%s (%d bytes)', [FPath, LSize]);
   SetLength(Result, Integer(LSize));
   FileSeek(FHandle, Int64(0), 0 { inicio });
@@ -623,7 +623,7 @@ begin
   {$ELSE}
   if not SetEndOfFile(FHandle) then
   {$ENDIF}
-    raise EAMQPWal.CreateFmt('nao consegui truncar %s em %d: %s',
+    raise EAMQPWal.CreateFmt('failed to truncate %s at %d: %s',
       [FPath, ASize, SysErrorMessage(AmqpLastOsError)]);
 end;
 
@@ -637,11 +637,11 @@ var
 begin
   inherited Create;
   if AFile = nil then
-    raise EAMQPWal.Create('segmento sem arquivo');
+    raise EAMQPWal.Create('segment has no file');
   FFile := AFile;
   FSegNo := ASegNo;
   if FFile.Size <> 0 then
-    raise EAMQPWal.CreateFmt('CreateNew sobre arquivo nao vazio (%d bytes)',
+    raise EAMQPWal.CreateFmt('CreateNew called on non-empty file (%d bytes)',
       [FFile.Size]);
 
   SetLength(LBuf, AMQP_WAL_SEG_HEADER_SIZE);
@@ -669,7 +669,7 @@ var
 begin
   inherited Create;
   if AFile = nil then
-    raise EAMQPWal.Create('segmento sem arquivo');
+    raise EAMQPWal.Create('segment has no file');
   FFile := AFile;
   LBuf := LeEValidaCabecalho;
   Varre(LBuf, False, LRecs, FStop, FEndOffset, FLastLsn);
@@ -694,15 +694,15 @@ var
 begin
   Result := FFile.ReadAll;
   if Length(Result) < AMQP_WAL_SEG_HEADER_SIZE then
-    raise EAMQPWal.CreateFmt('segmento truncado no cabecalho (%d bytes de %d)',
+    raise EAMQPWal.CreateFmt('segment header truncated (%d of %d bytes)',
       [Length(Result), AMQP_WAL_SEG_HEADER_SIZE]);
   for I := 1 to Length(AMQP_WAL_MAGIC) do
     if Result[I - 1] <> Byte(AMQP_WAL_MAGIC[I]) then
-      raise EAMQPWal.Create('nao e um segmento WAL deste broker '
-        + '(assinatura nao confere)');
+      raise EAMQPWal.Create('not a WAL segment from this broker'
+        + '(signature does not match)');
   LVer := PegaU16(Result, 8);
   if LVer <> AMQP_WAL_VERSION then
-    raise EAMQPWal.CreateFmt('versao de segmento %d, esperada %d',
+    raise EAMQPWal.CreateFmt('segment version %d, expected %d',
       [LVer, AMQP_WAL_VERSION]);
   FSegNo := PegaU32(Result, 12);
 end;
@@ -807,11 +807,11 @@ var
   LCrc: Cardinal;
 begin
   if ALsn <= FLastLsn then
-    raise EAMQPWal.CreateFmt('LSN %d nao e maior que o ultimo gravado (%d) -- '
-      + 'a leitura truncaria o segmento aqui', [ALsn, FLastLsn]);
+    raise EAMQPWal.CreateFmt('LSN %d is not greater than the last written (%d) -- '
+      + 'reading would truncate the segment here', [ALsn, FLastLsn]);
   LLen := Length(APayload);
   if LLen > AMQP_WAL_MAX_PAYLOAD then
-    raise EAMQPWal.CreateFmt('payload de %d bytes acima do teto de %d',
+    raise EAMQPWal.CreateFmt('payload of %d bytes exceeds the limit of %d',
       [LLen, AMQP_WAL_MAX_PAYLOAD]);
 
   SetLength(LBuf, AmqpWalRecordSize(LLen));
@@ -858,14 +858,14 @@ begin
   inherited Create;
   FHandle := THandle(-1); // ver a nota do TAMQPWalOsFile.Create
   if not ForceDirectories(ADir) then
-    raise EAMQPWal.CreateFmt('nao consegui criar o diretorio de dados %s: %s',
+    raise EAMQPWal.CreateFmt('failed to create data directory %s: %s',
       [ADir, SysErrorMessage(AmqpLastOsError)]);
   FPath := IncludeTrailingPathDelimiter(ADir) + AMQP_WAL_LOCK_NAME;
   if not FileExists(FPath) then
   begin
     H := FileCreate(FPath);
     if H = THandle(-1) then
-      raise EAMQPWal.CreateFmt('nao consegui criar %s: %s',
+      raise EAMQPWal.CreateFmt('failed to create %s: %s',
         [FPath, SysErrorMessage(AmqpLastOsError)]);
     FileClose(H);
   end;
@@ -873,8 +873,8 @@ begin
   // mediu os dois recusando o segundo dono e liberando no close.
   FHandle := FileOpen(FPath, fmOpenReadWrite or fmShareExclusive);
   if FHandle = THandle(-1) then
-    raise EAMQPWal.CreateFmt('o diretorio de dados %s ja tem dono '
-      + '(outro broker esta usando %s)', [ADir, AMQP_WAL_LOCK_NAME]);
+    raise EAMQPWal.CreateFmt('data directory %s is already owned'
+      + '(another broker is using %s)', [ADir, AMQP_WAL_LOCK_NAME]);
 end;
 
 destructor TAMQPWalDirLock.Destroy;
