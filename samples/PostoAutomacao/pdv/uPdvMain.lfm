@@ -1,0 +1,14 @@
+object frmPdv: TfrmPdv
+  Left = 0
+  Height = 640
+  Top = 0
+  Width = 900
+  Caption = 'Posto - PDV'
+  ClientHeight = 640
+  ClientWidth = 900
+  DesignTimePPI = 96
+  Position = poScreenCenter
+  LCLVersion = '4.4.0.0'
+  OnClose = FormClose
+  OnCreate = FormCreate
+end

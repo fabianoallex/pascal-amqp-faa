@@ -72,6 +72,21 @@
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
+      <Target FileName="samples\PostoAutomacao\servidor\ServidorPosto.lpi">
+        <BuildModes>
+          <Mode Name="Default"/>
+        </BuildModes>
+      </Target>
+      <Target FileName="samples\PostoAutomacao\pdv\PdvPosto.lpi">
+        <BuildModes>
+          <Mode Name="Default"/>
+        </BuildModes>
+      </Target>
+      <Target FileName="samples\PostoAutomacao\smoke\SmokePosto.lpi">
+        <BuildModes>
+          <Mode Name="Default"/>
+        </BuildModes>
+      </Target>
     </Targets>
   </ProjectGroup>
 </CONFIG>

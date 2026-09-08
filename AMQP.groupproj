@@ -51,6 +51,15 @@
         <Projects Include="samples\Server\AMQPServer.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="samples\PostoAutomacao\servidor\ServidorPosto.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="samples\PostoAutomacao\pdv\PdvPosto.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="samples\PostoAutomacao\smoke\SmokePosto.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -203,14 +212,41 @@
     <Target Name="AMQPServer:Make">
         <MSBuild Projects="samples\Server\AMQPServer.dproj" Targets="Make"/>
     </Target>
+    <Target Name="ServidorPosto">
+        <MSBuild Projects="samples\PostoAutomacao\servidor\ServidorPosto.dproj"/>
+    </Target>
+    <Target Name="ServidorPosto:Clean">
+        <MSBuild Projects="samples\PostoAutomacao\servidor\ServidorPosto.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="ServidorPosto:Make">
+        <MSBuild Projects="samples\PostoAutomacao\servidor\ServidorPosto.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="PdvPosto">
+        <MSBuild Projects="samples\PostoAutomacao\pdv\PdvPosto.dproj"/>
+    </Target>
+    <Target Name="PdvPosto:Clean">
+        <MSBuild Projects="samples\PostoAutomacao\pdv\PdvPosto.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="PdvPosto:Make">
+        <MSBuild Projects="samples\PostoAutomacao\pdv\PdvPosto.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="SmokePosto">
+        <MSBuild Projects="samples\PostoAutomacao\smoke\SmokePosto.dproj"/>
+    </Target>
+    <Target Name="SmokePosto:Clean">
+        <MSBuild Projects="samples\PostoAutomacao\smoke\SmokePosto.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="SmokePosto:Make">
+        <MSBuild Projects="samples\PostoAutomacao\smoke\SmokePosto.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AMQP_ServerTests;AMQP_Acceptance;SmokeTest;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;EventosTopicVcl;EventosHeadersVcl;PrioridadeVcl;AMQPServer"/>
+        <CallTarget Targets="AMQP_UnitTests;AMQP_IntegrationTests;AMQP_ServerTests;AMQP_Acceptance;SmokeTest;AutorizadorSim;Retaguarda;AutorizadorSimVcl;RetaguardaVcl;PublicadorConfiavelVcl;ConsultaStatusVcl;RetryDlqVcl;EventosTopicVcl;EventosHeadersVcl;PrioridadeVcl;AMQPServer;ServidorPosto;PdvPosto;SmokePosto"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AMQP_ServerTests:Clean;AMQP_Acceptance:Clean;SmokeTest:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;EventosTopicVcl:Clean;EventosHeadersVcl:Clean;PrioridadeVcl:Clean;AMQPServer:Clean"/>
+        <CallTarget Targets="AMQP_UnitTests:Clean;AMQP_IntegrationTests:Clean;AMQP_ServerTests:Clean;AMQP_Acceptance:Clean;SmokeTest:Clean;AutorizadorSim:Clean;Retaguarda:Clean;AutorizadorSimVcl:Clean;RetaguardaVcl:Clean;PublicadorConfiavelVcl:Clean;ConsultaStatusVcl:Clean;RetryDlqVcl:Clean;EventosTopicVcl:Clean;EventosHeadersVcl:Clean;PrioridadeVcl:Clean;AMQPServer:Clean;ServidorPosto:Clean;PdvPosto:Clean;SmokePosto:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AMQP_ServerTests:Make;AMQP_Acceptance:Make;SmokeTest:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;EventosTopicVcl:Make;EventosHeadersVcl:Make;PrioridadeVcl:Make;AMQPServer:Make"/>
+        <CallTarget Targets="AMQP_UnitTests:Make;AMQP_IntegrationTests:Make;AMQP_ServerTests:Make;AMQP_Acceptance:Make;SmokeTest:Make;AutorizadorSim:Make;Retaguarda:Make;AutorizadorSimVcl:Make;RetaguardaVcl:Make;PublicadorConfiavelVcl:Make;ConsultaStatusVcl:Make;RetryDlqVcl:Make;EventosTopicVcl:Make;EventosHeadersVcl:Make;PrioridadeVcl:Make;AMQPServer:Make;ServidorPosto:Make;PdvPosto:Make;SmokePosto:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

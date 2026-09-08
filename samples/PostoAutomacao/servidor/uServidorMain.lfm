@@ -1,0 +1,14 @@
+object frmPainel: TfrmPainel
+  Left = 0
+  Height = 660
+  Top = 0
+  Width = 960
+  Caption = 'Posto - Painel da Automacao'
+  ClientHeight = 660
+  ClientWidth = 960
+  DesignTimePPI = 96
+  Position = poScreenCenter
+  LCLVersion = '4.4.0.0'
+  OnClose = FormClose
+  OnCreate = FormCreate
+end
