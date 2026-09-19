@@ -75,6 +75,10 @@ type
     function Send(const Buffer; ACount: Integer): Integer;
     /// Encerra a conexao, desbloqueando um Receive pendente em outra thread.
     procedure Close;
+    /// True se o algoritmo de Nagle esta DESLIGADO neste socket (TCP_NODELAY).
+    /// Todo socket criado por esta unit (Connect e Accept) sai com ele ligado;
+    /// ver AmqpSetNoDelay.
+    function NoDelay: Boolean;
   end;
 
   { Socket de escuta TCP (lado servidor do sub-módulo broker). Mesma superfície
@@ -147,6 +151,82 @@ const
   AMQP_SHUT_RDWR = 2;
 {$ENDIF}
 
+const
+  // Mesmos valores em Windows, Linux, BSD e macOS.
+  AMQP_IPPROTO_TCP = 6;
+  AMQP_TCP_NODELAY = 1;
+
+{$IFNDEF FPC}
+  {$IFDEF AMQP_WINDOWS}
+// Direto do winsock: 'Winapi.WinSock2' no uses tornaria 'TSocket' ambiguo com o
+// TSocket de System.Net.Socket (a classe usada pelo resto desta unit).
+function amqp_setsockopt(S: NativeUInt; ALevel, AOptName: Integer;
+  AOptVal: Pointer; AOptLen: Integer): Integer; stdcall;
+  external 'ws2_32.dll' name 'setsockopt';
+function amqp_getsockopt(S: NativeUInt; ALevel, AOptName: Integer;
+  AOptVal: Pointer; var AOptLen: Integer): Integer; stdcall;
+  external 'ws2_32.dll' name 'getsockopt';
+  {$ENDIF}
+{$ENDIF}
+
+{ Desliga o algoritmo de Nagle (TCP_NODELAY). O AMQP e' um protocolo de
+  pedido/resposta com frames pequenos: com Nagle ligado, uma escrita pequena
+  espera o ACK da anterior, e o ACK do outro lado e' ATRASADO (~40 ms no Linux,
+  ate' 200 ms no Windows fora do loopback) -- cada ida e volta (declare, publish
+  com confirm, ack) ganha essa latencia. Medido no Linux em loopback: abrir
+  conexao 180 ms -> 6 ms, CreateChannel 88 ms -> 4 ms. Best effort: falhar em
+  ligar a opcao nao pode impedir a conexao. }
+{$IFDEF FPC}
+procedure AmqpSetNoDelay(AHandle: LongInt);
+var
+  LOpt: LongInt;
+begin
+  LOpt := 1;
+  fpSetSockOpt(AHandle, AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, SizeOf(LOpt));
+end;
+
+function AmqpGetNoDelay(AHandle: LongInt): Boolean;
+var
+  LOpt: LongInt;
+  LLen: {$IF Declared(TSockLen)}TSockLen{$ELSE}LongInt{$ENDIF};
+begin
+  LOpt := 0;
+  LLen := SizeOf(LOpt);
+  Result := (fpGetSockOpt(AHandle, AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, @LLen) = 0)
+    and (LOpt <> 0);
+end;
+{$ELSE}
+procedure AmqpSetNoDelay(ASock: TSocket);
+  {$IFDEF AMQP_WINDOWS}
+var
+  LOpt: Integer;
+begin
+  LOpt := 1;
+  amqp_setsockopt(NativeUInt(ASock.Handle), AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, SizeOf(LOpt));
+end;
+  {$ELSE}
+begin
+  // Delphi fora do Windows nao e' alvo desta lib (ver CLAUDE.md).
+end;
+  {$ENDIF}
+
+function AmqpGetNoDelay(ASock: TSocket): Boolean;
+  {$IFDEF AMQP_WINDOWS}
+var
+  LOpt, LLen: Integer;
+begin
+  LOpt := 0;
+  LLen := SizeOf(LOpt);
+  Result := (amqp_getsockopt(NativeUInt(ASock.Handle), AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, LLen) = 0)
+    and (LOpt <> 0);
+end;
+  {$ELSE}
+begin
+  Result := False;
+end;
+  {$ENDIF}
+{$ENDIF}
+
 var
   // Escrito uma vez pelo backend ao carregar (antes de qualquer leitura util:
   // so ha detalhe DEPOIS de uma conexao TLS abrir).
@@ -195,6 +275,7 @@ begin
   // Descritor cru: controlamos recv/send/close diretamente. (TInetSocket.Create
   // sobre um handle não roteia o Read por onde o shutdown/close desbloqueia.)
   FRawFd := AHandle;
+  AmqpSetNoDelay(AHandle);
 end;
 {$ELSE}
 constructor TAMQPTcpSocket.CreateFromAccepted(ASock: TSocket; const APeerAddr: string);
@@ -203,6 +284,7 @@ begin
   FPeerAddress := APeerAddr;
   FSock := ASock;
   FAccepted := True;
+  AmqpSetNoDelay(FSock);
 end;
 {$ENDIF}
 
@@ -232,8 +314,24 @@ procedure TAMQPTcpSocket.Connect(const AHost: string; APort: Word);
 begin
   {$IFDEF FPC}
   FSock := TInetSocket.Create(AHost, APort); // conecta no construtor
+  AmqpSetNoDelay(FSock.Handle);
   {$ELSE}
   FSock.Connect(AHost, '', '', APort);
+  AmqpSetNoDelay(FSock);
+  {$ENDIF}
+end;
+
+function TAMQPTcpSocket.NoDelay: Boolean;
+begin
+  {$IFDEF FPC}
+  if FRawFd >= 0 then
+    Result := AmqpGetNoDelay(FRawFd)
+  else if FSock <> nil then
+    Result := AmqpGetNoDelay(FSock.Handle)
+  else
+    Result := False;
+  {$ELSE}
+  Result := (FSock <> nil) and AmqpGetNoDelay(FSock);
   {$ENDIF}
 end;
 

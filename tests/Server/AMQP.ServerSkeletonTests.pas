@@ -44,6 +44,7 @@ type
   public
     [Test] procedure PortaZero_DevolveEfetiva;
     [Test] procedure Accept_RecebeConexaoEDados;
+    [Test] procedure Sockets_ClienteEAceito_TemNoDelayLigado;
     [Test] procedure Close_DesbloqueiaAccept;
   end;
 
@@ -386,6 +387,39 @@ begin
         SetLength(Buf, 16);
         N := Probe.Accepted.Receive(Buf[0], 16);
         Assert.AreEqual(2, N);
+        Probe.Accepted.Free;
+      finally
+        Cli.Free;
+      end;
+    finally
+      Probe.Free;
+    end;
+  finally
+    L.Free;
+  end;
+end;
+
+procedure TListenerTests.Sockets_ClienteEAceito_TemNoDelayLigado;
+var
+  L: TAMQPTcpListener;
+  Probe: TAMQPAcceptProbe;
+  Cli: TAMQPTcpSocket;
+begin
+  // Sem TCP_NODELAY o Nagle + ACK atrasado somam dezenas de ms a CADA ida e volta
+  // (medido no Linux: CreateChannel 88 ms -> 4 ms). Ver AmqpSetNoDelay.
+  L := TAMQPTcpListener.Create;
+  try
+    L.Listen('127.0.0.1', 0);
+    Probe := TAMQPAcceptProbe.Create(L);
+    try
+      TThread.Sleep(100);
+      Cli := TAMQPTcpSocket.Create;
+      try
+        Cli.Connect('127.0.0.1', L.Port);
+        Probe.WaitFor;
+        Assert.IsNotNull(Probe.Accepted, 'Accept devolveu um socket');
+        Assert.IsTrue(Cli.NoDelay, 'socket do cliente com TCP_NODELAY');
+        Assert.IsTrue(Probe.Accepted.NoDelay, 'socket aceito com TCP_NODELAY');
         Probe.Accepted.Free;
       finally
         Cli.Free;
