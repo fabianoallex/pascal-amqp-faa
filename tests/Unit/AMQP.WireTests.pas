@@ -597,9 +597,9 @@ begin
       Assert.IsTrue(LOut.TryGetValue('x-death', LVal), 'deve ter x-death');
       Assert.IsTrue(LVal.IsArray, 'valor deve ser array');
       Assert.AreEqual(1, LVal.GetArrayLength, 'um elemento');
-      // AmqpUnwrapValue: no Delphi o Make ja colapsa TValue-em-TValue (e'
-      // no-op aqui), mas no FPC o GetArrayElement devolve o elemento
-      // re-embrulhado num TValue tkRecord — o unwrap uniformiza os dois.
+      // AmqpUnwrapValue e' obrigatorio: o GetArrayElement devolve o elemento
+      // re-embrulhado num TValue tkRecord, aqui no Delphi tambem (o Make nao
+      // colapsa TValue-em-TValue) — sem o unwrap, IsObject daria False.
       LEntrada := AmqpUnwrapValue(LVal.GetArrayElement(0));
       Assert.IsTrue(LEntrada.IsObject, 'elemento deve ser objeto');
       Assert.IsTrue(LEntrada.AsObject is TAMQPFieldTable, 'elemento deve ser tabela');

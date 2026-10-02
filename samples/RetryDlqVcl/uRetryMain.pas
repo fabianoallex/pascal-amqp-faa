@@ -184,8 +184,8 @@ begin
     Exit;
   for I := 0 to LXDeath.GetArrayLength - 1 do
   begin
-    // AmqpUnwrapValue: no FPC o GetArrayElement devolve o elemento
-    // re-embrulhado num TValue tkRecord (gotcha no CLAUDE.md).
+    // AmqpUnwrapValue: o GetArrayElement devolve o elemento re-embrulhado
+    // num TValue tkRecord, no Delphi e no FPC (gotcha no CLAUDE.md).
     LEntrada := AmqpUnwrapValue(LXDeath.GetArrayElement(I));
     if not (LEntrada.IsObject and (LEntrada.AsObject is TAMQPFieldTable)) then
       Continue;

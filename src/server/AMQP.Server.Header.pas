@@ -232,8 +232,8 @@ end;
   ESCREVER na WS1 desta fase. Ate' la' isto aqui levantaria EAMQPWire. }
 
 // Le o x-death como array, ja' desembrulhado. nil se ausente/malformado.
-// AmqpUnwrapValue e' obrigatorio em TODO GetArrayElement (gotcha do FPC 3.2:
-// elemento de TArray<TValue> volta re-embrulhado).
+// AmqpUnwrapValue e' obrigatorio em TODO GetArrayElement (gotcha do TValue,
+// nos dois compiladores: elemento de TArray<TValue> volta re-embrulhado).
 function ReadDeaths(AHeaders: TAMQPFieldTable; out AArr: TValue): Boolean;
 begin
   AArr := TValue.Empty;

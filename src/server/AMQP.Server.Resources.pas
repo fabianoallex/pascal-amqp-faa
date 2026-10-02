@@ -160,9 +160,9 @@ type
 /// - cada chave de A precisa existir em B com o MESMO valor;
 /// - tabela aninhada ('F') compara recursivamente por AmqpArgsEqual;
 /// - array ('A' e afins) compara elemento a elemento, com AmqpUnwrapValue
-///   (AMQP.Wire) em TODO GetArrayElement -- gotcha conhecido do FPC 3.2
-///   (GetArrayElement sobre um array de field-values devolve o elemento
-///   re-embrulhado; ver CLAUDE.md).
+///   (AMQP.Wire) em TODO GetArrayElement -- gotcha conhecido do TValue, no
+///   Delphi e no FPC (GetArrayElement sobre um array de field-values devolve
+///   o elemento re-embrulhado; ver CLAUDE.md).
 /// E' a base do 406 PRECONDITION_FAILED de um redeclare divergente.
 function AmqpArgsEqual(A, B: TAMQPFieldTable): Boolean;
 
@@ -509,10 +509,10 @@ begin
     if LLen <> B.GetArrayLength then
       Exit(False);
     // 'A' (array de field-values): GetArrayElement devolve o elemento
-    // re-embrulhado num TValue no FPC -- AmqpUnwrapValue desfaz. Aplicamos o
-    // unwrap em TODO elemento, de qualquer array: ele e' idempotente e no-op
-    // no Delphi, e num array que nao seja de field-values (ex.: 'x' = TBytes)
-    // o elemento nao e' um TValue embrulhado, entao tambem e' no-op.
+    // re-embrulhado num TValue, no Delphi e no FPC -- AmqpUnwrapValue desfaz.
+    // Aplicamos o unwrap em TODO elemento, de qualquer array: ele e'
+    // idempotente, e num array que nao seja de field-values (ex.: 'x' = TBytes)
+    // o elemento nao e' um TValue embrulhado, entao e' no-op.
     //
     // NAO testar aqui "TypeInfo = TypeInfo(TArray<TValue>)" para decidir se
     // desembrulha: no FPC 3.2 essa especializacao ESCRITA INLINE nesta unit e'
