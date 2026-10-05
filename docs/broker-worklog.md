@@ -838,6 +838,15 @@ Também anotado lá: no FPC 3.2.2/Linux, `TThread.ProcessorCount` devolve **1** 
 
 **Validação.** FPC/Windows: unitária 121/121, integração 31/31 (com `-gh`), server **462/462** (Default) e **466/466** (`openssl`), aceitação 31/31 nas duas passagens nos dois modes, SmokeTest PASS contra o RabbitMQ e contra o broker embutido, 0 blocos vazados. FPC/Linux (container Debian): as nove configurações (unitária, server ×2, integração ×2, aceitação ×4) verdes, 0 blocos vazados conferidos no arquivo do `HEAPTRC=log=`. Uma rodada da integração Default teve a intermitente do item 6, e foi a única. Duas baterias de **60 rodadas a `--cpus=1`, com 8 containers ao mesmo tempo** (server ×20, integração ×20, aceitação ×20), uma antes e outra depois da correção do item 5: todas verdes. Delphi 12 CE (compilado no IDE, `.exe` rodados daqui), **Win32 e Win64**, Debug e OpenSSL: unitária 121, integração 31, server **462 / 466**, aceitação 31 nas duas passagens. `Tests Leaked: 0` em todas, e os números batem com o FPCUnit.
 
+**Depois da tag: submódulo na pascal-common-faa 1.2.0.** A pascal-common-faa corrigiu os dois achados desta rodada: a rajada na 1.1.3 e os núcleos no Linux na 1.2.0 (`PcProcessorCount`). Conferido aqui:
+- o repro da rajada agora inicia 16 de 17 itens com 0, 1 ou 6 workers ociosos, no Windows e no Linux;
+- no container, o teto do `PcPool` passou de 16 para 48;
+- a suíte de consumo, onde estava a intermitente, passou **40 de 40** a `--cpus=1` sob a carga do estresse.
+
+Os testes de pool continuam saturando um item por vez, porque é o jeito determinístico de saber que todo worker roda um item do teste; só o comentário mudou. As suítes foram revalidadas no FPC Windows e no Linux (mais 60 rodadas a `--cpus=1`, todas verdes) e no Delphi Win32/Win64, Debug e OpenSSL (`Tests Leaked: 0`).
+
+**v0.1.2: o mínimo da pascal-common-faa sobe para 1.1.3** (`PASCALCOMMON_VERSION < 10103`, e `MinVersion` 1.1.3 nos dois `.lpk`). A rajada não é só um problema de teste: os callbacks do cliente rodam no `PcPool`, e uma aplicação com uma cópia mais velha serializa callbacks que bloqueiam. Medido: contra a v1.1.2 o build para com `Fatal: User defined: pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`; contra a v1.2.0 compila.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

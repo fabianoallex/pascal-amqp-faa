@@ -6,6 +6,25 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-05
+
+### Mudado
+
+- **A versão mínima da pascal-common-faa sobe de 1.0 para 1.1.3.** Antes da 1.1.3 o `PcPool`
+  não crescia numa rajada de itens: com um worker ocioso, entregas cujos callbacks bloqueiam
+  rodavam uma de cada vez, e um callback que esperasse outro enfileirado atrás dele só andava
+  quando chegasse outro item (achado aqui, corrigido lá). Os callbacks do cliente rodam no
+  `PcPool`, então uma cópia mais velha é defeito em produção. Uma cópia anterior à 1.1.3 para o
+  build com `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`; os dois `.lpk`
+  exigem `MinVersion` 1.1.3.
+- Submódulo `external/pascal-common-faa` (só testes e samples) de v1.1.2 para v1.2.0, que
+  também conta os núcleos de verdade no FPC/Linux (o teto do `PcPool` lá era sempre 16).
+
+### Corrigido
+
+- A falha intermitente de `ConsomeTodas_ComAck_E_Concorrencia` (pico de concorrência 1) era a
+  rajada acima; some com a pascal-common-faa 1.1.3 ou mais nova.
+
 ## [0.1.1] - 2026-10-05
 
 Correções vindas da migração do pascal-dfe-broker para a v0.1.0 (achados 4 e 6 do F10 de lá),
@@ -96,6 +115,7 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fabianoallex/pascal-amqp-faa/releases/tag/v0.1.0

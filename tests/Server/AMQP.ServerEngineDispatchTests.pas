@@ -1985,12 +1985,11 @@ var
   LDeadline: UInt64;
 begin
   // MaxWorkers itens presos no portao, UM DE CADA VEZ (esperando cada um
-  // partir), e mais um que fica na fila. Em rajada nao da': o TPcThreadPool
-  // decide criar worker olhando os ociosos, e conta como ocioso quem ja foi
-  // acordado mas ainda nao pegou o item -- 17 itens contra 1 worker ocioso
-  // rodam 1 so', os outros 16 ficam na fila (medido; anotado em
-  // .ci/findings-for-pascal-common-faa.md). Sempre chamado dentro do try do
-  // teste: quem enfileirou tem de abrir o portao.
+  // partir), e mais um que fica na fila. Ate' a pascal-common-faa 1.1.2 uma
+  // rajada nao fazia o pool crescer (corrigido na 1.1.3; ver
+  // .ci/findings-for-pascal-common-faa.md); um por vez continua sendo o jeito
+  // deterministico de saber que todo worker roda um item NOSSO. Sempre
+  // chamado dentro do try do teste: quem enfileirou tem de abrir o portao.
   for I := 1 to PcPool.MaxWorkers do
   begin
     PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));

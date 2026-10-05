@@ -15,7 +15,7 @@
     </CompilerOptions>
     <Description Value="Cliente AMQP 0-9-1 (RabbitMQ) para FPC/Lazarus e Delphi, escrito do zero. Publish/consume com ack manual, publisher confirms, heartbeat, reconexao automatica com recuperacao de topologia e TLS (SChannel no Windows; OpenSSL opt-in via -dAMQP_OPENSSL em qualquer plataforma)."/>
     <License Value="MIT"/>
-    <Version Minor="1" Release="1"/>
+    <Version Minor="1" Release="2"/>
     <Files>
       <Item>
         <Filename Value="..\src\amqp.inc"/>
@@ -86,7 +86,7 @@
            .lpi de testes/samples apontam para external/ com Prefer="True". -->
       <Item>
         <PackageName Value="pascal_common_faa"/>
-        <MinVersion Major="1" Valid="True"/>
+        <MinVersion Major="1" Minor="1" Release="3" Valid="True"/>
       </Item>
       <Item>
         <PackageName Value="FCL"/>

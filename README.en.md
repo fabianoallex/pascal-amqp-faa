@@ -481,7 +481,7 @@ Why start from the parallel side instead of the serialized one: adding ordering 
 
 ## Building
 
-**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.0 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.0.0 ou mais nova` ("needs pascal-common-faa 1.0.0 or newer").
+**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.1.3 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova` ("needs pascal-common-faa 1.1.3 or newer"). 1.1.3 is the minimum because before it `PcPool` did not grow during a burst of items, and this client's callbacks run on it: deliveries whose callbacks block could run one at a time.
 
 **Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1 or newer.
 

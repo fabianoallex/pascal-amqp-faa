@@ -15,7 +15,7 @@
     </CompilerOptions>
     <Description Value="Broker AMQP 0-9-1 embutivel para FPC/Lazarus e Delphi (sub-modulo server do pascal-amqp-faa). Depende do pacote cliente pascal_amqp_faa: reusa o codec de wire, framing, field-tables e o transporte. Fase 1: handshake completo, canais, decodificacao de todo metodo cliente->servidor, heartbeat, close com modelo de erro; sem engine de roteamento ainda."/>
     <License Value="MIT"/>
-    <Version Minor="1" Release="1"/>
+    <Version Minor="1" Release="2"/>
     <Files>
       <Item>
         <Filename Value="..\src\server\AMQP.Server.Auth.pas"/>
@@ -108,7 +108,7 @@
            proprio), e a copia vem da aplicacao, nunca de external/. -->
       <Item>
         <PackageName Value="pascal_common_faa"/>
-        <MinVersion Major="1" Valid="True"/>
+        <MinVersion Major="1" Minor="1" Release="3" Valid="True"/>
       </Item>
       <Item>
         <PackageName Value="pascal_amqp_faa"/>

@@ -479,7 +479,7 @@ Por que começar do lado paralelo em vez do serializado: adicionar ordem sobre u
 
 ## Compilando
 
-**Dependência: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.0 ou mais nova.** É a base comum das libs `*-faa` (atomics, monitor, thread pool). A **aplicação** fornece uma cópia só dela, mesmo usando várias libs `*-faa`: esta lib não a embute. O submódulo `external/pascal-common-faa` existe para os testes e samples deste repositório, não para o seu build. Uma cópia mais velha que a mínima para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.0.0 ou mais nova`.
+**Dependência: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.1.3 ou mais nova.** É a base comum das libs `*-faa` (atomics, monitor, thread pool). A **aplicação** fornece uma cópia só dela, mesmo usando várias libs `*-faa`: esta lib não a embute. O submódulo `external/pascal-common-faa` existe para os testes e samples deste repositório, não para o seu build. Uma cópia mais velha que a mínima para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`. A 1.1.3 é o mínimo porque antes dela o `PcPool` não crescia numa rajada de itens, e os callbacks deste cliente rodam nele: entregas cujos callbacks bloqueiam podiam rodar uma de cada vez.
 
 **Lazarus**: instale (ou registre) `pascal_common_faa.lpk` da pascal-common-faa e depois abra/instale `packages/pascal_amqp_faa.lpk` (ou `lazbuild packages\pascal_amqp_faa.lpk`). O pacote exige `pascal_common_faa` pelo nome, versão 1 ou mais nova.
 

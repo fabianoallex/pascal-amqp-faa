@@ -7,6 +7,10 @@ the points to bring back. Most important first. The F8 findings are in
 
 ## 1. `TPcThreadPool.Queue` does not grow the pool during a burst: queued items wait behind blocking ones
 
+**Status: fixed in pascal-common-faa 1.1.3.** Confirmed here with the submodule at v1.2.0: the
+repro below starts 16 of 17 items with 0, 1 or 6 idle workers (Windows and Linux), and amqp's
+consume suite passed 40 times out of 40 at `--cpus=1`.
+
 **What happens.** `Queue` chooses between starting a worker and signalling `FWork` by looking at
 `FIdle`:
 
@@ -119,6 +123,9 @@ end.
 ```
 
 ## 2. On FPC/Linux, `TThread.ProcessorCount` is 1, so `PcPool`'s ceiling is always 16
+
+**Status: fixed in pascal-common-faa 1.2.0** (`PcProcessorCount`). Confirmed here: in the same
+container, `PcPool.MaxWorkers` went from 16 to 48 (`TThread.ProcessorCount` still reads 1).
 
 **Measured** (FPC 3.2.2, Debian 12 container, `nproc` = 12, with and without `--cpus=1`):
 `TThread.ProcessorCount = 1` and `PcPool.MaxWorkers = 16`. The default ceiling documented as

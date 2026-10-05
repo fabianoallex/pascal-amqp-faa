@@ -1,4 +1,4 @@
-unit AMQP.Threading;
+﻿unit AMQP.Threading;
 
 {$I amqp.inc}
 
@@ -28,8 +28,12 @@ uses
   DateUtils,
   PascalCommon.Version;
 
-{$IF PASCALCOMMON_VERSION < 10000}
-  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.0.0 ou mais nova'}
+// 1.1.3: antes dela o PcPool nao crescia numa rajada de itens (com 1 worker
+// ocioso, 17 callbacks que bloqueiam rodavam um de cada vez) -- achado aqui,
+// ver .ci/findings-for-pascal-common-faa.md. Os callbacks do cliente rodam
+// no PcPool, entao uma copia mais velha e' defeito em producao, nao so' teste.
+{$IF PASCALCOMMON_VERSION < 10103}
+  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova'}
 {$IFEND}
 
 /// Milissegundos de RELOGIO DE PAREDE desde a epoch Unix, em UTC.
