@@ -1437,7 +1437,7 @@ begin
     // body-size 0: a mensagem fecha no proprio content-header.
     SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(0));
     Assert.IsTrue(LSink.WaitCount(1, 3000), 'mensagem sem corpo aceita');
-    Assert.AreEqual(0, Length(LSink.Body), 'corpo vazio');
+    Assert.AreEqual(0, Integer(Length(LSink.Body)), 'corpo vazio');
 
     // Canal voltou ao ocioso: um metodo normal e' respondido.
     SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));

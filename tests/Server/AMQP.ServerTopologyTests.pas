@@ -261,7 +261,7 @@ begin
     Assert.IsFalse(R2.AutoDelete, 'auto-delete');
     Assert.IsTrue(R2.Internal, 'internal');
     Assert.IsTrue(R2.Arguments <> nil, 'argumentos vieram');
-    Assert.AreEqual(1, R2.Arguments.Count, 'uma chave');
+    Assert.AreEqual(1, Integer(R2.Arguments.Count), 'uma chave');
   finally
     R2.Arguments.Free;
   end;

@@ -233,7 +233,7 @@ begin
     R.Add('/app');
     Assert.IsTrue(R.Contains('/app'));
     R.Add('/app'); // idempotente
-    Assert.AreEqual(2, Length(R.ToArray));
+    Assert.AreEqual(2, Integer(Length(R.ToArray)));
     R.Remove('/app');
     Assert.IsFalse(R.Contains('/app'));
     Assert.IsTrue(R.Contains('/'), 'raiz intacta');
@@ -623,7 +623,7 @@ begin
           TThread.Sleep(10);
           Conns := B.Connections;
         end;
-        Assert.AreEqual(1, Length(Conns), 'conexao viva');
+        Assert.AreEqual(1, Integer(Length(Conns)), 'conexao viva');
         Assert.IsTrue(Conns[0].FramesRead >= 1, 'heartbeat contabilizado');
       finally
         Strm.Free;

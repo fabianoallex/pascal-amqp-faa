@@ -242,7 +242,7 @@ var
   LChunks: TAMQPBodyChunks;
 begin
   LChunks := AmqpSplitBody(nil, 4096);
-  Assert.AreEqual(0, Length(LChunks), 'corpo vazio -> 0 pedacos');
+  Assert.AreEqual(0, Integer(Length(LChunks)), 'corpo vazio -> 0 pedacos');
 end;
 
 procedure TMessageTests.Split_CorpoMenorQueOMaximo;
@@ -252,7 +252,7 @@ var
 begin
   LBody := AmqpUtf8Encode('um corpo pequeno');
   LChunks := AmqpSplitBody(LBody, 4096);
-  Assert.AreEqual(1, Length(LChunks), 'um pedaco so');
+  Assert.AreEqual(1, Integer(Length(LChunks)), 'um pedaco so');
   Assert.AreEqual(Length(LBody), Length(LChunks[0]), 'tamanho do pedaco unico');
 end;
 
@@ -269,7 +269,7 @@ begin
     LBody[I] := Byte(I and $FF);
 
   LChunks := AmqpSplitBody(LBody, 4096);
-  Assert.AreEqual(75, Length(LChunks), 'numero de pedacos');
+  Assert.AreEqual(75, Integer(Length(LChunks)), 'numero de pedacos');
 
   LTotal := 0;
   for I := 0 to High(LChunks) do
@@ -278,7 +278,7 @@ begin
       Format('pedaco %d nao excede o maximo', [I]));
     Inc(LTotal, Length(LChunks[I]));
   end;
-  Assert.AreEqual(Length(LBody), LTotal, 'soma dos pedacos bate com o corpo');
+  Assert.AreEqual(Integer(Length(LBody)), LTotal, 'soma dos pedacos bate com o corpo');
 
   // A concatenacao dos pedacos reproduz o corpo original.
   SetLength(LRebuilt, LTotal);
@@ -301,7 +301,7 @@ var
 begin
   SetLength(LBody, 10000);
   LChunks := AmqpSplitBody(LBody, 0);
-  Assert.AreEqual(1, Length(LChunks), 'maximo 0 -> um pedaco unico');
+  Assert.AreEqual(1, Integer(Length(LChunks)), 'maximo 0 -> um pedaco unico');
   Assert.AreEqual(Length(LBody), Length(LChunks[0]),
     'pedaco unico tem o corpo inteiro');
 end;

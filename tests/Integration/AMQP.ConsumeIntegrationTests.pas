@@ -162,7 +162,7 @@ begin
 
   LList := FReceived.LockList;
   try
-    Assert.AreEqual(1, LList.Count, 'deveria ter recebido 1 mensagem');
+    Assert.AreEqual(1, Integer(LList.Count), 'deveria ter recebido 1 mensagem');
     Assert.AreEqual('resposta-nfe-123', LList[0]);
   finally
     FReceived.UnlockList;
@@ -191,7 +191,7 @@ begin
 
   LList := FReceived.LockList;
   try
-    Assert.AreEqual(N, LList.Count, 'todas as mensagens deveriam ter sido processadas');
+    Assert.AreEqual(N, Integer(LList.Count), 'todas as mensagens deveriam ter sido processadas');
   finally
     FReceived.UnlockList;
   end;
@@ -222,7 +222,7 @@ begin
 
   LList := FReceived.LockList;
   try
-    Assert.AreEqual(N, LList.Count, 'todas as mensagens deveriam ter sido processadas');
+    Assert.AreEqual(N, Integer(LList.Count), 'todas as mensagens deveriam ter sido processadas');
     for I := 1 to N do
       Assert.AreEqual(Format('msg-%d', [I]), LList[I - 1],
         'worker dedicado deveria preservar a ordem de entrega');

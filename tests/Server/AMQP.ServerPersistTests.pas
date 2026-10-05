@@ -197,7 +197,7 @@ begin
   R.UserId := '';
   R.Body := LB;
   R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
-  Assert.AreEqual(256, Length(R2.Body), '256 bytes de volta');
+  Assert.AreEqual(256, Integer(Length(R2.Body)), '256 bytes de volta');
   Assert.IsTrue(BytesIguais(LB, R2.Body),
     'todos os 256 valores de byte sobrevivem');
 end;
@@ -237,7 +237,7 @@ begin
     DefaultSystemCodePage := LCpAntes;
   end;
   {$ENDIF}
-  Assert.AreEqual(256, Length(R2.Body), '256 bytes de volta');
+  Assert.AreEqual(256, Integer(Length(R2.Body)), '256 bytes de volta');
   Assert.IsTrue(BytesIguais(LB, R2.Body),
     'o corpo nao depende do codepage da app');
 end;
@@ -251,7 +251,7 @@ begin
   R.UserId := 'u';
   R.Body := nil;
   R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
-  Assert.AreEqual(0, Length(R2.Body), 'corpo vazio continua vazio');
+  Assert.AreEqual(0, Integer(Length(R2.Body)), 'corpo vazio continua vazio');
   Assert.AreEqual(Int64(7), Int64(R2.ContentId), 'e o resto sobrevive');
 end;
 

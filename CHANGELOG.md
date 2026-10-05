@@ -6,6 +6,47 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-05
+
+Correções vindas da migração do pascal-dfe-broker para a v0.1.0 (achados 4 e 6 do F10 de lá),
+mais o que a validação desta rodada encontrou. Nenhuma mudança de API além de uma função de
+diagnóstico.
+
+### Corrigido
+
+- **`Close`/`Free` da conexão durante a reconexão esperavam o `ReconnectDelayMs` inteiro.** A
+  espera entre tentativas era um `Sleep`; agora é um evento que o `Close` sinaliza, e fechar é
+  imediato (medido: 3000 ms → 38 ms).
+- **Com `ReconnectDelayMs` acima de 12 s, `Close`/`Destroy` liberavam a conexão com a thread
+  de reconexão ainda viva**, que depois acordava lendo o objeto liberado. A espera desistia
+  num teto de 12 s; agora a thread é unida, e `Close`/`Destroy` só voltam depois de ela sair.
+  Uma tentativa já em curso (connect, handshake, replay da topologia) termina antes, limitada
+  pelos timeouts dela.
+- `Close` chamado de dentro de `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (que rodam na
+  thread de reconexão) ficava preso 12 s esperando a própria thread; agora volta na hora.
+- Broker: **nomes de fila gerados (`amq.gen-…`) se repetiam entre conexões.** A sequência era
+  por conexão, e duas conexões no mesmo milissegundo geravam o mesmo nome; com a primeira fila
+  exclusiva e viva, o declare da segunda levava `405`. A sequência agora é do processo.
+- As suítes de teste compilam no **Delphi Win64** (asserções que comparavam `Integer` com o
+  `NativeInt` de `Length`/`Count`); as quatro passam em Win32 e Win64.
+
+### Adicionado
+
+- `AmqpReconnectThreadsAlive` (`AMQP.Connection`): quantas threads de reconexão existem no
+  processo. Serve a testes e diagnóstico.
+
+### Documentado
+
+- `Close`/`Free` de um canal esperam também os callbacks **ainda na fila** do pool; num canal
+  comum o pool é o `PcPool`, do processo inteiro, e um `PcPool` saturado por outra lib atrasa
+  o fechamento (medido: 1,5 s de saturação, 1,5 s de `Free`). Sem prazo, de propósito;
+  `CreateChannel(True)` não depende do `PcPool` (29 ms no mesmo cenário). Nos dois READMEs.
+
+### Mudado
+
+- Submódulo `external/pascal-common-faa` (só testes e samples) de v1.0.1 para v1.1.2. O mínimo
+  exigido da aplicação continua 1.0.
+
 ## [0.1.0] - 2026-10-04
 
 Primeira versão publicada. Cliente AMQP 0-9-1 para Delphi 12 e FPC 3.2.2/Lazarus (Windows e
@@ -55,5 +96,6 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fabianoallex/pascal-amqp-faa/releases/tag/v0.1.0

@@ -600,7 +600,7 @@ begin
       'bind identico de novo -> ok (idempotente, nao duplica)');
 
     LResult := LVHost.Route('ex1', 'rk', nil);
-    Assert.AreEqual(1, Length(LResult), 'bind repetido nao duplica a entrega');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'bind repetido nao duplica a entrega');
   finally
     LVHost.Free;
   end;
@@ -620,7 +620,7 @@ begin
     Assert.IsTrue(LVHost.UnbindQueue('ex1', 'q1', 'rk', nil) = amqtrOk,
       'unbind');
     LResult := LVHost.Route('ex1', 'rk', nil);
-    Assert.AreEqual(0, Length(LResult), 'nao entrega mais depois do unbind');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'nao entrega mais depois do unbind');
   finally
     LVHost.Free;
   end;
@@ -655,11 +655,11 @@ begin
     LVHost.BindQueue('exd', 'q1', 'rk', nil);
 
     LResult := LVHost.Route('exd', 'rk', nil);
-    Assert.AreEqual(1, Length(LResult), 'routing key igual -> entrega');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'routing key igual -> entrega');
     Assert.AreEqual('q1', LResult[0]);
 
     LResult := LVHost.Route('exd', 'rk-diferente', nil);
-    Assert.AreEqual(0, Length(LResult), 'routing key diferente -> sem entrega');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'routing key diferente -> sem entrega');
   finally
     LVHost.Free;
   end;
@@ -680,7 +680,7 @@ begin
     LVHost.BindQueue('exf', 'q2', 'ignorada-mesmo-assim', nil);
 
     LResult := LVHost.Route('exf', 'qualquer-coisa', nil);
-    Assert.AreEqual(2, Length(LResult),
+    Assert.AreEqual(2, Integer(Length(LResult)),
       'fanout entrega pras duas filas, binding key ignorada');
   finally
     LVHost.Free;
@@ -702,10 +702,10 @@ begin
     LVHost.BindQueue('ext', 'qTodas', 'nota.#', nil);
 
     LResult := LVHost.Route('ext', 'nota.aprovada', nil);
-    Assert.AreEqual(2, Length(LResult), 'as duas filas casam em nota.aprovada');
+    Assert.AreEqual(2, Integer(Length(LResult)), 'as duas filas casam em nota.aprovada');
 
     LResult := LVHost.Route('ext', 'nota.rejeitada', nil);
-    Assert.AreEqual(1, Length(LResult), 'so a fila # casa em nota.rejeitada');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'so a fila # casa em nota.rejeitada');
     Assert.AreEqual('qTodas', LResult[0]);
   finally
     LVHost.Free;
@@ -733,7 +733,7 @@ begin
     try
       LHeaders.Put('tipo', 'nfe');
       LResult := LVHost.Route('exh', '', LHeaders);
-      Assert.AreEqual(1, Length(LResult), 'headers casam -> entrega');
+      Assert.AreEqual(1, Integer(Length(LResult)), 'headers casam -> entrega');
     finally
       LHeaders.Free;
     end;
@@ -742,7 +742,7 @@ begin
     try
       LHeaders.Put('tipo', 'cte');
       LResult := LVHost.Route('exh', '', LHeaders);
-      Assert.AreEqual(0, Length(LResult), 'headers nao casam -> sem entrega');
+      Assert.AreEqual(0, Integer(Length(LResult)), 'headers nao casam -> sem entrega');
     finally
       LHeaders.Free;
     end;
@@ -760,12 +760,12 @@ begin
   try
     LVHost.DeclareQueue('minhaFila', True, False, False, nil);
     LResult := LVHost.Route('', 'minhaFila', nil);
-    Assert.AreEqual(1, Length(LResult),
+    Assert.AreEqual(1, Integer(Length(LResult)),
       'publish direto na fila via exchange default');
     Assert.AreEqual('minhaFila', LResult[0]);
 
     LResult := LVHost.Route('', 'fila-que-nao-existe', nil);
-    Assert.AreEqual(0, Length(LResult), 'fila inexistente -> sem rota');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'fila inexistente -> sem rota');
   finally
     LVHost.Free;
   end;
@@ -787,7 +787,7 @@ begin
 
     // 'a.b' casa nos TRES bindings acima -- so' pode entregar uma vez.
     LResult := LVHost.Route('ext', 'a.b', nil);
-    Assert.AreEqual(1, Length(LResult),
+    Assert.AreEqual(1, Integer(Length(LResult)),
       'fila casada por 3 bindings entrega uma unica vez');
   finally
     LVHost.Free;
@@ -804,10 +804,10 @@ begin
     LVHost.DeclareExchange('ext', AMQP_EXCHANGE_TYPE_TOPIC, True, False,
       False, nil);
     LResult := LVHost.Route('ext', 'nada.casa', nil);
-    Assert.AreEqual(0, Length(LResult), 'sem binding nenhum -> array vazio');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'sem binding nenhum -> array vazio');
 
     LResult := LVHost.Route('exchange-inexistente', 'rk', nil);
-    Assert.AreEqual(0, Length(LResult),
+    Assert.AreEqual(0, Integer(Length(LResult)),
       'exchange inexistente -> array vazio (nao erro)');
   finally
     LVHost.Free;
@@ -831,7 +831,7 @@ begin
     LVHost.BindExchange('exB', 'exA', 'ignorada-no-fanout', nil);
 
     LResult := LVHost.Route('exA', 'rk', nil);
-    Assert.AreEqual(1, Length(LResult), 'publish em exA chega em q1 via exB');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'publish em exA chega em q1 via exB');
     Assert.AreEqual('q1', LResult[0]);
   finally
     LVHost.Free;
@@ -858,7 +858,7 @@ begin
     // Se nao terminar, o runner de testes trava/estoura -- o proprio teste
     // rodar ate o fim ja e' parte da asserção.
     LResult := LVHost.Route('exA', 'qualquer', nil);
-    Assert.AreEqual(1, Length(LResult), 'ciclo nao duplica a entrega em q1');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'ciclo nao duplica a entrega em q1');
   finally
     LVHost.Free;
   end;
@@ -880,10 +880,10 @@ begin
     Assert.IsFalse(LVHost.QueueExists('q1'), 'fila sumiu');
 
     LResult := LVHost.Route('ext', 'a.b', nil);
-    Assert.AreEqual(0, Length(LResult), 'binding no topic sumiu junto');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'binding no topic sumiu junto');
 
     LResult := LVHost.Route('', 'q1', nil);
-    Assert.AreEqual(0, Length(LResult),
+    Assert.AreEqual(0, Integer(Length(LResult)),
       'auto-bind no exchange default tambem sumiu');
 
     Assert.IsTrue(LVHost.DeleteQueue('q1') = amqtrNotFound,
@@ -913,7 +913,7 @@ begin
     // O binding exA->exB nao pode ter sobrado apontando pro vazio: publicar
     // em exA nao pode dar erro nem "achar" q1 mais.
     LResult := LVHost.Route('exA', 'rk', nil);
-    Assert.AreEqual(0, Length(LResult), 'binding pendurado para exB sumiu');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'binding pendurado para exB sumiu');
   finally
     LVHost.Free;
   end;
@@ -948,11 +948,11 @@ begin
     LVHost.BindQueue('ae', 'q.ae', '', nil);
 
     LResult := LVHost.Route('ex', 'certa', nil);
-    Assert.AreEqual(1, Length(LResult), 'casou: vai pela rota normal');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'casou: vai pela rota normal');
     Assert.AreEqual('q.normal', LResult[0]);
 
     LResult := LVHost.Route('ex', 'nao-casa-nada', nil);
-    Assert.AreEqual(1, Length(LResult), 'nao casou: vai para o AE');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'nao casou: vai para o AE');
     Assert.AreEqual('q.ae', LResult[0]);
   finally
     LVHost.Free;
@@ -982,7 +982,7 @@ begin
     LVHost.BindExchange('meio', 'ex', '', nil);
 
     LResult := LVHost.Route('ex', 'qualquer', nil);
-    Assert.AreEqual(0, Length(LResult), 'binding casou, entao o AE de ex nao entra');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'binding casou, entao o AE de ex nao entra');
   finally
     LVHost.Free;
   end;
@@ -1006,7 +1006,7 @@ begin
     LVHost.BindQueue('ae2', 'q.fim', '', nil);
 
     LResult := LVHost.Route('ex', 'nada-casa', nil);
-    Assert.AreEqual(1, Length(LResult), 'desceu dois niveis de AE');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'desceu dois niveis de AE');
     Assert.AreEqual('q.fim', LResult[0]);
   finally
     LVHost.Free;
@@ -1028,7 +1028,7 @@ begin
       False, ArgsAe('a'));
 
     LResult := LVHost.Route('a', 'nada', nil);
-    Assert.AreEqual(0, Length(LResult), 'ciclo de AE termina, sem rota');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'ciclo de AE termina, sem rota');
   finally
     LVHost.Free;
   end;
@@ -1046,7 +1046,7 @@ begin
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, ArgsAe('nao-existe'));
     LResult := LVHost.Route('ex', 'nada', nil);
-    Assert.AreEqual(0, Length(LResult), 'sem rota, e sem travar');
+    Assert.AreEqual(0, Integer(Length(LResult)), 'sem rota, e sem travar');
   finally
     LVHost.Free;
   end;
@@ -1077,7 +1077,7 @@ begin
       LVal := TValue.From<string>('sul');
       LHeaders.Put('regiao', LVal);
       LResult := LVHost.Route('ex', 'nada-casa', LHeaders);
-      Assert.AreEqual(1, Length(LResult), 'o AE headers casou');
+      Assert.AreEqual(1, Integer(Length(LResult)), 'o AE headers casou');
       Assert.AreEqual('q.ae', LResult[0]);
     finally
       LHeaders.Free;
@@ -1122,7 +1122,7 @@ begin
 
     LIni := PcTickMs;
     LResult := LVHost.Route('e0', 'qualquer', nil);
-    Assert.AreEqual(1, Length(LResult), 'chegou ao fim');
+    Assert.AreEqual(1, Integer(Length(LResult)), 'chegou ao fim');
     Assert.IsTrue((PcTickMs - LIni) < 500, 'travessia tem de ser linear, nao exponencial (levou ' + IntToStr(PcTickMs - LIni) + ' ms)');
   finally
     LVHost.Free;

@@ -100,7 +100,7 @@ var
 begin
   FWriter.WriteOctet($7F);
   B := FWriter.ToBytes;
-  Assert.AreEqual(1, Length(B));
+  Assert.AreEqual(1, Integer(Length(B)));
   EqualByte($7F, B[0]);
 end;
 
@@ -110,7 +110,7 @@ var
 begin
   FWriter.WriteShortUInt($1234);
   B := FWriter.ToBytes;
-  Assert.AreEqual(2, Length(B));
+  Assert.AreEqual(2, Integer(Length(B)));
   EqualByte($12, B[0]);
   EqualByte($34, B[1]);
 end;
@@ -121,7 +121,7 @@ var
 begin
   FWriter.WriteLongUInt($DEADBEEF);
   B := FWriter.ToBytes;
-  Assert.AreEqual(4, Length(B));
+  Assert.AreEqual(4, Integer(Length(B)));
   EqualByte($DE, B[0]);
   EqualByte($AD, B[1]);
   EqualByte($BE, B[2]);
@@ -134,7 +134,7 @@ var
 begin
   FWriter.WriteLongLongUInt(UInt64($0102030405060708));
   B := FWriter.ToBytes;
-  Assert.AreEqual(8, Length(B));
+  Assert.AreEqual(8, Integer(Length(B)));
   EqualByte($01, B[0]);
   EqualByte($08, B[7]);
 end;
@@ -145,7 +145,7 @@ var
 begin
   FWriter.WriteShortStr('hi');
   B := FWriter.ToBytes;
-  Assert.AreEqual(3, Length(B));
+  Assert.AreEqual(3, Integer(Length(B)));
   EqualByte(2, B[0]);
   EqualByte(Ord('h'), B[1]);
   EqualByte(Ord('i'), B[2]);
@@ -158,7 +158,7 @@ begin
   // 'á' = 2 octetos em UTF-8 (0xC3 0xA1).
   FWriter.WriteShortStr('á');
   B := FWriter.ToBytes;
-  Assert.AreEqual(3, Length(B));
+  Assert.AreEqual(3, Integer(Length(B)));
   EqualByte(2, B[0]);
   EqualByte($C3, B[1]);
   EqualByte($A1, B[2]);
@@ -180,7 +180,7 @@ var
 begin
   FWriter.WriteLongStr('AB');
   B := FWriter.ToBytes;
-  Assert.AreEqual(6, Length(B));
+  Assert.AreEqual(6, Integer(Length(B)));
   EqualByte(0, B[0]);
   EqualByte(0, B[1]);
   EqualByte(0, B[2]);
@@ -197,7 +197,7 @@ begin
   FWriter.WriteBit(False);
   FWriter.WriteBit(True);
   B := FWriter.ToBytes;
-  Assert.AreEqual(1, Length(B));
+  Assert.AreEqual(1, Integer(Length(B)));
   EqualByte($05, B[0]);
 end;
 
@@ -211,7 +211,7 @@ begin
     FWriter.WriteBit(True);
   FWriter.WriteBit(True);
   B := FWriter.ToBytes;
-  Assert.AreEqual(2, Length(B));
+  Assert.AreEqual(2, Integer(Length(B)));
   EqualByte($FF, B[0]);
   EqualByte($01, B[1]);
 end;
@@ -223,7 +223,7 @@ begin
   FWriter.WriteBit(True);       // octeto parcial = 0x01
   FWriter.WriteOctet($AA);      // deve descarregar o bit antes
   B := FWriter.ToBytes;
-  Assert.AreEqual(2, Length(B));
+  Assert.AreEqual(2, Integer(Length(B)));
   EqualByte($01, B[0]);
   EqualByte($AA, B[1]);
 end;
@@ -482,7 +482,7 @@ begin
     W.WriteFieldTable(LIn);
     B := W.ToBytes;
     // Apenas o u32 de comprimento = 0.
-    Assert.AreEqual(4, Length(B));
+    Assert.AreEqual(4, Integer(Length(B)));
     EqualByte(0, B[0]);
     EqualByte(0, B[3]);
   finally
@@ -596,7 +596,7 @@ begin
     try
       Assert.IsTrue(LOut.TryGetValue('x-death', LVal), 'deve ter x-death');
       Assert.IsTrue(LVal.IsArray, 'valor deve ser array');
-      Assert.AreEqual(1, LVal.GetArrayLength, 'um elemento');
+      Assert.AreEqual(1, Integer(LVal.GetArrayLength), 'um elemento');
       // AmqpUnwrapValue e' obrigatorio: o GetArrayElement devolve o elemento
       // re-embrulhado num TValue tkRecord, aqui no Delphi tambem (o Make nao
       // colapsa TValue-em-TValue) — sem o unwrap, IsObject daria False.
@@ -671,7 +671,7 @@ begin
       Assert.IsTrue(LOut.TryGetValue('x-death', LVal), 'deve ter x-death');
       LVal := AmqpUnwrapValue(LVal);
       Assert.IsTrue(LVal.IsArray, 'valor deve ser array');
-      Assert.AreEqual(1, LVal.GetArrayLength, 'um elemento');
+      Assert.AreEqual(1, Integer(LVal.GetArrayLength), 'um elemento');
       LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
       Assert.IsTrue(LElem.IsObject and (LElem.AsObject is TAMQPFieldTable),
         'elemento deve ser tabela');
@@ -731,7 +731,7 @@ begin
   try
     Assert.IsTrue(LT2.TryGetValue('lista', LVal), 'deve ter lista');
     LVal := AmqpUnwrapValue(LVal);
-    Assert.AreEqual(3, LVal.GetArrayLength, 'tres elementos');
+    Assert.AreEqual(3, Integer(LVal.GetArrayLength), 'tres elementos');
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
     Assert.AreEqual('um', LElem.AsString, 'elemento 0');
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(1));
@@ -786,7 +786,7 @@ begin
       Assert.IsTrue(LT2.TryGetValue('nada', LVal), 'deve ter a chave');
       LVal := AmqpUnwrapValue(LVal);
       Assert.IsTrue(LVal.IsArray, 'deve ser array');
-      Assert.AreEqual(0, LVal.GetArrayLength, 'sem elementos');
+      Assert.AreEqual(0, Integer(LVal.GetArrayLength), 'sem elementos');
     finally
       LT2.Free;
     end;
@@ -840,7 +840,7 @@ begin
       SetLength(LVolta, LVal.GetArrayLength);
       for I := 0 to High(LVolta) do
         LVolta[I] := Byte(LVal.GetArrayElement(I).AsInteger);
-      Assert.AreEqual(4, Length(LVolta), 'quatro bytes de volta');
+      Assert.AreEqual(4, Integer(Length(LVolta)), 'quatro bytes de volta');
       Assert.AreEqual(BytesHex(LOrig), BytesHex(LVolta), 'conteudo intacto');
     finally
       LT2.Free;

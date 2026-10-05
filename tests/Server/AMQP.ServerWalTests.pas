@@ -327,7 +327,7 @@ begin
     Assert.AreEqual(Int64(1), Int64(LRecs[0].Lsn), 'primeiro lsn');
     Assert.AreEqual(Int64(50), Int64(LRecs[49].Lsn), 'ultimo lsn');
     Assert.AreEqual(Int64(5 mod 7), Int64(LRecs[4].Kind), 'kind do 5o');
-    Assert.AreEqual(50, Length(LRecs[49].Payload),
+    Assert.AreEqual(50, Integer(Length(LRecs[49].Payload)),
       'tamanho do payload do 50o');
     Assert.AreEqual(StringOfChar('x', 50), ComoTexto(LRecs[49].Payload),
       'conteudo do 50o');
@@ -352,7 +352,7 @@ begin
     LSeg.Append(2, 9, Bytes('depois'));
     Assert.AreEqual(2, LSeg.ReadPrefix(LRecs, LStop), 'dois registros');
     Assert.IsTrue(LStop = awsEnd, 'integro ate o fim');
-    Assert.AreEqual(0, Length(LRecs[0].Payload), 'payload vazio');
+    Assert.AreEqual(0, Integer(Length(LRecs[0].Payload)), 'payload vazio');
     Assert.AreEqual('depois', ComoTexto(LRecs[1].Payload),
       'o seguinte continua legivel');
   finally
@@ -562,7 +562,7 @@ begin
     LSeg.Free;
   end;
   LOrig := FDuble.Bytes;
-  Assert.AreEqual(LFim[20], Length(LOrig), 'tamanho previsto');
+  Assert.AreEqual(LFim[20], Integer(Length(LOrig)), 'tamanho previsto');
 
   for LCorte := AMQP_WAL_SEG_HEADER_SIZE to Length(LOrig) do
   begin
@@ -1086,7 +1086,7 @@ begin
   try
     Assert.AreEqual(30, LSeg.ReadPrefix(LRecs, LStop), 'leu do disco');
     Assert.IsTrue(LStop = awsEnd, 'integro');
-    Assert.AreEqual(60, Length(LRecs[29].Payload), 'ultimo payload');
+    Assert.AreEqual(60, Integer(Length(LRecs[29].Payload)), 'ultimo payload');
   finally
     LSeg.Free;
     LArq := nil;
@@ -1116,7 +1116,7 @@ begin
     LArq := nil;
   end;
   LSegs := AmqpWalListSegments(DirTeste);
-  Assert.AreEqual(4, Length(LSegs), 'achou os quatro');
+  Assert.AreEqual(4, Integer(Length(LSegs)), 'achou os quatro');
   Assert.AreEqual(Int64(1), Int64(LSegs[0]), '1o');
   Assert.AreEqual(Int64(2), Int64(LSegs[1]), '2o');
   Assert.AreEqual(Int64(10), Int64(LSegs[2]), '3o');

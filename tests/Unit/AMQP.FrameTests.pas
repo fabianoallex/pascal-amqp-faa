@@ -59,7 +59,7 @@ begin
     LFrame.WriteTo(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
     // type=1, channel=00 01, size=00 00 00 02, payload=AA BB, end=CE => 10 octetos
-    Assert.AreEqual(10, Length(B));
+    Assert.AreEqual(10, Integer(Length(B)));
     EqualByte(AMQP_FRAME_METHOD, B[0]);
     EqualByte($00, B[1]);
     EqualByte($01, B[2]);
@@ -105,7 +105,7 @@ begin
     LIn := TAMQPFrame.ReadFrom(LStream);
     EqualByte(AMQP_FRAME_METHOD, LIn.FrameType);
     Assert.AreEqual(Word(7), LIn.Channel);
-    Assert.AreEqual(4, Length(LIn.Payload));
+    Assert.AreEqual(4, Integer(Length(LIn.Payload)));
     EqualByte(30, LIn.Payload[2]);
     Assert.IsTrue(LIn.IsMethod);
   finally
@@ -124,7 +124,7 @@ begin
     LOut.WriteTo(LStream);
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
-    Assert.AreEqual(0, Length(LIn.Payload));
+    Assert.AreEqual(0, Integer(Length(LIn.Payload)));
     Assert.AreEqual(Word(0), LIn.Channel);
   finally
     LStream.Free;
@@ -210,7 +210,7 @@ begin
   try
     WriteProtocolHeader(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
-    Assert.AreEqual(8, Length(B));
+    Assert.AreEqual(8, Integer(Length(B)));
     EqualByte(Ord('A'), B[0]);
     EqualByte(Ord('M'), B[1]);
     EqualByte(Ord('Q'), B[2]);

@@ -34,7 +34,7 @@ uses
 
 const
   AMQP_CLIENT_PRODUCT = 'pascal-amqp-faa';
-  AMQP_CLIENT_VERSION = '0.1.0';
+  AMQP_CLIENT_VERSION = '0.1.1';
   {$IFDEF FPC}
   AMQP_CLIENT_PLATFORM = 'FreePascal';
   {$ELSE}
@@ -124,7 +124,7 @@ function NegotiateTune(const AServerTune: TAMQPConnectionTune;
 
 const
   AMQP_SERVER_PRODUCT  = 'pascal-amqp-faa (broker)';
-  AMQP_SERVER_VERSION  = '0.1.0';
+  AMQP_SERVER_VERSION  = '0.1.1';
   AMQP_SERVER_PLATFORM = AMQP_CLIENT_PLATFORM; // 'Delphi' | 'FreePascal'
   /// Versão do protocolo que o broker anuncia no Connection.Start.
   AMQP_VERSION_MAJOR = 0;

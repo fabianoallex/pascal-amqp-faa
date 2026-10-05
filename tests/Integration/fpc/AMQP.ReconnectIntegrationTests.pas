@@ -33,6 +33,10 @@ type
     // não existe no FPC -> PcAtomic*.
     FDropTestReconnected: Integer;
     FRepublishTestReconnected: Integer;
+    // Testes de fechamento durante a reconexão: quedas percebidas (OnDisconnect)
+    // e Close chamados de dentro do OnDisconnect que já voltaram.
+    FCloseTestDisconnected: Integer;
+    FSelfCloseDone: Integer;
     function ReceivedContains(const AText: string): Boolean;
     procedure WaitReceived(const AText: string; ATimeoutMs: Integer);
     procedure WaitReconnected(ATimeoutMs: Integer);
@@ -40,6 +44,11 @@ type
     procedure HandleConsumerDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleDropTestReconnect(AConnection: TAMQPConnection);
     procedure HandleRepublishTestReconnect(AConnection: TAMQPConnection);
+    procedure HandleCloseTestDisconnect(AConnection: TAMQPConnection);
+    procedure HandleSelfCloseDisconnect(AConnection: TAMQPConnection);
+    function NewReconnectingConnection(ADelayMs: Cardinal;
+      AOnDisconnect: TAMQPConnectionEvent): TAMQPConnection;
+    procedure WaitCounter(var ACounter: Integer; ATimeoutMs: Integer);
   protected
     procedure SetUp; override;
     procedure TearDown; override;
@@ -47,6 +56,9 @@ type
     procedure Reconecta_E_ContinuaConsumindo;
     procedure Confirm_PerdaNaQueda_WaitForConfirmsRetornaFalse;
     procedure Confirm_Republish_ReenviaNaoConfirmadosAposQueda;
+    procedure Close_DuranteEsperaDeReconexao_NaoEsperaODelay;
+    procedure Close_ComReconnectDelayAlto_VoltaComAThreadEncerrada;
+    procedure Close_DeDentroDoOnDisconnect_NaoTrava;
   end;
 
 implementation
@@ -60,6 +72,8 @@ begin
   FReconnected := 0;
   FDropTestReconnected := 0;
   FRepublishTestReconnected := 0;
+  FCloseTestDisconnected := 0;
+  FSelfCloseDone := 0;
   FQueue := 'test-recon-' + IntToStr(PcTickMs);
 
   // Conexão de controle (sem auto-reconnect) só para publicar.
@@ -116,6 +130,43 @@ end;
 procedure TAMQPReconnectIntegrationTests.HandleRepublishTestReconnect(AConnection: TAMQPConnection);
 begin
   PcAtomicSet(FRepublishTestReconnected, 1);
+end;
+
+procedure TAMQPReconnectIntegrationTests.HandleCloseTestDisconnect(AConnection: TAMQPConnection);
+begin
+  PcAtomicInc(FCloseTestDisconnected);
+end;
+
+procedure TAMQPReconnectIntegrationTests.HandleSelfCloseDisconnect(AConnection: TAMQPConnection);
+begin
+  // Roda NA thread de reconexão: o Close não pode unir a própria thread.
+  AConnection.Close;
+  PcAtomicInc(FSelfCloseDone);
+end;
+
+function TAMQPReconnectIntegrationTests.NewReconnectingConnection(ADelayMs: Cardinal;
+  AOnDisconnect: TAMQPConnectionEvent): TAMQPConnection;
+var
+  LParams: TAMQPConnectionParams;
+begin
+  LParams := IntegrationParams;
+  LParams.AutoReconnect := True;
+  LParams.ReconnectDelayMs := ADelayMs;
+  Result := TAMQPConnection.Create(LParams);
+  Result.OnDisconnect := AOnDisconnect;
+end;
+
+procedure TAMQPReconnectIntegrationTests.WaitCounter(var ACounter: Integer;
+  ATimeoutMs: Integer);
+var
+  LWaited: Integer;
+begin
+  LWaited := 0;
+  while (PcAtomicGet(ACounter) = 0) and (LWaited < ATimeoutMs) do
+  begin
+    TThread.Sleep(20);
+    Inc(LWaited, 20);
+  end;
 end;
 
 function TAMQPReconnectIntegrationTests.ReceivedContains(const AText: string): Boolean;
@@ -292,6 +343,81 @@ begin
     LPubChan.Free;
     LPubConn.Free;
   end;
+end;
+
+procedure TAMQPReconnectIntegrationTests.Close_DuranteEsperaDeReconexao_NaoEsperaODelay;
+var
+  LConn: TAMQPConnection;
+  LInicio, LGasto: UInt64;
+begin
+  // A conexão cai e a reconexão entra na espera de ReconnectDelayMs (o
+  // OnDisconnect dispara logo antes dela). Fechar ali tem de ser imediato: o
+  // Close acorda a espera, não espera ela vencer. Antes era um Sleep, e o
+  // Free levava o delay inteiro (medido pelo pascal-dfe-broker: 2,0-2,1 s com
+  // 2000 ms).
+  LConn := NewReconnectingConnection(3000, HandleCloseTestDisconnect);
+  try
+    LConn.Open;
+    LConn.DropConnectionForTest;
+    WaitCounter(FCloseTestDisconnected, 10000);
+    AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
+    LInicio := PcTickMs;
+    FreeAndNil(LConn);
+    LGasto := PcTickMs - LInicio;
+  finally
+    LConn.Free;
+  end;
+  AssertTrue('fechar na espera da reconexão não espera os 3000 ms (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+  AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
+end;
+
+procedure TAMQPReconnectIntegrationTests.Close_ComReconnectDelayAlto_VoltaComAThreadEncerrada;
+var
+  LConn: TAMQPConnection;
+  LInicio, LGasto: UInt64;
+begin
+  // Delay maior que o antigo teto de 12 s do WaitReconnectStopped: antes, o
+  // Close desistia de esperar com a thread de reconexão ainda dormindo, e ela
+  // acordava lendo um objeto já liberado. Agora o Close a une: volta rápido E
+  // com ela encerrada.
+  LConn := NewReconnectingConnection(60000, HandleCloseTestDisconnect);
+  try
+    LConn.Open;
+    LConn.DropConnectionForTest;
+    WaitCounter(FCloseTestDisconnected, 10000);
+    AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
+    LInicio := PcTickMs;
+    FreeAndNil(LConn);
+    LGasto := PcTickMs - LInicio;
+  finally
+    LConn.Free;
+  end;
+  AssertEquals('Close/Destroy só voltam com a thread de reconexão encerrada', 0, AmqpReconnectThreadsAlive);
+  AssertTrue('e voltam logo (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+end;
+
+procedure TAMQPReconnectIntegrationTests.Close_DeDentroDoOnDisconnect_NaoTrava;
+var
+  LConn: TAMQPConnection;
+  LInicio, LGasto: UInt64;
+begin
+  // O OnDisconnect roda na thread de reconexão. Um Close chamado dali não pode
+  // esperar a si mesmo: antes ficava preso no teto de 12 s. Agora volta na
+  // hora, a reconexão não acontece, e o Free (de outra thread) une a thread.
+  LConn := NewReconnectingConnection(60000, HandleSelfCloseDisconnect);
+  try
+    LConn.Open;
+    LInicio := PcTickMs;
+    LConn.DropConnectionForTest;
+    WaitCounter(FSelfCloseDone, 10000);
+    LGasto := PcTickMs - LInicio;
+    AssertEquals('o Close de dentro do OnDisconnect voltou', 1, PcAtomicGet(FSelfCloseDone));
+    AssertTrue('e voltou logo (' + IntToStr(LGasto) + ' ms)', LGasto < 3000);
+    AssertTrue('a conexão ficou fechada', not LConn.IsOpen);
+  finally
+    LConn.Free;
+  end;
+  AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
 end;
 
 initialization

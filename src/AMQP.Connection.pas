@@ -380,6 +380,12 @@ type
     /// pelo destrutor da conexão; esquecer o Free depois de um Close vaza o
     /// objeto. O par correto é sempre `Ch.Close; Ch.Free;` (ou só `Ch.Free`,
     /// que fecha antes de liberar).
+    ///
+    /// Close e Free esperam, sem prazo, os callbacks deste canal contados desde
+    /// o ENFILEIRAMENTO — inclusive os que ainda estão na fila do pool. Num
+    /// canal comum o pool é o PcPool, do processo inteiro: se outra lib o
+    /// saturar, fechar espera a fila dele andar. CreateChannel(True) não
+    /// depende dele (ver DrainInFlight).
     procedure Close(AReplyCode: Word = 200; const AReplyText: string = 'OK');
 
     property ChannelId: Word read FChannelId;
@@ -435,6 +441,14 @@ type
     // --- reconexão ---
     FDeliberateClose: Boolean; // True quando o usuário fechou (não reconectar)
     FReconnecting: Boolean;
+    // Thread da reconexão em curso (ou da última, já terminada), unida no Close
+    // ou antes de criar a próxima. Protegida por FReconnectLock, que também
+    // torna atômicos "decidir reconectar" (thread de leitura) e "fechar de
+    // propósito" (Close). FReconnectWake é sinalizado pelo Close e acorda a
+    // espera entre tentativas na hora.
+    FReconnectLock: TCriticalSection;
+    FReconnectWake: TEvent;
+    FReconnectThread: TThread;
     FOnDisconnect: TAMQPConnectionEvent;
     FOnReconnect: TAMQPConnectionEvent;
     FOnReconnectFailed: TAMQPConnectionEvent;
@@ -473,7 +487,7 @@ type
     procedure RunReconnect;
     procedure RecoverAllChannels;
     procedure DrainAllChannels;
-    procedure WaitReconnectStopped;
+    procedure StopReconnect;
   public
     constructor Create(const AParams: TAMQPConnectionParams);
     destructor Destroy; override;
@@ -485,7 +499,8 @@ type
     /// o canal da rede de segurança do destrutor da conexão).
     /// ADedicatedConsumerThread: se True, as entregas/returns/confirms deste
     /// canal são despachados para uma única thread própria do canal (ordem
-    /// garantida, nunca concorrente) em vez do pool global compartilhado.
+    /// garantida, nunca concorrente) em vez do pool global compartilhado — e
+    /// fechar/liberar o canal não depende de o PcPool estar livre.
     function CreateChannel(ADedicatedConsumerThread: Boolean = False): TAMQPChannel;
     /// Envia Connection.Close, aguarda Close-Ok e fecha o socket.
     procedure Close(AReplyCode: Word = 200; const AReplyText: string = 'Goodbye');
@@ -509,6 +524,11 @@ type
     property OnUnblocked: TAMQPConnectionEvent read FOnUnblocked write FOnUnblocked;
   end;
 
+/// Quantas threads de reconexão existem no processo agora (uso em testes):
+/// cai a zero só quando a última sai do Execute, depois do último acesso à
+/// conexão. É o que prova que Close/Destroy esperam a reconexão sair de fato.
+function AmqpReconnectThreadsAlive: Integer;
+
 implementation
 
 uses
@@ -529,7 +549,9 @@ const
 
 type
   { Thread dedicada da reconexão (substitui TThread.CreateAnonymousThread,
-    que não existe com method pointers / no FPC). Auto-libera ao terminar. }
+    que não existe com method pointers / no FPC). NÃO se auto-libera: a conexão
+    guarda a referência e a une (StopReconnect, ReadThreadFinished) — é assim
+    que o Close sabe que ela saiu de fato. }
   TAMQPReconnectThread = class(TThread)
   private
     FConnection: TAMQPConnection;
@@ -602,16 +624,29 @@ type
 
 { TAMQPReconnectThread }
 
+var
+  GReconnectThreadsAlive: Integer = 0;
+
+function AmqpReconnectThreadsAlive: Integer;
+begin
+  Result := PcAtomicGet(GReconnectThreadsAlive);
+end;
+
 constructor TAMQPReconnectThread.Create(AConnection: TAMQPConnection);
 begin
   FConnection := AConnection;
-  FreeOnTerminate := True;
+  FreeOnTerminate := False;
+  PcAtomicInc(GReconnectThreadsAlive); // antes de a thread poder partir
   inherited Create(False);
 end;
 
 procedure TAMQPReconnectThread.Execute;
 begin
-  FConnection.RunReconnect;
+  try
+    FConnection.RunReconnect;
+  finally
+    PcAtomicDec(GReconnectThreadsAlive);
+  end;
 end;
 
 { TAMQPDeliveryWork }
@@ -838,6 +873,8 @@ begin
   FChannels := TDictionary<Word, TAMQPChannel>.Create;
   FCloseOkEvent := TEvent.Create(nil, True, False, '');
   FHbStopEvent := TEvent.Create(nil, True, False, '');
+  FReconnectLock := TCriticalSection.Create;
+  FReconnectWake := TEvent.Create(nil, True, False, '');
 end;
 
 destructor TAMQPConnection.Destroy;
@@ -862,6 +899,8 @@ begin
   FWriteLock.Free;
   FCloseOkEvent.Free;
   FHbStopEvent.Free;
+  FReconnectWake.Free;
+  FReconnectLock.Free;
   inherited;
 end;
 
@@ -1188,11 +1227,25 @@ begin
     LChan.SignalError(LMsg);
 
   // Queda inesperada: dispara a reconexão (numa thread própria, pois esta é a
-  // thread de leitura que está terminando).
-  if FParams.AutoReconnect and (not FDeliberateClose) and (not FReconnecting) then
-  begin
-    FReconnecting := True;
-    TAMQPReconnectThread.Create(Self); // FreeOnTerminate: se auto-libera
+  // thread de leitura que está terminando). Sob FReconnectLock: ou o Close já
+  // marcou FDeliberateClose e nada é criado, ou a thread nasce antes e o Close
+  // a encontra para unir.
+  FReconnectLock.Enter;
+  try
+    if FParams.AutoReconnect and (not FDeliberateClose) and (not FReconnecting) then
+    begin
+      // A thread da reconexão anterior (bem-sucedida) já zerou FReconnecting,
+      // que é a última coisa que ela faz: está saindo, e o join é curto.
+      if Assigned(FReconnectThread) then
+      begin
+        FReconnectThread.WaitFor;
+        FreeAndNil(FReconnectThread);
+      end;
+      FReconnecting := True;
+      FReconnectThread := TAMQPReconnectThread.Create(Self);
+    end;
+  finally
+    FReconnectLock.Leave;
   end;
 end;
 
@@ -1226,17 +1279,36 @@ begin
     LChan.Recover;
 end;
 
-procedure TAMQPConnection.WaitReconnectStopped;
+procedure TAMQPConnection.StopReconnect;
 var
-  LWaited: Integer;
+  LThread: TThread;
 begin
-  // Assume FDeliberateClose já True. Espera a thread de reconexão encerrar para
-  // evitar corrida no teardown do socket/threads.
-  LWaited := 0;
-  while FReconnecting and (LWaited < 12000) do
+  // Marca o fechamento deliberado, acorda a espera entre tentativas e UNE a
+  // thread de reconexão: só volta quando ela saiu de fato, porque depois disto
+  // o Close mexe no socket e o Destroy libera o objeto que ela usa. Sem prazo
+  // de propósito: a espera entre tentativas termina na hora (FReconnectWake);
+  // o que pode demorar é uma tentativa já em curso (connect/handshake/replay),
+  // limitada pelos timeouts dela. Desistir antes seria use-after-free.
+  FReconnectLock.Enter;
+  try
+    FDeliberateClose := True;
+    FReconnectWake.SetEvent;
+    LThread := FReconnectThread;
+    // Close chamado de um callback que roda NA thread de reconexão
+    // (OnDisconnect, OnReconnect, OnReconnectFailed): ela não pode unir a si
+    // mesma. Fica para o Close/Destroy seguinte, de outra thread; o laço da
+    // reconexão vê FDeliberateClose e sai.
+    if Assigned(LThread) and (LThread.ThreadID = TThread.CurrentThread.ThreadID) then
+      LThread := nil
+    else
+      FReconnectThread := nil; // o join abaixo é o único (no Unix não é idempotente)
+  finally
+    FReconnectLock.Leave;
+  end;
+  if Assigned(LThread) then
   begin
-    Sleep(20);
-    Inc(LWaited, 20);
+    LThread.WaitFor;
+    LThread.Free;
   end;
 end;
 
@@ -1245,7 +1317,7 @@ var
   LAttempt: Integer;
   LDelay: Cardinal;
 begin
-  // Roda numa thread anônima dedicada; FReconnecting já está True.
+  // Roda na TAMQPReconnectThread; FReconnecting já está True.
   try
     StopHeartbeatThread;
     StopReadThread;    // aguarda a thread de leitura antiga terminar
@@ -1262,7 +1334,8 @@ begin
     LAttempt := 0;
     while not FDeliberateClose do
     begin
-      Sleep(LDelay);
+      // Não é Sleep: o Close sinaliza FReconnectWake e a espera acaba na hora.
+      FReconnectWake.WaitFor(LDelay);
       if FDeliberateClose then
         Break;
       Inc(LAttempt);
@@ -1434,8 +1507,7 @@ var
 begin
   // Idempotente. Sinaliza fechamento deliberado e aguarda qualquer reconexão em
   // curso encerrar antes de mexer no socket/threads (evita corrida).
-  FDeliberateClose := True;
-  WaitReconnectStopped;
+  StopReconnect;
 
   if FIsOpen then
   begin
@@ -2324,10 +2396,18 @@ end;
 
 procedure TAMQPChannel.DrainInFlight;
 begin
-  // Espera SEM timeout: liberar o canal com um callback ainda em execução seria
-  // use-after-free (o TTask capturou Self e ainda mexe em FInFlight/FConnection).
-  // Um callback bem-comportado sempre termina — mesmo que faça IO de 5s+ (o caso
-  // de uso alvo). Não chame Close de dentro do próprio callback (auto-espera).
+  // Espera SEM timeout: liberar o canal com um item ainda em execução ou ainda
+  // na FILA do pool seria use-after-free (o item guarda Self e decrementa
+  // FInFlight no fim). Um callback bem-comportado sempre termina — mesmo que
+  // faça IO de 5s+ (o caso de uso alvo). Não chame Close de dentro do próprio
+  // callback (auto-espera).
+  //
+  // O contador sobe no enfileiramento, então num canal comum esta espera
+  // depende do PcPool andar — e o PcPool é do processo inteiro. Medido
+  // (TPoolIsolationTests): PcPool saturado por 1,5 s, Free do canal com uma
+  // entrega na fila = 1,5 s; com CreateChannel(True), 29 ms. Um prazo aqui não
+  // teria saída segura (o item na fila ainda aponta para o canal); a saída é o
+  // pool próprio do canal.
   while PcAtomicGet(FInFlight) > 0 do
     Sleep(10);
 end;

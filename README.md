@@ -1,4 +1,4 @@
-# pascal-amqp-faa
+﻿# pascal-amqp-faa
 
 > 🇬🇧 This document is also available in [English](README.en.md).
 
@@ -45,9 +45,9 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 
 | Compilador | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suítes FPCUnit (121 unitários + 28 integração + 273 do broker + 28 de aceitação) e os samples passam contra RabbitMQ real |
-| Delphi (testado na base 12 / Athens) | Mesma codebase; suítes DUnitX (mesmos números) e os samples validados via IDE (Community Edition não compila por linha de comando) |
-| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), suíte FPCUnit (80 unitários + 27 integração, TLS incluso via OpenSSL) e os 4 samples (console e GUI/LCL-GTK2) passam contra RabbitMQ real |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test, suítes FPCUnit (121 unitários + 31 integração + 462 do broker, 466 com OpenSSL + 31 de aceitação, sem e com `DataDir`) e os samples passam contra RabbitMQ real |
+| Delphi 12 (Athens), Win32 e Win64 | Mesma codebase; suítes DUnitX (mesmos números, nas duas plataformas) e os samples validados via IDE (Community Edition não compila por linha de comando) |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), as quatro suítes FPCUnit com os mesmos números do Win64 (TLS via OpenSSL), inclusive repetidas em containers paralelos a `--cpus=1`, e os 4 samples (console e GUI/LCL-GTK2) passam contra RabbitMQ real |
 | FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Mesma cobertura do x86_64: smoke test plain e `--tls` (OpenSSL aarch64) e suíte FPCUnit 80 + 27 passam contra RabbitMQ real |
 
 Decisões do porte (ver `CLAUDE.md` para detalhes):
@@ -223,9 +223,13 @@ Conn.Open;
 
 Na queda, a lib reconecta e **restaura a topologia** declarada naquele canal (filas, exchanges, bindings, Qos, confirm mode) e **re-registra os consumers** — o seu callback volta a receber mensagens sem intervenção. Como *delivery-tags* reiniciam a cada sessão, mensagens não confirmadas são reentregues: projete os handlers para serem **idempotentes** (at-least-once). Em testes/sincronização, espere o `OnReconnect` (que dispara após o recovery completo), não `IsOpen` (fica `True` antes do replay da topologia).
 
+**Fechar durante uma queda é imediato.** `Close`/`Free` acordam a espera entre tentativas na hora (ela é um `TEvent`, não um `Sleep`), então fechar a aplicação com o broker fora do ar não espera o `ReconnectDelayMs`. E só voltam **depois** de a thread de reconexão sair — nunca a deixam rodando contra um objeto liberado, qualquer que seja o delay. A exceção é uma tentativa que já está em curso (connect, handshake, replay da topologia): ela termina antes, limitada pelos timeouts dela. `Close` pode ser chamado de dentro de `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (a reconexão para ali); `Free` não — libere a conexão de outra thread.
+
 ### O callback de consumer precisa sempre terminar sozinho
 
 `Close`/`Destroy` do canal esperam (sem timeout, de propósito) os callbacks em voo terminarem antes de liberar o objeto — I/O demorado é ok, mas um callback que bloqueia indefinidamente esperando interação do usuário ou um evento que só outra thread da aplicação sinaliza trava esse fechamento; se o `Free` roda na thread principal de uma app VCL/LCL, a UI congela junto (deadlock). Se o fluxo depende de aprovação humana, prefira **não bloquear**: guarde o *delivery-tag* e o conteúdo numa estrutura própria, retorne, e confirme depois (`Ack`/`Nack` podem ser chamados de qualquer thread). Se optar por bloquear num `TEvent`, o encerramento precisa acordar **todas** as esperas e também cobrir entregas que cheguem *durante* a desconexão — um nack+requeue pode ser reentregue imediatamente ao mesmo consumer até o `Cancel` completar (`samples/RetaguardaVcl` mostra o padrão com flag de encerramento).
+
+**A espera conta desde o enfileiramento, e o pool é do processo.** Os callbacks de um canal comum rodam no `PcPool`, que é dividido com as outras libs `*-faa` do processo; o `Close`/`Free` do canal espera também as entregas que **ainda estão na fila** do pool, não só as que estão rodando. Se outra parte do processo ocupar todos os workers do `PcPool` (callbacks presos em I/O, por exemplo), parar um consumidor espera a fila compartilhada andar até os itens dele. Medido com o `PcPool` saturado por itens bloqueados: o `Free` de um canal com uma entrega enfileirada esperou os 1,5 s em que o pool ficou ocupado; o mesmo cenário com `CreateChannel(True)` levou 29 ms, porque as entregas desse canal rodam numa thread só dele. Se o seu consumidor precisa parar no prazo dele, independente do resto do processo, use `CreateChannel(True)`. Não há prazo nessa espera de propósito: desistir liberaria o canal com itens ainda na fila apontando para ele.
 
 ## Broker embutido
 

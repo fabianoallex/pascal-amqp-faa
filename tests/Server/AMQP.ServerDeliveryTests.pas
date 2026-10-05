@@ -398,7 +398,7 @@ begin
     end;
 
     LFrames := FramesEscritos(LWriter, LStream);
-    Assert.AreEqual(3, Length(LFrames), 'method + header + body');
+    Assert.AreEqual(3, Integer(Length(LFrames)), 'method + header + body');
     Assert.AreEqual(Integer(AMQP_FRAME_METHOD), Integer(LFrames[0].FrameType), 'tipo do 1o');
     Assert.AreEqual(Integer(AMQP_FRAME_HEADER), Integer(LFrames[1].FrameType), 'tipo do 2o');
     Assert.AreEqual(Integer(AMQP_FRAME_BODY), Integer(LFrames[2].FrameType), 'tipo do 3o');
@@ -455,7 +455,7 @@ begin
     end;
 
     LFrames := FramesEscritos(LWriter, LStream);
-    Assert.AreEqual(5, Length(LFrames), 'method + header + 3 body (250/100)');
+    Assert.AreEqual(5, Integer(Length(LFrames)), 'method + header + 3 body (250/100)');
     LJunto := '';
     for I := 2 to High(LFrames) do
     begin
@@ -666,11 +666,11 @@ begin
         LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag);
       Assert.AreEqual(4, LAlvo.UnackedCount, 'quatro pendentes');
 
-      Assert.AreEqual(2, Length(LAlvo.NoteResolved(2, True)), 'multiple ate a tag 2');
+      Assert.AreEqual(2, Integer(Length(LAlvo.NoteResolved(2, True))), 'multiple ate a tag 2');
       Assert.AreEqual(2, LAlvo.UnackedCount, 'sobraram duas');
-      Assert.AreEqual(0, Length(LAlvo.NoteResolved(2, False)),
+      Assert.AreEqual(0, Integer(Length(LAlvo.NoteResolved(2, False))),
         'tag ja resolvida nao conta de novo');
-      Assert.AreEqual(2, Length(LAlvo.NoteResolved(0, True)),
+      Assert.AreEqual(2, Integer(Length(LAlvo.NoteResolved(0, True))),
         'multiple com tag 0 resolve todas as pendentes');
       Assert.AreEqual(0, LAlvo.UnackedCount, 'nada pendente');
     finally

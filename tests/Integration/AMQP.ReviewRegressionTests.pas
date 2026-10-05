@@ -146,7 +146,7 @@ begin
         Format('channel-id duplicado: %d', [LId]));
       LSeen.Add(LId, True);
     end;
-    Assert.AreEqual(N, LSeen.Count, 'deveria haver N canais com IDs distintos');
+    Assert.AreEqual(N, Integer(LSeen.Count), 'deveria haver N canais com IDs distintos');
   finally
     LSeen.Free;
     for I := 0 to N - 1 do

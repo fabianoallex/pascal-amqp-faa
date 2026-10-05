@@ -70,6 +70,7 @@ type
     [Test] procedure ConexaoCai_DevolveNaoConfirmadas;
     [Test] procedure AckRemoveDeVez_NaoVoltaAposQueda;
     [Test] procedure FilaAnonima_GanhaNomeGerado;
+    [Test] procedure FilaAnonima_NomeNaoRepeteEntreConexoes;
     [Test] procedure PublishSemRota_NaoEErro;
   end;
 
@@ -170,12 +171,19 @@ type
     FPortao: TEvent;
     FPartiram: Integer;
     FSairam: Integer;
+    FEnfileirados: Integer; // bloqueadores postos no PcPool (so' a thread do teste mexe)
+    FEntregues: Integer;
     function Params: TAMQPConnectionParams;
+    procedure SaturaPcPool;
+    procedure SoltaPcPool;
+    procedure AoEntregar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   public
     [Setup]    procedure Setup;
     [TearDown] procedure TearDown;
 
     [Test] procedure PcPoolSaturado_BrokerContinuaRespondendo;
+    [Test] procedure PcPoolSaturado_FreeDoCanalEsperaOCallbackEnfileirado;
+    [Test] procedure PcPoolSaturado_CanalComThreadPropria_NaoDependeDoPcPool;
   end;
 
 implementation
@@ -641,6 +649,50 @@ begin
       LCh.BasicGet(LOk.QueueName, True).BodyAsText, 'entregou');
   finally
     LConn.Free;
+  end;
+end;
+
+procedure TEngineDispatchTests.FilaAnonima_NomeNaoRepeteEntreConexoes;
+var
+  LConns: array[0..1] of TAMQPConnection;
+  LDecl: TAMQPQueueDeclare;
+  LNomes: TStringList;
+  LNome: string;
+  I, K: Integer;
+begin
+  // O nome gerado era 'amq.gen-<sequencia DA CONEXAO>-<tick>': toda conexao
+  // nova comeca a sequencia em 1, entao duas conexoes declarando no mesmo
+  // milissegundo geravam o mesmo nome -- e, com a primeira fila exclusiva e
+  // viva, a segunda levava 405. Achado na aceitacao (Delphi Win64, TLS):
+  // conexao de um teste e a do seguinte no mesmo ms.
+  LNomes := TStringList.Create;
+  try
+    for I := 1 to 20 do
+    begin
+      LConns[0] := nil;
+      LConns[1] := nil;
+      try
+        for K := 0 to 1 do
+        begin
+          LConns[K] := TAMQPConnection.Create(Params);
+          LConns[K].Open;
+        end;
+        for K := 0 to 1 do
+        begin
+          LDecl := TAMQPQueueDeclare.Create('');
+          LDecl.Exclusive := True;
+          LNome := LConns[K].CreateChannel.DeclareQueue(LDecl).QueueName;
+          Assert.IsTrue(LNomes.IndexOf(LNome) < 0, 'nome gerado repetido entre conexoes: ' + LNome);
+          LNomes.Add(LNome);
+        end;
+      finally
+        LConns[1].Free;
+        LConns[0].Free;
+      end;
+    end;
+    Assert.AreEqual(40, LNomes.Count, 'quarenta nomes distintos');
+  finally
+    LNomes.Free;
   end;
 end;
 
@@ -1882,6 +1934,8 @@ begin
   FPortao := TEvent.Create(nil, True, False, '');
   FPartiram := 0;
   FSairam := 0;
+  FEnfileirados := 0;
+  FEntregues := 0;
 end;
 
 procedure TPoolIsolationTests.TearDown;
@@ -1889,7 +1943,7 @@ begin
   FBroker.Free;
   // So' libera o portao se nenhum item o referencia mais (o teste esperou
   // todos sairem); senao vaza de proposito -- AV em worker e' pior que leak.
-  if PcAtomicGet(FSairam) = PcAtomicGet(FPartiram) then
+  if PcAtomicGet(FSairam) = FEnfileirados then
     FPortao.Free;
 end;
 
@@ -1898,28 +1952,84 @@ begin
   Result := ParamsDe(FBroker);
 end;
 
+type
+  { Abre o portao depois de AMs: a thread principal esta' presa no Free do
+    canal e nao pode abri-lo ela mesma. }
+  TAbrePortaoDepois = class(TThread)
+  private
+    FPortao: TEvent;
+    FMs: Cardinal;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(APortao: TEvent; AMs: Cardinal);
+  end;
+
+constructor TAbrePortaoDepois.Create(APortao: TEvent; AMs: Cardinal);
+begin
+  FPortao := APortao;
+  FMs := AMs;
+  FreeOnTerminate := False;
+  inherited Create(False);
+end;
+
+procedure TAbrePortaoDepois.Execute;
+begin
+  Sleep(FMs);
+  FPortao.SetEvent;
+end;
+
+procedure TPoolIsolationTests.SaturaPcPool;
+var
+  I: Integer;
+  LDeadline: UInt64;
+begin
+  // MaxWorkers itens presos no portao, UM DE CADA VEZ (esperando cada um
+  // partir), e mais um que fica na fila. Em rajada nao da': o TPcThreadPool
+  // decide criar worker olhando os ociosos, e conta como ocioso quem ja foi
+  // acordado mas ainda nao pegou o item -- 17 itens contra 1 worker ocioso
+  // rodam 1 so', os outros 16 ficam na fila (medido; anotado em
+  // .ci/findings-for-pascal-common-faa.md). Sempre chamado dentro do try do
+  // teste: quem enfileirou tem de abrir o portao.
+  for I := 1 to PcPool.MaxWorkers do
+  begin
+    PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
+    Inc(FEnfileirados);
+    LDeadline := PcTickMs + 5000;
+    while (PcAtomicGet(FPartiram) < I) and (PcTickMs < LDeadline) do
+      Sleep(1);
+  end;
+  PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
+  Inc(FEnfileirados);
+  Assert.IsTrue((PcAtomicGet(FPartiram) = PcPool.MaxWorkers) and (PcPool.QueueDepth > 0), Format('todo worker do PcPool roda um item nosso e sobra um na fila (partiram %d de %d, fila %d)',
+    [PcAtomicGet(FPartiram), PcPool.MaxWorkers, PcPool.QueueDepth]));
+end;
+
+procedure TPoolIsolationTests.SoltaPcPool;
+var
+  LDeadline: UInt64;
+begin
+  FPortao.SetEvent;
+  LDeadline := PcTickMs + 30000;
+  while (PcAtomicGet(FSairam) < FEnfileirados) and (PcTickMs < LDeadline) do
+    Sleep(5);
+end;
+
+procedure TPoolIsolationTests.AoEntregar(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery);
+begin
+  PcAtomicInc(FEntregues);
+end;
+
 procedure TPoolIsolationTests.PcPoolSaturado_BrokerContinuaRespondendo;
 var
-  LTotal, I: Integer;
-  LDeadline, LInicio, LGasto: UInt64;
+  LInicio, LGasto: UInt64;
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LGet: TAMQPGetResult;
 begin
-  // Mais itens que o teto do PcPool, max(16, 4 x nucleos): todo worker fica
-  // preso no portao e ainda sobra item na fila.
-  LTotal := TThread.ProcessorCount * 4 + 16;
   try
-    for I := 1 to LTotal do
-      PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
-    // Saturado: todo item ja partiu ou ainda esta na fila, e a fila nao esta
-    // vazia -- logo nenhum worker do PcPool esta livre.
-    LDeadline := PcTickMs + 10000;
-    while ((PcAtomicGet(FPartiram) + PcPool.QueueDepth < LTotal)
-      or (PcPool.QueueDepth = 0)) and (PcTickMs < LDeadline) do
-      Sleep(5);
-    Assert.IsTrue(PcPool.QueueDepth > 0, 'o PcPool ficou saturado (sobrou item na fila)');
-
+    SaturaPcPool;
     LConn := TAMQPConnection.Create(Params);
     try
       LConn.Open;
@@ -1938,12 +2048,105 @@ begin
       LConn.Free;
     end;
   finally
-    FPortao.SetEvent;
-    LDeadline := PcTickMs + 30000;
-    while (PcAtomicGet(FSairam) < LTotal) and (PcTickMs < LDeadline) do
-      Sleep(5);
+    SoltaPcPool;
   end;
-  Assert.AreEqual(LTotal, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
+  Assert.AreEqual(FEnfileirados, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
+end;
+
+procedure TPoolIsolationTests.PcPoolSaturado_FreeDoCanalEsperaOCallbackEnfileirado;
+var
+  LFila: Integer;
+  LDeadline, LInicio, LGasto: UInt64;
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LAbridor: TAbrePortaoDepois;
+begin
+  // Mede o achado 6 do pascal-dfe-broker: o Free de um canal espera os
+  // callbacks contados desde o ENFILEIRAMENTO (DrainInFlight), e os do
+  // cliente rodam no PcPool, que e' do processo inteiro. Com o PcPool
+  // saturado por outra lib, o Free espera a fila compartilhada chegar ao item
+  // do canal. E' o comportamento documentado (sem prazo: desistir seria
+  // liberar o canal com o item ainda na fila apontando para ele); o canal com
+  // thread propria, abaixo, e' a saida para quem nao pode esperar.
+  LGasto := 0;
+  try
+    SaturaPcPool;
+    LConn := TAMQPConnection.Create(Params);
+    try
+      LConn.Open;
+      LCh := LConn.CreateChannel;
+      try
+        LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.drain'));
+        LCh.Consume('q.drain', AoEntregar, True);
+        LFila := PcPool.QueueDepth;
+        LCh.PublishText('', 'q.drain', 'x');
+        LDeadline := PcTickMs + 5000;
+        while (PcPool.QueueDepth <= LFila) and (PcTickMs < LDeadline) do
+          Sleep(5);
+        Assert.IsTrue(PcPool.QueueDepth > LFila, 'a entrega ficou na fila do PcPool');
+        Assert.AreEqual(0, PcAtomicGet(FEntregues), 'o callback ainda nao rodou (PcPool saturado)');
+        LAbridor := TAbrePortaoDepois.Create(FPortao, 1500);
+        try
+          LInicio := PcTickMs;
+          FreeAndNil(LCh);
+          LGasto := PcTickMs - LInicio;
+        finally
+          LAbridor.WaitFor;
+          LAbridor.Free;
+        end;
+        Assert.AreEqual(1, PcAtomicGet(FEntregues), 'o Free so voltou depois de o callback enfileirado rodar');
+        Assert.IsTrue(LGasto >= 1000, 'o Free esperou o PcPool andar (' + IntToStr(LGasto) + ' ms)');
+      finally
+        LCh.Free;
+      end;
+    finally
+      LConn.Free;
+    end;
+  finally
+    SoltaPcPool;
+  end;
+  Assert.AreEqual(FEnfileirados, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
+end;
+
+procedure TPoolIsolationTests.PcPoolSaturado_CanalComThreadPropria_NaoDependeDoPcPool;
+var
+  LDeadline, LInicio, LGasto: UInt64;
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+begin
+  // CreateChannel(True): as entregas do canal rodam num pool de 1 worker do
+  // proprio canal. Com o PcPool saturado, o callback roda e o Free volta na
+  // hora -- e' o que se recomenda a quem precisa parar um consumidor sem
+  // depender do resto do processo.
+  LGasto := 0;
+  try
+    SaturaPcPool;
+    LConn := TAMQPConnection.Create(Params);
+    try
+      LConn.Open;
+      LCh := LConn.CreateChannel(True);
+      try
+        LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.propria'));
+        LCh.Consume('q.propria', AoEntregar, True);
+        LCh.PublishText('', 'q.propria', 'x');
+        LDeadline := PcTickMs + 5000;
+        while (PcAtomicGet(FEntregues) = 0) and (PcTickMs < LDeadline) do
+          Sleep(5);
+        Assert.AreEqual(1, PcAtomicGet(FEntregues), 'a entrega rodou na thread do canal, com o PcPool saturado');
+        LInicio := PcTickMs;
+        FreeAndNil(LCh);
+        LGasto := PcTickMs - LInicio;
+        Assert.IsTrue(LGasto < 1000, 'e o Free nao esperou o PcPool (' + IntToStr(LGasto) + ' ms)');
+      finally
+        LCh.Free;
+      end;
+    finally
+      LConn.Free;
+    end;
+  finally
+    SoltaPcPool;
+  end;
+  Assert.AreEqual(FEnfileirados, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
 end;
 
 initialization

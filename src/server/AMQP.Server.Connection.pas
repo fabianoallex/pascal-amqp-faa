@@ -134,7 +134,6 @@ type
     FAuthFailureClose: Boolean; // cliente anunciou a capability
     FCloseDeadline: UInt64;     // tick-limite do Close-Ok (0 = sem prazo)
     FLastReadTick: UInt64;      // atomico; ultimo frame CHEGADO do peer
-    FNameSeq: Integer;          // gera nomes de fila / consumer-tag unicos
     FEngine: TAMQPEngine;       // WS5: quem realmente declara/roteia/entrega
     FConnId: NativeUInt;        // identidade desta conexao (fila exclusiva)
 
@@ -1021,11 +1020,20 @@ end;
 
 { --- despacho das classes de recurso (broker "nulo" da Fase 1) ------------ }
 
+var
+  // Sequencia do PROCESSO, nao da conexao: o nome de fila vive no vhost, que
+  // e' compartilhado. Era um contador por conexao (toda conexao comecava em
+  // 1), e duas conexoes no mesmo milissegundo geravam o mesmo amq.gen-1-<tick>
+  // -- com a primeira fila exclusiva e viva, a segunda levava 405 (teste
+  // FilaAnonima_NomeNaoRepeteEntreConexoes).
+  GNameSeq: Integer = 0;
+
 // Nomes que o servidor gera quando o cliente manda vazio (fila anonima,
-// consumer-tag automatico). Unicos dentro da conexao, que e' o que a spec pede.
+// consumer-tag automatico). Unicos no processo; o tick separa um processo do
+// seguinte (filas duraveis de nome gerado voltam na recuperacao).
 function TAMQPServerConnection.GeneratedName(const APrefix: string): string;
 begin
-  Result := Format('%s%d-%d', [APrefix, PcAtomicInc(FNameSeq),
+  Result := Format('%s%d-%d', [APrefix, PcAtomicInc(GNameSeq),
     Integer(PcTickMs and $FFFFFF)]);
 end;
 

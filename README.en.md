@@ -1,4 +1,4 @@
-# pascal-amqp-faa
+﻿# pascal-amqp-faa
 
 > 🇧🇷 Este documento também está disponível em [português](README.md) — a versão em português é a canônica; em caso de divergência, ela prevalece.
 
@@ -45,9 +45,9 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 
 | Compiler | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test, FPCUnit suites (121 unit + 28 integration + 273 broker + 28 acceptance) and the samples pass against a real RabbitMQ |
-| Delphi (tested on 12 / Athens) | Same codebase; DUnitX suites (same numbers) and the samples validated through the IDE (Community Edition has no command-line compiler) |
-| FPC 3.2.2, Linux x86_64 (Debian, container) | Compiles; smoke test (plain and `--tls` with `-dAMQP_OPENSSL`), FPCUnit suite (80 unit + 27 integration, TLS included via OpenSSL) and the 4 samples (console and GUI/LCL-GTK2) pass against a real RabbitMQ |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test, FPCUnit suites (121 unit + 31 integration + 462 broker, 466 with OpenSSL + 31 acceptance, without and with `DataDir`) and the samples pass against a real RabbitMQ |
+| Delphi 12 (Athens), Win32 and Win64 | Same codebase; DUnitX suites (same numbers, on both platforms) and the samples validated through the IDE (Community Edition has no command-line compiler) |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compiles; smoke test (plain and `--tls` with `-dAMQP_OPENSSL`), the four FPCUnit suites with the same numbers as Win64 (TLS via OpenSSL), also repeated in parallel containers at `--cpus=1`, and the 4 samples (console and GUI/LCL-GTK2) pass against a real RabbitMQ |
 | FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Same coverage as x86_64: smoke test plain and `--tls` (aarch64 OpenSSL) and FPCUnit suite 80 + 27 pass against a real RabbitMQ |
 
 Porting decisions (see `CLAUDE.md` for details):
@@ -223,9 +223,13 @@ Conn.Open;
 
 On a drop, the library reconnects and **restores the topology** declared on that channel (queues, exchanges, bindings, Qos, confirm mode) and **re-registers the consumers** — your callback receives messages again with no intervention. Since *delivery-tags* restart on each session, unconfirmed messages are redelivered: design your handlers to be **idempotent** (at-least-once). For tests/synchronization, wait for `OnReconnect` (which fires after the full recovery), not `IsOpen` (it turns `True` before the topology replay).
 
+**Closing during an outage is immediate.** `Close`/`Free` wake the wait between attempts right away (it is a `TEvent`, not a `Sleep`), so closing the application while the broker is down does not wait for `ReconnectDelayMs`. And they only return **after** the reconnection thread has exited: they never leave it running against a freed object, whatever the delay. The exception is an attempt already under way (connect, handshake, topology replay): it finishes first, bounded by its own timeouts. `Close` may be called from inside `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (reconnection stops there); `Free` may not — free the connection from another thread.
+
 ### The consumer callback must always finish on its own
 
 The channel's `Close`/`Destroy` wait (without timeout, on purpose) for in-flight callbacks to finish before releasing the object — slow I/O is fine, but a callback that blocks indefinitely waiting for user interaction, or for an event only another application thread signals, stalls that shutdown; if the `Free` runs on the main thread of a VCL/LCL app, the UI freezes with it (deadlock). If the flow depends on human approval, prefer **not blocking**: store the *delivery-tag* and the content in your own structure, return, and confirm later (`Ack`/`Nack` can be called from any thread). If you choose to block on a `TEvent`, the shutdown must wake **all** the waits and also cover deliveries arriving *during* the disconnection — a nack+requeue can be redelivered immediately to the same consumer until `Cancel` completes (`samples/RetaguardaVcl` shows the pattern with a shutdown flag).
+
+**The wait counts from enqueueing, and the pool belongs to the process.** A regular channel's callbacks run on `PcPool`, which is shared with the other `*-faa` libraries in the process; the channel's `Close`/`Free` also waits for deliveries that are **still queued** in the pool, not only the ones running. If another part of the process occupies every `PcPool` worker (callbacks stuck on I/O, for example), stopping a consumer waits for the shared queue to reach its items. Measured with `PcPool` saturated by blocked items: freeing a channel with one queued delivery waited the 1.5 s the pool stayed busy; the same scenario with `CreateChannel(True)` took 29 ms, because that channel's deliveries run on a thread of its own. If your consumer has to stop on its own schedule, regardless of the rest of the process, use `CreateChannel(True)`. There is no deadline on this wait on purpose: giving up would free the channel while queued items still point at it.
 
 ## Embedded broker
 

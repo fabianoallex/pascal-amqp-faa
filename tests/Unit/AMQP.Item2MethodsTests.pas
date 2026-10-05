@@ -184,7 +184,7 @@ begin
     Assert.IsFalse(R.ReadBit, 'no-wait');
     LArgs := R.ReadFieldTable;
     try
-      Assert.AreEqual(0, LArgs.Count, 'arguments vazio');
+      Assert.AreEqual(0, Integer(LArgs.Count), 'arguments vazio');
     finally
       LArgs.Free;
     end;
@@ -321,7 +321,7 @@ begin
     // Diferente de bind: unbind NÃO tem no-wait — vem a field-table direto.
     LArgs := R.ReadFieldTable;
     try
-      Assert.AreEqual(0, LArgs.Count, 'arguments vazio');
+      Assert.AreEqual(0, Integer(LArgs.Count), 'arguments vazio');
     finally
       LArgs.Free;
     end;
