@@ -53,7 +53,7 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 Porting decisions (see `CLAUDE.md` for details):
 
 - **Callbacks are `procedure ... of object`** (not `reference to`), because stable FPC has no anonymous methods. In Delphi, use methods of your own class instead of lambdas.
-- No `System.Threading`/`TTask` and no `System.TMonitor`: the library ships `AMQP.Threading` (portable thread pool + monitor/condvar + atomics).
+- No `System.Threading`/`TTask` and no `System.TMonitor`: the portable thread pool, monitor/condvar and atomics come from [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (`PcPool`, `TPcMonitor`, `PcAtomic*`), the base shared by the `*-faa` libraries (see [Building](#building)).
 - Socket layer in `AMQP.Transport` (`System.Net.Socket` on Delphi, `ssockets` on FPC).
 
 ## Quick start
@@ -413,12 +413,12 @@ Documented on purpose — these are not bugs:
 
 ## Architecture (summary)
 
-- **One read thread** is the only one reading the socket after the handshake; it demultiplexes frames per channel and **dispatches consumer callbacks to the thread pool** (`AmqpPool`, from `AMQP.Threading`) — it never runs user code and never blocks.
+- **One read thread** is the only one reading the socket after the handshake; it demultiplexes frames per channel and **dispatches consumer callbacks to the thread pool** (`PcPool`, from pascal-common-faa) — it never runs user code and never blocks. `PcPool` is **one pool for the whole process**, shared with the other `*-faa` libraries you use; its worker ceiling is `max(16, 4 × cores)`.
 - All **writes** are serialized by a lock; the frames of one message (method + header + body) go out together.
 - **RPC** (declare/bind/get/consume/close) is event-based: send and wait for the read thread to deliver the response.
 - **Heartbeat** and **reconnection** run on their own threads with interruptible waits (`TEvent`).
 
-On the **broker** side the model is: **one thread per connection** with blocking I/O, **one writer thread per connection** (a bounded outbound queue gives natural backpressure), **a single monitor thread** for the whole broker (heartbeats, the `Close-Ok` deadline, reaping dead connections) and **one actor per queue** — each queue has a serial command mailbox scheduled on the thread pool, so no queue state is ever touched by two threads. Binding matching runs on the publisher's thread; only the enqueue crosses over to the actor.
+On the **broker** side the model is: **one thread per connection** with blocking I/O, **one writer thread per connection** (a bounded outbound queue gives natural backpressure), **a single monitor thread** for the whole broker (heartbeats, the `Close-Ok` deadline, reaping dead connections) and **one actor per queue** — each queue has a serial command mailbox scheduled on a thread pool, so no queue state is ever touched by two threads. That pool **belongs to the `TAMQPServer`**, not `PcPool`: a consumer callback may block on I/O, and with the actors on the process-wide pool a saturated `PcPool` stalled the broker (measured: `Queue.Declare-Ok` waited 15 s and the connection dropped; with its own pool, 26 ms). Binding matching runs on the publisher's thread; only the enqueue crosses over to the actor.
 
 ## Errors and exceptions
 
@@ -442,7 +442,7 @@ Practical notes:
 
 ## Concurrency and message ordering
 
-Each delivery is dispatched to the **thread pool** (`AmqpPool`, see `AMQP.Threading`) as an independent work item — there is no single per-channel/consumer queue being drained in order. It is a deliberate design choice, different from the common pattern in other languages:
+Each delivery is dispatched to the **thread pool** (`PcPool`, from pascal-common-faa) as an independent work item — there is no single per-channel/consumer queue being drained in order. It is a deliberate design choice, different from the common pattern in other languages:
 
 - **RabbitMQ Java/.NET client**: each channel is processed sequentially by a single worker taken from a shared pool — different channels run in parallel with each other, but within a channel order is preserved by default.
 - **pika (Python) / node-amqplib**: single-threaded, event-loop oriented — all callbacks run on the same thread/loop; parallelism is opt-in, on the user's side.
@@ -462,7 +462,7 @@ Chan.Consume('my-queue', Consumer.OnMsg);
 
 Serializes **everything** for that consumer — no parallelism at all. A good choice when strict ordering is mandatory and volume is not the bottleneck.
 
-**2. Channel with a dedicated worker (`CreateChannel(True)`)** — native library option: instead of the global `AmqpPool`, the channel gets its own thread (`TAMQPThreadPool.Create(1)` internally) that processes deliveries/returns/confirms one at a time, in arrival order. Unlike `Qos(1)`, the broker keeps delivering up to the configured prefetch — only client-side processing is serialized, not the network flow. Zero application code; other channels on the same connection stay concurrent as usual. See `samples/Retaguarda` (`--dedicado` flag) and `samples/RetaguardaVcl` (the "Thread dedicada" checkbox).
+**2. Channel with a dedicated worker (`CreateChannel(True)`)** — native library option: instead of the global `PcPool`, the channel gets its own thread (`TPcThreadPool.Create(1)` internally) that processes deliveries/returns/confirms one at a time, in arrival order. Unlike `Qos(1)`, the broker keeps delivering up to the configured prefetch — only client-side processing is serialized, not the network flow. Zero application code; other channels on the same connection stay concurrent as usual. See `samples/Retaguarda` (`--dedicado` flag) and `samples/RetaguardaVcl` (the "Thread dedicada" checkbox).
 
 **3. Application-owned queue + one dedicated thread** — the callback only enqueues the delivery into a thread-safe queue (e.g. `TCriticalSection` + `TQueue`); a single dedicated thread drains and processes in arrival order, calling `Ack` at the end of each item. Only worth it over option 2 when you need something the library's dedicated worker doesn't offer — e.g. your own backpressure (bounding the queue size) or sharing a single processing queue across more than one channel/consumer.
 
@@ -477,15 +477,17 @@ Why start from the parallel side instead of the serialized one: adding ordering 
 
 ## Building
 
-**Lazarus**: open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`).
+**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.0 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.0.0 ou mais nova` ("needs pascal-common-faa 1.0.0 or newer").
+
+**Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1 or newer.
 
 **Plain FPC**:
 
 ```
-fpc -Fusrc -Fisrc your_program.pas
+fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src your_program.pas
 ```
 
-**Delphi**: add `src\` to the project search path (unit scope names `System;Winapi`, which is the default). Ready-made example in `samples\SmokeTest\SmokeTest.dproj`.
+**Delphi**: add `src\` and pascal-common-faa's `src\` to the project search path (unit scope names `System;Winapi`, which is the default). Ready-made example in `samples\SmokeTest\SmokeTest.dproj`.
 
 **To use the embedded broker**, add the server package/directory as well: `packages\pascal_amqp_faa_server.lpk` in Lazarus, `-Fusrc\server` in plain FPC, `src\server\` in Delphi's search path. Client-only users need none of this — the two packages are separate on purpose.
 

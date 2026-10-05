@@ -40,7 +40,7 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.Wal,
   AMQP.Server.Journal,
   AMQP.ServerTestDoubles;
@@ -618,8 +618,8 @@ begin
     // inverte-la poria um callback de fora na frente de acordar os waiters. Sao
     // dois sinais independentes, e o teste que os tratou como um so' falhava
     // uma vez a cada oito execucoes.
-    LPrazo := AmqpTickMs + 5000;
-    while (S.Avisos = 0) and (AmqpTickMs < LPrazo) do
+    LPrazo := PcTickMs + 5000;
+    while (S.Avisos = 0) and (PcTickMs < LPrazo) do
       Sleep(2);
     AssertTrue('sink foi avisado', S.Avisos > 0);
     AssertEquals('com o MAIOR LSN do lote', Int64(LSN), Int64(S.Ultimo));
@@ -644,8 +644,8 @@ begin
     J.WaitDurable(1, 5000);
     J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
     J.Submit(Um(1, 'vai falhar'));
-    LPrazo := AmqpTickMs + 5000;
-    while (not J.Failed) and (AmqpTickMs < LPrazo) do
+    LPrazo := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
     AssertTrue('journal em falha', J.Failed);
     AssertTrue('com mensagem', J.LastError <> '');
@@ -669,8 +669,8 @@ begin
     J.Start;
     J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
     J.Submit(Um(1, 'vai falhar'));
-    LPrazo := AmqpTickMs + 5000;
-    while (not J.Failed) and (AmqpTickMs < LPrazo) do
+    LPrazo := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
     AssertEquals('avisado exatamente uma vez', 1, S.Falhas);
   finally
@@ -689,8 +689,8 @@ begin
     J.Start;
     J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
     J.Submit(Um(1, 'vai falhar'));
-    LPrazo := AmqpTickMs + 5000;
-    while (not J.Failed) and (AmqpTickMs < LPrazo) do
+    LPrazo := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
     LLevantou := False;
     try
@@ -715,8 +715,8 @@ begin
     J.Start;
     J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
     J.Submit(Um(1, 'vai falhar'));
-    LPrazo := AmqpTickMs + 5000;
-    while (not J.Failed) and (AmqpTickMs < LPrazo) do
+    LPrazo := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
     AssertFalse('quem esperava durabilidade e' + ' liberado com False',
       J.WaitDurable(99, 300));

@@ -32,7 +32,8 @@ uses
   AMQP.Exchange.Methods,
   AMQP.Queue.Methods,
   AMQP.Basic.Methods,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Connection,
   AMQP.Server.Types,
   AMQP.Server.Broker;
@@ -159,6 +160,25 @@ type
     procedure ExchangeAutoDelete_FicaEnquantoHouverBinding;
   end;
 
+  { O broker NAO divide pool com o resto do processo (F8, migracao para a
+    pascal-common-faa). Os atores das filas rodam num TPcThreadPool do proprio
+    TAMQPServer; o PcPool e' de todo mundo -- callbacks do cliente desta lib,
+    e das outras libs *-faa no mesmo processo -- e callback de usuario pode
+    bloquear em I/O por segundos. }
+  TPoolIsolationTests = class(TTestCase)
+  private
+    FBroker: TAMQPServer;
+    FPortao: TEvent;
+    FPartiram: Integer;
+    FSairam: Integer;
+    function Params: TAMQPConnectionParams;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
+  published
+    procedure PcPoolSaturado_BrokerContinuaRespondendo;
+  end;
+
 implementation
 
 { --- helpers --- }
@@ -273,8 +293,8 @@ function TEngineDispatchTests.EsperaEntregas(ACount,
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
-  while (QuantasRecebidas < ACount) and (AmqpTickMs < LDeadline) do
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
+  while (QuantasRecebidas < ACount) and (PcTickMs < LDeadline) do
     Sleep(10);
   Result := QuantasRecebidas >= ACount;
 end;
@@ -743,8 +763,8 @@ begin
     // Publish nao e' RPC: o erro chega como Channel.Close assincrono, entao
     // esperamos o canal cair em vez de esperar excecao no publish.
     LCh.PublishText('ex.que.nao.existe', 'k', 'x');
-    LDeadline := AmqpTickMs + 3000;
-    while LCh.IsOpen and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 3000;
+    while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
     AssertFalse('publish em exchange inexistente fecha o canal', LCh.IsOpen);
     LCodigo := 0;
@@ -901,8 +921,8 @@ begin
     LCh.Publish('', 'q.uid', AmqpUtf8Encode('x'), LProps);
 
     // Como o publish nao e' RPC, o 403 chega como Channel.Close assincrono.
-    LDeadline := AmqpTickMs + 3000;
-    while LCh.IsOpen and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 3000;
+    while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
     AssertFalse('user-id diferente do usuario autenticado fecha o canal (403)', LCh.IsOpen);
   finally
@@ -1053,8 +1073,8 @@ function TConfirmTests.EsperaDevolucoes(ACount, ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
-  while (QuantasDevolvidas < ACount) and (AmqpTickMs < LDeadline) do
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
+  while (QuantasDevolvidas < ACount) and (PcTickMs < LDeadline) do
     Sleep(10);
   Result := QuantasDevolvidas >= ACount;
 end;
@@ -1284,8 +1304,8 @@ function TLifecycleTests.EsperaFilaSumir(AConn: TAMQPConnection;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
-  while FilaExiste(AConn, ANome) and (AmqpTickMs < LDeadline) do
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
+  while FilaExiste(AConn, ANome) and (PcTickMs < LDeadline) do
     Sleep(20);
   Result := not FilaExiste(AConn, ANome);
 end;
@@ -1803,10 +1823,120 @@ begin
   end;
 end;
 
+{ --- TPoolIsolationTests --- }
+
+type
+  { Ocupa um worker do PcPool ate' o portao abrir. A partida conta no
+    Execute; a saida conta no DESTRUTOR, que roda tambem quando o pool libera
+    o item sem executa-lo -- e' a ultima vez que o item toca o teste, entao e'
+    por ela que o teste espera antes de liberar o portao. }
+  TBloqueiaPoolWork = class(TPcWorkItem)
+  private
+    FPortao: TEvent;
+    FPartiram: PInteger;
+    FSairam: PInteger;
+  public
+    constructor Create(APortao: TEvent; APartiram, ASairam: PInteger);
+    destructor Destroy; override;
+    procedure Execute; override;
+  end;
+
+constructor TBloqueiaPoolWork.Create(APortao: TEvent;
+  APartiram, ASairam: PInteger);
+begin
+  inherited Create;
+  FPortao := APortao;
+  FPartiram := APartiram;
+  FSairam := ASairam;
+end;
+
+destructor TBloqueiaPoolWork.Destroy;
+begin
+  PcAtomicInc(FSairam^);
+  inherited;
+end;
+
+procedure TBloqueiaPoolWork.Execute;
+begin
+  PcAtomicInc(FPartiram^);
+  FPortao.WaitFor(60000); // rede: o teste sempre abre o portao no finally
+end;
+
+procedure TPoolIsolationTests.SetUp;
+begin
+  FBroker := NovoBroker;
+  FPortao := TEvent.Create(nil, True, False, '');
+  FPartiram := 0;
+  FSairam := 0;
+end;
+
+procedure TPoolIsolationTests.TearDown;
+begin
+  FBroker.Free;
+  // So' libera o portao se nenhum item o referencia mais (o teste esperou
+  // todos sairem); senao vaza de proposito -- AV em worker e' pior que leak.
+  if PcAtomicGet(FSairam) = PcAtomicGet(FPartiram) then
+    FPortao.Free;
+end;
+
+function TPoolIsolationTests.Params: TAMQPConnectionParams;
+begin
+  Result := ParamsDe(FBroker);
+end;
+
+procedure TPoolIsolationTests.PcPoolSaturado_BrokerContinuaRespondendo;
+var
+  LTotal, I: Integer;
+  LDeadline, LInicio, LGasto: UInt64;
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LGet: TAMQPGetResult;
+begin
+  // Mais itens que o teto do PcPool, max(16, 4 x nucleos): todo worker fica
+  // preso no portao e ainda sobra item na fila.
+  LTotal := TThread.ProcessorCount * 4 + 16;
+  try
+    for I := 1 to LTotal do
+      PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
+    // Saturado: todo item ja partiu ou ainda esta na fila, e a fila nao esta
+    // vazia -- logo nenhum worker do PcPool esta livre.
+    LDeadline := PcTickMs + 10000;
+    while ((PcAtomicGet(FPartiram) + PcPool.QueueDepth < LTotal)
+      or (PcPool.QueueDepth = 0)) and (PcTickMs < LDeadline) do
+      Sleep(5);
+    AssertTrue('o PcPool ficou saturado (sobrou item na fila)', PcPool.QueueDepth > 0);
+
+    LConn := TAMQPConnection.Create(Params);
+    try
+      LConn.Open;
+      LCh := LConn.CreateChannel;
+      LInicio := PcTickMs;
+      // Declare-Ok e Get-Ok saem do ATOR da fila (comando sincrono): se ele
+      // dependesse do PcPool, esperaria ate' o timeout de 15 s do ator.
+      LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.pool'));
+      LCh.PublishText('', 'q.pool', 'passou');
+      LGet := LCh.BasicGet('q.pool', True);
+      LGasto := PcTickMs - LInicio;
+      AssertTrue('o Get achou a mensagem', LGet.Found);
+      AssertEquals('corpo', 'passou', LGet.BodyAsText);
+      AssertTrue('sem esperar pelo PcPool (' + IntToStr(LGasto) + ' ms)', LGasto < 5000);
+    finally
+      LConn.Free;
+    end;
+  finally
+    FPortao.SetEvent;
+    LDeadline := PcTickMs + 30000;
+    while (PcAtomicGet(FSairam) < LTotal) and (PcTickMs < LDeadline) do
+      Sleep(5);
+  end;
+  AssertEquals('todo item bloqueador saiu do PcPool', LTotal, PcAtomicGet(FSairam));
+end;
+
 initialization
   RegisterTest(TEngineDispatchTests);
   RegisterTest(TErrorTableTests);
   RegisterTest(TConfirmTests);
   RegisterTest(TLifecycleTests);
+  RegisterTest(TPoolIsolationTests);
 
 end.

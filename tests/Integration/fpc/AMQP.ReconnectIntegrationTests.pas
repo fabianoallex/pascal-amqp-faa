@@ -11,7 +11,7 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
@@ -30,7 +30,7 @@ type
     // (não usam a FConsumerConn do Setup) — closures não são aceitas pelos
     // callbacks 'of object' da lib (ver CLAUDE.md), então o que antes era
     // variável local capturada agora precisa ser campo da fixture. TInterlocked
-    // não existe no FPC -> AmqpAtomic*.
+    // não existe no FPC -> PcAtomic*.
     FDropTestReconnected: Integer;
     FRepublishTestReconnected: Integer;
     function ReceivedContains(const AText: string): Boolean;
@@ -60,7 +60,7 @@ begin
   FReconnected := 0;
   FDropTestReconnected := 0;
   FRepublishTestReconnected := 0;
-  FQueue := 'test-recon-' + IntToStr(AmqpTickMs);
+  FQueue := 'test-recon-' + IntToStr(PcTickMs);
 
   // Conexão de controle (sem auto-reconnect) só para publicar.
   FControlConn := TAMQPConnection.Create(IntegrationParams);
@@ -98,7 +98,7 @@ end;
 
 procedure TAMQPReconnectIntegrationTests.HandleConsumerReconnect(AConnection: TAMQPConnection);
 begin
-  AmqpAtomicSet(FReconnected, 1);
+  PcAtomicSet(FReconnected, 1);
 end;
 
 procedure TAMQPReconnectIntegrationTests.HandleConsumerDelivery(AChannel: TAMQPChannel;
@@ -110,12 +110,12 @@ end;
 
 procedure TAMQPReconnectIntegrationTests.HandleDropTestReconnect(AConnection: TAMQPConnection);
 begin
-  AmqpAtomicSet(FDropTestReconnected, 1);
+  PcAtomicSet(FDropTestReconnected, 1);
 end;
 
 procedure TAMQPReconnectIntegrationTests.HandleRepublishTestReconnect(AConnection: TAMQPConnection);
 begin
-  AmqpAtomicSet(FRepublishTestReconnected, 1);
+  PcAtomicSet(FRepublishTestReconnected, 1);
 end;
 
 function TAMQPReconnectIntegrationTests.ReceivedContains(const AText: string): Boolean;
@@ -148,7 +148,7 @@ var
   LWaited: Integer;
 begin
   LWaited := 0;
-  while (AmqpAtomicGet(FReconnected) = 0) and (LWaited < ATimeoutMs) do
+  while (PcAtomicGet(FReconnected) = 0) and (LWaited < ATimeoutMs) do
   begin
     TThread.Sleep(50);
     Inc(LWaited, 50);
@@ -168,7 +168,7 @@ begin
   // 3) Aguarda a auto-reconexão + recuperação (OnReconnect dispara após
   //    redeclarar a fila e re-consumir).
   WaitReconnected(15000);
-  AssertEquals('deveria ter reconectado', 1, AmqpAtomicGet(FReconnected));
+  AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FReconnected));
   AssertTrue('conexão deveria estar aberta após reconectar', FConsumerConn.IsOpen);
 
   // 4) Publica depois da recuperação e confirma que o consumo voltou.
@@ -208,12 +208,12 @@ begin
 
     // Aguarda a auto-reconexão + recuperação (re-arma o confirm mode).
     LWaited := 0;
-    while (AmqpAtomicGet(FDropTestReconnected) = 0) and (LWaited < 15000) do
+    while (PcAtomicGet(FDropTestReconnected) = 0) and (LWaited < 15000) do
     begin
       TThread.Sleep(50);
       Inc(LWaited, 50);
     end;
-    AssertEquals('deveria ter reconectado', 1, AmqpAtomicGet(FDropTestReconnected));
+    AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FDropTestReconnected));
 
     // Os publishes pendentes na queda foram PERDIDOS: WaitForConfirms deve
     // reportar False. (Bug: Recover limpava FNacked e isto retornava True.)
@@ -264,12 +264,12 @@ begin
 
     // Aguarda a reconexão (que dispara o reenvio dos não confirmados).
     LWaited := 0;
-    while (AmqpAtomicGet(FRepublishTestReconnected) = 0) and (LWaited < 15000) do
+    while (PcAtomicGet(FRepublishTestReconnected) = 0) and (LWaited < 15000) do
     begin
       TThread.Sleep(50);
       Inc(LWaited, 50);
     end;
-    AssertEquals('deveria ter reconectado', 1, AmqpAtomicGet(FRepublishTestReconnected));
+    AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FRepublishTestReconnected));
 
     // Drena pela conexão de controle: as 100 devem chegar (at-least-once — pode
     // haver duplicatas de mensagens cujo ack se perdeu na queda, por isso >= 100).

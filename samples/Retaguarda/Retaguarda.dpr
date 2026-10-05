@@ -7,7 +7,7 @@
 
   Diferenca em relacao ao mesmo cenario com outras libs AMQP para Delphi:
   o Channel.Consume desta lib ja despacha cada entrega para o thread pool
-  proprio (AmqpPool, dentro de TAMQPChannel.DispatchDelivery) - o callback
+  proprio (PcPool, dentro de TAMQPChannel.DispatchDelivery) - o callback
   abaixo roda concorrente para mensagens diferentes sem nenhum despacho
   manual, e a thread de leitura nunca fica bloqueada esperando
   ProcessarChave terminar.

@@ -35,7 +35,6 @@ uses
   AMQP.Exchange.Methods,
   AMQP.Queue.Methods,
   AMQP.Connection,
-  AMQP.Threading,
   AMQP.Server.Wal,
   AMQP.Server.Journal,
   AMQP.Server.Records,

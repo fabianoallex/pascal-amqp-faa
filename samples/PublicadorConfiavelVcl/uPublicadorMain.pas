@@ -53,7 +53,7 @@ uses
   SysUtils, Classes, StrUtils,
   SyncObjs, Generics.Collections,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ComCtrls,
-  AMQP.Wire, AMQP.Threading, AMQP.Connection, AMQP.Transport,
+  AMQP.Wire, PascalCommon.Threading, PascalCommon.ThreadPool, AMQP.Connection, AMQP.Transport,
   AMQP.Queue.Methods, AMQP.Basic.Methods;
 
 type
@@ -302,9 +302,9 @@ type
     casa só pelo campo Thread (que fica nil), então lá o post direto
     funcionaria. Sintoma observado: o marshal do OnDisconnect chegava (a
     thread de reconexão ainda vive durante os retries) e o do OnReconnect
-    sumia. O salto por um worker do AmqpPool — threads PERSISTENTES — garante
+    sumia. O salto por um worker do PcPool — threads PERSISTENTES — garante
     que o post à UI sobreviva nos dois compiladores. }
-  TConexaoEventoWork = class(TAMQPWorkItem)
+  TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmPublicador;
     FEvento: TConexaoEvento;
@@ -423,11 +423,11 @@ begin
   if not FParar then
   begin
     FForm.QueueLog('Lote enviado. Aguardando confirmações pendentes (WaitForConfirms)...');
-    LInicio := AmqpTickMs;
+    LInicio := PcTickMs;
     try
       if FCanal.WaitForConfirms(5000) then
         FForm.QueueLog(Format('WaitForConfirms: todas confirmadas (%d ms).',
-          [Int64(AmqpTickMs - LInicio)]))
+          [Int64(PcTickMs - LInicio)]))
       else
         FForm.QueueLog('WaitForConfirms: nem todas confirmadas (nack, perda na queda ou timeout).');
     except
@@ -813,12 +813,12 @@ begin
   TThread.Queue(nil, LMarshal.Execute);
 end;
 
-// Os três eventos de conexão saltam pelo AmqpPool em vez de postar direto:
+// Os três eventos de conexão saltam pelo PcPool em vez de postar direto:
 // a thread de reconexão morre logo após o OnReconnect e, no FPC, levaria o
 // post pendente junto (ver o comentário de TConexaoEventoWork).
 procedure TfrmPublicador.OnDesconectado(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
 end;
 
 procedure TfrmPublicador.OnReconectado(AConnection: TAMQPConnection);
@@ -832,12 +832,12 @@ begin
   finally
     FLoteLock.Leave;
   end;
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceVoltou));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceVoltou));
 end;
 
 procedure TfrmPublicador.OnReconexaoFalhou(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
 { --- ações ----------------------------------------------------------------- }

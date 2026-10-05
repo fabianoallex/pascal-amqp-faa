@@ -38,6 +38,8 @@ uses
   Classes,
   SyncObjs,
   Generics.Collections,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Threading,
   AMQP.Transport,
   AMQP.Protocol,
@@ -223,17 +225,17 @@ type
     FOnBasicReturn: TAMQPBasicReturnCallback;
     FInFlight: Integer; // callbacks em execução no pool (atômico)
     // Pool privado (1 worker) quando o canal usa thread dedicada; nil => usa
-    // o AmqpPool global (comportamento padrão). Ver CreateChannel.
-    FDispatchPool: TAMQPThreadPool;
+    // o PcPool global (comportamento padrão). Ver CreateChannel.
+    FDispatchPool: TPcThreadPool;
     // --- publisher confirms ---
-    // FConfirmMon é lock + variável de condição (TAMQPMonitor) que protege
+    // FConfirmMon é lock + variável de condição (TPcMonitor) que protege
     // FUnconfirmed/FNacked/FPublishSeqNo/FConfirmBase e acorda WaitForConfirm(s).
     // Ordem de locks: é o lock MAIS interno — só se adquire sozinho ou dentro do
     // FWriteLock (Publish); nunca se adquire outro lock segurando-o.
     FConfirmMode: Boolean;
     FPublishSeqNo: UInt64;   // seq-no do usuário, monotônico (NÃO reseta na reconexão)
     FConfirmBase: UInt64;    // offset da sessão: userSeqNo = FConfirmBase + wireTag do broker
-    FConfirmMon: TAMQPMonitor;
+    FConfirmMon: TPcMonitor;
     FUnconfirmed: TDictionary<UInt64, Boolean>; // seq-nos aguardando confirmação
     FNacked: TDictionary<UInt64, Boolean>;      // seq-nos nack-ados (ou perdidos na queda)
     FOnConfirm: TAMQPConfirmCallback;
@@ -273,9 +275,9 @@ type
     procedure SignalError(const AMessage: string);
     procedure CompleteContent;
     /// Enfileira um work item no pool dedicado do canal (se houver) ou no
-    /// AmqpPool global. Não chamar de "Dispatch": colidiria com o
+    /// PcPool global. Não chamar de "Dispatch": colidiria com o
     /// TObject.Dispatch usado no mecanismo de message dispatch.
-    procedure DispatchToPool(AItem: TAMQPWorkItem);
+    procedure DispatchToPool(AItem: TPcWorkItem);
     /// Despacha uma entrega para o callback do consumer, no thread pool.
     procedure DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
       const AProps: TAMQPBasicProperties; const ABody: TBytes);
@@ -537,11 +539,12 @@ type
     constructor Create(AConnection: TAMQPConnection);
   end;
 
-  { Itens de trabalho despachados para o pool (AMQP.Threading). Substituem os
+  { Itens de trabalho despachados para o pool (PcPool, da pascal-common-faa,
+    ou o pool proprio do canal). Substituem os
     closures de TTask.Run: cada item carrega os dados capturados em campos e o
     contador de "em voo" é decrementado no finally do Execute — o mesmo
     contrato dos closures originais. O pool libera o item após Execute. }
-  TAMQPDeliveryWork = class(TAMQPWorkItem)
+  TAMQPDeliveryWork = class(TPcWorkItem)
   private
     FChannel: TAMQPChannel;
     FCallback: TAMQPConsumerCallback;
@@ -552,7 +555,7 @@ type
     procedure Execute; override;
   end;
 
-  TAMQPReturnWork = class(TAMQPWorkItem)
+  TAMQPReturnWork = class(TPcWorkItem)
   private
     FChannel: TAMQPChannel;
     FCallback: TAMQPBasicReturnCallback;
@@ -564,7 +567,7 @@ type
     procedure Execute; override;
   end;
 
-  TAMQPConfirmWork = class(TAMQPWorkItem)
+  TAMQPConfirmWork = class(TPcWorkItem)
   private
     FChannel: TAMQPChannel;
     FCallback: TAMQPConfirmCallback;
@@ -576,7 +579,7 @@ type
     procedure Execute; override;
   end;
 
-  TAMQPBlockedWork = class(TAMQPWorkItem)
+  TAMQPBlockedWork = class(TPcWorkItem)
   private
     FConnection: TAMQPConnection;
     FCallback: TAMQPConnectionBlockedEvent;
@@ -587,7 +590,7 @@ type
     procedure Execute; override;
   end;
 
-  TAMQPUnblockedWork = class(TAMQPWorkItem)
+  TAMQPUnblockedWork = class(TPcWorkItem)
   private
     FConnection: TAMQPConnection;
     FCallback: TAMQPConnectionEvent;
@@ -629,7 +632,7 @@ begin
   finally
     if FDelivery.Properties.Has(bpHeaders) and Assigned(FDelivery.Properties.Headers) then
       FDelivery.Properties.Headers.Free;
-    AmqpAtomicDec(FChannel.FInFlight);
+    PcAtomicDec(FChannel.FInFlight);
   end;
 end;
 
@@ -652,7 +655,7 @@ begin
   finally
     if FReturned.Properties.Has(bpHeaders) and Assigned(FReturned.Properties.Headers) then
       FReturned.Properties.Headers.Free;
-    AmqpAtomicDec(FChannel.FInFlight);
+    PcAtomicDec(FChannel.FInFlight);
   end;
 end;
 
@@ -673,7 +676,7 @@ begin
   try
     FCallback(FChannel, FSeqNo, FAck);
   finally
-    AmqpAtomicDec(FChannel.FInFlight);
+    PcAtomicDec(FChannel.FInFlight);
   end;
 end;
 
@@ -693,7 +696,7 @@ begin
   try
     FCallback(FConnection, FReason);
   finally
-    AmqpAtomicDec(FConnection.FInFlightConn);
+    PcAtomicDec(FConnection.FInFlightConn);
   end;
 end;
 
@@ -712,7 +715,7 @@ begin
   try
     FCallback(FConnection);
   finally
-    AmqpAtomicDec(FConnection.FInFlightConn);
+    PcAtomicDec(FConnection.FInFlightConn);
   end;
 end;
 
@@ -785,7 +788,7 @@ begin
     begin
       LFrame := TAMQPFrame.ReadFrom(FConnection.FStream);
       // atômico p/ a thread de heartbeat
-      AmqpAtomicWrite64(FConnection.FLastReadTick, AmqpTickMs);
+      PcAtomicWrite64(FConnection.FLastReadTick, PcTickMs);
       FConnection.DispatchFrame(LFrame);
     end;
     FConnection.ReadThreadFinished('');
@@ -873,8 +876,8 @@ begin
   LFrame := TAMQPFrame.Create(AFrameType, AChannel, APayload);
   LFrame.WriteTo(FStream);
   // Atômico: lido pela thread de heartbeat; no Win32 um store de 64 bits não é
-  // atômico e poderia ser "torn" (ver AmqpAtomicRead64 em HeartbeatTick).
-  AmqpAtomicWrite64(FLastWriteTick, AmqpTickMs);
+  // atômico e poderia ser "torn" (ver PcAtomicRead64 em HeartbeatTick).
+  PcAtomicWrite64(FLastWriteTick, PcTickMs);
 end;
 
 procedure TAMQPConnection.SendFrame(AFrameType: Byte; AChannel: Word;
@@ -1050,7 +1053,7 @@ begin
 
   Handshake; // antes de qualquer thread (agora sobre TLS, se habilitado)
 
-  FLastWriteTick := AmqpTickMs;
+  FLastWriteTick := PcTickMs;
   FLastReadTick := FLastWriteTick;
   StartReadThread;     // a partir daqui, só a thread lê o socket
   StartHeartbeatThread;
@@ -1135,11 +1138,11 @@ begin
   LIntervalMs := UInt64(FNegotiated.Heartbeat) * 1000;
   if LIntervalMs = 0 then
     Exit;
-  LNow := AmqpTickMs;
+  LNow := PcTickMs;
   // Leituras atômicas (os ticks são escritos por outras threads; no Win32 um
   // load de 64 bits pode ser "torn" e produzir um delta absurdo).
-  LLastRead := AmqpAtomicRead64(FLastReadTick);
-  LLastWrite := AmqpAtomicRead64(FLastWriteTick);
+  LLastRead := PcAtomicRead64(FLastReadTick);
+  LLastWrite := PcAtomicRead64(FLastWriteTick);
 
   // Conexão morta: nenhum frame recebido em 2x o intervalo (o servidor também
   // manda heartbeats). Fecha o socket para desbloquear a thread de leitura.
@@ -1353,8 +1356,8 @@ begin
   if not Assigned(LCallback) then
     Exit;
   // Pool próprio: a thread de leitura NÃO roda o callback do usuário.
-  AmqpAtomicInc(FInFlightConn);
-  AmqpPool.Queue(TAMQPBlockedWork.Create(Self, LCallback, AReason));
+  PcAtomicInc(FInFlightConn);
+  PcPool.Queue(TAMQPBlockedWork.Create(Self, LCallback, AReason));
 end;
 
 procedure TAMQPConnection.DispatchUnblocked;
@@ -1364,15 +1367,15 @@ begin
   LCallback := FOnUnblocked;
   if not Assigned(LCallback) then
     Exit;
-  AmqpAtomicInc(FInFlightConn);
-  AmqpPool.Queue(TAMQPUnblockedWork.Create(Self, LCallback));
+  PcAtomicInc(FInFlightConn);
+  PcPool.Queue(TAMQPUnblockedWork.Create(Self, LCallback));
 end;
 
 procedure TAMQPConnection.DrainConnCallbacks;
 begin
   // Espera os callbacks Blocked/Unblocked em voo (capturaram Self) terminarem
   // antes de o objeto ser liberado — mesmo racional do DrainInFlight do canal.
-  while AmqpAtomicGet(FInFlightConn) > 0 do
+  while PcAtomicGet(FInFlightConn) > 0 do
     Sleep(10);
 end;
 
@@ -1405,7 +1408,7 @@ begin
     LChan := TAMQPChannel.Create(Self, FNextChannel);
     try
       if ADedicatedConsumerThread then
-        LChan.FDispatchPool := TAMQPThreadPool.Create(1);
+        LChan.FDispatchPool := TPcThreadPool.Create(1);
       FChannels.Add(LChan.ChannelId, LChan);
     except
       LChan.Free;
@@ -1466,7 +1469,7 @@ begin
   FRpcEvent := TEvent.Create(nil, True, False, '');
   FConsumers := TDictionary<string, TAMQPConsumerCallback>.Create;
   FConsumersLock := TCriticalSection.Create;
-  FConfirmMon := TAMQPMonitor.Create;
+  FConfirmMon := TPcMonitor.Create;
   FUnconfirmed := TDictionary<UInt64, Boolean>.Create;
   FNacked := TDictionary<UInt64, Boolean>.Create;
   FResendBuffer := TDictionary<UInt64, TAMQPRawPublish>.Create;
@@ -2063,7 +2066,7 @@ begin
     raise EAMQPChannel.Create('channel is not in confirm mode (call ConfirmSelect)');
   if ASeqNo = 0 then
     raise EAMQPChannel.Create('invalid seq-no (0) in WaitForConfirm');
-  LDeadline := AmqpTickMs + ATimeoutMs;
+  LDeadline := PcTickMs + ATimeoutMs;
   FConfirmMon.Enter;
   try
     while True do
@@ -2077,7 +2080,7 @@ begin
         // não está pendente nem nack-ado: ack-ado (se já foi publicado) ou
         // seq-no que nunca existiu (> último atribuído => False, não espera à toa).
         Exit(ASeqNo <= FPublishSeqNo);
-      LNow := AmqpTickMs;
+      LNow := PcTickMs;
       if LNow >= LDeadline then
         Exit(False);
       LRemaining := Int64(LDeadline) - Int64(LNow);
@@ -2095,12 +2098,12 @@ var
 begin
   if not FConfirmMode then
     raise EAMQPChannel.Create('channel is not in confirm mode (call ConfirmSelect)');
-  LDeadline := AmqpTickMs + ATimeoutMs;
+  LDeadline := PcTickMs + ATimeoutMs;
   FConfirmMon.Enter;
   try
     while FUnconfirmed.Count > 0 do
     begin
-      LNow := AmqpTickMs;
+      LNow := PcTickMs;
       if LNow >= LDeadline then
         Exit(False);
       LRemaining := Int64(LDeadline) - Int64(LNow);
@@ -2134,7 +2137,7 @@ var
 begin
   // Geramos o consumer-tag no cliente e registramos o callback ANTES de enviar,
   // para não perder deliveries que cheguem entre o Consume-Ok e o registro.
-  LTag := Format('ctag-%d-%d', [FChannelId, AmqpAtomicInc(FConsumerCounter)]);
+  LTag := Format('ctag-%d-%d', [FChannelId, PcAtomicInc(FConsumerCounter)]);
   FConsumersLock.Enter;
   try
     FConsumers.AddOrSetValue(LTag, ACallback);
@@ -2178,12 +2181,12 @@ begin
   end;
 end;
 
-procedure TAMQPChannel.DispatchToPool(AItem: TAMQPWorkItem);
+procedure TAMQPChannel.DispatchToPool(AItem: TPcWorkItem);
 begin
   if Assigned(FDispatchPool) then
     FDispatchPool.Queue(AItem)
   else
-    AmqpPool.Queue(AItem);
+    PcPool.Queue(AItem);
 end;
 
 procedure TAMQPChannel.DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
@@ -2218,7 +2221,7 @@ begin
   end;
 
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
-  AmqpAtomicInc(FInFlight);
+  PcAtomicInc(FInFlight);
   DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery));
 end;
 
@@ -2248,7 +2251,7 @@ begin
   end;
 
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
-  AmqpAtomicInc(FInFlight);
+  PcAtomicInc(FInFlight);
   DispatchToPool(TAMQPReturnWork.Create(Self, LCallback, LReturned));
 end;
 
@@ -2260,7 +2263,7 @@ begin
   if not Assigned(LCallback) then
     Exit;
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
-  AmqpAtomicInc(FInFlight);
+  PcAtomicInc(FInFlight);
   DispatchToPool(TAMQPConfirmWork.Create(Self, LCallback, ASeqNo, AAck));
 end;
 
@@ -2325,7 +2328,7 @@ begin
   // use-after-free (o TTask capturou Self e ainda mexe em FInFlight/FConnection).
   // Um callback bem-comportado sempre termina — mesmo que faça IO de 5s+ (o caso
   // de uso alvo). Não chame Close de dentro do próprio callback (auto-espera).
-  while AmqpAtomicGet(FInFlight) > 0 do
+  while PcAtomicGet(FInFlight) > 0 do
     Sleep(10);
 end;
 

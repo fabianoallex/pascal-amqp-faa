@@ -20,14 +20,14 @@
   larga. O ultimo Release libera o objeto. NINGUEM muta a mensagem depois de
   criada: Body e HeaderPayload sao expostos so' para leitura.
 
-  Atomics via AmqpAtomicInc/Dec (AMQP.Threading) -- TInterlocked nao existe no
+  Atomics via PcAtomicInc/Dec (PascalCommon.Threading) -- TInterlocked nao existe no
   FPC (ver tabela de proibidos do CLAUDE.md). }
 
 interface
 
 uses
   SysUtils,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.Types;
 
 type
@@ -118,17 +118,17 @@ end;
 
 function TAMQPMessage.GetRefCount: Integer;
 begin
-  Result := AmqpAtomicGet(FRefCount);
+  Result := PcAtomicGet(FRefCount);
 end;
 
 function TAMQPMessage.AddRef: Integer;
 begin
-  Result := AmqpAtomicInc(FRefCount);
+  Result := PcAtomicInc(FRefCount);
 end;
 
 function TAMQPMessage.Release: Integer;
 begin
-  Result := AmqpAtomicDec(FRefCount);
+  Result := PcAtomicDec(FRefCount);
   if Result = 0 then
     Free;
 end;

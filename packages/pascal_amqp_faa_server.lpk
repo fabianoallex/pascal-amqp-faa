@@ -103,6 +103,13 @@
       </Item>
     </Files>
     <RequiredPkgs>
+      <!-- Pelo nome, como no pacote cliente: as units do broker usam a
+           pascal-common-faa direto (PcPool fica de fora: o broker tem pool
+           proprio), e a copia vem da aplicacao, nunca de external/. -->
+      <Item>
+        <PackageName Value="pascal_common_faa"/>
+        <MinVersion Major="1" Valid="True"/>
+      </Item>
       <Item>
         <PackageName Value="pascal_amqp_faa"/>
       </Item>

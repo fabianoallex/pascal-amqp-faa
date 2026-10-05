@@ -18,7 +18,7 @@
   fora do ar.
 
   Ver CLAUDE.md para os workarounds de erros internos do FPC 3.2.2 e o
-  TInterlocked que nao existe no FPC (usar AmqpAtomic* de AMQP.Threading). }
+  TInterlocked que nao existe no FPC (usar PcAtomic* de PascalCommon.Threading). }
 
 {$mode delphi}{$H+}
 

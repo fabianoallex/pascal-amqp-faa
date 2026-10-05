@@ -25,7 +25,7 @@ uses
   AMQP.Wire,
   AMQP.Method,
   AMQP.Frame,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Transport,
   AMQP.Connection.Methods,
   AMQP.Channel.Methods,
@@ -178,13 +178,13 @@ var
   LAll: TArray<TAMQPServerConnection>;
 begin
   Result := nil;
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
   repeat
     LAll := ABroker.Connections;
     if Length(LAll) > 0 then
       Exit(LAll[0]);
     TThread.Sleep(10);
-  until AmqpTickMs > LDeadline;
+  until PcTickMs > LDeadline;
 end;
 
 function WaitState(AConn: TAMQPServerConnection; AState: TAMQPServerConnState;
@@ -192,12 +192,12 @@ function WaitState(AConn: TAMQPServerConnection; AState: TAMQPServerConnState;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
   repeat
     if AConn.State = AState then
       Exit(True);
     TThread.Sleep(10);
-  until AmqpTickMs > LDeadline;
+  until PcTickMs > LDeadline;
   Result := AConn.State = AState;
 end;
 
@@ -206,12 +206,12 @@ function WaitChannels(AConn: TAMQPServerConnection; ACount: Integer;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
   repeat
     if AConn.ChannelCount = ACount then
       Exit(True);
     TThread.Sleep(10);
-  until AmqpTickMs > LDeadline;
+  until PcTickMs > LDeadline;
   Result := AConn.ChannelCount = ACount;
 end;
 
@@ -606,12 +606,12 @@ function TRecordingSink.WaitCount(ACount, ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
   repeat
     if Count >= ACount then
       Exit(True);
     TThread.Sleep(10);
-  until AmqpTickMs > LDeadline;
+  until PcTickMs > LDeadline;
   Result := Count >= ACount;
 end;
 
@@ -833,8 +833,8 @@ begin
     LCli.Close; // Connection.Close + espera o Close-Ok do broker
     Assert.IsFalse(LCli.IsOpen, 'cliente fechado');
 
-    LDeadline := AmqpTickMs + 3000;
-    while (FBroker.ConnectionCount > 0) and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 3000;
+    while (FBroker.ConnectionCount > 0) and (PcTickMs < LDeadline) do
       TThread.Sleep(10);
     Assert.AreEqual(0, FBroker.ConnectionCount, 'broker reapou a conexao');
   finally
@@ -1125,8 +1125,8 @@ begin
     LGot := False;
     // Fica só lendo: com 1 s negociado, o primeiro heartbeat tem de chegar bem
     // antes dos 2 s em que o broker nos consideraria mortos.
-    LDeadline := AmqpTickMs + 1500;
-    while (not LGot) and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 1500;
+    while (not LGot) and (PcTickMs < LDeadline) do
     begin
       LF := TAMQPFrame.ReadFrom(LStrm, MAX_PAYLOAD);
       if LF.IsHeartbeat then
@@ -1152,8 +1152,8 @@ begin
     // Não mandamos mais nada. O broker tem de nos derrubar depois de 2x1 s.
     // Seguimos lendo (só chegam heartbeats dele) até o stream acabar.
     LDropped := False;
-    LDeadline := AmqpTickMs + 6000;
-    while (not LDropped) and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 6000;
+    while (not LDropped) and (PcTickMs < LDeadline) do
       try
         TAMQPFrame.ReadFrom(LStrm, MAX_PAYLOAD);
       except
@@ -1209,8 +1209,8 @@ begin
 
     // Nunca respondemos o Close-Ok: o broker tem de derrubar no prazo.
     LDropped := False;
-    LDeadline := AmqpTickMs + 5000;
-    while (not LDropped) and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 5000;
+    while (not LDropped) and (PcTickMs < LDeadline) do
       try
         TAMQPFrame.ReadFrom(LStrm, MAX_PAYLOAD);
       except

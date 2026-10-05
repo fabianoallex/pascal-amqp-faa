@@ -363,7 +363,7 @@ samples/PostoAutomacao/
   pdv/
     Posto.PDV.Cliente.pas              conexão + RPC síncrono (fila de resposta exclusiva)
     Posto.PDV.Sincronia.pas            buffer + snapshot + replay + detecção de salto de versão
-    Posto.PDV.Modelo.pas               venda + itens + outbox + reconciliação (ops em workers do AmqpPool)
+    Posto.PDV.Modelo.pas               venda + itens + outbox + reconciliação (ops em workers do PcPool)
     uPdvMain.pas / .dfm / .lfm         frente de caixa GUI dual
     PdvPosto.dpr / .lpi / .dproj
   smoke/
@@ -382,7 +382,7 @@ uma fonte de layout, nada para manter em sincronia entre os dois formatos.
 notificadora do broker, callbacks de conexão) só mexem em estado com lock e
 enfileiram log / marcam uma flag atômica; um `TTimer` na thread da UI drena o
 log e reconstrói as listas. Isso evita o gotcha do `TThread.Queue` descartado
-por thread que morre (CLAUDE.md) sem precisar do salto pelo `AmqpPool`.
+por thread que morre (CLAUDE.md) sem precisar do salto pelo `PcPool`.
 
 ---
 

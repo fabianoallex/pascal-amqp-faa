@@ -28,7 +28,7 @@ uses
   cthreads,
   {$ENDIF}
   SysUtils, Classes,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.Types,
   AMQP.Server.Broker;
 
@@ -137,8 +137,8 @@ begin
     // Sai por prazo OU por uma linha na entrada padrao: com prazo o script nao
     // trava se algo der errado; com a entrada padrao quem chamou encerra assim
     // que o SmokeTest termina.
-    LDeadline := AmqpTickMs + UInt64(LSegundos) * 1000;
-    while AmqpTickMs < LDeadline do
+    LDeadline := PcTickMs + UInt64(LSegundos) * 1000;
+    while PcTickMs < LDeadline do
     begin
       if not Eof(Input) then
       begin

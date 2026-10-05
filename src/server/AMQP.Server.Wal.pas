@@ -91,11 +91,11 @@ interface
 
 uses
   SysUtils,
-  Classes,
+  Classes
   {$IFNDEF FPC}
-  Windows,
+  , Windows
   {$ENDIF}
-  AMQP.Threading;
+  ;
 
 const
   /// Assinatura do cabecalho de segmento. Muda junto com o formato.

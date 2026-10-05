@@ -9,7 +9,7 @@
 
   Os eventos de conexao (OnDisconnect/OnReconnect) chegam por threads da lib
   que podem morrer logo em seguida -- por isso NAO usamos TThread.Queue aqui;
-  so' flag atomica, log com lock, e disparo de workers do AmqpPool (gotcha
+  so' flag atomica, log com lock, e disparo de workers do PcPool (gotcha
   do CLAUDE.md; ver EventosTopicVcl). }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
@@ -22,7 +22,8 @@ uses
   {$ENDIF}
   SysUtils, Classes, SyncObjs,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
-  AMQP.Threading, AMQP.Connection,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool, AMQP.Connection,
   Posto.Abastecida, Posto.Contratos,
   Posto.PDV.Cliente, Posto.PDV.Sincronia, Posto.PDV.Modelo;
 
@@ -286,7 +287,7 @@ end;
 
 procedure TfrmPdv.MarcaSujo;
 begin
-  AmqpAtomicSet(FSujo, 1);
+  PcAtomicSet(FSujo, 1);
 end;
 
 procedure TfrmPdv.tmrUiTimer(Sender: TObject);
@@ -321,9 +322,9 @@ begin
     end;
   end;
 
-  if FConectado and (AmqpAtomicGet(FSujo) <> 0) then
+  if FConectado and (PcAtomicGet(FSujo) <> 0) then
   begin
-    AmqpAtomicSet(FSujo, 0);
+    PcAtomicSet(FSujo, 0);
     AtualizaListas;
   end;
 end;

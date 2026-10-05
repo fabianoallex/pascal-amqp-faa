@@ -22,7 +22,7 @@ uses
   SysUtils,
   Classes,
   SyncObjs,
-  AMQP.Threading,     // atomics
+  PascalCommon.Threading,
   AMQP.Basic.Methods, // TAMQPBasicProperties
   AMQP.Server.Events, // IAMQPEventSink (TAMQPServerConnConfig.Events)
   AMQP.Server.Auth,
@@ -379,7 +379,7 @@ function TAMQPNullMessageSink.RouteMessage(const AVHost: string;
 begin
   ARejected := False; // sink nulo nunca recusa: nao ha fila para encher
   ALsn := 0;           // e nao durou nada: nao ha journal
-  AmqpAtomicInc(FCount);
+  PcAtomicInc(FCount);
   // Fase 1: nenhuma fila existe, então nada foi roteado. Devolver False é o
   // que a Fase 2 usará para disparar o Basic.Return de um publish mandatory.
   Result := False;
@@ -387,7 +387,7 @@ end;
 
 function TAMQPNullMessageSink.Count: Integer;
 begin
-  Result := AmqpAtomicGet(FCount);
+  Result := PcAtomicGet(FCount);
 end;
 
 end.

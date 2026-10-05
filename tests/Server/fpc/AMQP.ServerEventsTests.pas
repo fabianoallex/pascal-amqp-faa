@@ -46,7 +46,8 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes, SyncObjs,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Wire,
   AMQP.Connection,
   AMQP.Queue.Methods,
@@ -61,7 +62,7 @@ type
     thread do runner, entao tudo passa por lock. }
   TCaptura = class
   private
-    FMon: TAMQPMonitor;
+    FMon: TPcMonitor;
     FEvents: array of TAMQPServerEvent;
   public
     constructor Create;
@@ -182,7 +183,7 @@ end;
 constructor TCaptura.Create;
 begin
   inherited Create;
-  FMon := TAMQPMonitor.Create;
+  FMon := TPcMonitor.Create;
 end;
 
 destructor TCaptura.Destroy;
@@ -271,7 +272,7 @@ var
   LDeadline: UInt64;
   LN, I: Integer;
 begin
-  LDeadline := AmqpTickMs + ATimeoutMs;
+  LDeadline := PcTickMs + ATimeoutMs;
   FMon.Enter;
   try
     repeat
@@ -281,7 +282,7 @@ begin
           Inc(LN);
       if LN >= ACount then
         Exit(True);
-      if AmqpTickMs >= LDeadline then
+      if PcTickMs >= LDeadline then
         Exit(False);
       FMon.Wait(20);
     until False;
@@ -724,7 +725,7 @@ var
   LEv: TAMQPServerEvent;
   LMsg: TAMQPGetResult;
 begin
-  // Estes dois nascem num worker do AmqpPool, dentro do ator -- nao na thread
+  // Estes dois nascem num worker do pool dos atores -- nao na thread
   // de leitura. Que eles cheguem e' a prova de que o marshalling da D30 vale
   // para as duas origens, com o MESMO contrato.
   SobeEConecta(True);

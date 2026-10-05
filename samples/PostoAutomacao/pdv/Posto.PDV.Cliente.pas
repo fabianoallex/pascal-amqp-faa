@@ -6,7 +6,7 @@
   (ARQUITETURA.md §5, §6.2).
 
   Chamar() bloqueia ate' a resposta ou o timeout -- e' feito para rodar numa
-  thread de trabalho (AmqpPool), NUNCA na thread da UI. A fila de respostas
+  thread de trabalho (PcPool), NUNCA na thread da UI. A fila de respostas
   e' exclusiva, auto-delete, de nome fixo (sobrevive ao replay da reconexao,
   ao contrario de um nome gerado pelo broker -- ver ConsultaStatusVcl).
 

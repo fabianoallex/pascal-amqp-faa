@@ -11,7 +11,8 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
@@ -24,10 +25,10 @@ type
   TAMQPStringArr = array of string;
 
   // System.Threading (TParallel.For) nao existe no FPC (ver CLAUDE.md) —
-  // dispara N criacoes de canal concorrentes via AmqpPool (o thread pool
+  // dispara N criacoes de canal concorrentes via PcPool (o thread pool
   // proprio da lib) em vez disso. O pool assume a posse do item: nao se
   // libera manualmente apos Queue.
-  TCreateChannelWorkItem = class(TAMQPWorkItem)
+  TCreateChannelWorkItem = class(TPcWorkItem)
   private
     FConn: TAMQPConnection;
     FIndex: Integer;
@@ -46,7 +47,7 @@ type
     FStarted: Integer;
     FFinished: Integer;
     // Callback de consumer é 'of object' na lib (ver CLAUDE.md) — sem métodos
-    // anônimos. TInterlocked não existe no FPC -> AmqpAtomic*.
+    // anônimos. TInterlocked não existe no FPC -> PcAtomic*.
     procedure HandleSlowDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   protected
     procedure SetUp; override;
@@ -79,7 +80,7 @@ begin
     on E: Exception do
       FErrors[FIndex] := E.Message;
   end;
-  AmqpAtomicInc(FDone^);
+  PcAtomicInc(FDone^);
 end;
 
 { TAMQPReviewRegressionTests }
@@ -100,9 +101,9 @@ end;
 procedure TAMQPReviewRegressionTests.HandleSlowDelivery(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery);
 begin
-  AmqpAtomicSet(FStarted, 1);
+  PcAtomicSet(FStarted, 1);
   TThread.Sleep(6000);
-  AmqpAtomicSet(FFinished, 1);
+  PcAtomicSet(FFinished, 1);
 end;
 
 procedure TAMQPReviewRegressionTests.CloseDoCanal_EsperaCallbackEmVoo;
@@ -129,20 +130,20 @@ begin
 
     // Espera o callback começar (mas ainda dormindo).
     LWaited := 0;
-    while (AmqpAtomicGet(FStarted) = 0) and (LWaited < 5000) do
+    while (PcAtomicGet(FStarted) = 0) and (LWaited < 5000) do
     begin
       TThread.Sleep(20);
       Inc(LWaited, 20);
     end;
-    AssertEquals('o callback deveria ter começado', 1, AmqpAtomicGet(FStarted));
+    AssertEquals('o callback deveria ter começado', 1, PcAtomicGet(FStarted));
     AssertEquals('o callback ainda deveria estar em voo (dormindo)',
-      0, AmqpAtomicGet(FFinished));
+      0, PcAtomicGet(FFinished));
 
     // Fecha o canal COM o callback em voo: DrainInFlight deve esperar terminar.
     LChan.Close;
 
     AssertEquals('Close deveria ter drenado (esperado) o callback em voo antes de retornar',
-      1, AmqpAtomicGet(FFinished));
+      1, PcAtomicGet(FFinished));
   finally
     LChan.Free;
   end;
@@ -166,19 +167,19 @@ begin
     LErrors[I] := '';
   end;
 
-  // Cria N canais concorrentemente via AmqpPool (thread pool proprio da lib,
+  // Cria N canais concorrentemente via PcPool (thread pool proprio da lib,
   // ver comentario do TCreateChannelWorkItem acima).
   LDone := 0;
   for I := 0 to N - 1 do
-    AmqpPool.Queue(TCreateChannelWorkItem.Create(FConn, I, LChannels, LErrors, @LDone));
+    PcPool.Queue(TCreateChannelWorkItem.Create(FConn, I, LChannels, LErrors, @LDone));
 
   LWaited := 0;
-  while (AmqpAtomicGet(LDone) < N) and (LWaited < 10000) do
+  while (PcAtomicGet(LDone) < N) and (LWaited < 10000) do
   begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
   end;
-  AssertEquals('todos os N itens deveriam terminar', N, AmqpAtomicGet(LDone));
+  AssertEquals('todos os N itens deveriam terminar', N, PcAtomicGet(LDone));
 
   LSeen := TDictionary<Word, Boolean>.Create;
   try

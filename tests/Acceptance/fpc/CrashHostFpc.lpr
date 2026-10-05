@@ -62,7 +62,6 @@ uses
   cthreads,
   {$ENDIF}
   SysUtils,
-  AMQP.Threading,
   AMQP.Queue.Methods,
   AMQP.Connection,
   AMQP.Server.Types,

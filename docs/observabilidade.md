@@ -57,7 +57,7 @@ Porque não existe metade segura. As três alternativas ao ring foram medidas co
 
 | onde rodar o handler | o que quebra |
 |---|---|
-| worker do `AmqpPool` | é o **mesmo pool** que roda os atores das filas — handler lento starva o ator |
+| worker de pool | o pool dos atores das filas (próprio do broker) — handler lento starva o ator; o `PcPool` é do processo inteiro, e o handler disputaria worker com callbacks de outras libs |
 | thread monitora | põe heartbeat, prazo de Close-Ok, varredura de TTL e reap atrás do handler |
 | inline na thread de leitura | trava o processamento de frames daquela conexão, **heartbeat incluso**, até o cliente derrubá-la |
 

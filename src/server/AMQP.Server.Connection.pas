@@ -44,7 +44,7 @@ uses
   Rtti,
   SyncObjs,
   Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Method,
@@ -332,7 +332,7 @@ begin
   FChLock := TCriticalSection.Create;
   FJoinLock := TCriticalSection.Create;
   FChannels := TDictionary<Word, TAMQPServerChannel>.Create;
-  FConnId := NativeUInt(Cardinal(AmqpAtomicInc(GConnIdSeq)));
+  FConnId := NativeUInt(Cardinal(PcAtomicInc(GConnIdSeq)));
   FThread := TAMQPServerConnThread.Create(Self);
 end;
 
@@ -368,7 +368,7 @@ end;
 
 procedure TAMQPServerConnection.Shutdown;
 begin
-  if AmqpAtomicCompareExchange(FClosing, 1, 0) <> 0 then
+  if PcAtomicCompareExchange(FClosing, 1, 0) <> 0 then
     Exit; // já em curso
   // Fecha o socket: desbloqueia um ReadFrom pendente na thread de leitura.
   // Guardado: Shutdown é chamado pelo Stop do broker e pelo destrutor, e uma
@@ -404,7 +404,7 @@ end;
 
 function TAMQPServerConnection.LastReadTick: UInt64;
 begin
-  Result := AmqpAtomicRead64(FLastReadTick);
+  Result := PcAtomicRead64(FLastReadTick);
 end;
 
 procedure TAMQPServerConnection.HeartbeatTick;
@@ -419,12 +419,12 @@ begin
   if LIntervalMs = 0 then
     Exit; // heartbeat desabilitado pelo cliente no Tune-Ok
 
-  LNow := AmqpTickMs;
+  LNow := PcTickMs;
 
   // Peer morto: a spec manda derrubar após dois intervalos sem NADA chegar
   // (qualquer frame conta, não só heartbeat). Fechar o socket desbloqueia o
   // ReadFrom da thread desta conexão, que então encerra pelo caminho normal.
-  LLastRead := AmqpAtomicRead64(FLastReadTick);
+  LLastRead := PcAtomicRead64(FLastReadTick);
   if (LLastRead <> 0) and ((LNow - LLastRead) > (2 * LIntervalMs)) then
   begin
     if FError = '' then
@@ -448,7 +448,7 @@ end;
 procedure TAMQPServerConnection.EnforceCloseDeadline;
 begin
   if (FState = amqssClosing) and (FCloseDeadline <> 0) and
-     (AmqpTickMs > FCloseDeadline) then
+     (PcTickMs > FCloseDeadline) then
   begin
     if FError = '' then
       FError := 'client did not respond to Connection.Close within the deadline';
@@ -637,7 +637,7 @@ begin
   if FError = '' then
     FError := Format('%d %s', [ACode, AText]);
   PostMethod(AMQP_CHANNEL_CONNECTION, BuildClose(LClose));
-  FCloseDeadline := AmqpTickMs + FConfig.CloseTimeoutMs;
+  FCloseDeadline := PcTickMs + FConfig.CloseTimeoutMs;
 end;
 
 procedure TAMQPServerConnection.SendChannelClose(AChannel, ACode: Word;
@@ -1025,8 +1025,8 @@ end;
 // consumer-tag automatico). Unicos dentro da conexao, que e' o que a spec pede.
 function TAMQPServerConnection.GeneratedName(const APrefix: string): string;
 begin
-  Result := Format('%s%d-%d', [APrefix, AmqpAtomicInc(FNameSeq),
-    Integer(AmqpTickMs and $FFFFFF)]);
+  Result := Format('%s%d-%d', [APrefix, PcAtomicInc(FNameSeq),
+    Integer(PcTickMs and $FFFFFF)]);
 end;
 
 procedure TAMQPServerConnection.CheckArgs(AChannel: TAMQPServerChannel;
@@ -1334,6 +1334,7 @@ var
   LRes: TAMQPEngineResult;
   LPolicy: TAMQPQueuePolicy;
   LErrorArg: string;
+  LArgs: TAMQPFieldTable;
 begin
   Result := True;
   case AId.MethodId of
@@ -1370,10 +1371,16 @@ begin
             if not LDeclare.Passive then
               CheckArgs(AChannel, AmqpParseQueuePolicy(LDeclare.Arguments,
                 LPolicy, LErrorArg), LErrorArg, AId.ClassId, AId.MethodId);
+            // A posse passa ANTES da chamada: a engine entrega a tabela ao
+            // descritor da fila e depois ainda espera o ator (Stats, sincrono),
+            // que pode levantar por timeout. Zerar so' na volta fazia o finally
+            // abaixo liberar a tabela que o descritor ja' possuia -- double free
+            // no Destroy do broker, achado na F8 com o pool dos atores saturado.
+            LArgs := LDeclare.Arguments;
+            LDeclare.Arguments := nil;
             LRes := FEngine.DeclareQueue(FVirtualHost, LName, LDeclare.Passive,
               LDeclare.Durable, LDeclare.Exclusive, LDeclare.AutoDelete,
-              LDeclare.Arguments, FConnId, LMsgs, LCons);
-            LDeclare.Arguments := nil; // posse transferida
+              LArgs, FConnId, LMsgs, LCons);
             CheckEngine(AChannel, LRes, 'queue ' + LName,
               AId.ClassId, AId.MethodId);
             // Fila "corrente" do canal: o cliente pode omitir o nome no
@@ -2075,7 +2082,7 @@ begin
       if not FProtocolOk then
         Exit;
 
-      AmqpAtomicWrite64(FLastReadTick, AmqpTickMs);
+      PcAtomicWrite64(FLastReadTick, PcTickMs);
       SendConnectionStart;
       FState := amqssAwaitStartOk;
 
@@ -2099,8 +2106,8 @@ begin
           end;
         end;
 
-        AmqpAtomicInc(FFramesRead);
-        AmqpAtomicWrite64(FLastReadTick, AmqpTickMs);
+        PcAtomicInc(FFramesRead);
+        PcAtomicWrite64(FLastReadTick, PcTickMs);
 
         try
           if FState = amqssClosing then

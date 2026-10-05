@@ -53,7 +53,7 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 Decisões do porte (ver `CLAUDE.md` para detalhes):
 
 - **Callbacks são `procedure ... of object`** (não `reference to`), porque o FPC estável não tem métodos anônimos. No Delphi, use métodos de uma classe sua em vez de lambdas.
-- Nada de `System.Threading`/`TTask` nem `System.TMonitor`: a lib traz `AMQP.Threading` (thread pool + monitor/condvar + atomics portáveis).
+- Nada de `System.Threading`/`TTask` nem `System.TMonitor`: thread pool, monitor/condvar e atomics portáveis vêm da [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (`PcPool`, `TPcMonitor`, `PcAtomic*`), a base compartilhada pelas libs `*-faa` (ver [Compilando](#compilando)).
 - Socket em `AMQP.Transport` (`System.Net.Socket` no Delphi, `ssockets` no FPC).
 
 ## Uso rápido
@@ -411,12 +411,12 @@ Documentados de propósito — não são bugs:
 
 ## Arquitetura (resumo)
 
-- **Uma thread de leitura** é a única que lê o socket após o handshake; ela demultiplexa frames por canal e **despacha callbacks de consumer para o thread pool** (`AmqpPool`, de `AMQP.Threading`) — nunca roda código do usuário nem bloqueia.
+- **Uma thread de leitura** é a única que lê o socket após o handshake; ela demultiplexa frames por canal e **despacha callbacks de consumer para o thread pool** (`PcPool`, da pascal-common-faa) — nunca roda código do usuário nem bloqueia. O `PcPool` é **um pool para o processo inteiro**, dividido com as outras libs `*-faa` que você usar; o teto de workers é `max(16, 4 × núcleos)`.
 - Todas as **escritas** são serializadas por um lock; os frames de uma mensagem (método + header + corpo) saem juntos.
 - **RPC** (declare/bind/get/consume/close) é feito por evento: envia e aguarda a thread de leitura entregar a resposta.
 - **Heartbeat** e **reconexão** rodam em threads próprias com espera interrompível (`TEvent`).
 
-Do lado do **broker**, o modelo é: **uma thread por conexão** com I/O bloqueante, **uma thread escritora por conexão** (fila de saída limitada = backpressure natural), **uma única thread monitora** para o broker inteiro (heartbeats, prazo do `Close-Ok`, reap de conexões mortas) e **um ator por fila** — cada fila tem uma caixa de comandos serial agendada no thread pool, então nenhum estado de fila é tocado por duas threads. O casamento de bindings roda na thread do publicador; só o enfileiramento atravessa para o ator.
+Do lado do **broker**, o modelo é: **uma thread por conexão** com I/O bloqueante, **uma thread escritora por conexão** (fila de saída limitada = backpressure natural), **uma única thread monitora** para o broker inteiro (heartbeats, prazo do `Close-Ok`, reap de conexões mortas) e **um ator por fila** — cada fila tem uma caixa de comandos serial agendada num thread pool, então nenhum estado de fila é tocado por duas threads. Esse pool é **do próprio `TAMQPServer`**, não o `PcPool`: callback de consumer pode bloquear em I/O, e com os atores no pool do processo um `PcPool` saturado travava o broker (medido: o `Queue.Declare-Ok` esperava 15 s e a conexão caía; com o pool próprio, 26 ms). O casamento de bindings roda na thread do publicador; só o enfileiramento atravessa para o ator.
 
 ## Erros e exceções
 
@@ -440,7 +440,7 @@ Pontos práticos:
 
 ## Concorrência e ordenação de mensagens
 
-Cada entrega é despachada pro **thread pool** (`AmqpPool`, ver `AMQP.Threading`) como um item de trabalho independente — não existe uma fila única por canal/consumer sendo drenada em ordem. É uma escolha de design deliberada, diferente do padrão comum em outras linguagens:
+Cada entrega é despachada pro **thread pool** (`PcPool`, da pascal-common-faa) como um item de trabalho independente — não existe uma fila única por canal/consumer sendo drenada em ordem. É uma escolha de design deliberada, diferente do padrão comum em outras linguagens:
 
 - **RabbitMQ Java/.NET client**: cada canal é processado sequencialmente por um único worker tirado de um pool compartilhado — canais diferentes rodam em paralelo entre si, mas dentro de um canal a ordem é preservada por padrão.
 - **pika (Python) / node-amqplib**: single-threaded, orientado a event loop — todos os callbacks rodam na mesma thread/loop; paralelismo é opt-in, por conta do código do usuário.
@@ -460,7 +460,7 @@ Chan.Consume('minha-fila', Consumidor.OnMsg);
 
 Serializa **tudo** daquele consumer — sem paralelismo algum. Boa escolha quando ordem estrita é obrigatória e o volume não é o gargalo.
 
-**2. Canal com worker dedicado (`CreateChannel(True)`)** — opção nativa da lib: em vez do `AmqpPool` global, o canal ganha uma thread própria (`TAMQPThreadPool.Create(1)` internamente) que processa deliveries/returns/confirms um de cada vez, na ordem de chegada. Diferente do `Qos(1)`, o broker continua entregando até o prefetch configurado — só o processamento no cliente é serializado, não o fluxo de rede. Zero código de aplicação; outros canais da mesma conexão continuam concorrentes normalmente. Ver `samples/Retaguarda` (flag `--dedicado`) e `samples/RetaguardaVcl` (checkbox "Thread dedicada").
+**2. Canal com worker dedicado (`CreateChannel(True)`)** — opção nativa da lib: em vez do `PcPool` global, o canal ganha uma thread própria (`TPcThreadPool.Create(1)` internamente) que processa deliveries/returns/confirms um de cada vez, na ordem de chegada. Diferente do `Qos(1)`, o broker continua entregando até o prefetch configurado — só o processamento no cliente é serializado, não o fluxo de rede. Zero código de aplicação; outros canais da mesma conexão continuam concorrentes normalmente. Ver `samples/Retaguarda` (flag `--dedicado`) e `samples/RetaguardaVcl` (checkbox "Thread dedicada").
 
 **3. Fila própria da aplicação + uma thread dedicada** — a callback só empilha a entrega numa fila thread-safe (ex. `TCriticalSection` + `TQueue`); uma única thread dedicada drena e processa em ordem de chegada, chamando `Ack` no fim de cada item. Só vale a pena sobre a opção 2 quando você precisa de algo que o worker dedicado da lib não oferece — por exemplo, backpressure própria (limitar o tamanho da fila) ou compartilhar uma única fila de processamento entre mais de um canal/consumer.
 
@@ -475,15 +475,17 @@ Por que começar do lado paralelo em vez do serializado: adicionar ordem sobre u
 
 ## Compilando
 
-**Lazarus**: abra/instale `packages/pascal_amqp_faa.lpk` (ou `lazbuild packages\pascal_amqp_faa.lpk`).
+**Dependência: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.0 ou mais nova.** É a base comum das libs `*-faa` (atomics, monitor, thread pool). A **aplicação** fornece uma cópia só dela, mesmo usando várias libs `*-faa`: esta lib não a embute. O submódulo `external/pascal-common-faa` existe para os testes e samples deste repositório, não para o seu build. Uma cópia mais velha que a mínima para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.0.0 ou mais nova`.
+
+**Lazarus**: instale (ou registre) `pascal_common_faa.lpk` da pascal-common-faa e depois abra/instale `packages/pascal_amqp_faa.lpk` (ou `lazbuild packages\pascal_amqp_faa.lpk`). O pacote exige `pascal_common_faa` pelo nome, versão 1 ou mais nova.
 
 **FPC puro**:
 
 ```
-fpc -Fusrc -Fisrc seu_programa.pas
+fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src seu_programa.pas
 ```
 
-**Delphi**: adicione `src\` ao search path do projeto (unit scope names `System;Winapi`, que é o padrão). Exemplo pronto em `samples\SmokeTest\SmokeTest.dproj`.
+**Delphi**: adicione `src\` e o `src\` da pascal-common-faa ao search path do projeto (unit scope names `System;Winapi`, que é o padrão). Exemplo pronto em `samples\SmokeTest\SmokeTest.dproj`.
 
 **Para usar o broker embutido**, some o pacote/diretório do servidor: `packages\pascal_amqp_faa_server.lpk` no Lazarus, `-Fusrc\server` no FPC puro, `src\server\` no search path do Delphi. Quem só usa o cliente não precisa de nada disso — os dois pacotes são separados de propósito.
 

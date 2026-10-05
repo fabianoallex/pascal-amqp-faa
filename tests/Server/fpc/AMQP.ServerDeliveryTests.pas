@@ -31,7 +31,7 @@ uses
   AMQP.Wire,
   AMQP.Frame,
   AMQP.Basic.Methods,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.FrameIO,
   AMQP.Server.Message,
   AMQP.Server.Queue,
@@ -723,7 +723,7 @@ begin
     LMsg := NovaMensagem('m');
     try
       LRecusou := False;
-      LInicio := AmqpTickMs;
+      LInicio := PcTickMs;
       for I := 1 to 50 do
         if not LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag) then
         begin
@@ -731,7 +731,7 @@ begin
           Break;
         end;
       AssertTrue('com a fila de escrita cheia, o alvo recusa', LRecusou);
-      AssertTrue('e recusa SEM BLOQUEAR -- e o que a D2/D3 exige do ator', AmqpTickMs - LInicio < 2000);
+      AssertTrue('e recusa SEM BLOQUEAR -- e o que a D2/D3 exige do ator', PcTickMs - LInicio < 2000);
     finally
       LMsg.Release;
     end;

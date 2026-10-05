@@ -29,7 +29,8 @@ uses
   Classes,
   SyncObjs,
   Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Transport,
   AMQP.Server.Auth,
   AMQP.Server.Types,
@@ -84,6 +85,15 @@ type
     FAuthorizer: IAMQPAuthorizer;
     FSink: IAMQPMessageSink;
     FEngine: TAMQPEngine; // WS5: a engine de verdade; tambem e' o Sink
+    // Pool PROPRIO dos atores das filas (F8). Nao o PcPool da
+    // pascal-common-faa: aquele e' do processo inteiro -- callbacks de
+    // consumer deste cliente e das outras libs *-faa, que podem bloquear em
+    // I/O por segundos -- e tem teto. Medido (TPoolIsolationTests): com o
+    // PcPool saturado e o ator nele, o Queue.Declare-Ok esperava os 15 s do
+    // comando sincrono do ator e a conexao caia. O ator nunca bloqueia (D2),
+    // entao este pool so' disputa CPU entre filas, que e' o que ele deve
+    // disputar. Criar e' barato (nenhuma thread antes do primeiro Queue).
+    FActorPool: TPcThreadPool;
     FJournal: TAMQPJournal; // Fase 4: nil enquanto DataDir estiver vazio
     // Onde os canais penduram confirms adiados. Existe junto com o journal e
     // pelo mesmo motivo: sem DataDir nao ha o que esperar, e o confirm sai
@@ -290,6 +300,9 @@ begin
   // WS5: a engine e' o sink. O caminho de conteudo da Fase 1 (canal remonta
   // -> Sink.RouteMessage) nao mudou -- so' quem esta' plugado nele.
   FEngine := TAMQPEngine.Create;
+  // Antes de qualquer fila existir (a recuperacao do Start ja' cria filas).
+  FActorPool := TPcThreadPool.Create;
+  FEngine.Pool := FActorPool;
   FSink := FEngine;
   FMonitorStop := TEvent.Create(nil, True, False, '');
   // O barramento nasce com o servidor (e nao no Start) para o Subscribe
@@ -341,6 +354,11 @@ begin
   // sendo alimentado. O destrutor da engine para os atores antes de liberar.
   FreeAndNil(FJournal);
   FEngine.Free;
+  // Depois da engine: o destrutor dela para cada ator (Stop espera o work
+  // item em voo sair do laco), entao aqui nao ha item de fila na mao de
+  // nenhum worker. O Destroy do pool executaria o que ainda estivesse na
+  // fila -- nunca descartou --, mas nao sobra nada para executar.
+  FActorPool.Free;
   // O BARRAMENTO POR ULTIMO, depois da engine e do journal. A engine, cada
   // FILA que ela possui e o journal guardam um IAMQPEventSink apontando para
   // ele; liberar o barramento antes faz o destrutor de cada um desses campos
@@ -536,7 +554,7 @@ begin
     finally
       FLock.Leave;
     end;
-    AmqpAtomicInc(FTotalAccepted);
+    PcAtomicInc(FTotalAccepted);
     LConn.Start;
   end;
 end;

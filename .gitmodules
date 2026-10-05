@@ -1,0 +1,3 @@
+[submodule "external/pascal-common-faa"]
+	path = external/pascal-common-faa
+	url = https://github.com/fabianoallex/pascal-common-faa.git

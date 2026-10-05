@@ -6,7 +6,7 @@
   em memoria, ver CLAUDE.md).
 
   Decisao D2 (travada): o ator NAO tem thread propria. Ele e' um work item
-  agendado num TAMQPThreadPool -- N filas ociosas nao podem virar N threads.
+  agendado num TPcThreadPool -- N filas ociosas nao podem virar N threads.
   A regra que isso impoe: NENHUM comando pode bloquear o worker esperando I/O
   (por isso a entrega da WS4 e' post nao-bloqueante e o consumidor lento sai
   do rodizio, decisao D3).
@@ -52,9 +52,11 @@
   espera o ator sair do laco (FScheduled=False) com deadline e SO' ENTAO drena
   o estoque inline. NUNCA liberar a fila sem o Stop ter voltado -- e' a mesma
   familia de erro que custou double-free na Fase 1. Stop NAO usa um "comando
-  de parada": se o pool ja' estiver em shutdown (a finalizacao da unit
-  AMQP.Threading libera itens enfileirados SEM executa-los), um comando
-  postado ali nunca rodaria e o Stop so' voltaria no timeout.
+  de parada": um pool em shutdown libera SEM executar o item que recebe
+  depois de o Destroy comecar (o que ja' estava na fila ele executa -- o
+  Destroy do TPcThreadPool nunca descartou a fila; esta nota dizia o
+  contrario ate' a F8), entao um comando postado ali nunca rodaria e o Stop
+  so' voltaria no timeout.
 
   Escopo do WS3 -- o que NAO esta' aqui
   -------------------------------------
@@ -73,7 +75,8 @@ uses
   Classes,
   SyncObjs,
   Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Server.Events,
   AMQP.Server.Message,
   AMQP.Server.Header,
@@ -341,7 +344,7 @@ type
   TAMQPServerQueue = class;
 
   { O work item que roda uma rodada do ator num worker do pool. }
-  TAMQPQueueWork = class(TAMQPWorkItem)
+  TAMQPQueueWork = class(TPcWorkItem)
   private
     FQueue: TAMQPServerQueue;
   public
@@ -356,9 +359,9 @@ type
     FMaxLength: Integer;      // teto EFETIVO de contagem (global + fila)
     FMaxBytes: Int64;         // teto EFETIVO de bytes (-1 = sem teto)
     FBytesProntos: Int64;     // soma dos corpos das PRONTAS (so' do ator)
-    FPool: TAMQPThreadPool;
+    FPool: TPcThreadPool;
     // --- caixa (sob FMon) ---
-    FMon: TAMQPMonitor;
+    FMon: TPcMonitor;
     FMailbox: TQueue<TAMQPQueueCommand>;
     FScheduled: Boolean;
     FStopping: Boolean;
@@ -474,7 +477,7 @@ type
     /// Relogio do ator (decisao D13). Virtual porque teste de TTL nao pode
     /// depender de Sleep: a suite sobrescreve isto e faz o tempo andar na mao,
     /// o que torna a expiracao deterministica e instantanea. Em producao e'
-    /// AmqpTickMs.
+    /// PcTickMs.
     function NowTick: UInt64; virtual;
     /// Uma rodada do ator. Publico so' para o work item; nunca chame de fora.
     procedure RunActor;
@@ -485,17 +488,18 @@ type
   public
     /// AMaxLength = 0: sem limite (default da D7). > 0: ao estourar, descarta
     /// da CABECA e conta em Stats.DroppedCount.
-    /// APool = nil: AmqpPool global (letra da D2). O parametro existe para o
-    /// broker poder isolar seus atores num pool proprio sem mudanca de
-    /// estrutura, se a inanicao aparecer (o AmqpPool tem teto e e'
-    /// compartilhado com os callbacks de consumer do cliente).
+    /// APool = nil: PcPool, o pool do processo (letra da D2). O broker NAO
+    /// usa o nil: o TAMQPServer passa o pool proprio dele desde a F8, porque
+    /// o PcPool tem teto e e' dividido com callbacks de consumer -- deste
+    /// cliente e das outras libs *-faa -- que podem bloquear em I/O; medido
+    /// em TPoolIsolationTests, o ator esperava ali ate' o timeout de 15 s.
     constructor Create(const AName: string; AMaxLength: Integer = 0;
-      APool: TAMQPThreadPool = nil); overload;
+      APool: TPcThreadPool = nil); overload;
     /// Com os x-arguments ja' lidos (WS2). E' por aqui que a engine cria a
     /// fila; a sobrecarga acima existe para quem nao tem politica nenhuma
     /// (testes de estado puro) e equivale a passar TAMQPQueuePolicy.Empty.
     constructor Create(const AName: string; const APolicy: TAMQPQueuePolicy;
-      AMaxLength: Integer = 0; APool: TAMQPThreadPool = nil); overload;
+      AMaxLength: Integer = 0; APool: TPcThreadPool = nil); overload;
     destructor Destroy; override;
 
     // --- comandos assincronos ---
@@ -662,12 +666,12 @@ end;
 
 function TAMQPQueueCommand.AddRef: Integer;
 begin
-  Result := AmqpAtomicInc(FRefCount);
+  Result := PcAtomicInc(FRefCount);
 end;
 
 function TAMQPQueueCommand.Release: Integer;
 begin
-  Result := AmqpAtomicDec(FRefCount);
+  Result := PcAtomicDec(FRefCount);
   if Result = 0 then
     Free;
 end;
@@ -699,14 +703,14 @@ end;
 { TAMQPServerQueue }
 
 constructor TAMQPServerQueue.Create(const AName: string; AMaxLength: Integer;
-  APool: TAMQPThreadPool);
+  APool: TPcThreadPool);
 begin
   Create(AName, TAMQPQueuePolicy.Empty, AMaxLength, APool);
 end;
 
 constructor TAMQPServerQueue.Create(const AName: string;
   const APolicy: TAMQPQueuePolicy; AMaxLength: Integer;
-  APool: TAMQPThreadPool);
+  APool: TPcThreadPool);
 var
   I: Integer;
 begin
@@ -736,8 +740,8 @@ begin
   if APool <> nil then
     FPool := APool
   else
-    FPool := AmqpPool;
-  FMon := TAMQPMonitor.Create;
+    FPool := PcPool;
+  FMon := TPcMonitor.Create;
   FMailbox := TQueue<TAMQPQueueCommand>.Create;
   FLastUsed := NowTick; // a fila nasce "usada agora"
   SetLength(FStock, FMaxPriority + 1);
@@ -922,8 +926,8 @@ begin
     if FStopped then
       Exit;
     FStopping := True; // ninguem mais posta nem agenda
-    LDeadline := AmqpTickMs + AMQP_QUEUE_STOP_TIMEOUT_MS;
-    while FScheduled and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + AMQP_QUEUE_STOP_TIMEOUT_MS;
+    while FScheduled and (PcTickMs < LDeadline) do
       FMon.Wait(100);
     if FScheduled then
       raise EAMQPQueueActor.CreateFmt(
@@ -1215,7 +1219,7 @@ end;
 
 function TAMQPServerQueue.NowTick: UInt64;
 begin
-  Result := AmqpTickMs;
+  Result := PcTickMs;
 end;
 
 function TAMQPServerQueue.LimitPriority(APriority: Byte): Byte;

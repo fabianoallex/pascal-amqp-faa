@@ -24,7 +24,7 @@ uses
   AMQP.Server.Wal,
   AMQP.Protocol,
   AMQP.Frame,
-  AMQP.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Server.FrameIO;
 
 type
@@ -522,7 +522,7 @@ var
   P: PByte;
   I: Integer;
 begin
-  FPortao.WaitFor(AMQP_WAIT_INFINITE);
+  FPortao.WaitFor(PC_WAIT_INFINITE);
   FLock.Enter;
   try
     if FLen + Count > Length(FLog) then

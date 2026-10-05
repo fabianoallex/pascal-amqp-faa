@@ -28,7 +28,8 @@ uses
   Classes,
   SyncObjs,
   Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Frame,
   AMQP.Transport; // EAMQPTransport
 
@@ -49,7 +50,7 @@ type
   private
     FStream: TStream;
     FQueue: TQueue<TAMQPFrame>;
-    FMon: TAMQPMonitor;
+    FMon: TPcMonitor;
     FThread: TAMQPFrameWriterThread;
     FJoinLock: TCriticalSection;
     FJoined: Boolean;
@@ -90,7 +91,7 @@ type
     /// '' enquanto sã; o motivo depois de uma falha de escrita.
     function LastError: string;
     function Failed: Boolean;
-    /// Tick (AmqpTickMs) da última escrita que chegou de fato ao stream — não
+    /// Tick (PcTickMs) da última escrita que chegou de fato ao stream — não
     /// do último Post*. É o que o heartbeat precisa: a spec fala em ociosidade
     /// do envio no wire, e um frame parado na fila ainda não saiu.
     /// 0 enquanto nada foi escrito. Leitura atômica; chamável de outra thread.
@@ -122,7 +123,7 @@ begin
   if FMaxDepth < 1 then
     FMaxDepth := 1;
   FQueue := TQueue<TAMQPFrame>.Create;
-  FMon := TAMQPMonitor.Create;
+  FMon := TPcMonitor.Create;
   FJoinLock := TCriticalSection.Create;
   FThread := TAMQPFrameWriterThread.Create(Self);
   FStarted := True;
@@ -195,7 +196,7 @@ procedure TAMQPFrameWriter.EnqueueOne(const AFrame: TAMQPFrame);
 begin
   // chamar SEGURANDO FMon
   while (FQueue.Count >= FMaxDepth) and (not FStopping) and (not FFailed) do
-    FMon.Wait(AMQP_WAIT_INFINITE);
+    FMon.Wait(PC_WAIT_INFINITE);
   if FStopping then
     raise EAMQPTransport.Create('frame writer stopped');
   if FFailed then
@@ -225,7 +226,7 @@ begin
     // Espera só uma vez (o lote inteiro entra junto, mesmo que passe do teto:
     // um lote indivisível não pode ficar preso pela metade).
     while (FQueue.Count >= FMaxDepth) and (not FStopping) and (not FFailed) do
-      FMon.Wait(AMQP_WAIT_INFINITE);
+      FMon.Wait(PC_WAIT_INFINITE);
     if FStopping then
       raise EAMQPTransport.Create('frame writer stopped');
     if FFailed then
@@ -251,7 +252,7 @@ begin
     FMon.Enter;
     try
       while (FQueue.Count = 0) and (not FStopping) and (not FFailed) do
-        FMon.Wait(AMQP_WAIT_INFINITE);
+        FMon.Wait(PC_WAIT_INFINITE);
 
       LCount := FQueue.Count;
       if LCount > 0 then
@@ -278,7 +279,7 @@ begin
       try
         for I := 0 to High(LBatch) do
           LBatch[I].WriteTo(FStream);
-        AmqpAtomicWrite64(FLastWriteTick, AmqpTickMs);
+        PcAtomicWrite64(FLastWriteTick, PcTickMs);
       except
         on E: Exception do
         begin
@@ -312,7 +313,7 @@ end;
 
 function TAMQPFrameWriter.LastWriteTick: UInt64;
 begin
-  Result := AmqpAtomicRead64(FLastWriteTick);
+  Result := PcAtomicRead64(FLastWriteTick);
 end;
 
 function TAMQPFrameWriter.Failed: Boolean;

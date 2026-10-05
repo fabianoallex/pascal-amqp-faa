@@ -22,7 +22,7 @@ uses
   fpcunit, testregistry, SysUtils, Rtti,
   AMQP.Wire,
   AMQP.Exchange.Methods,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.Resources,
   AMQP.Server.Routing,
   AMQP.Server.VHost;
@@ -155,10 +155,10 @@ var
   I: Integer;
   LStart, LElapsedMs: Int64;
 begin
-  LStart := AmqpTickMs;
+  LStart := PcTickMs;
   for I := 1 to 10000 do
     AmqpTopicMatches('a.#.c.*.e', 'a.b.c.d.e');
-  LElapsedMs := AmqpTickMs - LStart;
+  LElapsedMs := PcTickMs - LStart;
   AssertTrue(Format('10000 casamentos em %d ms (esperado < 2000ms -- guarda ' +
     'barata contra uma implementacao que aloque por chamada)', [LElapsedMs]),
     LElapsedMs < 2000);
@@ -185,9 +185,9 @@ begin
   for I := 2 to 24 do
     LRoute := LRoute + '.a';
 
-  LStart := AmqpTickMs;
+  LStart := PcTickMs;
   AssertFalse('8 hashes contra 24 palavras nao casa', AmqpTopicMatches(LBind, LRoute));
-  LElapsedMs := AmqpTickMs - LStart;
+  LElapsedMs := PcTickMs - LStart;
   AssertTrue(Format('casamento patologico levou %d ms (esperado < 1000ms -- ' + 'guarda contra a volta do matcher exponencial)', [LElapsedMs]),
     LElapsedMs < 1000);
 end;
@@ -1117,11 +1117,11 @@ begin
     LVHost.DeclareQueue('q.fim', True, False, False, nil);
     LVHost.BindQueue('e15', 'q.fim', '', nil);
 
-    LIni := AmqpTickMs;
+    LIni := PcTickMs;
     LResult := LVHost.Route('e0', 'qualquer', nil);
     AssertEquals('chegou ao fim', 1, Length(LResult));
     AssertTrue('travessia tem de ser linear, nao exponencial (levou '
-      + IntToStr(AmqpTickMs - LIni) + ' ms)', (AmqpTickMs - LIni) < 500);
+      + IntToStr(PcTickMs - LIni) + ' ms)', (PcTickMs - LIni) < 500);
   finally
     LVHost.Free;
   end;

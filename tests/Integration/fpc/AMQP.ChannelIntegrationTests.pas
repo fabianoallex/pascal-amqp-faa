@@ -9,7 +9,7 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes, Rtti,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Wire,
@@ -24,7 +24,7 @@ type
     FChan: TAMQPChannel;
     // Estado capturado pelos callbacks (of object — a lib não aceita métodos
     // anônimos aqui, ver CLAUDE.md); cada teste reseta o que usa antes de armar
-    // o callback correspondente. TInterlocked não existe no FPC -> AmqpAtomic*.
+    // o callback correspondente. TInterlocked não existe no FPC -> PcAtomic*.
     FReturned: TAMQPReturnedMessage;
     FGotReturn: Integer;
     FConfirmedSeq: UInt64;
@@ -100,7 +100,7 @@ procedure TAMQPChannelIntegrationTests.HandleBasicReturn(AChannel: TAMQPChannel;
   const AReturned: TAMQPReturnedMessage);
 begin
   FReturned := AReturned;
-  AmqpAtomicSet(FGotReturn, 1);
+  PcAtomicSet(FGotReturn, 1);
 end;
 
 procedure TAMQPChannelIntegrationTests.HandleConfirmSingle(AChannel: TAMQPChannel;
@@ -108,16 +108,16 @@ procedure TAMQPChannelIntegrationTests.HandleConfirmSingle(AChannel: TAMQPChanne
 begin
   FConfirmedSeq := ASeqNo;
   if AAck then
-    AmqpAtomicSet(FAckFlag, 1);
+    PcAtomicSet(FAckFlag, 1);
 end;
 
 procedure TAMQPChannelIntegrationTests.HandleConfirmAckNack(AChannel: TAMQPChannel;
   ASeqNo: UInt64; AAck: Boolean);
 begin
   if AAck then
-    AmqpAtomicInc(FAckCount)
+    PcAtomicInc(FAckCount)
   else
-    AmqpAtomicInc(FNackCount);
+    PcAtomicInc(FNackCount);
 end;
 
 procedure TAMQPChannelIntegrationTests.PublicaEBuscaComPropriedades;
@@ -280,12 +280,12 @@ begin
 
   for I := 1 to 80 do
   begin
-    if AmqpAtomicGet(FGotReturn) = 1 then
+    if PcAtomicGet(FGotReturn) = 1 then
       Break;
     TThread.Sleep(25);
   end;
 
-  AssertEquals('OnBasicReturn deveria disparar', 1, AmqpAtomicGet(FGotReturn));
+  AssertEquals('OnBasicReturn deveria disparar', 1, PcAtomicGet(FGotReturn));
   AssertEquals('sem destino', FReturned.BodyAsText);
 end;
 
@@ -306,11 +306,11 @@ begin
 
   for I := 1 to 80 do
   begin
-    if AmqpAtomicGet(FAckFlag) = 1 then
+    if PcAtomicGet(FAckFlag) = 1 then
       Break;
     TThread.Sleep(25);
   end;
-  AssertEquals('OnConfirm deveria disparar com ack', 1, AmqpAtomicGet(FAckFlag));
+  AssertEquals('OnConfirm deveria disparar com ack', 1, PcAtomicGet(FAckFlag));
   AssertTrue('OnConfirm deveria trazer o seq-no 1', UInt64(1) = FConfirmedSeq);
 end;
 
@@ -372,7 +372,7 @@ begin
   // que expõe o achado #1: o nack já chegou quando WaitForConfirms é chamado.
   for I := 1 to 200 do
   begin
-    if (AmqpAtomicGet(FAckCount) + AmqpAtomicGet(FNackCount)) >= 2 then
+    if (PcAtomicGet(FAckCount) + PcAtomicGet(FNackCount)) >= 2 then
       Break;
     TThread.Sleep(25);
   end;
@@ -380,7 +380,7 @@ begin
   // Prova que o cenário funcionou (1 ack + 1 nack) — se o broker não nack-ar,
   // esta asserção falha com mensagem clara, em vez de mascarar o teste real.
   AssertEquals('o publish B deveria ter sido nack-ado (reject-publish)',
-    1, AmqpAtomicGet(FNackCount));
+    1, PcAtomicGet(FNackCount));
 
   // O achado #1: como um publish do lote foi nack-ado, WaitForConfirms deve
   // retornar False — mesmo o nack tendo chegado ANTES da chamada.

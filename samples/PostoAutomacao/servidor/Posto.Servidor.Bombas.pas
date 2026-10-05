@@ -14,6 +14,7 @@ interface
 
 uses
   SysUtils, Classes, SyncObjs,
+  PascalCommon.Threading,
   AMQP.Threading,     // AmqpWallMs
   Posto.Abastecida;
 
@@ -82,14 +83,14 @@ end;
 procedure TPostoBombas.DefinePausado(AValor: Boolean);
 begin
   if AValor then
-    AmqpAtomicSet(FPausado, 1)
+    PcAtomicSet(FPausado, 1)
   else
-    AmqpAtomicSet(FPausado, 0);
+    PcAtomicSet(FPausado, 0);
 end;
 
 function TPostoBombas.Pausado: Boolean;
 begin
-  Result := AmqpAtomicGet(FPausado) <> 0;
+  Result := PcAtomicGet(FPausado) <> 0;
 end;
 
 function TPostoBombas.EncerranteRef(ABomba, ABico: Integer): Integer;

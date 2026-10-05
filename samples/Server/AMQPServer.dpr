@@ -33,7 +33,7 @@ uses
   cthreads,
   {$ENDIF}
   SysUtils,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.Events,
   AMQP.Server.Broker;
 
@@ -150,8 +150,8 @@ begin
       [GBroker.Port, GSegundos]));
     Writeln('');
 
-    LFim := AmqpTickMs + UInt64(GSegundos) * 1000;
-    while AmqpTickMs < LFim do
+    LFim := PcTickMs + UInt64(GSegundos) * 1000;
+    while PcTickMs < LFim do
       Sleep(200);
 
     // Drena antes de relatar: a entrega e' assincrona (D30), entao sem a

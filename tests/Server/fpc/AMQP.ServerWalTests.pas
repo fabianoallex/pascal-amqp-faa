@@ -40,6 +40,7 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes,
+  PascalCommon.Threading,
   AMQP.Threading,
   AMQP.Server.Wal,
   AMQP.ServerTestDoubles;
@@ -1158,10 +1159,10 @@ end;
 procedure TWalClockTests.WallMs_DifereDoMonotonico;
 begin
   // Sao relogios de origens diferentes (epoch x boot). Se um dia alguem
-  // "simplificar" AmqpWallMs para devolver AmqpTickMs, a D21 inteira cai --
+  // "simplificar" AmqpWallMs para devolver PcTickMs, a D21 inteira cai --
   // e este e o teste que grita.
   AssertTrue('parede e monotonico sao relogios diferentes',
-    AmqpWallMs <> Int64(AmqpTickMs));
+    AmqpWallMs <> Int64(PcTickMs));
 end;
 
 initialization

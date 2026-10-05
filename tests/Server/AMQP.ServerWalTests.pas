@@ -44,6 +44,7 @@ uses
   System.SysUtils,
   System.Classes,
   System.IOUtils,
+  PascalCommon.Threading,
   AMQP.Threading,
   AMQP.Server.Wal,
   AMQP.ServerTestDoubles;
@@ -1188,9 +1189,9 @@ end;
 procedure TWalClockTests.WallMs_DifereDoMonotonico;
 begin
   // Sao relogios de origens diferentes (epoch x boot). Se um dia alguem
-  // "simplificar" AmqpWallMs para devolver AmqpTickMs, a D21 inteira cai --
+  // "simplificar" AmqpWallMs para devolver PcTickMs, a D21 inteira cai --
   // e este e o teste que grita.
-  Assert.IsTrue(AmqpWallMs <> Int64(AmqpTickMs),
+  Assert.IsTrue(AmqpWallMs <> Int64(PcTickMs),
     'parede e monotonico sao relogios diferentes');
 end;
 

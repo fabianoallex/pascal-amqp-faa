@@ -8,9 +8,11 @@
   inclusive os que nascem na thread de leitura da conexão. A D30 rejeitou as
   três alternativas, cada uma por um motivo próprio:
 
-  - worker do AmqpPool: é o MESMO pool que roda os atores das filas, então um
-    handler lento starva o ator. Seria a D2 violada por via indireta, que é a
-    pior forma -- a que não aparece no código que a viola;
+  - worker de pool: o dos atores das filas (pool próprio do broker desde a
+    F8; antes era o global) faria um handler lento starvar o ator. Seria a D2
+    violada por via indireta, que é a pior forma -- a que não aparece no
+    código que a viola. E o PcPool é do processo inteiro, então o handler
+    disputaria worker com callbacks de outras libs;
   - thread monitora: poria heartbeat, prazo de Close-Ok, varredura de TTL e
     reap de conexão morta atrás de um handler de usuário;
   - inline na thread de leitura: trava o processamento de frames daquela
@@ -44,7 +46,8 @@ uses
   Classes,
   SyncObjs,
   Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Server.Events,
   AMQP.Server.Types;
 
@@ -76,7 +79,7 @@ type
   TAMQPEventBus = class(TInterfacedObject, IAMQPEventSink)
   private
     // --- ring + contadores (sob FMon) ---
-    FMon: TAMQPMonitor;
+    FMon: TPcMonitor;
     FRing: array of TAMQPServerEvent;
     FCapacity: Integer;
     FHead: Integer;       // próximo a sair
@@ -198,7 +201,7 @@ end;
 constructor TAMQPEventBus.Create;
 begin
   inherited Create;
-  FMon := TAMQPMonitor.Create;
+  FMon := TPcMonitor.Create;
   FSubsLock := TCriticalSection.Create;
   FSubs := TList<TAMQPEventSubscription>.Create;
   FCapacity := AMQP_EVENT_QUEUE_CAPACITY;
@@ -250,7 +253,7 @@ begin
   for I := 0 to FSubs.Count - 1 do
     LMask := LMask or FSubs[I].Mask;
   // Publicacao atomica: Wants le' sem lock nenhum, no caminho quente.
-  AmqpAtomicSet(FMask, Integer(LMask));
+  PcAtomicSet(FMask, Integer(LMask));
 end;
 
 procedure TAMQPEventBus.Subscribe(AHandler: TAMQPServerEventHandler);
@@ -318,7 +321,7 @@ end;
 
 function TAMQPEventBus.Wants(AType: TAMQPServerEventType): Boolean;
 begin
-  Result := (AmqpAtomicGet(FMask)
+  Result := (PcAtomicGet(FMask)
     and Integer(Cardinal(1) shl Ord(AType))) <> 0;
 end;
 
@@ -497,12 +500,12 @@ function TAMQPEventBus.Drain(ATimeoutMs: Cardinal): Boolean;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + ATimeoutMs;
+  LDeadline := PcTickMs + ATimeoutMs;
   FMon.Enter;
   try
-    // Re-checa a condicao em laco com deadline: o TAMQPMonitor pode acordar
+    // Re-checa a condicao em laco com deadline: o TPcMonitor pode acordar
     // espuriamente (contrato dele).
-    while ((FCount > 0) or FDispatching) and (AmqpTickMs < LDeadline) do
+    while ((FCount > 0) or FDispatching) and (PcTickMs < LDeadline) do
       FMon.Wait(20);
     Result := (FCount = 0) and (not FDispatching);
   finally

@@ -6,7 +6,7 @@
   §8, §9).
 
   Cada operacao (adicionar item, remover, finalizar, cancelar, reconciliar)
-  roda num worker do AmqpPool -- a UI nunca bloqueia num RPC. O resultado
+  roda num worker do PcPool -- a UI nunca bloqueia num RPC. O resultado
   volta pela UI via OnMudou/OnLog (a UI marca-se suja e le' o estado).
 
   Online, adicionar item e' sincrono (feedback imediato). Offline / timeout,
@@ -20,7 +20,7 @@ interface
 
 uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
-  AMQP.Wire, AMQP.Threading,
+  AMQP.Wire, PascalCommon.ThreadPool,
   Posto.Json, Posto.Abastecida, Posto.Contratos,
   Posto.PDV.Cliente, Posto.PDV.Sincronia;
 
@@ -90,7 +90,7 @@ implementation
 type
   TModeloOp = (moAdicionar, moRemover, moCancelar, moFinalizar, moReconciliar);
 
-  TModeloWork = class(TAMQPWorkItem)
+  TModeloWork = class(TPcWorkItem)
   private
     FModelo: TPostoModelo;
     FOp: TModeloOp;
@@ -273,7 +273,7 @@ begin
   LItem.Obs := 'enviando...';
   PoeItem(LItem);
   Notificar;
-  AmqpPool.Queue(TModeloWork.Create(Self, moAdicionar, AId));
+  PcPool.Queue(TModeloWork.Create(Self, moAdicionar, AId));
 end;
 
 procedure TPostoModelo.RemoverItem(const AId: string);
@@ -293,22 +293,22 @@ begin
   end;
   Notificar;
   if LEnviado then
-    AmqpPool.Queue(TModeloWork.Create(Self, moRemover, AId));
+    PcPool.Queue(TModeloWork.Create(Self, moRemover, AId));
 end;
 
 procedure TPostoModelo.CancelarVenda;
 begin
-  AmqpPool.Queue(TModeloWork.Create(Self, moCancelar, ''));
+  PcPool.Queue(TModeloWork.Create(Self, moCancelar, ''));
 end;
 
 procedure TPostoModelo.FinalizarVenda;
 begin
-  AmqpPool.Queue(TModeloWork.Create(Self, moFinalizar, ''));
+  PcPool.Queue(TModeloWork.Create(Self, moFinalizar, ''));
 end;
 
 procedure TPostoModelo.ReconciliarAposReconexao;
 begin
-  AmqpPool.Queue(TModeloWork.Create(Self, moReconciliar, ''));
+  PcPool.Queue(TModeloWork.Create(Self, moReconciliar, ''));
 end;
 
 { --- corpos bloqueantes (worker do pool) --- }

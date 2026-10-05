@@ -36,7 +36,7 @@ uses
   Classes,
   SyncObjs,
   Rtti,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Wire,
   AMQP.Basic.Methods,
   AMQP.Exchange.Methods,
@@ -209,14 +209,14 @@ var
   LDecl: TAMQPQueueDeclare;
   LFim: UInt64;
 begin
-  LFim := AmqpTickMs + ATimeoutMs;
+  LFim := PcTickMs + ATimeoutMs;
   repeat
     LDecl := TAMQPQueueDeclare.Create(AQueue);
     LDecl.Passive := True; // passive: so' consulta, nao redeclara
     if AChan.DeclareQueue(LDecl).MessageCount >= ACount then
       Exit(True);
     Sleep(25);
-  until AmqpTickMs > LFim;
+  until PcTickMs > LFim;
   Result := False;
 end;
 

@@ -58,7 +58,7 @@ uses
   AMQP.Protocol,
   AMQP.Frame,
   AMQP.Basic.Methods,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.FrameIO,
   AMQP.Server.Types,
   AMQP.Server.Journal;
@@ -359,7 +359,7 @@ end;
 
 function TAMQPConfirmRegistry.Watermark: UInt64;
 begin
-  Result := AmqpAtomicRead64(FMark);
+  Result := PcAtomicRead64(FMark);
 end;
 
 function TAMQPConfirmRegistry.TrackerCount: Integer;
@@ -392,7 +392,7 @@ end;
 
 procedure TAMQPConfirmRegistry.Durable(ALsn: UInt64);
 begin
-  AmqpAtomicWrite64(FMark, ALsn);
+  PcAtomicWrite64(FMark, ALsn);
   ReleaseAll(ALsn);
 end;
 

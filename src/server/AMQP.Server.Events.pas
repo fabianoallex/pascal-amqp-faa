@@ -48,7 +48,8 @@ interface
 
 uses
   SysUtils,
-  AMQP.Threading; // AmqpWallMs, AmqpTickMs
+  PascalCommon.Threading,
+  AMQP.Threading; // AmqpWallMs
 
 type
   { O que aconteceu. A ORDEM DESTE ENUM É API: o valor ordinal vira bit na
@@ -250,7 +251,7 @@ begin
   Result := Default(TAMQPServerEvent);
   Result.EventType := AType;
   Result.WallMs := AmqpWallMs;
-  Result.TickMs := Int64(AmqpTickMs);
+  Result.TickMs := Int64(PcTickMs);
 end;
 
 function AmqpEventMask(const ATypes: TAMQPServerEventTypes): Cardinal;

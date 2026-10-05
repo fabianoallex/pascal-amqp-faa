@@ -110,7 +110,8 @@ uses
   Classes,
   SyncObjs,
   Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Server.Events,
   AMQP.Server.Wal,
   AMQP.Server.Records,
@@ -170,7 +171,7 @@ type
     deste projeto e' Win32, onde Inc() num Int64 e' leitura-modificacao-escrita
     NAO atomica -- uma thread de teste lendo um contador enquanto a do journal
     o incrementa poderia ver metade de um valor. E' a mesma razao de existirem
-    os AmqpAtomic*64 na AMQP.Threading. }
+    os PcAtomic*64 na PascalCommon.Threading. }
   TAMQPJournalStats = record
     /// Rodadas do laco que escreveram alguma coisa.
     Batches: Int64;
@@ -227,7 +228,7 @@ type
     FSegment: TAMQPWalSegment;
     FFile: IAMQPWalFile;
     FThread: TAMQPJournalThread;
-    FMon: TAMQPMonitor;
+    FMon: TPcMonitor;
     FPendings: TQueue<TAMQPJournalItem>;
     FPendingBytes: Int64;
     FMaxPendingBytes: Int64;
@@ -402,7 +403,7 @@ constructor TAMQPJournal.Create(const ADir: string);
 begin
   inherited Create;
   FDir := ADir;
-  FMon := TAMQPMonitor.Create;
+  FMon := TPcMonitor.Create;
   FPendings := TQueue<TAMQPJournalItem>.Create;
   FMaxPendingBytes := AMQP_JOURNAL_MAX_PENDING_BYTES;
   FMaxSegmentBytes := AMQP_WAL_SEGMENT_BYTES;
@@ -466,7 +467,7 @@ begin
   UpdateSize;
   // O que ja' estava no arquivo esta' no disco por definicao: ninguem promete
   // nada sobre ele agora, mas a marca d'agua nao pode nascer ATRAS dele.
-  AmqpAtomicWrite64(FDurableLsn, FSegment.LastLsn);
+  PcAtomicWrite64(FDurableLsn, FSegment.LastLsn);
 end;
 
 procedure TAMQPJournal.Start;
@@ -587,10 +588,10 @@ begin
     if AWaitVacancy then
     begin
       // Contrapressao: espera a fila baixar do teto. Re-checa em laco com
-      // deadline, como manda o contrato do TAMQPMonitor (wakeup espurio).
-      LDeadline := AmqpTickMs + AMQP_JOURNAL_SUBMIT_TIMEOUT_MS;
+      // deadline, como manda o contrato do TPcMonitor (wakeup espurio).
+      LDeadline := PcTickMs + AMQP_JOURNAL_SUBMIT_TIMEOUT_MS;
       while FRunning and (not FStopping) and (not FFailed)
-        and (FPendingBytes >= FMaxPendingBytes) and (AmqpTickMs < LDeadline) do
+        and (FPendingBytes >= FMaxPendingBytes) and (PcTickMs < LDeadline) do
         FMon.Wait(50);
     end;
 
@@ -638,20 +639,20 @@ end;
 
 function TAMQPJournal.DurableLsn: UInt64;
 begin
-  Result := AmqpAtomicRead64(FDurableLsn);
+  Result := PcAtomicRead64(FDurableLsn);
 end;
 
 function TAMQPJournal.WaitDurable(ALsn: UInt64; ATimeoutMs: Cardinal): Boolean;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + ATimeoutMs;
+  LDeadline := PcTickMs + ATimeoutMs;
   FMon.Enter;
   try
-    while (AmqpAtomicRead64(FDurableLsn) < ALsn) and (not FFailed)
-      and (AmqpTickMs < LDeadline) do
+    while (PcAtomicRead64(FDurableLsn) < ALsn) and (not FFailed)
+      and (PcTickMs < LDeadline) do
       FMon.Wait(20);
-    Result := (not FFailed) and (AmqpAtomicRead64(FDurableLsn) >= ALsn);
+    Result := (not FFailed) and (PcAtomicRead64(FDurableLsn) >= ALsn);
   finally
     FMon.Leave;
   end;
@@ -672,7 +673,7 @@ begin
     Result.Records := FRecords;
     Result.MaxBatchSize := FMaxBatchSize;
     Result.PendingBytes := FPendingBytes;
-    Result.DurableLsn := AmqpAtomicRead64(FDurableLsn);
+    Result.DurableLsn := PcAtomicRead64(FDurableLsn);
     Result.NextLsn := FNextLsn;
   finally
     FMon.Leave;
@@ -846,7 +847,7 @@ begin
     // esperaria ate' o proximo lote de publish -- que pode nunca vir. Estes
     // registros ESTAO no disco: dizer isso e a coisa honesta.
     if LLast > 0 then
-      AmqpAtomicWrite64(FDurableLsn, LLast);
+      PcAtomicWrite64(FDurableLsn, LLast);
 
     // (5) Agora os velhos podem ir. Uma queda aqui deixa as duas copias, e o
     // replay as unifica por EntryId -- o dobro dos bytes, nunca o dobro das
@@ -894,7 +895,7 @@ begin
   // O pior caso e' aceitar (ou recusar) um publish na fronteira exata, e o
   // proximo ja' ve' o numero certo.
   Result := (FMaxJournalBytes > 0)
-    and (Int64(AmqpAtomicRead64(FTotalBytes)) >= FMaxJournalBytes);
+    and (Int64(PcAtomicRead64(FTotalBytes)) >= FMaxJournalBytes);
 end;
 
 // Recalcula o tamanho aproximado do log. Roda SO' na thread do journal, nos
@@ -907,7 +908,7 @@ begin
   LEnd := 0;
   if FSegment <> nil then
     LEnd := FSegment.EndOffset;
-  AmqpAtomicWrite64(FTotalBytes, UInt64(Int64(FClosedBytes) + LEnd));
+  PcAtomicWrite64(FTotalBytes, UInt64(Int64(FClosedBytes) + LEnd));
 end;
 
 function TAMQPJournal.ActiveSegment: Cardinal;
@@ -986,7 +987,7 @@ begin
   // andar -- seria prometer durabilidade que ninguem confirmou.
   LSyncOk := FSegment.Sync;
   if LSyncOk then
-    AmqpAtomicWrite64(FDurableLsn, LMaxLsn);
+    PcAtomicWrite64(FDurableLsn, LMaxLsn);
   UpdateSize;
 
   // ROTACAO, e SO' AQUI: na fronteira de lote, depois do fsync. Nunca no meio

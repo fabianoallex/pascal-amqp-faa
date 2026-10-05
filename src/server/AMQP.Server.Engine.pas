@@ -45,6 +45,8 @@ uses
   AMQP.Wire,
   AMQP.Basic.Methods,
   AMQP.Exchange.Methods,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Threading,
   AMQP.Server.Types,
   AMQP.Server.Message,
@@ -121,7 +123,7 @@ type
     /// journal fica MUDO: o que se declara e enfileira agora VEIO do log, e
     /// regravar faria o WAL crescer uma copia por boot, para sempre.
     FRecovering: Boolean;
-    FPool: TAMQPThreadPool;
+    FPool: TPcThreadPool;
     FRouted: Integer;   // atomico -- publicacoes com ao menos uma rota
     FUnrouted: Integer; // atomico -- publicacoes sem rota
     function Key(const AVHost, AName: string): string;
@@ -213,9 +215,10 @@ type
     /// deu, e o chamador devolve amqerSemDurabilidade.
     function WriteTopology(AKind: Byte; const APayload: TBytes): Boolean;
     /// Proximo identificador de conteudo/colocacao. Monotonico e unico no
-    /// broker; sob o mesmo lock que ja' guarda as filas vivas, porque nao ha
-    /// incremento atomico de 64 bits portavel na AMQP.Threading e um contador
-    /// de 32 bits daria a volta num broker de vida longa.
+    /// broker; sob o mesmo lock que ja' guarda as filas vivas. Escrito quando
+    /// nao havia incremento atomico de 64 bits portavel (a pascal-common-faa
+    /// tem PcAtomicInc64; o lock ficou porque quem chama ja' o segura), e um
+    /// contador de 32 bits daria a volta num broker de vida longa.
     function NextId: UInt64;
     function WriteEnqueue(AQueue: TAMQPServerQueue; const AVHost: string;
       AMessage: TAMQPMessage; APriority: Byte; AMessageTtlMs: Int64;
@@ -286,8 +289,10 @@ type
 
     property MaxQueueLength: Integer read FMaxQueueLength
       write FMaxQueueLength;
-    /// Pool onde os atores das filas sao agendados (nil = AmqpPool global).
-    property Pool: TAMQPThreadPool read FPool write FPool;
+    /// Pool onde os atores das filas sao agendados (nil = PcPool). O
+    /// TAMQPServer sempre passa o pool proprio dele; nil fica para a engine
+    /// solta dos testes.
+    property Pool: TPcThreadPool read FPool write FPool;
     /// Publicacoes que acharam ao menos uma fila / que nao acharam nenhuma.
     function RoutedCount: Integer;
     function UnroutedCount: Integer;
@@ -1278,10 +1283,10 @@ begin
   Result := Length(LDestinations) > 0;
   if not Result then
   begin
-    AmqpAtomicInc(FUnrouted);
+    PcAtomicInc(FUnrouted);
     Exit;
   end;
-  AmqpAtomicInc(FRouted);
+  PcAtomicInc(FRouted);
 
   // UMA mensagem para N filas: corpo e header cru compartilhados sem copia,
   // cada fila tirando a referencia dela (decisao de arquitetura da Fase 2).
@@ -1391,10 +1396,10 @@ begin
   begin
     // DLX sem rota: a mensagem morre de vez. E' o mesmo destino que teria sem
     // DLX nenhum, e por isso nao e' erro -- so' nao ha para onde mandar.
-    AmqpAtomicInc(FUnrouted);
+    PcAtomicInc(FUnrouted);
     Exit;
   end;
-  AmqpAtomicInc(FRouted);
+  PcAtomicInc(FRouted);
 
   for I := 0 to High(LDestinations) do
   begin
@@ -1498,12 +1503,12 @@ end;
 
 function TAMQPEngine.RoutedCount: Integer;
 begin
-  Result := AmqpAtomicGet(FRouted);
+  Result := PcAtomicGet(FRouted);
 end;
 
 function TAMQPEngine.UnroutedCount: Integer;
 begin
-  Result := AmqpAtomicGet(FUnrouted);
+  Result := PcAtomicGet(FUnrouted);
 end;
 
 end.

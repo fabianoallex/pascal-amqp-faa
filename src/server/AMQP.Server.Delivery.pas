@@ -59,7 +59,7 @@ uses
   AMQP.Protocol,
   AMQP.Frame,
   AMQP.Basic.Methods,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Server.FrameIO,
   AMQP.Server.Message,
   AMQP.Server.Queue;
@@ -193,7 +193,7 @@ begin
   FWriter := AWriter;
   FChannelNo := AChannelNo;
   FMaxPayload := AMaxPayload;
-  FIdentity := NativeUInt(Cardinal(AmqpAtomicInc(GIdentitySeq)));
+  FIdentity := NativeUInt(Cardinal(PcAtomicInc(GIdentitySeq)));
   FNextTag := 1; // spec: a sequencia de delivery-tag de um canal comeca em 1
   FAttached := 1;
   FActive := 1;
@@ -216,7 +216,7 @@ begin
   // Sem lock de proposito: e' consultado para cada consumidor em cada rodada
   // de entrega. O flag atomico basta -- quem chegar tarde cai no teste de
   // FWriter=nil dentro do TryDeliver, esse sim sob o lock.
-  Result := AmqpAtomicGet(FAttached) = 1;
+  Result := PcAtomicGet(FAttached) = 1;
 end;
 
 procedure TAMQPChannelDeliveryTarget.Detach;
@@ -224,7 +224,7 @@ begin
   FLock.Enter;
   try
     FWriter := nil;
-    AmqpAtomicSet(FAttached, 0);
+    PcAtomicSet(FAttached, 0);
   finally
     FLock.Leave;
   end;
@@ -233,14 +233,14 @@ end;
 procedure TAMQPChannelDeliveryTarget.SetActive(AValue: Boolean);
 begin
   if AValue then
-    AmqpAtomicSet(FActive, 1)
+    PcAtomicSet(FActive, 1)
   else
-    AmqpAtomicSet(FActive, 0);
+    PcAtomicSet(FActive, 0);
 end;
 
 procedure TAMQPChannelDeliveryTarget.SetPrefetch(AValue: Word);
 begin
-  AmqpAtomicSet(FPrefetch, AValue);
+  PcAtomicSet(FPrefetch, AValue);
 end;
 
 function TAMQPChannelDeliveryTarget.UnackedCount: Integer;
@@ -412,11 +412,11 @@ begin
   try
     if FWriter = nil then
       Exit; // canal/conexao ja morreu (Detach)
-    if AmqpAtomicGet(FActive) = 0 then
+    if PcAtomicGet(FActive) = 0 then
       Exit; // Channel.Flow desligado pelo peer
     if not ANoAck then
     begin
-      LPrefetch := AmqpAtomicGet(FPrefetch);
+      LPrefetch := PcAtomicGet(FPrefetch);
       if (LPrefetch > 0) and (PrefetchInFlight >= LPrefetch) then
         Exit; // prefetch estourado: o canal ja tem o que aguenta
     end;

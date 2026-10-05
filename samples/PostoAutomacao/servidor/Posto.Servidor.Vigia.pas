@@ -17,7 +17,6 @@ interface
 
 uses
   SysUtils, SyncObjs, Generics.Collections,
-  AMQP.Threading,
   AMQP.Server.Events, AMQP.Server.Broker,
   Posto.Contratos;
 

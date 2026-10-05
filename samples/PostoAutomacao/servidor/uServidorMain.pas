@@ -20,6 +20,7 @@ uses
   {$ENDIF}
   SysUtils, Classes, SyncObjs,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
+  PascalCommon.Threading,
   AMQP.Threading,
   Posto.Abastecida, Posto.Contratos,
   Posto.Servidor.Registro, Posto.Servidor.Vigia, Posto.Servidor.App;
@@ -246,7 +247,7 @@ end;
 
 procedure TfrmPainel.MarcaSujo;
 begin
-  AmqpAtomicSet(FSujo, 1);
+  PcAtomicSet(FSujo, 1);
 end;
 
 procedure TfrmPainel.tmrUiTimer(Sender: TObject);
@@ -281,9 +282,9 @@ begin
     end;
   end;
 
-  if FApp.Rodando and (AmqpAtomicGet(FSujo) <> 0) then
+  if FApp.Rodando and (PcAtomicGet(FSujo) <> 0) then
   begin
-    AmqpAtomicSet(FSujo, 0);
+    PcAtomicSet(FSujo, 0);
     AtualizaListas;
   end;
 end;

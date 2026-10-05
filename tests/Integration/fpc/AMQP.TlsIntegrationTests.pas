@@ -19,7 +19,7 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes,
-  AMQP.Threading, // AmqpAtomic* (TInterlocked não existe no FPC)
+  PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Transport, // EAMQPTls (vale pra SChannel e OpenSSL)
@@ -130,7 +130,7 @@ var
   LWaited: Integer;
 begin
   LWaited := 0;
-  while (AmqpAtomicGet(FCount) < AExpected) and (LWaited < ATimeoutMs) do
+  while (PcAtomicGet(FCount) < AExpected) and (LWaited < ATimeoutMs) do
   begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
@@ -142,20 +142,20 @@ procedure TAMQPTlsIntegrationTests.HandleDeliveryConcurrent(AChannel: TAMQPChann
 var
   LCur, LOldPeak, LWaited: Integer;
 begin
-  LCur := AmqpAtomicInc(FCurrent);
+  LCur := PcAtomicInc(FCurrent);
   // atualiza o pico de concorrência (CAS)
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
-  until AmqpAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
+  until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
   // Segura o callback até OBSERVAR outro rodando junto (ou timeout): prova a
   // sobreposição sem depender de janela de timing (um sleep fixo flakeia
   // quando os workers do pool demoram a subir sob carga). Se o pico >= 2 já
   // foi registrado, a prova está feita e ninguém mais precisa esperar.
   LWaited := 0;
-  while (AmqpAtomicGet(FCurrent) < 2) and (AmqpAtomicGet(FPeak) < 2) and
+  while (PcAtomicGet(FCurrent) < 2) and (PcAtomicGet(FPeak) < 2) and
         (LWaited < 2000) do
   begin
     TThread.Sleep(10);
@@ -163,8 +163,8 @@ begin
   end;
 
   AChannel.Ack(ADelivery.DeliveryTag);
-  AmqpAtomicDec(FCurrent);
-  AmqpAtomicInc(FCount);
+  PcAtomicDec(FCurrent);
+  PcAtomicInc(FCount);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_PublishEBusca;
@@ -232,9 +232,9 @@ begin
   WaitCount(N, 30000);
 
   AssertEquals('todas as mensagens deveriam ter sido processadas sobre TLS',
-    N, AmqpAtomicGet(FCount));
+    N, PcAtomicGet(FCount));
   AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
-    AmqpAtomicGet(FPeak) > 1);
+    PcAtomicGet(FPeak) > 1);
 end;
 
 procedure TAMQPTlsIntegrationTests.DoOpenAgainstPlainPort;

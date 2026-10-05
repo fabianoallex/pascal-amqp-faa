@@ -79,6 +79,15 @@
       </Item>
     </Files>
     <RequiredPkgs>
+      <!-- So' pelo nome, sem DefaultFilename: a aplicacao fornece a copia
+           unica da pascal-common-faa (um pascal_common_faa.lpk registrado).
+           Um DefaultFilename para external/ deixaria o Lazarus cair na copia
+           privada desta lib - o diamante que a pascal-common-faa proibe. Os
+           .lpi de testes/samples apontam para external/ com Prefer="True". -->
+      <Item>
+        <PackageName Value="pascal_common_faa"/>
+        <MinVersion Major="1" Valid="True"/>
+      </Item>
       <Item>
         <PackageName Value="FCL"/>
       </Item>

@@ -45,7 +45,7 @@
   Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
   callbacks como métodos nomeados ('of object', regra do FPC) e atualizações
   de UI via objetos de "marshal" descartáveis + TThread.Queue (ver
-  RetaguardaVcl). Os eventos de conexão saltam pelo AmqpPool antes de postar
+  RetaguardaVcl). Os eventos de conexão saltam pelo PcPool antes de postar
   — no FPC um TThread.Queue postado pela thread de reconexão (que morre logo
   após o OnReconnect) seria descartado; ver TConexaoEventoWork e o gotcha no
   CLAUDE.md. }
@@ -63,7 +63,7 @@ uses
   SysUtils, Classes, StrUtils,
   Generics.Collections,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ComCtrls, ExtCtrls,
-  AMQP.Wire, AMQP.Threading, AMQP.Connection, AMQP.Transport,
+  AMQP.Wire, PascalCommon.Threading, PascalCommon.ThreadPool, AMQP.Connection, AMQP.Transport,
   AMQP.Queue.Methods, AMQP.Basic.Methods;
 
 type
@@ -225,9 +225,9 @@ type
     thread que morre antes do bombeio é DESCARTADO (TThread.Destroy remove os
     posts pendentes dela, casando pelo ThreadID; no Delphi o descarte casa só
     pelo parâmetro AThread, que é nil aqui). O salto por um worker do
-    AmqpPool — threads PERSISTENTES — garante a entrega. Gotcha no CLAUDE.md;
+    PcPool — threads PERSISTENTES — garante a entrega. Gotcha no CLAUDE.md;
     achado no PublicadorConfiavelVcl. }
-  TConexaoEventoWork = class(TAMQPWorkItem)
+  TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmConsulta;
     FEvento: TConexaoEvento;
@@ -571,7 +571,7 @@ begin
 
     LPendente := TConsultaPendente.Create;
     LPendente.Chave := LChave;
-    LPendente.EnviadaTick := AmqpTickMs;
+    LPendente.EnviadaTick := PcTickMs;
     LPendente.DeadlineTick := LPendente.EnviadaTick + UInt64(LTimeout);
     LPendente.Item := LItem;
     FPendentes.Add(LCorr, LPendente);
@@ -624,7 +624,7 @@ begin
     Exit;
   end;
   FPendentes.Remove(ACorrelationId);
-  LTempoMs := AmqpTickMs - LPendente.EnviadaTick;
+  LTempoMs := PcTickMs - LPendente.EnviadaTick;
   if LPendente.Item <> nil then
   begin
     LPendente.Item.SubItems[1] := AStatus;
@@ -644,7 +644,7 @@ var
 begin
   if FPendentes.Count = 0 then
     Exit;
-  LAgora := AmqpTickMs;
+  LAgora := PcTickMs;
   LExpiradas := TList<string>.Create;
   try
     for LCorr in FPendentes.Keys do
@@ -707,22 +707,22 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo AmqpPool em vez de postar direto:
+// Os três eventos de conexão saltam pelo PcPool em vez de postar direto:
 // a thread de reconexão morre logo após o OnReconnect e, no FPC, levaria o
 // post pendente junto (ver o comentário de TConexaoEventoWork).
 procedure TfrmConsulta.OnDesconectado(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
 end;
 
 procedure TfrmConsulta.OnReconectado(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceVoltou));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceVoltou));
 end;
 
 procedure TfrmConsulta.OnReconexaoFalhou(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
 { --- conexão ---------------------------------------------------------------- }

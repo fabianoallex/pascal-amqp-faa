@@ -21,7 +21,8 @@ interface
 uses
   fpcunit, testregistry, SysUtils, Classes,
   AMQP.Wire,
-  AMQP.Threading,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Server.Message,
   AMQP.Server.Resources,
   AMQP.Server.Header,
@@ -180,7 +181,7 @@ type
   { Produtor do teste de estresse. TParallel.For nao existe no FPC (ver
     CLAUDE.md), entao os produtores concorrentes sao work items do proprio
     pool da lib. }
-  TProdutorWork = class(TAMQPWorkItem)
+  TProdutorWork = class(TPcWorkItem)
   private
     FQueue: TAMQPServerQueue;
     FQuantas: Integer;
@@ -214,13 +215,13 @@ begin
       LMsg.Release; // a nossa
     end;
   end;
-  AmqpAtomicInc(FConcluidos^);
+  PcAtomicInc(FConcluidos^);
 end;
 
 type
   { Injeta um comando SINCRONO de outra thread. Usado pelo teste da janela de
     fim de rodada. }
-  TInjetorWork = class(TAMQPWorkItem)
+  TInjetorWork = class(TPcWorkItem)
   private
     FQueue: TAMQPServerQueue;
     FEnfileirou: PInteger;
@@ -245,15 +246,15 @@ end;
 procedure TInjetorWork.Execute;
 begin
   // O ator esta parado na janela do fim de rodada, esperando este sinal.
-  AmqpAtomicSet(FEnfileirou^, 1);
+  PcAtomicSet(FEnfileirou^, 1);
   try
     FQueue.Stats; // se o wakeup se perder, isto so' volta no timeout de 15 s
-    AmqpAtomicSet(FOk^, 1);
+    PcAtomicSet(FOk^, 1);
   except
     on E: Exception do
-      AmqpAtomicSet(FOk^, 0);
+      PcAtomicSet(FOk^, 0);
   end;
-  AmqpAtomicSet(FConcluiu^, 1);
+  PcAtomicSet(FConcluiu^, 1);
 end;
 
 type
@@ -279,13 +280,13 @@ procedure TQueueCorrida.ActorRoundEnding;
 var
   LDeadline: UInt64;
 begin
-  if AmqpAtomicCompareExchange(FInjetado, 1, 0) <> 0 then
+  if PcAtomicCompareExchange(FInjetado, 1, 0) <> 0 then
     Exit; // so' na primeira rodada
-  AmqpPool.Queue(TInjetorWork.Create(Self, @FEnfileirou, @FConcluiu, @FOk));
+  PcPool.Queue(TInjetorWork.Create(Self, @FEnfileirou, @FConcluiu, @FOk));
   // Segura a rodada ate' o injetor ter POSTADO -- e' isso que poe o post
   // dentro da janela em vez de antes ou depois dela.
-  LDeadline := AmqpTickMs + 5000;
-  while (AmqpAtomicGet(FEnfileirou) = 0) and (AmqpTickMs < LDeadline) do
+  LDeadline := PcTickMs + 5000;
+  while (PcAtomicGet(FEnfileirou) = 0) and (PcTickMs < LDeadline) do
     Sleep(0);
   Sleep(5); // folga para o Post do injetor entrar de fato na caixa
 end;
@@ -876,17 +877,17 @@ begin
   LQ := TAMQPServerQueue.Create('q');
   try
     for I := 1 to PRODUTORES do
-      AmqpPool.Queue(TProdutorWork.Create(LQ, POR_PRODUTOR, @LConcluidos));
+      PcPool.Queue(TProdutorWork.Create(LQ, POR_PRODUTOR, @LConcluidos));
 
     // Enquanto os produtores despejam, comandos SINCRONOS concorrentes.
-    LDeadline := AmqpTickMs + 30000;
-    while (AmqpAtomicGet(LConcluidos) < PRODUTORES) and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 30000;
+    while (PcAtomicGet(LConcluidos) < PRODUTORES) and (PcTickMs < LDeadline) do
     begin
       LQ.Stats;
       Inc(LVoltas);
     end;
     AssertEquals('produtores terminaram dentro do prazo', PRODUTORES,
-      AmqpAtomicGet(LConcluidos));
+      PcAtomicGet(LConcluidos));
     AssertTrue('os comandos sincronos concorreram de fato com os produtores',
       LVoltas > 0);
 
@@ -917,13 +918,13 @@ begin
 
     // Ninguem mais posta nada: se o wakeup se perder, nada resgata o comando
     // do injetor (e' exatamente o caso "ultimo post antes da ociosidade").
-    LDeadline := AmqpTickMs + 5000;
-    while (AmqpAtomicGet(LQ.FConcluiu) = 0) and (AmqpTickMs < LDeadline) do
+    LDeadline := PcTickMs + 5000;
+    while (PcAtomicGet(LQ.FConcluiu) = 0) and (PcTickMs < LDeadline) do
       Sleep(10);
 
     AssertEquals('o comando postado na janela do fim de rodada tem de ser atendido',
-      1, AmqpAtomicGet(LQ.FConcluiu));
-    AssertEquals('e sem levantar', 1, AmqpAtomicGet(LQ.FOk));
+      1, PcAtomicGet(LQ.FConcluiu));
+    AssertEquals('e sem levantar', 1, PcAtomicGet(LQ.FOk));
   finally
     LQ.Free;
   end;

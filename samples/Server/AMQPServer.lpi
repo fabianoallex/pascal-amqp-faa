@@ -56,6 +56,10 @@
     </RunParams>
     <RequiredPackages>
       <Item>
+        <PackageName Value="pascal_common_faa"/>
+        <DefaultFilename Value="..\..\external\pascal-common-faa\packages\pascal_common_faa.lpk" Prefer="True"/>
+      </Item>
+      <Item>
         <PackageName Value="pascal_amqp_faa_server"/>
       </Item>
     </RequiredPackages>

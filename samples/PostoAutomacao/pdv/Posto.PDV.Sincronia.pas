@@ -20,7 +20,7 @@ interface
 
 uses
   SysUtils, Classes, SyncObjs, Generics.Collections,
-  AMQP.Threading, AMQP.Connection,
+  PascalCommon.ThreadPool, AMQP.Connection,
   Posto.Json, Posto.Abastecida, Posto.Contratos,
   Posto.PDV.Cliente;
 
@@ -63,7 +63,7 @@ implementation
 
 type
   { Worker do pool para rodar a sincronizacao fora da thread de callback. }
-  TSyncWork = class(TAMQPWorkItem)
+  TSyncWork = class(TPcWorkItem)
   private
     FAlvo: TPostoSincronia;
   public
@@ -118,13 +118,13 @@ procedure TPostoSincronia.Iniciar;
 begin
   EntraEmBuffer;
   FCliente.AssinarEventos(OnEventoAmqp);
-  AmqpPool.Queue(TSyncWork.Create(Self));
+  PcPool.Queue(TSyncWork.Create(Self));
 end;
 
 procedure TPostoSincronia.Ressincronizar;
 begin
   EntraEmBuffer;
-  AmqpPool.Queue(TSyncWork.Create(Self));
+  PcPool.Queue(TSyncWork.Create(Self));
 end;
 
 procedure TPostoSincronia.OnEventoAmqp(AChannel: TAMQPChannel;

@@ -10,7 +10,7 @@ interface
 
 uses
   fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
@@ -27,7 +27,7 @@ type
     function DeclareTempQueue: string;
     procedure WaitCount(AExpected, ATimeoutMs: Integer);
     // Callbacks de consumer são 'of object' na lib (ver CLAUDE.md) — sem
-    // métodos anônimos; TInterlocked não existe no FPC -> AmqpAtomic*.
+    // métodos anônimos; TInterlocked não existe no FPC -> PcAtomic*.
     procedure HandleDeliverySimple(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleDeliveryConcurrent(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleDeliveryDedicated(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
@@ -75,7 +75,7 @@ var
   LWaited: Integer;
 begin
   LWaited := 0;
-  while (AmqpAtomicGet(FCount) < AExpected) and (LWaited < ATimeoutMs) do
+  while (PcAtomicGet(FCount) < AExpected) and (LWaited < ATimeoutMs) do
   begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
@@ -87,7 +87,7 @@ procedure TAMQPConsumeIntegrationTests.HandleDeliverySimple(AChannel: TAMQPChann
 begin
   FReceived.Add(ADelivery.BodyAsText);
   AChannel.Ack(ADelivery.DeliveryTag);
-  AmqpAtomicInc(FCount);
+  PcAtomicInc(FCount);
 end;
 
 procedure TAMQPConsumeIntegrationTests.HandleDeliveryConcurrent(AChannel: TAMQPChannel;
@@ -95,20 +95,20 @@ procedure TAMQPConsumeIntegrationTests.HandleDeliveryConcurrent(AChannel: TAMQPC
 var
   LCur, LOldPeak, LWaited: Integer;
 begin
-  LCur := AmqpAtomicInc(FCurrent);
+  LCur := PcAtomicInc(FCurrent);
   // atualiza o pico de concorrência (CAS)
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
-  until AmqpAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
+  until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
   // Segura o callback até OBSERVAR outro rodando junto (ou timeout): prova a
   // sobreposição sem depender de janela de timing (um sleep fixo flakeia
   // quando os workers do pool demoram a subir sob carga). Se o pico >= 2 já
   // foi registrado, a prova está feita e ninguém mais precisa esperar.
   LWaited := 0;
-  while (AmqpAtomicGet(FCurrent) < 2) and (AmqpAtomicGet(FPeak) < 2) and
+  while (PcAtomicGet(FCurrent) < 2) and (PcAtomicGet(FPeak) < 2) and
         (LWaited < 2000) do
   begin
     TThread.Sleep(10);
@@ -117,8 +117,8 @@ begin
 
   FReceived.Add(ADelivery.BodyAsText);
   AChannel.Ack(ADelivery.DeliveryTag);
-  AmqpAtomicDec(FCurrent);
-  AmqpAtomicInc(FCount);
+  PcAtomicDec(FCurrent);
+  PcAtomicInc(FCount);
 end;
 
 procedure TAMQPConsumeIntegrationTests.HandleDeliveryDedicated(AChannel: TAMQPChannel;
@@ -126,14 +126,14 @@ procedure TAMQPConsumeIntegrationTests.HandleDeliveryDedicated(AChannel: TAMQPCh
 var
   LCur, LOldPeak: Integer;
 begin
-  LCur := AmqpAtomicInc(FCurrent);
+  LCur := PcAtomicInc(FCurrent);
   // mesma atualização de pico do teste de concorrência; aqui esperamos que
   // nunca passe de 1 (worker dedicado é sequencial).
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
-  until AmqpAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
+  until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
   // Dá tempo de sobra para outro worker do pool global sobrepor, se o
   // despacho estivesse indo para lá em vez do worker dedicado do canal.
@@ -141,8 +141,8 @@ begin
 
   FReceived.Add(ADelivery.BodyAsText);
   AChannel.Ack(ADelivery.DeliveryTag);
-  AmqpAtomicDec(FCurrent);
-  AmqpAtomicInc(FCount);
+  PcAtomicDec(FCurrent);
+  PcAtomicInc(FCount);
 end;
 
 procedure TAMQPConsumeIntegrationTests.ConsomeUmaMensagem_CorpoCorreto;
@@ -193,7 +193,7 @@ begin
     FReceived.UnlockList;
   end;
   AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
-    AmqpAtomicGet(FPeak) > 1);
+    PcAtomicGet(FPeak) > 1);
 end;
 
 procedure TAMQPConsumeIntegrationTests.CanalDedicado_ProcessaSequencialEEmOrdem;
@@ -227,7 +227,7 @@ begin
     FReceived.UnlockList;
   end;
   AssertEquals('worker dedicado nunca deveria rodar 2 callbacks ao mesmo tempo (pico deveria ser 1)',
-    1, AmqpAtomicGet(FPeak));
+    1, PcAtomicGet(FPeak));
 end;
 
 initialization

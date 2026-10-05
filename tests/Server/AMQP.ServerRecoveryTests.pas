@@ -707,6 +707,18 @@ begin
   // thread do journal. Sem esperar a marca d agua, o teste olharia o segmento
   // antes de o primeiro byte ter saido.
   ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
+  // A rotacao roda DEPOIS de a marca d agua avancar (fronteira de lote, apos o
+  // fsync -- D24), e o Rotate abre o segmento novo antes de contar a rotacao.
+  // Logo o WaitDurable nao e' barreira para nenhuma das duas leituras: espera
+  // com prazo. Sem isto o teste falhou no Linux com a maquina sob carga (F8):
+  // ActiveSegment ja' era 2 e Rotations ainda 0.
+  I := 0;
+  while ((FJournal.ActiveSegment <= 1) or (FJournal.Stats.Rotations < 1))
+    and (I < 500) do
+  begin
+    Sleep(10);
+    Inc(I);
+  end;
   ChecaOk('o segmento ativo passou do primeiro',
     FJournal.ActiveSegment > 1);
   ChecaOk('e as rotacoes foram contadas',

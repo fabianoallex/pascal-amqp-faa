@@ -13,7 +13,7 @@ uses
   fpcunit, testregistry, SysUtils, Classes,
   AMQP.Protocol,
   AMQP.Frame,
-  AMQP.Threading,
+  PascalCommon.Threading,
   AMQP.Transport,
   AMQP.Server.FrameIO,
   AMQP.Server.Types,
@@ -70,8 +70,8 @@ function WaitConnCount(AServer: TAMQPServer; ACount, ATimeoutMs: Integer): Boole
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
-  while AmqpTickMs < LDeadline do
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
+  while PcTickMs < LDeadline do
   begin
     if AServer.ConnectionCount = ACount then
       Exit(True);
@@ -85,8 +85,8 @@ function WaitAccepted(AServer: TAMQPServer; AN, ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
 begin
-  LDeadline := AmqpTickMs + UInt64(ATimeoutMs);
-  while AmqpTickMs < LDeadline do
+  LDeadline := PcTickMs + UInt64(ATimeoutMs);
+  while PcTickMs < LDeadline do
   begin
     if AServer.TotalAccepted >= AN then
       Exit(True);
@@ -559,9 +559,9 @@ begin
       Conns[I] := RawConnect(B.Port, True);
     AssertTrue(WaitConnCount(B, 5, 3000));
 
-    LStart := AmqpTickMs;
+    LStart := PcTickMs;
     B.Stop; // deve derrubar as 5 e voltar rapido
-    AssertTrue('Stop nao travou', AmqpTickMs - LStart < 5000);
+    AssertTrue('Stop nao travou', PcTickMs - LStart < 5000);
     AssertFalse(B.Running);
 
     for I := 0 to High(Conns) do
@@ -605,10 +605,10 @@ begin
         HB.WriteTo(Strm);
 
         // O broker contabiliza o frame recebido e segue vivo.
-        Deadline := AmqpTickMs + 2000;
+        Deadline := PcTickMs + 2000;
         Conns := B.Connections;
         while (Length(Conns) = 1) and (Conns[0].FramesRead < 1) and
-              (AmqpTickMs < Deadline) do
+              (PcTickMs < Deadline) do
         begin
           Sleep(10);
           Conns := B.Connections;

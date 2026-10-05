@@ -37,7 +37,7 @@
 
   Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
   callbacks nomeados ('of object'), marshals descartáveis + TThread.Queue
-  para a UI (ver RetaguardaVcl) e eventos de conexão saltando pelo AmqpPool
+  para a UI (ver RetaguardaVcl) e eventos de conexão saltando pelo PcPool
   (gotcha do TThread.Queue descartado; ver TConexaoEventoWork e CLAUDE.md). }
 
 interface
@@ -53,7 +53,7 @@ uses
   SysUtils, Classes,
   Generics.Collections, Rtti,
   Graphics, Controls, Forms, Dialogs, StdCtrls, ComCtrls,
-  AMQP.Wire, AMQP.Threading, AMQP.Connection, AMQP.Transport,
+  AMQP.Wire, PascalCommon.ThreadPool, AMQP.Connection, AMQP.Transport,
   AMQP.Queue.Methods, AMQP.Basic.Methods;
 
 type
@@ -234,8 +234,8 @@ type
   { Eventos de conexão rodam na thread de RECONEXÃO da lib, que morre logo
     após o OnReconnect — no FPC um TThread.Queue postado por thread que morre
     antes do bombeio é DESCARTADO (gotcha no CLAUDE.md). Salto por um worker
-    persistente do AmqpPool. }
-  TConexaoEventoWork = class(TAMQPWorkItem)
+    persistente do PcPool. }
+  TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmRetry;
     FEvento: TConexaoEvento;
@@ -693,21 +693,21 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo AmqpPool em vez de postar direto
+// Os três eventos de conexão saltam pelo PcPool em vez de postar direto
 // (ver o comentário de TConexaoEventoWork).
 procedure TfrmRetry.OnDesconectado(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
 end;
 
 procedure TfrmRetry.OnReconectado(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceVoltou));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceVoltou));
 end;
 
 procedure TfrmRetry.OnReconexaoFalhou(AConnection: TAMQPConnection);
 begin
-  AmqpPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
+  PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
 { --- conexão ----------------------------------------------------------------- }
