@@ -21,6 +21,7 @@ uses
   AMQP.Exchange.Methods in '..\..\src\AMQP.Exchange.Methods.pas',
   AMQP.Queue.Methods in '..\..\src\AMQP.Queue.Methods.pas',
   AMQP.Basic.Methods in '..\..\src\AMQP.Basic.Methods.pas',
+  AMQP.Tracing in '..\..\src\AMQP.Tracing.pas',
   AMQP.Connection in '..\..\src\AMQP.Connection.pas',
   AMQP.Server.Auth in '..\..\src\server\AMQP.Server.Auth.pas',
   AMQP.Server.Types in '..\..\src\server\AMQP.Server.Types.pas',
@@ -57,7 +58,8 @@ uses
   AMQP.ServerTopologyTests in 'AMQP.ServerTopologyTests.pas',
   AMQP.ServerPersistTests in 'AMQP.ServerPersistTests.pas',
   AMQP.ServerConfirmTests in 'AMQP.ServerConfirmTests.pas',
-  AMQP.ServerRecoveryTests in 'AMQP.ServerRecoveryTests.pas';
+  AMQP.ServerRecoveryTests in 'AMQP.ServerRecoveryTests.pas',
+  AMQP.ServerTracingTests in 'AMQP.ServerTracingTests.pas';
 
 var
   runner: ITestRunner;

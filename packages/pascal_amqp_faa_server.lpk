@@ -108,7 +108,7 @@
            proprio), e a copia vem da aplicacao, nunca de external/. -->
       <Item>
         <PackageName Value="pascal_common_faa"/>
-        <MinVersion Major="1" Minor="1" Release="3" Valid="True"/>
+        <MinVersion Major="1" Minor="8" Valid="True"/>
       </Item>
       <Item>
         <PackageName Value="pascal_amqp_faa"/>

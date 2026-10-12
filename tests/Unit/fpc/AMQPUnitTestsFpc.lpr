@@ -27,7 +27,8 @@ uses
   AMQP.WireTests,
   AMQP.FrameTests,
   AMQP.ConnectionMethodsTests,
-  AMQP.Item2MethodsTests;
+  AMQP.Item2MethodsTests,
+  AMQP.TracingTests;
 
 var
   ConsoleApp: TTestRunner;

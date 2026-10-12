@@ -164,7 +164,15 @@ function DecodeBasicReturn(const AReader: TAMQPReader): TAMQPBasicReturn;
 
 /// Payload do frame de content header (tipo 2). ABodySize = total do corpo.
 function BuildContentHeader(ABodySize: UInt64;
-  const AProps: TAMQPBasicProperties): TBytes;
+  const AProps: TAMQPBasicProperties): TBytes; overload;
+
+/// O mesmo, com o contexto de trace W3C nos headers: 'traceparent' (e
+/// 'tracestate', quando não vazio) como longstr no fim da tabela. A tabela do
+/// chamador NÃO é alterada — os pares entram só nos bytes. Se a tabela já tem
+/// 'traceparent', quem publicou decidiu o contexto e nada é acrescentado.
+/// ATraceParent vazio = a primeira forma.
+function BuildContentHeader(ABodySize: UInt64; const AProps: TAMQPBasicProperties;
+  const ATraceParent, ATraceState: string): TBytes; overload;
 
 /// Lê um content header já decodificado do payload de um frame tipo 2.
 /// Se as propriedades incluírem Headers, o chamador é dono dessa tabela.
@@ -547,11 +555,25 @@ end;
 
 function BuildContentHeader(ABodySize: UInt64;
   const AProps: TAMQPBasicProperties): TBytes;
+begin
+  Result := BuildContentHeader(ABodySize, AProps, '', '');
+end;
+
+function BuildContentHeader(ABodySize: UInt64; const AProps: TAMQPBasicProperties;
+  const ATraceParent, ATraceState: string): TBytes;
 var
   W: TAMQPWriter;
   LFlags: Word;
   P: TAMQPBasicProp;
+  LHeaders: TAMQPFieldTable;
+  LInject: Boolean;
 begin
+  LHeaders := nil;
+  if bpHeaders in AProps.Flags then
+    LHeaders := AProps.Headers;
+  LInject := (ATraceParent <> '') and
+    not (Assigned(LHeaders) and LHeaders.ContainsKey('traceparent'));
+
   W := TAMQPWriter.Create;
   try
     W.WriteShortUInt(AMQP_CLASS_BASIC); // class-id
@@ -561,12 +583,26 @@ begin
     LFlags := 0;
     for P in AProps.Flags do
       LFlags := LFlags or PropBit(P);
+    if LInject then
+      LFlags := LFlags or PropBit(bpHeaders);
     W.WriteShortUInt(LFlags);
 
     // Propriedades presentes, na ordem do enum.
     if bpContentType in AProps.Flags then W.WriteShortStr(AProps.ContentType);
     if bpContentEncoding in AProps.Flags then W.WriteShortStr(AProps.ContentEncoding);
-    if bpHeaders in AProps.Flags then W.WriteFieldTable(AProps.Headers);
+    if LInject then
+    begin
+      // tracestate solto na tabela (sem traceparent) fica o do chamador:
+      // field-table não admite nome repetido.
+      if (ATraceState <> '') and
+        not (Assigned(LHeaders) and LHeaders.ContainsKey('tracestate')) then
+        W.WriteFieldTable(LHeaders, ['traceparent', 'tracestate'],
+          [ATraceParent, ATraceState])
+      else
+        W.WriteFieldTable(LHeaders, ['traceparent'], [ATraceParent]);
+    end
+    else if bpHeaders in AProps.Flags then
+      W.WriteFieldTable(AProps.Headers);
     if bpDeliveryMode in AProps.Flags then W.WriteOctet(AProps.DeliveryMode);
     if bpPriority in AProps.Flags then W.WriteOctet(AProps.Priority);
     if bpCorrelationId in AProps.Flags then W.WriteShortStr(AProps.CorrelationId);

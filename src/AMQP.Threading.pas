@@ -32,8 +32,11 @@ uses
 // ocioso, 17 callbacks que bloqueiam rodavam um de cada vez) -- achado aqui,
 // ver .ci/findings-for-pascal-common-faa.md. Os callbacks do cliente rodam
 // no PcPool, entao uma copia mais velha e' defeito em producao, nao so' teste.
-{$IF PASCALCOMMON_VERSION < 10103}
-  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova'}
+// 1.8.0: PascalCommon.Tracing (spans de publish e consumo, AMQP.Tracing). A 1.7
+// ja' tinha o que se usa aqui, mas e' a 1.8 que as libs irmas exigem -- uma
+// aplicacao nao fica com duas exigencias diferentes para o mesmo pacote.
+{$IF PASCALCOMMON_VERSION < 10800}
+  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova'}
 {$IFEND}
 
 /// Milissegundos de RELOGIO DE PAREDE desde a epoch Unix, em UTC.

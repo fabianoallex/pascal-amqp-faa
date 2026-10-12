@@ -135,6 +135,7 @@
         <DCCReference Include="..\..\src\AMQP.Exchange.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Queue.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Basic.Methods.pas"/>
+        <DCCReference Include="..\..\src\AMQP.Tracing.pas"/>
         <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Auth.pas"/>
         <DCCReference Include="..\..\src\server\AMQP.Server.Types.pas"/>
@@ -172,6 +173,7 @@
         <DCCReference Include="AMQP.ServerPersistTests.pas"/>
         <DCCReference Include="AMQP.ServerConfirmTests.pas"/>
         <DCCReference Include="AMQP.ServerRecoveryTests.pas"/>
+        <DCCReference Include="AMQP.ServerTracingTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

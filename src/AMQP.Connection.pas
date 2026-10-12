@@ -220,6 +220,10 @@ type
     FAsmRemaining: UInt64;
     // --- consumers ---
     FConsumers: TDictionary<string, TAMQPConsumerCallback>;
+    // consumer-tag -> fila, para o nome do span 'process <fila>' (o
+    // Basic.Deliver não traz a fila). Sob FConsumersLock; a reconexão não
+    // limpa: os consumers voltam com o mesmo tag e a mesma fila.
+    FConsumerQueues: TDictionary<string, string>;
     FConsumersLock: TCriticalSection;
     FConsumerCounter: Integer;
     FOnBasicReturn: TAMQPBasicReturnCallback;
@@ -299,6 +303,8 @@ type
     /// se RepublishUnconfirmedOnReconnect). Reenvia na ordem original, com seq-nos
     /// novos; os antigos já foram reportados como não confirmados.
     procedure ResendUnconfirmed;
+    /// O Basic.Get sem span (BasicGet abre o span em volta dele).
+    function DoBasicGet(const AQueue: string; ANoAck: Boolean): TAMQPGetResult;
     /// Aguarda os callbacks em voo terminarem (usado ao fechar o canal).
     procedure DrainInFlight;
     /// Trata um frame entregue pela thread de leitura (roda NA thread de leitura).
@@ -532,7 +538,9 @@ function AmqpReconnectThreadsAlive: Integer;
 implementation
 
 uses
-  AMQP.Channel.Methods
+  AMQP.Channel.Methods,
+  PascalCommon.Tracing,
+  AMQP.Tracing
   // TLS: OpenSSL (opt-in via AMQP_OPENSSL, qualquer plataforma) tem precedência
   // sobre SChannel (automático no Windows). Ver EstablishConnection.
   {$IFDEF AMQP_OPENSSL}
@@ -571,9 +579,11 @@ type
     FChannel: TAMQPChannel;
     FCallback: TAMQPConsumerCallback;
     FDelivery: TAMQPDelivery;
+    FQueue: string;
   public
     constructor Create(AChannel: TAMQPChannel;
-      const ACallback: TAMQPConsumerCallback; const ADelivery: TAMQPDelivery);
+      const ACallback: TAMQPConsumerCallback; const ADelivery: TAMQPDelivery;
+      const AQueue: string);
     procedure Execute; override;
   end;
 
@@ -652,18 +662,40 @@ end;
 { TAMQPDeliveryWork }
 
 constructor TAMQPDeliveryWork.Create(AChannel: TAMQPChannel;
-  const ACallback: TAMQPConsumerCallback; const ADelivery: TAMQPDelivery);
+  const ACallback: TAMQPConsumerCallback; const ADelivery: TAMQPDelivery;
+  const AQueue: string);
 begin
   inherited Create;
   FChannel := AChannel;
   FCallback := ACallback;
   FDelivery := ADelivery;
+  FQueue := AQueue;
 end;
 
 procedure TAMQPDeliveryWork.Execute;
+var
+  LSpan: IPcSpan;
 begin
   try
-    FCallback(FChannel, FDelivery);
+    // Span 'process <fila>' filho do traceparent da mensagem (nil com o
+    // tracer desligado). Corrente durante o callback; nasce e termina aqui,
+    // na thread do pool.
+    LSpan := AmqpStartProcessSpan(FQueue, FDelivery.Properties,
+      FDelivery.RoutingKey, Length(FDelivery.Body), FDelivery.DeliveryTag,
+      FDelivery.Redelivered, FChannel.FConnection.FParams.Host,
+      FChannel.FConnection.FParams.Port);
+    try
+      FCallback(FChannel, FDelivery);
+    except
+      on E: Exception do
+      begin
+        AmqpFinishSpan(LSpan, E);
+        LSpan := nil;
+        raise;
+      end;
+    end;
+    AmqpFinishSpan(LSpan, nil);
+    LSpan := nil;
   finally
     if FDelivery.Properties.Has(bpHeaders) and Assigned(FDelivery.Properties.Headers) then
       FDelivery.Properties.Headers.Free;
@@ -1540,6 +1572,7 @@ begin
   FRpcLock := TCriticalSection.Create;
   FRpcEvent := TEvent.Create(nil, True, False, '');
   FConsumers := TDictionary<string, TAMQPConsumerCallback>.Create;
+  FConsumerQueues := TDictionary<string, string>.Create;
   FConsumersLock := TCriticalSection.Create;
   FConfirmMon := TPcMonitor.Create;
   FUnconfirmed := TDictionary<UInt64, Boolean>.Create;
@@ -1572,6 +1605,7 @@ begin
   FResendBuffer.Free;
   FConfirmMon.Free;
   FConsumers.Free;
+  FConsumerQueues.Free;
   FConsumersLock.Free;
   FRpcEvent.Free;
   FRpcLock.Free;
@@ -2001,11 +2035,39 @@ end;
 
 function TAMQPChannel.Publish(const AExchange, ARoutingKey: string;
   const ABody: TBytes; const AProps: TAMQPBasicProperties; AMandatory: Boolean): UInt64;
+var
+  LSpan: IPcSpan;
+  LHeader: TBytes;
 begin
-  Result := DoSendPublish(
-    BuildBasicPublish(AExchange, ARoutingKey, AMandatory, False),
-    BuildContentHeader(UInt64(Length(ABody)), AProps),
-    ABody);
+  // Span producer (nil com o tracer desligado); o traceparent dele vai nos
+  // headers, só nos bytes. Termina aqui, na thread que o abriu: o confirm
+  // chega depois, noutra thread (ver AMQP.Tracing).
+  LSpan := AmqpStartPublishSpan(AExchange, ARoutingKey, Length(ABody), AProps,
+    FConnection.FParams.Host, FConnection.FParams.Port);
+  if LSpan = nil then
+  begin
+    Result := DoSendPublish(
+      BuildBasicPublish(AExchange, ARoutingKey, AMandatory, False),
+      BuildContentHeader(UInt64(Length(ABody)), AProps),
+      ABody);
+    Exit;
+  end;
+  try
+    LHeader := BuildContentHeader(UInt64(Length(ABody)), AProps,
+      LSpan.TraceParent, LSpan.TraceState);
+    Result := DoSendPublish(
+      BuildBasicPublish(AExchange, ARoutingKey, AMandatory, False),
+      LHeader, ABody);
+    if Result > 0 then
+      LSpan.SetIntAttribute('pascalamqp.publish.sequence_number', Int64(Result));
+  except
+    on E: Exception do
+    begin
+      AmqpFinishSpan(LSpan, E);
+      raise;
+    end;
+  end;
+  AmqpFinishSpan(LSpan, nil);
 end;
 
 procedure TAMQPChannel.ResendUnconfirmed;
@@ -2071,6 +2133,31 @@ begin
 end;
 
 function TAMQPChannel.BasicGet(const AQueue: string; ANoAck: Boolean): TAMQPGetResult;
+var
+  LSpan: IPcSpan;
+begin
+  LSpan := AmqpStartReceiveSpan(AQueue, FConnection.FParams.Host,
+    FConnection.FParams.Port);
+  if LSpan = nil then
+  begin
+    Result := DoBasicGet(AQueue, ANoAck);
+    Exit;
+  end;
+  try
+    Result := DoBasicGet(AQueue, ANoAck);
+    AmqpSetReceiveResult(LSpan, Result.Found, Result.Properties, Result.RoutingKey,
+      Length(Result.Body), Result.DeliveryTag, Result.Redelivered);
+  except
+    on E: Exception do
+    begin
+      AmqpFinishSpan(LSpan, E);
+      raise;
+    end;
+  end;
+  AmqpFinishSpan(LSpan, nil);
+end;
+
+function TAMQPChannel.DoBasicGet(const AQueue: string; ANoAck: Boolean): TAMQPGetResult;
 begin
   FRpcLock.Enter;
   try
@@ -2213,6 +2300,7 @@ begin
   FConsumersLock.Enter;
   try
     FConsumers.AddOrSetValue(LTag, ACallback);
+    FConsumerQueues.AddOrSetValue(LTag, AQueue);
   finally
     FConsumersLock.Leave;
   end;
@@ -2226,6 +2314,7 @@ begin
     FConsumersLock.Enter;
     try
       FConsumers.Remove(LTag);
+      FConsumerQueues.Remove(LTag);
     finally
       FConsumersLock.Leave;
     end;
@@ -2246,6 +2335,7 @@ begin
     FConsumersLock.Enter;
     try
       FConsumers.Remove(AConsumerTag);
+      FConsumerQueues.Remove(AConsumerTag);
     finally
       FConsumersLock.Leave;
     end;
@@ -2266,11 +2356,14 @@ procedure TAMQPChannel.DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
 var
   LCallback: TAMQPConsumerCallback;
   LDelivery: TAMQPDelivery;
+  LQueue: string;
 begin
   FConsumersLock.Enter;
   try
     if not FConsumers.TryGetValue(ADeliver.ConsumerTag, LCallback) then
       LCallback := nil;
+    if not FConsumerQueues.TryGetValue(ADeliver.ConsumerTag, LQueue) then
+      LQueue := '';
   finally
     FConsumersLock.Leave;
   end;
@@ -2294,7 +2387,7 @@ begin
 
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
   PcAtomicInc(FInFlight);
-  DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery));
+  DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery, LQueue));
 end;
 
 procedure TAMQPChannel.DispatchReturn(const AReturn: TAMQPBasicReturn;
@@ -2556,6 +2649,7 @@ begin
       FConsumersLock.Enter;
       try
         FConsumers.Remove(LTag);
+        FConsumerQueues.Remove(LTag);
       finally
         FConsumersLock.Leave;
       end;

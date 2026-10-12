@@ -23,6 +23,7 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 - **Automatic reconnection** (opt-in) with topology recovery (exchanges, queues, bindings, qos, confirm mode and consumers) and, optionally, republishing of unconfirmed publishes (`RepublishUnconfirmedOnReconnect`).
 - **TLS (amqps)** with two backends behind the same API: native **SChannel** on Windows (automatic, zero dependencies) and **OpenSSL** on any platform (opt-in via `-dAMQP_OPENSSL`) — see the [TLS (amqps)](#tls-amqps) section.
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (RabbitMQ extension), `Basic.Get`, `Qos`.
+- **OpenTelemetry tracing** (opt-in, through pascal-common-faa): a span per publish and per consumed message, with the W3C `traceparent` in the message headers. Producer and consumer end up in the same trace — see [Tracing (OpenTelemetry)](#tracing-opentelemetry).
 
 ### Embedded broker
 
@@ -230,6 +231,32 @@ On a drop, the library reconnects and **restores the topology** declared on that
 The channel's `Close`/`Destroy` wait (without timeout, on purpose) for in-flight callbacks to finish before releasing the object — slow I/O is fine, but a callback that blocks indefinitely waiting for user interaction, or for an event only another application thread signals, stalls that shutdown; if the `Free` runs on the main thread of a VCL/LCL app, the UI freezes with it (deadlock). If the flow depends on human approval, prefer **not blocking**: store the *delivery-tag* and the content in your own structure, return, and confirm later (`Ack`/`Nack` can be called from any thread). If you choose to block on a `TEvent`, the shutdown must wake **all** the waits and also cover deliveries arriving *during* the disconnection — a nack+requeue can be redelivered immediately to the same consumer until `Cancel` completes (`samples/RetaguardaVcl` shows the pattern with a shutdown flag).
 
 **The wait counts from enqueueing, and the pool belongs to the process.** A regular channel's callbacks run on `PcPool`, which is shared with the other `*-faa` libraries in the process; the channel's `Close`/`Free` also waits for deliveries that are **still queued** in the pool, not only the ones running. If another part of the process occupies every `PcPool` worker (callbacks stuck on I/O, for example), stopping a consumer waits for the shared queue to reach its items. Measured with `PcPool` saturated by blocked items: freeing a channel with one queued delivery waited the 1.5 s the pool stayed busy; the same scenario with `CreateChannel(True)` took 29 ms, because that channel's deliveries run on a thread of its own. If your consumer has to stop on its own schedule, regardless of the rest of the process, use `CreateChannel(True)`. There is no deadline on this wait on purpose: giving up would free the channel while queued items still point at it.
+
+### Tracing (OpenTelemetry)
+
+With pascal-common-faa's tracer started, the channel opens the spans on its own. Without it nothing changes: no span, no header, the same bytes as always.
+
+```pascal
+uses PascalCommon.Tracing;
+
+TPcTracing.Start(TPcTracingOptions.FromEnvironment('orders', '1.0.0'), Exporter);
+// ... Publish, Consume and BasicGet as usual ...
+TPcTracing.Shutdown; // exports the last spans before the program ends
+```
+
+| Where | Span | Kind | Parent |
+|---|---|---|---|
+| `Publish`/`PublishText` | `publish <exchange>` (`publish amq.default` on the default exchange) | producer | the thread's current span |
+| `Consume` callback | `process <queue>` | consumer | the message's `traceparent` |
+| `BasicGet` | `receive <queue>` | client | the thread's current span |
+
+- The publish span's `traceparent` (and `tracestate`) goes **in the message headers**, and the consumer's `process` span is its child: an HTTP request that publishes and the worker that consumes show up as **a single trace**. During the callback `process` is the current span, so whatever the callback does (a query, Redis, another publish) joins the same trace.
+- Your headers table is **not modified**: the context goes into the bytes only. If it already has a `traceparent`, yours wins.
+- The publish span ends when the frames are sent, not on the confirm (the seq-no is in the `pascalamqp.publish.sequence_number` attribute). `process` measures the callback, not the time until the ack. A callback that raises leaves `process` with an error status.
+- To process a `BasicGet` result in the producer's trace: `AmqpStartProcessSpan('queue', R.Properties, ...)` and `AmqpFinishSpan` (unit `AMQP.Tracing`).
+- The embedded broker opens no span, but passes the header through untouched, dead-lettering included.
+
+Attributes, decisions and tests in [`docs/tracing.md`](docs/tracing.md) (Portuguese).
 
 ## Embedded broker
 
@@ -481,9 +508,9 @@ Why start from the parallel side instead of the serialized one: adding ordering 
 
 ## Building
 
-**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.1.3 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova` ("needs pascal-common-faa 1.1.3 or newer"). 1.1.3 is the minimum because before it `PcPool` did not grow during a burst of items, and this client's callbacks run on it: deliveries whose callbacks block could run one at a time.
+**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.8.0 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool, tracing). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova` ("needs pascal-common-faa 1.8.0 or newer"). 1.8.0 brings `PascalCommon.Tracing` (the spans), and it is the same version the other `*-faa` libraries require. Before 1.1.3 `PcPool` did not grow during a burst of items, and this client's callbacks run on it: deliveries whose callbacks block could run one at a time.
 
-**Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1 or newer.
+**Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1.8 or newer.
 
 **Plain FPC**:
 
@@ -619,12 +646,12 @@ In both:
 
 | Suite | Tests | Requires |
 |---|---|---|
-| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 117 | nothing — frame/method/content-header encode/decode, tune negotiation |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 28 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
-| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 273 (277 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 28 | nothing — runs the **client's integration suite against the embedded broker** |
+| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 31 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 471 (475 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 31 | nothing — runs the **client's integration suite against the embedded broker** |
 
-The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 28 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
+The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 31 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
 
 As for the TLS tests: The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down — and, outside Windows, if the runner was not built with `-dAMQP_OPENSSL`. On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as **Passed** — so an "N Passed / 0 Ignored" summary can hide tests that never touched the broker. Two signals resolve the ambiguity: the `IGNORADO: ...` message in the console log, and the **time** — a self-ignored test comes out at ~0.000s, which is why the DUnitX projects here register their own logger (`tests\AMQP.TestTimeLogger.pas`) that prints each test's duration and marks near-zero ones with `~`. The same data is in `dunitx-results.xml` (the `time` attribute); the `asserts` attribute is **not** usable for this — it reads 0 even for tests that really ran.
 

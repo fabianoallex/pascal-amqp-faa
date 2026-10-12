@@ -11,7 +11,7 @@ uses
   AMQP.Protocol, AMQP.Wire, AMQP.Frame, AMQP.Method, AMQP.Connection.Methods, 
   AMQP.Channel.Methods, AMQP.Exchange.Methods, AMQP.Queue.Methods, 
   AMQP.Basic.Methods, AMQP.Threading, AMQP.Transport, AMQP.Transport.Tls, 
-  AMQP.Transport.OpenSSL, AMQP.Connection;
+  AMQP.Transport.OpenSSL, AMQP.Tracing, AMQP.Connection;
 
 implementation
 

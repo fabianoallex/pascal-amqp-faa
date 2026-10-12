@@ -132,6 +132,7 @@
         <DCCReference Include="..\..\src\AMQP.Exchange.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Queue.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Basic.Methods.pas"/>
+        <DCCReference Include="..\..\src\AMQP.Tracing.pas"/>
         <DCCReference Include="..\..\src\AMQP.Transport.Tls.pas"/>
         <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
         <DCCReference Include="AMQP.HandshakeIntegrationTests.pas"/>

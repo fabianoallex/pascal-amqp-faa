@@ -23,6 +23,7 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 - **Reconexão automática** (opt-in) com recuperação de topologia (exchanges, filas, binds, qos, confirm mode e consumers) e, opcionalmente, reenvio de publishes não confirmados (`RepublishUnconfirmedOnReconnect`).
 - **TLS (amqps)** com dois backends, mesma API: **SChannel** nativo no Windows (automático, sem dependências) e **OpenSSL** em qualquer plataforma (opt-in via `-dAMQP_OPENSSL`) — ver a seção [TLS (amqps)](#tls-amqps).
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (extensão RabbitMQ), `Basic.Get`, `Qos`.
+- **Tracing OpenTelemetry** (opt-in, pela pascal-common-faa): span por publish e por mensagem consumida, com o `traceparent` W3C nos headers. Produtor e consumidor saem na mesma trace — ver [Tracing (OpenTelemetry)](#tracing-opentelemetry).
 
 ### Broker embutido
 
@@ -230,6 +231,32 @@ Na queda, a lib reconecta e **restaura a topologia** declarada naquele canal (fi
 `Close`/`Destroy` do canal esperam (sem timeout, de propósito) os callbacks em voo terminarem antes de liberar o objeto — I/O demorado é ok, mas um callback que bloqueia indefinidamente esperando interação do usuário ou um evento que só outra thread da aplicação sinaliza trava esse fechamento; se o `Free` roda na thread principal de uma app VCL/LCL, a UI congela junto (deadlock). Se o fluxo depende de aprovação humana, prefira **não bloquear**: guarde o *delivery-tag* e o conteúdo numa estrutura própria, retorne, e confirme depois (`Ack`/`Nack` podem ser chamados de qualquer thread). Se optar por bloquear num `TEvent`, o encerramento precisa acordar **todas** as esperas e também cobrir entregas que cheguem *durante* a desconexão — um nack+requeue pode ser reentregue imediatamente ao mesmo consumer até o `Cancel` completar (`samples/RetaguardaVcl` mostra o padrão com flag de encerramento).
 
 **A espera conta desde o enfileiramento, e o pool é do processo.** Os callbacks de um canal comum rodam no `PcPool`, que é dividido com as outras libs `*-faa` do processo; o `Close`/`Free` do canal espera também as entregas que **ainda estão na fila** do pool, não só as que estão rodando. Se outra parte do processo ocupar todos os workers do `PcPool` (callbacks presos em I/O, por exemplo), parar um consumidor espera a fila compartilhada andar até os itens dele. Medido com o `PcPool` saturado por itens bloqueados: o `Free` de um canal com uma entrega enfileirada esperou os 1,5 s em que o pool ficou ocupado; o mesmo cenário com `CreateChannel(True)` levou 29 ms, porque as entregas desse canal rodam numa thread só dele. Se o seu consumidor precisa parar no prazo dele, independente do resto do processo, use `CreateChannel(True)`. Não há prazo nessa espera de propósito: desistir liberaria o canal com itens ainda na fila apontando para ele.
+
+### Tracing (OpenTelemetry)
+
+Com o tracer da pascal-common-faa ligado, o canal abre os spans sozinho. Sem ele, nada muda: nenhum span, nenhum header, os mesmos bytes de sempre.
+
+```pascal
+uses PascalCommon.Tracing;
+
+TPcTracing.Start(TPcTracingOptions.FromEnvironment('pedidos', '1.0.0'), Exportador);
+// ... Publish, Consume e BasicGet como sempre ...
+TPcTracing.Shutdown; // exporta os últimos spans antes de o programa terminar
+```
+
+| Onde | Span | Kind | Pai |
+|---|---|---|---|
+| `Publish`/`PublishText` | `publish <exchange>` (`publish amq.default` no exchange padrão) | producer | o span corrente da thread |
+| callback do `Consume` | `process <fila>` | consumer | o `traceparent` da mensagem |
+| `BasicGet` | `receive <fila>` | client | o span corrente da thread |
+
+- O `traceparent` (e o `tracestate`) do publish vai **nos headers da mensagem**, e o `process` do consumidor nasce filho dele: uma requisição HTTP que publica e o worker que consome aparecem como **uma trace só**. Durante o callback, o `process` é o span corrente, então o que o callback fizer (query, Redis, outro publish) entra na mesma trace.
+- A sua tabela de headers **não é alterada**: o contexto entra só nos bytes. Se ela já tem um `traceparent`, o seu vence.
+- O span de publish termina quando os frames saem, não no confirm (o seq-no vai no atributo `pascalamqp.publish.sequence_number`). O `process` mede o callback, não o tempo até o ack. Callback que levanta deixa o `process` com status de erro.
+- Para processar um `BasicGet` na trace do produtor: `AmqpStartProcessSpan('fila', R.Properties, ...)` e `AmqpFinishSpan` (unit `AMQP.Tracing`).
+- O broker embutido não abre span, mas repassa o header intacto, inclusive no dead-letter.
+
+Atributos, decisões e testes em [`docs/tracing.md`](docs/tracing.md).
 
 ## Broker embutido
 
@@ -479,9 +506,9 @@ Por que começar do lado paralelo em vez do serializado: adicionar ordem sobre u
 
 ## Compilando
 
-**Dependência: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.1.3 ou mais nova.** É a base comum das libs `*-faa` (atomics, monitor, thread pool). A **aplicação** fornece uma cópia só dela, mesmo usando várias libs `*-faa`: esta lib não a embute. O submódulo `external/pascal-common-faa` existe para os testes e samples deste repositório, não para o seu build. Uma cópia mais velha que a mínima para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`. A 1.1.3 é o mínimo porque antes dela o `PcPool` não crescia numa rajada de itens, e os callbacks deste cliente rodam nele: entregas cujos callbacks bloqueiam podiam rodar uma de cada vez.
+**Dependência: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.8.0 ou mais nova.** É a base comum das libs `*-faa` (atomics, monitor, thread pool, tracing). A **aplicação** fornece uma cópia só dela, mesmo usando várias libs `*-faa`: esta lib não a embute. O submódulo `external/pascal-common-faa` existe para os testes e samples deste repositório, não para o seu build. Uma cópia mais velha que a mínima para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova`. A 1.8.0 traz o `PascalCommon.Tracing` (os spans), e é a mesma versão que as outras libs `*-faa` exigem. Antes da 1.1.3 o `PcPool` não crescia numa rajada de itens, e os callbacks deste cliente rodam nele: entregas cujos callbacks bloqueiam podiam rodar uma de cada vez.
 
-**Lazarus**: instale (ou registre) `pascal_common_faa.lpk` da pascal-common-faa e depois abra/instale `packages/pascal_amqp_faa.lpk` (ou `lazbuild packages\pascal_amqp_faa.lpk`). O pacote exige `pascal_common_faa` pelo nome, versão 1 ou mais nova.
+**Lazarus**: instale (ou registre) `pascal_common_faa.lpk` da pascal-common-faa e depois abra/instale `packages/pascal_amqp_faa.lpk` (ou `lazbuild packages\pascal_amqp_faa.lpk`). O pacote exige `pascal_common_faa` pelo nome, versão 1.8 ou mais nova.
 
 **FPC puro**:
 
@@ -616,12 +643,12 @@ Em ambos:
 
 | Suíte | Testes | Precisa de quê |
 |---|---|---|
-| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 117 | nada — encode/decode de frames, métodos, content header, negociação de tune |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 28 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
-| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 273 (277 com `-dAMQP_OPENSSL`) | nada — sobe o **broker embutido** in-process em porta efêmera |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 28 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
+| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nada — encode/decode de frames, métodos, content header, negociação de tune, injeção do `traceparent` |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 31 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 471 (475 com `-dAMQP_OPENSSL`) | nada — sobe o **broker embutido** in-process em porta efêmera (inclui os spans do cliente ponta a ponta) |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 31 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
 
-A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. **Os 28 passam, sem nenhum ignorado por recurso faltante** — o último que faltava (`x-max-length` + `x-overflow: reject-publish`) entrou junto com o resto do ciclo de vida de mensagem. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
+A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. **Os 31 passam, sem nenhum ignorado por recurso faltante** — o último que faltava (`x-max-length` + `x-overflow: reject-publish`) entrou junto com o resto do ciclo de vida de mensagem. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
 
 O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console. Rodando pela IDE do Lazarus, o chaveamento é em `Run → Run Parameters → Command line parameters` — os `.lpi` vêm com `--all --format=plain` salvo (modo console); limpe o campo para o F9 abrir a GUI. No modo console via F9 a janela fecha ao terminar: ou marque *Use launching application* com `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, ou rode o executável direto num terminal.
 

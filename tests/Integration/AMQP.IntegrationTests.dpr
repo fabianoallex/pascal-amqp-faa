@@ -18,6 +18,7 @@ uses
   AMQP.Exchange.Methods in '..\..\src\AMQP.Exchange.Methods.pas',
   AMQP.Queue.Methods in '..\..\src\AMQP.Queue.Methods.pas',
   AMQP.Basic.Methods in '..\..\src\AMQP.Basic.Methods.pas',
+  AMQP.Tracing in '..\..\src\AMQP.Tracing.pas',
   AMQP.Transport.Tls in '..\..\src\AMQP.Transport.Tls.pas',
   AMQP.Connection in '..\..\src\AMQP.Connection.pas',
   AMQP.HandshakeIntegrationTests in 'AMQP.HandshakeIntegrationTests.pas',

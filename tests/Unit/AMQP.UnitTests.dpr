@@ -18,10 +18,12 @@ uses
   AMQP.Exchange.Methods in '..\..\src\AMQP.Exchange.Methods.pas',
   AMQP.Queue.Methods in '..\..\src\AMQP.Queue.Methods.pas',
   AMQP.Basic.Methods in '..\..\src\AMQP.Basic.Methods.pas',
+  AMQP.Tracing in '..\..\src\AMQP.Tracing.pas',
   AMQP.WireTests in 'AMQP.WireTests.pas',
   AMQP.FrameTests in 'AMQP.FrameTests.pas',
   AMQP.ConnectionMethodsTests in 'AMQP.ConnectionMethodsTests.pas',
-  AMQP.Item2MethodsTests in 'AMQP.Item2MethodsTests.pas';
+  AMQP.Item2MethodsTests in 'AMQP.Item2MethodsTests.pas',
+  AMQP.TracingTests in 'AMQP.TracingTests.pas';
 
 var
   runner: ITestRunner;

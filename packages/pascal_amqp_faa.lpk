@@ -74,6 +74,10 @@
         <UnitName Value="AMQP.Transport.OpenSSL"/>
       </Item>
       <Item>
+        <Filename Value="..\src\AMQP.Tracing.pas"/>
+        <UnitName Value="AMQP.Tracing"/>
+      </Item>
+      <Item>
         <Filename Value="..\src\AMQP.Connection.pas"/>
         <UnitName Value="AMQP.Connection"/>
       </Item>
@@ -86,7 +90,7 @@
            .lpi de testes/samples apontam para external/ com Prefer="True". -->
       <Item>
         <PackageName Value="pascal_common_faa"/>
-        <MinVersion Major="1" Minor="1" Release="3" Valid="True"/>
+        <MinVersion Major="1" Minor="8" Valid="True"/>
       </Item>
       <Item>
         <PackageName Value="FCL"/>

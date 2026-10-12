@@ -847,6 +847,35 @@ Os testes de pool continuam saturando um item por vez, porque é o jeito determi
 
 **v0.1.2: o mínimo da pascal-common-faa sobe para 1.1.3** (`PASCALCOMMON_VERSION < 10103`, e `MinVersion` 1.1.3 nos dois `.lpk`). A rajada não é só um problema de teste: os callbacks do cliente rodam no `PcPool`, e uma aplicação com uma cópia mais velha serializa callbacks que bloqueiam. Medido: contra a v1.1.2 o build para com `Fatal: User defined: pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`; contra a v1.2.0 compila.
 
+## v0.2.0 — tracing do cliente (2026-10-12)
+
+Fase D da observabilidade da pascal-api-infra-faa; o desenho e as decisões estão em
+`docs/tracing.md`. O que esta rodada mediu e achou fora do desenho:
+
+- **Mutação**: o publish sem injetar o `traceparent` derruba 4 dos 9 testes de
+  `AMQP.ServerTracingTests` (cadeia publish → process, header visto pelo consumidor, publish
+  dentro do callback e dead-letter).
+- **Sonda contra o RabbitMQ 3.13.7** (FPC/Linux, rede do container do broker, fora da suíte):
+  `GET /probe` → `publish amq.default` → `process probe.tracing` numa trace só, com o header
+  recebido igual ao contexto do publish. É a prova de que a codificação do longstr no header
+  é a que o RabbitMQ preserva e o nosso decoder lê.
+- **A 5672 de `127.0.0.1` estava com o `DFeBrokerServico`** (o serviço do pascal-dfe-broker,
+  com broker embutido), não com o RabbitMQ do docker, que escuta no curinga. O SmokeTest e a
+  suíte de integração com `localhost` falam com quem tiver o `127.0.0.1`. O SmokeTest falhava
+  no passo 6 (TTL + dead-letter) contra ele, **também no HEAD sem esta mudança** (medido com
+  stash): é o broker do serviço, não esta versão. Contra o RabbitMQ (`--host` com o IP da LAN)
+  o SmokeTest passou; a integração foi rodada no container Linux, na rede do RabbitMQ. A
+  integração **Delphi** (que não tem `--host`) caiu no serviço e falhou em
+  `Heartbeat_MantemConexaoViva` (e numa segunda falha no Win64 Debug), enquanto a mesma
+  suíte passou 31/31 na aceitação Delphi, contra o broker embutido desta versão.
+- **Intermitente anterior a esta mudança**:
+  `TAMQPReconnectIntegrationTests.Confirm_PerdaNaQueda_WaitForConfirmsRetornaFalse` na
+  aceitação **durável** (`AMQP_ACEITACAO_DURAVEL=1`) falhou em 2 de 4 passadas inteiras com
+  esta versão e em **3 de 5 no HEAD** (medido com stash); isolada, a fixture passou 6 de 6. Na
+  aceitação transiente o mesmo teste falhou 1 vez em 9 passadas com esta versão. O
+  teste espera que publishes fiquem sem confirm quando a conexão cai; a hipótese (não medida)
+  é uma corrida entre o confirm do journal e a queda. Não investigado nesta rodada.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

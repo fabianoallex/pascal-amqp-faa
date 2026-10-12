@@ -30,7 +30,8 @@ uses
   AMQP.ServerTopologyTests,
   AMQP.ServerPersistTests,
   AMQP.ServerConfirmTests,
-  AMQP.ServerRecoveryTests;
+  AMQP.ServerRecoveryTests,
+  AMQP.ServerTracingTests;
 
 var
   ConsoleApp: TTestRunner;

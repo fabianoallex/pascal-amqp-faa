@@ -6,6 +6,36 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-12
+
+Fase D do design de observabilidade da pascal-api-infra-faa: spans do OpenTelemetry no
+cliente, sobre o `PascalCommon.Tracing` da pascal-common-faa. Detalhes e decisões em
+[`docs/tracing.md`](docs/tracing.md).
+
+### Adicionado
+
+- **Spans por publish e por mensagem consumida**, abertos pelo próprio canal quando a
+  aplicação liga o tracer (`TPcTracing.Start`): `publish <exchange>` (producer, filho do span
+  corrente), `process <fila>` em volta do callback do `Consume` (consumer, filho do
+  `traceparent` da mensagem e span corrente durante o callback) e `receive <fila>` no
+  `BasicGet` (client). Atributos das convenções de mensageria do OpenTelemetry. Com o tracer
+  desligado nada muda: nenhum span, nenhum header, os mesmos bytes.
+- **`traceparent`/`tracestate` nos headers da mensagem publicada**, injetados só nos bytes do
+  content header: a tabela de headers do chamador não é alterada, e um `traceparent` que a
+  aplicação já pôs vence.
+- Unit `AMQP.Tracing`: `AmqpTraceParentOf`, `AmqpStartProcessSpan` (para processar o resultado
+  de um `BasicGet` na trace do produtor), `AmqpFinishSpan` e as demais peças.
+- `BuildContentHeader` com contexto de trace e `TAMQPWriter.WriteFieldTable` com pares extras
+  (overloads; as formas antigas seguem iguais).
+
+### Mudado
+
+- **A versão mínima da pascal-common-faa sobe de 1.1.3 para 1.8.0**, que traz o
+  `PascalCommon.Tracing`; é a mesma que as outras libs `*-faa` exigem. Uma cópia mais velha
+  para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova`; os dois
+  `.lpk` exigem `MinVersion` 1.8.
+- Submódulo `external/pascal-common-faa` (só testes e samples) de v1.2.0 para v1.8.0.
+
 ## [0.1.2] - 2026-10-05
 
 ### Mudado
@@ -115,7 +145,8 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fabianoallex/pascal-amqp-faa/releases/tag/v0.1.0

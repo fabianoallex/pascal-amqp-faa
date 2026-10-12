@@ -92,7 +92,12 @@ type
     procedure WriteLongStr(const AValue: string);
     procedure WriteBit(AValue: Boolean);
     procedure WriteTimestamp(AValue: UInt64);
-    procedure WriteFieldTable(ATable: TAMQPFieldTable);
+    procedure WriteFieldTable(ATable: TAMQPFieldTable); overload;
+    /// A tabela (pode ser nil) seguida dos pares AExtraNames[i] = AExtraValues[i]
+    /// como longstr, sem alterar ATable. Quem chama garante que os nomes extras
+    /// nao estao em ATable (field-table nao admite nome repetido).
+    procedure WriteFieldTable(ATable: TAMQPFieldTable;
+      const AExtraNames, AExtraValues: array of string); overload;
     /// Escreve bytes crus, sem qualquer prefixo (descarrega bits pendentes antes).
     procedure WriteRaw(const ABytes: TBytes);
 
@@ -491,10 +496,17 @@ begin
 end;
 
 procedure TAMQPWriter.WriteFieldTable(ATable: TAMQPFieldTable);
+begin
+  WriteFieldTable(ATable, [], []);
+end;
+
+procedure TAMQPWriter.WriteFieldTable(ATable: TAMQPFieldTable;
+  const AExtraNames, AExtraValues: array of string);
 var
   LInner: TAMQPWriter;
   LPair: TPair<string, TValue>;
   LBytes: TBytes;
+  I: Integer;
 begin
   LInner := TAMQPWriter.Create;
   try
@@ -504,6 +516,12 @@ begin
         LInner.WriteShortStr(LPair.Key);
         LInner.WriteFieldValue(LPair.Value);
       end;
+    for I := Low(AExtraNames) to High(AExtraNames) do
+    begin
+      LInner.WriteShortStr(AExtraNames[I]);
+      LInner.WriteOctet(FV_LONGSTR);
+      LInner.WriteLongStr(AExtraValues[I]);
+    end;
     LBytes := LInner.ToBytes;
   finally
     LInner.Free;
