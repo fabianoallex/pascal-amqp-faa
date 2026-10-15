@@ -16,7 +16,7 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 ### Cliente
 
 - Handshake completo (`Start/Tune/Open`) com negociação correta de `channel-max`/`frame-max`/`heartbeat` (compatível com RabbitMQ 3.13+).
-- Publish/consume com **ack manual** (at-least-once); callbacks de consumer despachados em **thread pool próprio** — a thread de leitura nunca roda código do usuário.
+- Publish/consume com **ack manual** (at-least-once); callbacks de consumer despachados em **thread pool próprio** — a thread de leitura nunca roda código do usuário. Exceção no callback vai para `OnConsumerError` e a entrega leva `Nack` (ver [Exceção no callback de consumer](#exceção-no-callback-de-consumer)).
 - **Publisher confirms** (`confirm.select`): `Publish` devolve seq-no, `OnConfirm` assíncrono, `WaitForConfirm`/`WaitForConfirms`.
 - `Basic.Return` (publish `mandatory` não roteável), `Connection.Blocked/Unblocked` (resource alarm do broker).
 - **Heartbeat** em thread dedicada (detecção de conexão morta + envio quando ocioso).
@@ -230,6 +230,36 @@ Na queda, a lib reconecta e **restaura a topologia** declarada nos canais da con
 **Uma tentativa que falha nunca é silenciosa.** Cada uma dispara `OnReconnectError(Conn, Tentativa, Motivo)` e fica em `Conn.LastReconnectError` (zerado quando uma reconexão dá certo). O publish feito nesse meio-tempo levanta `EAMQPConnection` com o motivo da queda e o da última tentativa no texto, por exemplo `connection unavailable right now (reconnecting; connection closed by server: 320 CONNECTION_FORCED - ...; last attempt failed: channel 1 closed by server: 404 NOT_FOUND - no queue 'pedidos' ...)`. Com o broker ainda subindo, o motivo é de socket ou de handshake; se é o replay que falha (o `404` de um consumer numa fila que **ninguém nesta conexão** declara, porque quem a declara é outro processo), a reconexão continua tentando a cada `ReconnectDelayMs` e se recupera sozinha na primeira tentativa depois de a fila voltar. Com `MaxReconnectAttempts = 0` (infinitas), é por `OnReconnectError` que se descobre que ela não está andando.
 
 **Fechar durante uma queda é imediato.** `Close`/`Free` acordam a espera entre tentativas na hora (ela é um `TEvent`, não um `Sleep`), então fechar a aplicação com o broker fora do ar não espera o `ReconnectDelayMs`. E só voltam **depois** de a thread de reconexão sair — nunca a deixam rodando contra um objeto liberado, qualquer que seja o delay. A exceção é uma tentativa que já está em curso (connect, handshake, replay da topologia): ela termina antes, limitada pelos timeouts dela. `Close` pode ser chamado de dentro de `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (a reconexão para ali); `Free` não — libere a conexão de outra thread.
+
+### Exceção no callback de consumer
+
+Se o callback de consumer levanta, a exceção vai para `Chan.OnConsumerError` e, **se a entrega ainda não foi confirmada, a lib faz `Nack` sem requeue**: a mensagem vai para a dead-letter exchange da fila, se houver; sem DLX, o broker a descarta. O handler é opcional e decide a ação:
+
+```pascal
+procedure TMeuConsumidor.QuandoFalhar(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery; AError: Exception;
+  var AAction: TAMQPConsumerErrorAction);
+begin
+  Log.Error('pedido %s: %s', [ADelivery.Properties.MessageId, AError.Message]);
+  if AError is ETimeoutBanco then
+    AAction := ceaRequeue; // falha transitória: volta para a fila
+  // senão fica o padrão, ceaReject (Nack sem requeue -> DLX)
+end;
+
+// ...
+Chan.OnConsumerError := Consumidor.QuandoFalhar;
+Chan.Consume('pedidos', Consumidor.OnMsg);
+```
+
+| `AAction` | O que a lib faz |
+|---|---|
+| `ceaReject` (padrão) | `Nack` sem requeue: DLX da fila, se houver; senão a mensagem é descartada |
+| `ceaRequeue` | `Nack` com requeue: a mensagem volta para a fila com `Redelivered=True`. Cuidado com a mensagem que **sempre** falha: ela volta na hora e vira um loop |
+| `ceaNone` | nada: o aplicativo confirma depois, com `Ack`/`Nack` (até lá, a entrega conta no `Qos`) |
+
+**Nunca confirma duas vezes.** Se o callback já deu `Ack`/`Nack` antes de levantar, ou se o próprio handler confirmou, a lib não manda nada: confirmar duas vezes o mesmo *delivery-tag* é `406 PRECONDITION_FAILED`, e o broker fecha o canal. O handler recebe `AAction = ceaNone` quando a entrega já está confirmada ou quando o consumer é no-ack (sem nada a confirmar). Se a conexão caiu durante o callback, o `Nack` falha em silêncio: o broker já devolveu a mensagem à fila, e ela volta com `Redelivered=True` depois da reconexão. Uma exceção levantada pelo próprio handler é ignorada, e a ação vale como estava. O handler roda na mesma thread do pool do callback; a exceção é da lib (não a libere nem a relance).
+
+*(Até a 0.3.0 a exceção era engolida pelo pool: a entrega ficava sem ack até a conexão cair, nada era logado, a mensagem voltava a cada reinício do processo e travava de novo, e com `Qos(1)` o consumer inteiro parava. Medido contra o RabbitMQ 3: com a 1ª de 5 mensagens levantando, 1 callback em 8 s e 4 prontas para sempre; agora as 4 passam.)*
 
 ### O callback de consumer precisa sempre terminar sozinho
 
@@ -472,6 +502,7 @@ Pontos práticos:
 - **`Open`** é onde mais se espera capturar exceção síncrona: `EAMQPConnection`, e — se `UseTls=True` — `EAMQPTransport`/`EAMQPTls`.
 - **Chamadas de canal** (`DeclareQueue`, `BindQueue`, `Publish`, `Consume`, etc.) podem levantar `EAMQPChannel` de forma síncrona quando o broker recusa o pedido ou o canal já caiu.
 - **Depois de `Open` bem-sucedido, uma queda de conexão não vira exceção na thread da aplicação** — ela é reportada pelos callbacks `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (ver [Reconexão automática](#reconexão-automática)); sem `AutoReconnect`, a próxima chamada de RPC naquele canal falha com `EAMQPChannel` ("canal fechado"), e `Publish`/`Ack`/`Nack` falham com `EAMQPConnection` trazendo o motivo da queda.
+- **Exceção levantada no callback de consumer não chega à aplicação por `raise`** — vai para `OnConsumerError`, e a entrega pendente leva `Nack` sem requeue (ver [Exceção no callback de consumer](#exceção-no-callback-de-consumer)).
 - **Falha de publisher confirm não é exceção** — é `WaitForConfirm`/`WaitForConfirms` retornando `False`, ou `AAck=False` no `OnConfirm` (ver [Publisher confirms em detalhe](#publisher-confirms-em-detalhe)).
 
 ## Concorrência e ordenação de mensagens
@@ -649,9 +680,9 @@ Em ambos:
 | Suíte | Testes | Precisa de quê |
 |---|---|---|
 | `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nada — encode/decode de frames, métodos, content header, negociação de tune, injeção do `traceparent` |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 34 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` apontam para outro endereço |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 43 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` apontam para outro endereço |
 | `AMQP.ServerTests` / `AMQPServerTestsFpc` | 471 (475 com `-dAMQP_OPENSSL`) | nada — sobe o **broker embutido** in-process em porta efêmera (inclui os spans do cliente ponta a ponta) |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 34 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 43 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
 
 A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. **Os 34 passam, sem nenhum ignorado por recurso faltante** — o último que faltava (`x-max-length` + `x-overflow: reject-publish`) entrou junto com o resto do ciclo de vida de mensagem. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
 

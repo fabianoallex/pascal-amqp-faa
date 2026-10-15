@@ -145,10 +145,40 @@ type
     function BodyAsText: string;
   end;
 
-  { Callback de consumer. Roda numa thread do pool (TTask), então NÃO bloqueia a
-    thread de leitura. Use AChannel.Ack(ADelivery.DeliveryTag) para confirmar. }
+  { Callback de consumer. Roda numa thread do pool, então NÃO bloqueia a
+    thread de leitura. Use AChannel.Ack(ADelivery.DeliveryTag) para confirmar.
+    Se ele levantar, a exceção vai para AChannel.OnConsumerError e a entrega
+    ainda não confirmada leva Nack sem requeue (ver TAMQPConsumerErrorAction). }
   TAMQPConsumerCallback = procedure(AChannel: TAMQPChannel;
     const ADelivery: TAMQPDelivery) of object;
+
+  { O que a lib faz com uma entrega cujo callback levantou exceção. Só é
+    aplicada se a entrega ainda não foi confirmada (por Ack/Nack no callback ou
+    no próprio OnConsumerError). Se a conexão caiu durante o callback, o Nack
+    falha em silêncio: o broker já devolveu a entrega à fila, e ela volta
+    com Redelivered=True depois da reconexão. }
+  TAMQPConsumerErrorAction = (
+    ceaReject,  // Nack sem requeue: vai para a dead-letter exchange da fila, se houver; senão o broker descarta
+    ceaRequeue, // Nack com requeue: volta para a fila (cuidado com mensagem que sempre falha: loop)
+    ceaNone);   // a lib não confirma (o aplicativo confirma depois, ou nada há a confirmar)
+
+  { Callback de exceção levantada pelo callback de consumer. Roda na mesma
+    thread do pool, logo depois da exceção. AAction chega como ceaReject se a
+    entrega ainda está pendente, ou ceaNone se já foi confirmada ou se o
+    consumer é no-ack; mude-a para decidir. A exceção é da lib: não a libere
+    nem a relance. Uma exceção levantada pelo próprio handler é ignorada e
+    AAction vale como estava. }
+  TAMQPConsumerErrorEvent = procedure(AChannel: TAMQPChannel;
+    const ADelivery: TAMQPDelivery; AError: Exception;
+    var AAction: TAMQPConsumerErrorAction) of object;
+
+  { Consumer registrado no canal: a fila (para o nome do span 'process
+    <fila>'; o Basic.Deliver não a traz) e o modo no-ack (entrega no-ack não
+    tem o que confirmar quando o callback levanta). }
+  TAMQPConsumerInfo = record
+    Queue: string;
+    NoAck: Boolean;
+  end;
 
   { Mensagem devolvida pelo broker (Basic.Return): um publish `mandatory` que
     não pôde ser roteado a nenhuma fila. Se Properties tiver Headers, a tabela
@@ -238,12 +268,23 @@ type
     FAsmRemaining: UInt64;
     // --- consumers ---
     FConsumers: TDictionary<string, TAMQPConsumerCallback>;
-    // consumer-tag -> fila, para o nome do span 'process <fila>' (o
-    // Basic.Deliver não traz a fila). Sob FConsumersLock; a reconexão não
-    // limpa: os consumers voltam com o mesmo tag e a mesma fila.
-    FConsumerQueues: TDictionary<string, string>;
+    // consumer-tag -> fila e no-ack (ver TAMQPConsumerInfo). Sob
+    // FConsumersLock; a reconexão não limpa: os consumers voltam com o mesmo
+    // tag, a mesma fila e o mesmo modo.
+    FConsumerInfo: TDictionary<string, TAMQPConsumerInfo>;
     FConsumersLock: TCriticalSection;
     FConsumerCounter: Integer;
+    // --- entregas ainda não confirmadas (para OnConsumerError) ---
+    // Delivery-tags de consumers com ack manual, do despacho (thread de
+    // leitura, ANTES de enfileirar: um Ack nunca chega antes do registro) até
+    // Ack/Nack ou o fim do callback. Uma entrega de antes de uma reconexão
+    // nunca é confirmada com o tag de outra: a reconexão drena todo callback
+    // antigo (DrainAllChannels) antes de reabrir o canal, e o Nack de um
+    // callback antigo cai no socket morto. FSettleLock só protege o conjunto;
+    // nunca se adquire outro lock com ele.
+    FUnsettled: TDictionary<UInt64, Boolean>;
+    FSettleLock: TCriticalSection;
+    FOnConsumerError: TAMQPConsumerErrorEvent;
     FOnBasicReturn: TAMQPBasicReturnCallback;
     FInFlight: Integer; // callbacks em execução no pool (atômico)
     // Pool privado (1 worker) quando o canal usa thread dedicada; nil => usa
@@ -330,6 +371,19 @@ type
     procedure ResendUnconfirmed;
     /// O Basic.Get sem span (BasicGet abre o span em volta dele).
     function DoBasicGet(const AQueue: string; ANoAck: Boolean): TAMQPGetResult;
+    /// Retira do conjunto de pendentes o tag (ou, com AMultiple, todo tag até
+    /// ele). Chamado por Ack/Nack, antes de enviar.
+    procedure SettleDeliveries(ADeliveryTag: UInt64; AMultiple: Boolean);
+    /// Retira o tag do conjunto; True se ele estava lá (a entrega continua
+    /// sem confirmação). Atômico: é o que impede a lib de confirmar uma
+    /// entrega que o aplicativo já confirmou.
+    function TakeUnsettled(ADeliveryTag: UInt64): Boolean;
+    /// Só consulta (sem retirar); usado para a ação inicial do OnConsumerError.
+    function IsUnsettled(ADeliveryTag: UInt64): Boolean;
+    /// Trata a exceção levantada por um callback de consumer: OnConsumerError
+    /// e, se a entrega continua pendente, o Nack da ação escolhida.
+    procedure HandleConsumerError(const ADelivery: TAMQPDelivery;
+      AError: Exception);
     /// Aguarda os callbacks em voo terminarem (usado ao fechar o canal).
     procedure DrainInFlight;
     /// Trata um frame entregue pela thread de leitura (roda NA thread de leitura).
@@ -428,6 +482,12 @@ type
     /// Roda numa thread do pool. Configure antes de publicar. Opcional — dá para
     /// usar só WaitForConfirm/WaitForConfirms.
     property OnConfirm: TAMQPConfirmCallback read FOnConfirm write FOnConfirm;
+    /// Disparado quando um callback de consumer deste canal levanta exceção
+    /// (ver TAMQPConsumerErrorEvent). Sem handler, ou se ele não mudar a
+    /// ação, uma entrega ainda não confirmada leva Nack SEM requeue — vai para
+    /// a dead-letter exchange da fila, se houver. Nunca confirma duas vezes:
+    /// se o callback já deu Ack/Nack antes de levantar, a lib não faz nada.
+    property OnConsumerError: TAMQPConsumerErrorEvent read FOnConsumerError write FOnConsumerError;
   end;
 
   TAMQPReaderThread = class(TThread)
@@ -636,7 +696,7 @@ type
   public
     constructor Create(AChannel: TAMQPChannel;
       const ACallback: TAMQPConsumerCallback; const ADelivery: TAMQPDelivery;
-      const AQueue: string);
+      const AConsumer: TAMQPConsumerInfo);
     procedure Execute; override;
   end;
 
@@ -716,13 +776,13 @@ end;
 
 constructor TAMQPDeliveryWork.Create(AChannel: TAMQPChannel;
   const ACallback: TAMQPConsumerCallback; const ADelivery: TAMQPDelivery;
-  const AQueue: string);
+  const AConsumer: TAMQPConsumerInfo);
 begin
   inherited Create;
   FChannel := AChannel;
   FCallback := ACallback;
   FDelivery := ADelivery;
-  FQueue := AQueue;
+  FQueue := AConsumer.Queue;
 end;
 
 procedure TAMQPDeliveryWork.Execute;
@@ -744,12 +804,19 @@ begin
       begin
         AmqpFinishSpan(LSpan, E);
         LSpan := nil;
-        raise;
+        // Não relança: o pool engoliria a exceção em silêncio, e a entrega
+        // ficaria sem ack até a conexão cair (com Qos baixo, o consumer
+        // inteiro parava). Aqui ela vira OnConsumerError + Nack.
+        FChannel.HandleConsumerError(FDelivery, E);
       end;
     end;
-    AmqpFinishSpan(LSpan, nil);
+    AmqpFinishSpan(LSpan, nil); // nil-safe: no caminho da exceção já fechou
     LSpan := nil;
   finally
+    // Callback que voltou sem confirmar (ack adiado pelo aplicativo) sai do
+    // conjunto aqui: o conjunto só serve enquanto o callback roda. (Os tags
+    // são do canal, no-ack ou não: retirar um que nunca entrou é inócuo.)
+    FChannel.TakeUnsettled(FDelivery.DeliveryTag);
     if FDelivery.Properties.Has(bpHeaders) and Assigned(FDelivery.Properties.Headers) then
       FDelivery.Properties.Headers.Free;
     PcAtomicDec(FChannel.FInFlight);
@@ -1780,8 +1847,10 @@ begin
   FRpcLock := TCriticalSection.Create;
   FRpcEvent := TEvent.Create(nil, True, False, '');
   FConsumers := TDictionary<string, TAMQPConsumerCallback>.Create;
-  FConsumerQueues := TDictionary<string, string>.Create;
+  FConsumerInfo := TDictionary<string, TAMQPConsumerInfo>.Create;
   FConsumersLock := TCriticalSection.Create;
+  FUnsettled := TDictionary<UInt64, Boolean>.Create;
+  FSettleLock := TCriticalSection.Create;
   FConfirmMon := TPcMonitor.Create;
   FUnconfirmed := TDictionary<UInt64, Boolean>.Create;
   FNacked := TDictionary<UInt64, Boolean>.Create;
@@ -1813,8 +1882,10 @@ begin
   FResendBuffer.Free;
   FConfirmMon.Free;
   FConsumers.Free;
-  FConsumerQueues.Free;
+  FConsumerInfo.Free;
   FConsumersLock.Free;
+  FUnsettled.Free;
+  FSettleLock.Free;
   FRpcEvent.Free;
   FRpcLock.Free;
   inherited;
@@ -1961,6 +2032,16 @@ begin
       FConfirmMon.PulseAll;
     finally
       FConfirmMon.Leave;
+    end;
+    // Os tags da sessão nova recomeçam em 1. O conjunto já deveria estar
+    // vazio — o RunReconnect drena todo callback antigo (DrainAllChannels)
+    // antes de chegar aqui, e cada um retira o próprio tag —, mas um tag
+    // velho que sobrasse seria confundido com o de uma entrega nova.
+    FSettleLock.Enter;
+    try
+      FUnsettled.Clear;
+    finally
+      FSettleLock.Leave;
     end;
     Open; // Channel.Open no novo socket (define FIsOpen := True)
 
@@ -2431,12 +2512,94 @@ end;
 
 procedure TAMQPChannel.Ack(ADeliveryTag: UInt64; AMultiple: Boolean);
 begin
+  SettleDeliveries(ADeliveryTag, AMultiple);
   FConnection.SendMethod(FChannelId, BuildBasicAck(ADeliveryTag, AMultiple));
 end;
 
 procedure TAMQPChannel.Nack(ADeliveryTag: UInt64; ARequeue, AMultiple: Boolean);
 begin
+  SettleDeliveries(ADeliveryTag, AMultiple);
   FConnection.SendMethod(FChannelId, BuildBasicNack(ADeliveryTag, AMultiple, ARequeue));
+end;
+
+procedure TAMQPChannel.SettleDeliveries(ADeliveryTag: UInt64; AMultiple: Boolean);
+var
+  LTags: TArray<UInt64>;
+  LTag: UInt64;
+begin
+  FSettleLock.Enter;
+  try
+    if not AMultiple then
+      FUnsettled.Remove(ADeliveryTag)
+    else
+    begin
+      // O conjunto só tem os callbacks em voo (e os enfileirados): é pequeno.
+      LTags := FUnsettled.Keys.ToArray;
+      for LTag in LTags do
+        if LTag <= ADeliveryTag then
+          FUnsettled.Remove(LTag);
+    end;
+  finally
+    FSettleLock.Leave;
+  end;
+end;
+
+function TAMQPChannel.TakeUnsettled(ADeliveryTag: UInt64): Boolean;
+begin
+  FSettleLock.Enter;
+  try
+    // Remove é procedure no Delphi (e no FPC): consulta e retira separados,
+    // ainda sob o mesmo lock.
+    Result := FUnsettled.ContainsKey(ADeliveryTag);
+    if Result then
+      FUnsettled.Remove(ADeliveryTag);
+  finally
+    FSettleLock.Leave;
+  end;
+end;
+
+function TAMQPChannel.IsUnsettled(ADeliveryTag: UInt64): Boolean;
+begin
+  FSettleLock.Enter;
+  try
+    Result := FUnsettled.ContainsKey(ADeliveryTag);
+  finally
+    FSettleLock.Leave;
+  end;
+end;
+
+procedure TAMQPChannel.HandleConsumerError(const ADelivery: TAMQPDelivery;
+  AError: Exception);
+var
+  LAction: TAMQPConsumerErrorAction;
+  LHandler: TAMQPConsumerErrorEvent;
+begin
+  // Roda na thread do pool, dentro do except do callback (AError ainda vive).
+  // Entrega no-ack nunca entra no conjunto: cai em ceaNone aqui.
+  if IsUnsettled(ADelivery.DeliveryTag) then
+    LAction := ceaReject
+  else
+    LAction := ceaNone;
+
+  LHandler := FOnConsumerError;
+  if Assigned(LHandler) then
+    try
+      LHandler(Self, ADelivery, AError, LAction);
+    except
+      // O handler de erro que levanta não pode deixar a entrega pendurada,
+      // que é o defeito que ele existe para resolver: a ação segue valendo.
+    end;
+
+  // Confere DE NOVO, retirando: o handler pode ter dado Ack/Nack ele mesmo.
+  // Confirmar duas vezes o mesmo tag é 406 PRECONDITION_FAILED e derruba o canal.
+  if (LAction = ceaNone) or (not TakeUnsettled(ADelivery.DeliveryTag)) then
+    Exit;
+  try
+    FConnection.SendMethod(FChannelId, BuildBasicNack(ADelivery.DeliveryTag,
+      False, LAction = ceaRequeue));
+  except
+    // Conexão ou canal caiu: o broker devolve a entrega à fila sozinho.
+  end;
 end;
 
 procedure TAMQPChannel.ConfirmSelect;
@@ -2535,14 +2698,17 @@ var
   LTag: string;
   LConsume: TAMQPBasicConsume;
   LPayload: TBytes;
+  LInfo: TAMQPConsumerInfo;
 begin
   // Geramos o consumer-tag no cliente e registramos o callback ANTES de enviar,
   // para não perder deliveries que cheguem entre o Consume-Ok e o registro.
   LTag := Format('ctag-%d-%d', [FChannelId, PcAtomicInc(FConsumerCounter)]);
+  LInfo.Queue := AQueue;
+  LInfo.NoAck := ANoAck;
   FConsumersLock.Enter;
   try
     FConsumers.AddOrSetValue(LTag, ACallback);
-    FConsumerQueues.AddOrSetValue(LTag, AQueue);
+    FConsumerInfo.AddOrSetValue(LTag, LInfo);
   finally
     FConsumersLock.Leave;
   end;
@@ -2556,7 +2722,7 @@ begin
     FConsumersLock.Enter;
     try
       FConsumers.Remove(LTag);
-      FConsumerQueues.Remove(LTag);
+      FConsumerInfo.Remove(LTag);
     finally
       FConsumersLock.Leave;
     end;
@@ -2577,7 +2743,7 @@ begin
     FConsumersLock.Enter;
     try
       FConsumers.Remove(AConsumerTag);
-      FConsumerQueues.Remove(AConsumerTag);
+      FConsumerInfo.Remove(AConsumerTag);
     finally
       FConsumersLock.Leave;
     end;
@@ -2598,14 +2764,14 @@ procedure TAMQPChannel.DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
 var
   LCallback: TAMQPConsumerCallback;
   LDelivery: TAMQPDelivery;
-  LQueue: string;
+  LInfo: TAMQPConsumerInfo;
 begin
   FConsumersLock.Enter;
   try
     if not FConsumers.TryGetValue(ADeliver.ConsumerTag, LCallback) then
       LCallback := nil;
-    if not FConsumerQueues.TryGetValue(ADeliver.ConsumerTag, LQueue) then
-      LQueue := '';
+    if not FConsumerInfo.TryGetValue(ADeliver.ConsumerTag, LInfo) then
+      LInfo := Default(TAMQPConsumerInfo);
   finally
     FConsumersLock.Leave;
   end;
@@ -2627,9 +2793,21 @@ begin
     Exit;
   end;
 
+  // Registra a entrega como pendente ANTES de enfileirar: um Ack do callback
+  // (ou um Ack com multiple de outro callback) nunca chega antes do registro.
+  if not LInfo.NoAck then
+  begin
+    FSettleLock.Enter;
+    try
+      FUnsettled.AddOrSetValue(LDelivery.DeliveryTag, True);
+    finally
+      FSettleLock.Leave;
+    end;
+  end;
+
   // Despacha para o pool; a thread de leitura NÃO roda o callback.
   PcAtomicInc(FInFlight);
-  DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery, LQueue));
+  DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery, LInfo));
 end;
 
 procedure TAMQPChannel.DispatchReturn(const AReturn: TAMQPBasicReturn;
@@ -2891,7 +3069,7 @@ begin
       FConsumersLock.Enter;
       try
         FConsumers.Remove(LTag);
-        FConsumerQueues.Remove(LTag);
+        FConsumerInfo.Remove(LTag);
       finally
         FConsumersLock.Leave;
       end;

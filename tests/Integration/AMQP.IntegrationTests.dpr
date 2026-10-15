@@ -25,6 +25,7 @@ uses
   AMQP.IntegrationConfig in 'AMQP.IntegrationConfig.pas',
   AMQP.ChannelIntegrationTests in 'AMQP.ChannelIntegrationTests.pas',
   AMQP.ConsumeIntegrationTests in 'AMQP.ConsumeIntegrationTests.pas',
+  AMQP.ConsumerErrorIntegrationTests in 'AMQP.ConsumerErrorIntegrationTests.pas',
   AMQP.ReconnectIntegrationTests in 'AMQP.ReconnectIntegrationTests.pas',
   AMQP.TlsIntegrationTests in 'AMQP.TlsIntegrationTests.pas',
   AMQP.ReviewRegressionTests in 'AMQP.ReviewRegressionTests.pas';

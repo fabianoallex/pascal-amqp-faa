@@ -913,6 +913,50 @@ broker TLS, como sempre no DUnitX), server 471/475, aceitação 34 nas duas pass
 `Tests Leaked: 0`. O `MessagingSample` da pascal-api-infra-faa, sem `declare-both`, voltou a
 202 em ~16 s depois do `docker restart` e o consumidor seguiu consumindo.
 
+## v0.4.0 — exceção no callback de consumer (2026-10-15)
+
+Achado pela pascal-api-infra-faa ao medir o guia `docs/guide/dtos-json.md` (seção 8 do
+`docs/plan.md` de lá). Medido antes de mudar, com um programa fora do repositório contra um
+RabbitMQ próprio na 5680 (a 5672 desta máquina é do `DFeBrokerServico`):
+
+- **O defeito.** `TAMQPDeliveryWork.Execute` fechava o span e relançava; o worker do
+  `TPcThreadPool` faz `except end` sem gancho. 7 mensagens com a 4ª levantando: 7 callbacks, 6
+  acks, `list_queues` com 0 prontas e 1 sem ack; dois reinícios do processo: ela voltou
+  `redelivered` e travou de novo nas duas. **Com `Qos(1)`** (o que não tinha sido medido lá) e
+  a 1ª de 5 levantando: 1 callback em 8 s, 4 prontas e 1 sem ack — o consumer inteiro parado.
+- **A decisão** (do usuário): evento + padrão. `TAMQPChannel.OnConsumerError(Canal, Entrega,
+  Erro, var Acao)`; sem handler (ou sem mudar a ação), `Nack` sem requeue. A lib só confirma se
+  a entrega ainda está pendente: um conjunto `FUnsettled` de tags de consumers com ack manual,
+  sob `FSettleLock`, preenchido no despacho (thread de leitura, antes de enfileirar — um `Ack`
+  nunca chega antes do registro), esvaziado por `Ack`/`Nack` (com `multiple`, todo tag até o
+  dado) e no fim do callback. A ação inicial é calculada antes do handler, e a retirada é
+  conferida de novo, atômica, depois dele: o handler pode ter confirmado sozinho.
+- **A época de sessão que não ficou.** O primeiro desenho tinha um contador de sessão por canal,
+  para um callback da sessão velha não confirmar com o tag de uma entrega nova (os tags
+  recomeçam em 1). O teste que devia exercitá-lo falhou de um jeito revelador: a velha levantava
+  **antes** da reconexão, porque o `RunReconnect` faz `DrainAllChannels` antes de reabrir os
+  canais. Nenhum callback velho roda junto com a sessão nova; o `Nack` dele cai no socket morto
+  (`EAMQPConnection`, engolida ali: o broker já devolveu a entrega). A época saiu; o teste virou
+  `Reconexao_CallbackLevantaNaQueda_MensagemVoltaNaSessaoNova`, que prova o que acontece de
+  fato (a mensagem volta `redelivered` e não vai para a DLQ). O `BeginRecover` ainda limpa o
+  conjunto, que a essa altura já está vazio.
+- **Testes**: `AMQP.ConsumerErrorIntegrationTests` (9, espelhada, corpo gerado do FPC), quase
+  todos com `Qos(1)` e a ruim na frente de boas — sem confirmação as boas não chegam, com
+  confirmação dupla o 406 fecha o canal e elas também não chegam. A fila tem DLX para
+  `amq.direct`, onde a DLQ espera pela chave da principal.
+- **Mutações** (FPC, contra o RabbitMQ): tirar a reconferência depois do handler derruba
+  `HandlerConfirmouEleMesmo_NaoConfirmaDeNovo` (406); `Ack` sem retirar do conjunto derruba
+  também `CallbackAckouAntesDeLevantar_NaoConfirmaDeNovo`; voltar ao `raise` derruba os 9.
+  Ignorar o no-ack no tratamento **sobreviveu** — entrega no-ack nunca entra no conjunto, então a
+  checagem era redundante e saiu; o no-ack é decidido num ponto só, o despacho.
+
+**Validação.** FPC/Windows: unitária 131, integração 43 (contra o RabbitMQ 3 na 5680), server
+471, aceitação 43 nas duas passagens (0 vazamentos), SmokeTest PASS; o programa de medição,
+refeito com a lib nova: as 4 boas passam com `Qos(1)` e a fila fica 0/0. Delphi 12 (compilado
+no IDE), Win32 e Win64, Debug e OpenSSL: unitária 131, integração 43 (contra o RabbitMQ na
+5680), server 471/475, aceitação 43 nas duas passagens, `Tests Leaked: 0` em todas. Não
+rodado: FPC/Linux e o build mode `openssl` do FPC.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

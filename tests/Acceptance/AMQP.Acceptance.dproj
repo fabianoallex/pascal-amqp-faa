@@ -160,6 +160,7 @@
         <DCCReference Include="..\Integration\AMQP.IntegrationConfig.pas"/>
         <DCCReference Include="..\Integration\AMQP.ChannelIntegrationTests.pas"/>
         <DCCReference Include="..\Integration\AMQP.ConsumeIntegrationTests.pas"/>
+        <DCCReference Include="..\Integration\AMQP.ConsumerErrorIntegrationTests.pas"/>
         <DCCReference Include="..\Integration\AMQP.ReconnectIntegrationTests.pas"/>
         <DCCReference Include="..\Integration\AMQP.TlsIntegrationTests.pas"/>
         <DCCReference Include="..\Integration\AMQP.ReviewRegressionTests.pas"/>

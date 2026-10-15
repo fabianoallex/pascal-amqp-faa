@@ -6,6 +6,32 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-15
+
+Defeito achado ao medir o guia `docs/guide/dtos-json.md` da pascal-api-infra-faa (FPC
+3.2.2/Windows contra RabbitMQ 3).
+
+### Corrigido
+
+- **Exceção no callback de consumer sumia, e a entrega ficava sem ack.** O
+  `TAMQPDeliveryWork` relançava a exceção, e o pool (`TPcThreadPool`) a engole de propósito: nada
+  era logado, a mensagem ficava sem ack até a conexão cair, voltava a cada reinício do processo
+  e travava de novo, e com `Qos(1)` o consumer inteiro parava. Medido: 7 mensagens com a 4ª
+  levantando deixavam 0 prontas e 1 sem ack; com `Qos(1)` e a 1ª de 5 levantando, 1 callback
+  em 8 s e 4 prontas para sempre. Agora a entrega pendente leva `Nack` sem requeue (vai para a
+  dead-letter exchange da fila, se houver; sem DLX, o broker a descarta), e as 4 passam.
+  **Mudança de comportamento:** quem contava com a mensagem voltando depois de uma queda passa a
+  vê-la na DLX (ou descartada); para o comportamento de antes, `AAction := ceaNone` no handler.
+
+### Adicionado
+
+- **`TAMQPChannel.OnConsumerError(Canal, Entrega, Erro, var Acao)`**, chamado quando um
+  callback de consumer levanta, na mesma thread do pool. `Acao` (`TAMQPConsumerErrorAction`)
+  chega como `ceaReject` se a entrega está pendente, ou `ceaNone` se já foi confirmada ou se o
+  consumer é no-ack; o handler pode trocá-la por `ceaRequeue` (Nack com requeue) ou `ceaNone`
+  (o aplicativo confirma depois). A lib nunca confirma duas vezes: se o callback ou o handler já
+  deu `Ack`/`Nack`, nada é enviado (confirmar o mesmo tag de novo é `406` e fecha o canal).
+
 ## [0.3.0] - 2026-10-15
 
 Dois defeitos achados ao medir o guia de mensageria da pascal-api-infra-faa (FPC 3.2.2/Windows
@@ -178,7 +204,8 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.1...v0.1.2

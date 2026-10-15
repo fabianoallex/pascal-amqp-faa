@@ -16,7 +16,7 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 ### Client
 
 - Full handshake (`Start/Tune/Open`) with correct `channel-max`/`frame-max`/`heartbeat` negotiation (compatible with RabbitMQ 3.13+).
-- Publish/consume with **manual ack** (at-least-once); consumer callbacks dispatched on the library's **own thread pool** — the read thread never runs user code.
+- Publish/consume with **manual ack** (at-least-once); consumer callbacks dispatched on the library's **own thread pool** — the read thread never runs user code. An exception in the callback goes to `OnConsumerError` and the delivery gets a `Nack` (see [Exception in a consumer callback](#exception-in-a-consumer-callback)).
 - **Publisher confirms** (`confirm.select`): `Publish` returns a seq-no, asynchronous `OnConfirm`, `WaitForConfirm`/`WaitForConfirms`.
 - `Basic.Return` (unroutable `mandatory` publish), `Connection.Blocked/Unblocked` (broker resource alarm).
 - **Heartbeat** on a dedicated thread (dead-connection detection + sending when idle).
@@ -230,6 +230,36 @@ On a drop, the library reconnects and **restores the topology** declared on the 
 **A failed attempt is never silent.** Each one fires `OnReconnectError(Conn, Attempt, Reason)` and is kept in `Conn.LastReconnectError` (cleared when a reconnection succeeds). A publish made in the meantime raises `EAMQPConnection` with the reason for the drop and that of the last attempt in its text, for example `connection unavailable right now (reconnecting; connection closed by server: 320 CONNECTION_FORCED - ...; last attempt failed: channel 1 closed by server: 404 NOT_FOUND - no queue 'orders' ...)`. While the broker is still starting, the reason is a socket or handshake one; if it's the replay that fails (the `404` of a consumer on a queue that **nobody on this connection** declares, because another process declares it), reconnection keeps trying every `ReconnectDelayMs` and recovers by itself on the first attempt after the queue is back. With `MaxReconnectAttempts = 0` (unlimited), `OnReconnectError` is how you find out it isn't getting anywhere.
 
 **Closing during an outage is immediate.** `Close`/`Free` wake the wait between attempts right away (it is a `TEvent`, not a `Sleep`), so closing the application while the broker is down does not wait for `ReconnectDelayMs`. And they only return **after** the reconnection thread has exited: they never leave it running against a freed object, whatever the delay. The exception is an attempt already under way (connect, handshake, topology replay): it finishes first, bounded by its own timeouts. `Close` may be called from inside `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (reconnection stops there); `Free` may not — free the connection from another thread.
+
+### Exception in a consumer callback
+
+If the consumer callback raises, the exception goes to `Chan.OnConsumerError` and, **if the delivery hasn't been settled yet, the library sends a `Nack` without requeue**: the message goes to the queue's dead-letter exchange, if there is one; without a DLX, the broker drops it. The handler is optional and picks the action:
+
+```pascal
+procedure TMyConsumer.OnFailure(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery; AError: Exception;
+  var AAction: TAMQPConsumerErrorAction);
+begin
+  Log.Error('order %s: %s', [ADelivery.Properties.MessageId, AError.Message]);
+  if AError is EDatabaseTimeout then
+    AAction := ceaRequeue; // transient failure: back to the queue
+  // otherwise the default stays, ceaReject (Nack without requeue -> DLX)
+end;
+
+// ...
+Chan.OnConsumerError := Consumer.OnFailure;
+Chan.Consume('orders', Consumer.OnMsg);
+```
+
+| `AAction` | What the library does |
+|---|---|
+| `ceaReject` (default) | `Nack` without requeue: the queue's DLX, if any; otherwise the message is dropped |
+| `ceaRequeue` | `Nack` with requeue: the message goes back to the queue with `Redelivered=True`. Beware of a message that **always** fails: it comes straight back and loops |
+| `ceaNone` | nothing: the application settles it later with `Ack`/`Nack` (until then, the delivery counts against `Qos`) |
+
+**It never settles twice.** If the callback already called `Ack`/`Nack` before raising, or the handler itself settled the delivery, the library sends nothing: settling the same *delivery-tag* twice is `406 PRECONDITION_FAILED`, and the broker closes the channel. The handler gets `AAction = ceaNone` when the delivery is already settled or the consumer is no-ack (nothing to settle). If the connection dropped during the callback, the `Nack` fails silently: the broker has already put the message back in the queue, and it comes back with `Redelivered=True` after reconnection. An exception raised by the handler itself is ignored, and the action stands as it was. The handler runs on the same pool thread as the callback; the exception belongs to the library (don't free it or re-raise it).
+
+*(Up to 0.3.0 the exception was swallowed by the pool: the delivery stayed unacked until the connection dropped, nothing was logged, the message came back on every process restart and got stuck again, and with `Qos(1)` the whole consumer stopped. Measured against RabbitMQ 3: with the 1st of 5 messages raising, 1 callback in 8 s and 4 ready forever; now the 4 go through.)*
 
 ### The consumer callback must always finish on its own
 
@@ -474,6 +504,7 @@ Practical notes:
 - **`Open`** is where you most expect to catch a synchronous exception: `EAMQPConnection`, and — if `UseTls=True` — `EAMQPTransport`/`EAMQPTls`.
 - **Channel calls** (`DeclareQueue`, `BindQueue`, `Publish`, `Consume`, etc.) can raise `EAMQPChannel` synchronously when the broker refuses the request or the channel already dropped.
 - **After a successful `Open`, a connection drop does not turn into an exception on the application thread** — it is reported through the `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` callbacks (see [Automatic reconnection](#automatic-reconnection)); without `AutoReconnect`, the next RPC call on that channel fails with `EAMQPChannel` ("canal fechado"), and `Publish`/`Ack`/`Nack` fail with `EAMQPConnection` carrying the reason for the drop.
+- **An exception raised in a consumer callback doesn't reach the application through `raise`** — it goes to `OnConsumerError`, and the pending delivery gets a `Nack` without requeue (see [Exception in a consumer callback](#exception-in-a-consumer-callback)).
 - **A publisher-confirm failure is not an exception** — it's `WaitForConfirm`/`WaitForConfirms` returning `False`, or `AAck=False` in `OnConfirm` (see [Publisher confirms in detail](#publisher-confirms-in-detail)).
 
 ## Concurrency and message ordering
@@ -652,9 +683,9 @@ In both:
 | Suite | Tests | Requires |
 |---|---|---|
 | `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 34 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 43 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
 | `AMQP.ServerTests` / `AMQPServerTestsFpc` | 471 (475 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 34 | nothing — runs the **client's integration suite against the embedded broker** |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 43 | nothing — runs the **client's integration suite against the embedded broker** |
 
 The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 34 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
 
