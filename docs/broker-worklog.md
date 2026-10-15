@@ -957,6 +957,24 @@ no IDE), Win32 e Win64, Debug e OpenSSL: unitária 131, integração 43 (contra 
 5680), server 471/475, aceitação 43 nas duas passagens, `Tests Leaked: 0` em todas. Não
 rodado: FPC/Linux e o build mode `openssl` do FPC.
 
+## v0.4.1 — `OnConsumerError` dentro do span `process` (2026-10-15)
+
+Achado pela pascal-api-infra-faa no `samples/04-messaging`: a linha "order rejected: ..." que o
+`OnOrderError` escreve saía sem `trace_id`. Medido aqui antes de mudar, com o teste novo
+`TTracingTests.OnConsumerError_RodaDentroDoProcess` (cliente real contra o broker embutido,
+tracer ligado): dentro do handler, `TPcTracing.Current` era nil — o `except` do
+`TAMQPDeliveryWork.Execute` chamava `AmqpFinishSpan(LSpan, E)` antes de `HandleConsumerError`.
+Decisão (do usuário): manter o span corrente durante o handler e o `Nack`, e fechá-lo depois
+com o erro do callback; sem parâmetro novo na assinatura (um logger que lê o span corrente
+já pega o trace id). O teste também confere que o span segue com status de erro, mensagem e
+`error.type`.
+
+**Validação.** FPC/Windows: unitária 131, integração 43 (contra um RabbitMQ 3 próprio na 5681),
+server 472, aceitação 43 nas duas passagens, 0 vazamentos, SmokeTest PASS. Delphi 12 (compilado
+no IDE), Win32 e Win64, Debug e OpenSSL: unitária 131, integração 43, server 472/476, aceitação
+43 nas duas passagens, `Tests Leaked: 0` em todas. Não rodado: FPC/Linux e o build mode
+`openssl` do FPC.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

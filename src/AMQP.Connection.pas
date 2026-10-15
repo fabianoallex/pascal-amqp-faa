@@ -163,7 +163,9 @@ type
     ceaNone);   // a lib não confirma (o aplicativo confirma depois, ou nada há a confirmar)
 
   { Callback de exceção levantada pelo callback de consumer. Roda na mesma
-    thread do pool, logo depois da exceção. AAction chega como ceaReject se a
+    thread do pool, logo depois da exceção, com o span 'process' da mensagem
+    ainda corrente (com o tracing ligado: o log escrito aqui leva o trace id
+    dela; o span termina depois, com o erro do callback). AAction chega como ceaReject se a
     entrega ainda está pendente, ou ceaNone se já foi confirmada ou se o
     consumer é no-ack; mude-a para decidir. A exceção é da lib: não a libere
     nem a relance. Uma exceção levantada pelo próprio handler é ignorada e
@@ -802,12 +804,18 @@ begin
     except
       on E: Exception do
       begin
-        AmqpFinishSpan(LSpan, E);
-        LSpan := nil;
         // Não relança: o pool engoliria a exceção em silêncio, e a entrega
         // ficaria sem ack até a conexão cair (com Qos baixo, o consumer
-        // inteiro parava). Aqui ela vira OnConsumerError + Nack.
-        FChannel.HandleConsumerError(FDelivery, E);
+        // inteiro parava). Aqui ela vira OnConsumerError + Nack — com o
+        // 'process' ainda corrente, para o log do handler sair com o trace
+        // id da mensagem (até a 0.4.0 o span fechava antes). O span termina
+        // depois, com o erro do callback.
+        try
+          FChannel.HandleConsumerError(FDelivery, E);
+        finally
+          AmqpFinishSpan(LSpan, E);
+          LSpan := nil;
+        end;
       end;
     end;
     AmqpFinishSpan(LSpan, nil); // nil-safe: no caminho da exceção já fechou

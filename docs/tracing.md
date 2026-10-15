@@ -62,7 +62,9 @@ consumo), `messaging.rabbitmq.destination.routing_key`, `messaging.message.body.
 `messaging.destination.temporary` (fila `amq.gen-...`). Próprios da lib, com prefixo:
 `pascalamqp.publish.sequence_number` (o seq-no do confirm), `pascalamqp.message.redelivered`
 e `pascalamqp.get.empty`. Callback que levanta deixa o `process` com status de erro, a
-mensagem e `error.type` (a classe).
+mensagem e `error.type` (a classe). O `OnConsumerError` do canal roda com o `process` ainda
+corrente, então o log do handler leva o trace id da mensagem; o span termina depois dele e do
+`Nack` (até a 0.4.0 fechava antes, e o handler rodava sem span corrente).
 
 ## Decisões (2026-10-12)
 
@@ -91,8 +93,8 @@ As três primeiras foram do usuário; as demais, como recomendadas.
    terminar na thread que o abriu (regra de threads do `PascalCommon.Tracing`). O seq-no vai
    no atributo, o que permite casar o span com o `OnConfirm` se alguém quiser.
 6. **O `process` nasce e termina no work item da entrega**, na thread do pool, em volta do
-   callback. Não mede o tempo até o ack (o ack pode vir depois, de outra thread, ou nunca, com
-   `noAck`). Ack/nack/reject, `Basic.Return`, confirms e declares ficam fora da trace.
+   callback e do `OnConsumerError`, quando o callback levanta. Não mede o tempo até o ack (o
+   ack pode vir depois, de outra thread, ou nunca, com `noAck`). Ack/nack/reject, `Basic.Return`, confirms e declares ficam fora da trace.
 7. **`Basic.Get` é `receive`, filho do span corrente**: o pull faz parte do trabalho de quem
    chamou. Ligar à trace do produtor é decisão de quem processa (o `AmqpStartProcessSpan`
    acima), porque só a aplicação sabe se aquele Get é um "processamento".

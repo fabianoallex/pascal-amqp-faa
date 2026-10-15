@@ -6,6 +6,17 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-15
+
+### Corrigido
+
+- **O `OnConsumerError` rodava sem span corrente**, e o log escrito nele saía sem o trace id da
+  mensagem (com o `try` dentro do callback, como até a 0.3.0, saía com). O span `process <fila>`
+  era fechado antes de o handler ser chamado. Agora ele segue corrente durante o handler e o
+  `Nack`, e termina depois, marcado com o erro do callback (`error.type` e status, como antes).
+  Achado pela pascal-api-infra-faa no `samples/04-messaging`; medido aqui com um teste que lê
+  `TPcTracing.Current` dentro do handler (vazio na 0.4.0).
+
 ## [0.4.0] - 2026-10-15
 
 Defeito achado ao medir o guia `docs/guide/dtos-json.md` da pascal-api-infra-faa (FPC
@@ -204,7 +215,8 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.2...v0.2.0

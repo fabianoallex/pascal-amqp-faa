@@ -257,7 +257,7 @@ Chan.Consume('orders', Consumer.OnMsg);
 | `ceaRequeue` | `Nack` with requeue: the message goes back to the queue with `Redelivered=True`. Beware of a message that **always** fails: it comes straight back and loops |
 | `ceaNone` | nothing: the application settles it later with `Ack`/`Nack` (until then, the delivery counts against `Qos`) |
 
-**It never settles twice.** If the callback already called `Ack`/`Nack` before raising, or the handler itself settled the delivery, the library sends nothing: settling the same *delivery-tag* twice is `406 PRECONDITION_FAILED`, and the broker closes the channel. The handler gets `AAction = ceaNone` when the delivery is already settled or the consumer is no-ack (nothing to settle). If the connection dropped during the callback, the `Nack` fails silently: the broker has already put the message back in the queue, and it comes back with `Redelivered=True` after reconnection. An exception raised by the handler itself is ignored, and the action stands as it was. The handler runs on the same pool thread as the callback; the exception belongs to the library (don't free it or re-raise it).
+**It never settles twice.** If the callback already called `Ack`/`Nack` before raising, or the handler itself settled the delivery, the library sends nothing: settling the same *delivery-tag* twice is `406 PRECONDITION_FAILED`, and the broker closes the channel. The handler gets `AAction = ceaNone` when the delivery is already settled or the consumer is no-ack (nothing to settle). If the connection dropped during the callback, the `Nack` fails silently: the broker has already put the message back in the queue, and it comes back with `Redelivered=True` after reconnection. An exception raised by the handler itself is ignored, and the action stands as it was. The handler runs on the same pool thread as the callback and, with tracing on, inside the message's `process` span: a log line written there carries its trace id. The exception belongs to the library (don't free it or re-raise it).
 
 *(Up to 0.3.0 the exception was swallowed by the pool: the delivery stayed unacked until the connection dropped, nothing was logged, the message came back on every process restart and got stuck again, and with `Qos(1)` the whole consumer stopped. Measured against RabbitMQ 3: with the 1st of 5 messages raising, 1 callback in 8 s and 4 ready forever; now the 4 go through.)*
 
@@ -287,7 +287,7 @@ TPcTracing.Shutdown; // exports the last spans before the program ends
 
 - The publish span's `traceparent` (and `tracestate`) goes **in the message headers**, and the consumer's `process` span is its child: an HTTP request that publishes and the worker that consumes show up as **a single trace**. During the callback `process` is the current span, so whatever the callback does (a query, Redis, another publish) joins the same trace.
 - Your headers table is **not modified**: the context goes into the bytes only. If it already has a `traceparent`, yours wins.
-- The publish span ends when the frames are sent, not on the confirm (the seq-no is in the `pascalamqp.publish.sequence_number` attribute). `process` measures the callback, not the time until the ack. A callback that raises leaves `process` with an error status.
+- The publish span ends when the frames are sent, not on the confirm (the seq-no is in the `pascalamqp.publish.sequence_number` attribute). `process` measures the callback, not the time until the ack. A callback that raises leaves `process` with an error status, and `OnConsumerError` runs **inside** it: the handler's log line carries the message's trace id (`TPcTracing.Current` is the `process` span), and the span ends after the handler and the `Nack`.
 - To process a `BasicGet` result in the producer's trace: `AmqpStartProcessSpan('queue', R.Properties, ...)` and `AmqpFinishSpan` (unit `AMQP.Tracing`).
 - The embedded broker opens no span, but passes the header through untouched, dead-lettering included.
 
@@ -684,7 +684,7 @@ In both:
 |---|---|---|
 | `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection |
 | `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 43 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
-| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 471 (475 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 472 (476 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
 | `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 43 | nothing — runs the **client's integration suite against the embedded broker** |
 
 The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 34 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.

@@ -63,8 +63,14 @@ type
     FTraceParentVisto: string;
     FRecebidas: Integer;
     FRepassarPara: string;
+    // o que o OnConsumerError viu como span corrente ('' = nenhum)
+    FTraceNoHandler: string;
+    FSpanNoHandler: string;
+    FHandlerChamado: Integer;
     function Params: TAMQPConnectionParams;
     procedure AoEntregar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure AoFalhar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
+      AError: Exception; var AAction: TAMQPConsumerErrorAction);
     /// Exporta e espera ACount spans com esse nome.
     function EsperaSpans(const AName: string; ACount, ATimeoutMs: Integer): Boolean;
     /// O AIndex-esimo span com esse nome (falha o teste se nao houver).
@@ -81,6 +87,7 @@ type
     procedure TraceParentDaAplicacao_Vence;
     procedure PublishDentroDoCallback_EFilhoDoProcess;
     procedure CallbackQueLevanta_ProcessComErro;
+    procedure OnConsumerError_RodaDentroDoProcess;
     procedure Get_SpanReceiveFilhoDoCorrente;
     procedure DeadLetter_PreservaOTraceParent;
     procedure FilaGerada_NomeTemporarioNoSpan;
@@ -207,6 +214,9 @@ begin
   FTraceParentVisto := '';
   FRecebidas := 0;
   FRepassarPara := '';
+  FTraceNoHandler := '';
+  FSpanNoHandler := '';
+  FHandlerChamado := 0;
   FColetor := TColetorDeSpans.Create;
   FColetorRef := FColetor;
   TPcTracing.Start(TPcTracingOptions.Default('amqp-tests', '0'), FColetorRef, False);
@@ -245,6 +255,27 @@ begin
     AChannel.PublishText('', FRepassarPara, 'repassada');
   if ADelivery.BodyAsText = CORPO_QUE_LEVANTA then
     raise Exception.Create('falhou de proposito');
+end;
+
+procedure TTracingTests.AoFalhar(AChannel: TAMQPChannel;
+  const ADelivery: TAMQPDelivery; AError: Exception;
+  var AAction: TAMQPConsumerErrorAction);
+var
+  LCorrente: IPcSpan;
+begin
+  // O que um log do aplicativo enxergaria aqui: o span corrente da thread.
+  LCorrente := TPcTracing.Current;
+  FLock.Enter;
+  try
+    if LCorrente <> nil then
+    begin
+      FTraceNoHandler := LCorrente.TraceId;
+      FSpanNoHandler := LCorrente.SpanId;
+    end;
+  finally
+    FLock.Leave;
+  end;
+  PcAtomicInc(FHandlerChamado);
 end;
 
 function TTracingTests.TraceParentVisto: string;
@@ -453,6 +484,43 @@ begin
 
     AssertTrue('o process terminou', EsperaSpans('process q.erro', 1, 5000));
     LProc := Span('process q.erro');
+    AssertTrue('status de erro', LProc.Status = ssError);
+    AssertEquals('mensagem', 'falhou de proposito', LProc.StatusMessage);
+    AssertEquals('classe', 'Exception', Attr(LProc, 'error.type'));
+  finally
+    LConn.Free;
+  end;
+end;
+
+procedure TTracingTests.OnConsumerError_RodaDentroDoProcess;
+var
+  LConn: TAMQPConnection;
+  LCh: TAMQPChannel;
+  LProc: TPcSpanData;
+begin
+  // O handler de erro loga com o trace id da mensagem: o 'process' segue
+  // corrente durante ele e só termina depois, ainda marcado com o erro.
+  LConn := TAMQPConnection.Create(Params);
+  try
+    LConn.Open;
+    LCh := LConn.CreateChannel;
+    LCh.OnConsumerError := AoFalhar;
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.handler', False));
+    LCh.Consume('q.handler', AoEntregar, True);
+    LCh.PublishText('', 'q.handler', CORPO_QUE_LEVANTA);
+
+    AssertTrue('o process terminou', EsperaSpans('process q.handler', 1, 5000));
+    AssertEquals('o handler rodou', 1, PcAtomicGet(FHandlerChamado));
+    LProc := Span('process q.handler');
+    FLock.Enter;
+    try
+      AssertEquals('no handler, a trace corrente e a da mensagem', LProc.TraceId,
+        FTraceNoHandler);
+      AssertEquals('no handler, o span corrente e o process', LProc.SpanId,
+        FSpanNoHandler);
+    finally
+      FLock.Leave;
+    end;
     AssertTrue('status de erro', LProc.Status = ssError);
     AssertEquals('mensagem', 'falhou de proposito', LProc.StatusMessage);
     AssertEquals('classe', 'Exception', Attr(LProc, 'error.type'));
