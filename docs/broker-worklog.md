@@ -876,6 +876,43 @@ Fase D da observabilidade da pascal-api-infra-faa; o desenho e as decisões est�
   teste espera que publishes fiquem sem confirm quando a conexão cai; a hipótese (não medida)
   é uma corrida entre o confirm do journal e a queda. Não investigado nesta rodada.
 
+## v0.3.0 — reconexão: replay por fase e falha visível (2026-10-15)
+
+Dois defeitos achados pela pascal-api-infra-faa ao medir o guia de mensageria (anotados na
+seção 8 do `docs/plan.md` de lá). Medido antes de mudar, com um RabbitMQ próprio na 5673 e uma
+cópia instrumentada de `AMQP.Connection.pas` fora do repositório:
+
+- **Replay na ordem do hash.** `RecoverAllChannels` iterava `FChannels.Values` (um
+  `TDictionary<Word, ...>`): com os canais 1, 2 e 3 o 3 saía primeiro. Cada canal replayava só a
+  própria lista, então o `basic.consume` do canal 3 levava `404` antes de o declare do canal 1
+  voltar (fila não durável, apagada pelo `docker restart`); o `except` do `RunReconnect` engolia
+  e a tentativa seguinte repetia igual. Correção: `TAMQPRecoveryPhase` (derivada do método do
+  payload em `AddRecovery`), replay da conexão inteira fase a fase, canais em ordem de
+  `ChannelId`; `OnReconnectError` + `LastReconnectError` + motivo no texto da `EAMQPConnection`.
+- **`EWriteError` vazando.** Sem `AutoReconnect`, o stream continuava atribuído depois da queda e
+  o `WriteBuffer` da RTL levantava. Correção: `FWritable` (o handshake escreve por
+  `SendHandshakeMethod`) e falha de escrita embrulhada em `EAMQPConnection`.
+- **Mutações**: voltar ao replay canal a canal derruba
+  `Reconexao_FilaDeclaradaSoNoutroCanal_Recupera` com o 404 original; voltar ao envio antigo
+  derruba `SemAutoReconnect_PublishNaConexaoMorta_LevantaEAMQPConnection` com
+  `EWriteError: Stream write error`.
+- **Corrida achada no container Linux** (aceitação durável): `ReadThreadFinished` baixava
+  `FIsOpen`/`FWritable` antes de gravar `FLostReason`, e o teste, que espera `IsOpen = False`,
+  pegou "connection is not open". O motivo passou a ser gravado antes das flags; depois, 30 de
+  30 rodadas da fixture de reconexão a `--cpus=1` (integração, aceitação e aceitação durável).
+- **Ambiente**: a suíte de integração ganhou `AMQP_TEST_HOST`/`AMQP_TEST_PORT` (a 5672 desta
+  máquina é do `DFeBrokerServico`); os certificados de `docker/certs` tinham sumido e foram
+  regerados pelo README de lá (as 4 falhas de `TServerTlsTests` no mode `openssl` eram isso).
+
+**Validação.** FPC/Windows: unitária 131, integração 34 (com `-gh`, contra o RabbitMQ 3 na 5673),
+server 471 e 475 (`openssl`), aceitação 34 nas duas passagens, SmokeTest PASS, 0 vazamentos.
+FPC/Linux (container Debian, rede do RabbitMQ): unitária 131, integração 34, server 471,
+aceitação 34 nas duas passagens, 0 blocos no `HEAPTRC=log=`. Delphi 12 (compilado no IDE),
+Win32 e Win64, Debug e OpenSSL: unitária 131, integração 34 (os 5 de TLS contam como Passed sem
+broker TLS, como sempre no DUnitX), server 471/475, aceitação 34 nas duas passagens,
+`Tests Leaked: 0`. O `MessagingSample` da pascal-api-infra-faa, sem `declare-both`, voltou a
+202 em ~16 s depois do `docker restart` e o consumidor seguiu consumindo.
+
 ## Verificador de espelhos
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**

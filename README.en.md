@@ -219,10 +219,15 @@ LParams.MaxReconnectAttempts := 0;  // 0 = unlimited
 
 Conn := TAMQPConnection.Create(LParams);
 Conn.OnReconnect := MyApp.WhenReconnected; // fires after reconnecting AND restoring the topology
+Conn.OnReconnectError := MyApp.WhenAttemptFailed; // (Conn, Attempt, Reason): every failed attempt
 Conn.Open;
 ```
 
-On a drop, the library reconnects and **restores the topology** declared on that channel (queues, exchanges, bindings, Qos, confirm mode) and **re-registers the consumers** — your callback receives messages again with no intervention. Since *delivery-tags* restart on each session, unconfirmed messages are redelivered: design your handlers to be **idempotent** (at-least-once). For tests/synchronization, wait for `OnReconnect` (which fires after the full recovery), not `IsOpen` (it turns `True` before the topology replay).
+On a drop, the library reconnects and **restores the topology** declared on the connection's channels (queues, exchanges, bindings, Qos, confirm mode) and **re-registers the consumers** — your callback receives messages again with no intervention. Since *delivery-tags* restart on each session, unconfirmed messages are redelivered: design your handlers to be **idempotent** (at-least-once). For tests/synchronization, wait for `OnReconnect` (which fires after the full recovery), not `IsOpen` (it turns `True` before the topology replay).
+
+**The replay covers the whole connection, phase by phase**: first the exchanges of every channel, then the queues, then the bindings, and only then the consumers (within each phase, in channel creation order and, on each channel, in the order you declared things). So declaring a queue on one channel and consuming it on another works — there is no need to redeclare the queue on the consuming channel. *(Up to 0.2.0 the replay went channel by channel, in an order that wasn't creation order: with the queue declared only on the publishing channel, the consuming channel's `basic.consume` arrived before the declare, got `404` because the broker restart had deleted the non-durable queue, and reconnection repeated the same failure forever, with no signal at all.)*
+
+**A failed attempt is never silent.** Each one fires `OnReconnectError(Conn, Attempt, Reason)` and is kept in `Conn.LastReconnectError` (cleared when a reconnection succeeds). A publish made in the meantime raises `EAMQPConnection` with the reason for the drop and that of the last attempt in its text, for example `connection unavailable right now (reconnecting; connection closed by server: 320 CONNECTION_FORCED - ...; last attempt failed: channel 1 closed by server: 404 NOT_FOUND - no queue 'orders' ...)`. While the broker is still starting, the reason is a socket or handshake one; if it's the replay that fails (the `404` of a consumer on a queue that **nobody on this connection** declares, because another process declares it), reconnection keeps trying every `ReconnectDelayMs` and recovers by itself on the first attempt after the queue is back. With `MaxReconnectAttempts = 0` (unlimited), `OnReconnectError` is how you find out it isn't getting anywhere.
 
 **Closing during an outage is immediate.** `Close`/`Free` wake the wait between attempts right away (it is a `TEvent`, not a `Sleep`), so closing the application while the broker is down does not wait for `ReconnectDelayMs`. And they only return **after** the reconnection thread has exited: they never leave it running against a freed object, whatever the delay. The exception is an attempt already under way (connect, handshake, topology replay): it finishes first, bounded by its own timeouts. `Close` may be called from inside `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (reconnection stops there); `Free` may not — free the connection from another thread.
 
@@ -457,7 +462,7 @@ All descend directly from `Exception` (no common base class). `EAMQPConnection`/
 
 | Exception | Raised when |
 |---|---|
-| `EAMQPConnection` | Handshake/`Open` failure (broker refusal, response on an unexpected channel); `Publish`/`CreateChannel` called with the connection closed or mid-reconnect. |
+| `EAMQPConnection` | Handshake/`Open` failure (broker refusal, response on an unexpected channel); `Publish`/`Ack`/`Nack`/`CreateChannel` called with the connection closed, dropped or mid-reconnect — the text carries the reason (`connection closed by server: 320 ...`, `connection write failed (...)`, `connection unavailable right now (reconnecting; ...)`). On both compilers, including when the write fails before the drop has been noticed (up to 0.2.0 this leaked the RTL's `EWriteError`). |
 | `EAMQPChannel` | A channel RPC (declare/bind/get/consume/close) got `Channel.Close` from the broker, timed out, or was called with the channel already closed; API misuse (e.g. `WaitForConfirm` outside confirm mode). |
 | `EAMQPTransport` | Plain socket error (unreachable host/port, dropped connection) outside the TLS handshake. |
 | `EAMQPTls` | TLS handshake failure, rejected certificate (`TlsVerifyPeer=True`), `UseTls=True` with no TLS backend compiled, or `libssl`/`libcrypto` not found at runtime. See [TLS (amqps)](#tls-amqps). |
@@ -468,7 +473,7 @@ Practical notes:
 
 - **`Open`** is where you most expect to catch a synchronous exception: `EAMQPConnection`, and — if `UseTls=True` — `EAMQPTransport`/`EAMQPTls`.
 - **Channel calls** (`DeclareQueue`, `BindQueue`, `Publish`, `Consume`, etc.) can raise `EAMQPChannel` synchronously when the broker refuses the request or the channel already dropped.
-- **After a successful `Open`, a connection drop does not turn into an exception on the application thread** — it is reported through the `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` callbacks (see [Automatic reconnection](#automatic-reconnection)); without `AutoReconnect`, the next RPC call on that channel fails with `EAMQPChannel` ("canal fechado").
+- **After a successful `Open`, a connection drop does not turn into an exception on the application thread** — it is reported through the `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` callbacks (see [Automatic reconnection](#automatic-reconnection)); without `AutoReconnect`, the next RPC call on that channel fails with `EAMQPChannel` ("canal fechado"), and `Publish`/`Ack`/`Nack` fail with `EAMQPConnection` carrying the reason for the drop.
 - **A publisher-confirm failure is not an exception** — it's `WaitForConfirm`/`WaitForConfirms` returning `False`, or `AAck=False` in `OnConfirm` (see [Publisher confirms in detail](#publisher-confirms-in-detail)).
 
 ## Concurrency and message ordering
@@ -647,11 +652,11 @@ In both:
 | Suite | Tests | Requires |
 |---|---|---|
 | `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 31 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`) |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 34 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
 | `AMQP.ServerTests` / `AMQPServerTestsFpc` | 471 (475 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 31 | nothing — runs the **client's integration suite against the embedded broker** |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 34 | nothing — runs the **client's integration suite against the embedded broker** |
 
-The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 31 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
+The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 34 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
 
 As for the TLS tests: The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down — and, outside Windows, if the runner was not built with `-dAMQP_OPENSSL`. On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as **Passed** — so an "N Passed / 0 Ignored" summary can hide tests that never touched the broker. Two signals resolve the ambiguity: the `IGNORADO: ...` message in the console log, and the **time** — a self-ignored test comes out at ~0.000s, which is why the DUnitX projects here register their own logger (`tests\AMQP.TestTimeLogger.pas`) that prints each test's duration and marks near-zero ones with `~`. The same data is in `dunitx-results.xml` (the `time` attribute); the `asserts` attribute is **not** usable for this — it reads 0 even for tests that really ran.
 

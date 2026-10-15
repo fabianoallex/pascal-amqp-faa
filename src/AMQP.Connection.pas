@@ -117,6 +117,14 @@ type
     interna; mantenha-o curto e não bloqueante. }
   TAMQPConnectionEvent = procedure(AConnection: TAMQPConnection) of object;
 
+  { Callback de tentativa de reconexão que falhou: AAttempt conta desde 1 na
+    queda corrente e AError é a mensagem da exceção (ex.: o 404 de um
+    basic.consume numa fila que ninguém redeclarou). Roda na thread de
+    reconexão, como OnDisconnect/OnReconnect; a próxima tentativa vem depois de
+    ReconnectDelayMs. }
+  TAMQPReconnectErrorEvent = procedure(AConnection: TAMQPConnection;
+    AAttempt: Integer; const AError: string) of object;
+
   { Callback de Connection.Blocked (extensão RabbitMQ): o broker entrou em
     resource alarm (memória/disco) e parou de aceitar publishes; AReason traz o
     motivo. Despachado num thread do pool (não bloqueia a thread de leitura). O
@@ -168,12 +176,22 @@ type
   TAMQPConfirmCallback = procedure(AChannel: TAMQPChannel;
     ASeqNo: UInt64; AAck: Boolean) of object;
 
+  { Fase do replay em que uma ação gravada entra. A reconexão replaya a
+    conexão INTEIRA fase a fase, não canal a canal: toda exchange de todo
+    canal, depois toda fila, depois todo bind, por fim todo consumer. Canal a
+    canal, um consumer num canal que só consome rodava antes do declare feito
+    noutro canal e levava 404 (fila não durável, que o restart do broker
+    apagou) — e a tentativa falhava igual para sempre. Dentro de uma fase, a
+    ordem é a dos canais (ChannelId) e, em cada canal, a da gravação. }
+  TAMQPRecoveryPhase = (rpChannel, rpExchange, rpQueue, rpBind, rpConsume);
+
   { Ação de topologia gravada para replay após reconexão. Guardamos o payload
     já serializado do método (qos/declare/bind/consume) — assim argumentos e
     flags vêm de graça. Consumers guardam também o tag e o callback. }
   TAMQPRecoveryAction = record
     Payload: TBytes;
     AwaitReply: Boolean;    // True: espera o -Ok (CallRpc); False: só envia
+    Phase: TAMQPRecoveryPhase; // derivada do método do payload (AddRecovery)
     IsConsume: Boolean;
     ConsumerTag: string;
     Callback: TAMQPConsumerCallback;
@@ -268,8 +286,15 @@ type
     procedure RemoveQueueDeclareRecovery(const AQueue: string);
     /// Remove do recovery toda ação cujo payload coincida com um dos candidatos.
     procedure RemoveRecoveryMatching(const ACandidates: array of TBytes);
-    /// Reabre o canal e replaya a topologia gravada (chamado na reconexão).
-    procedure Recover;
+    /// Reconexão, em três passos chamados pela conexão (RecoverAllChannels):
+    /// BeginRecover pega o FRpcLock (RPCs do usuário esperam o replay), reabre
+    /// o canal e replaya a fase rpChannel (qos, confirm.select); ReplayRecovery
+    /// replaya uma fase de topologia (e, depois da última, a conexão chama
+    /// ResendUnconfirmed); EndRecover solta o lock, com sucesso ou não. Se
+    /// BeginRecover levanta, o lock já foi solto e EndRecover não é chamado.
+    procedure BeginRecover;
+    procedure ReplayRecovery(APhase: TAMQPRecoveryPhase);
+    procedure EndRecover;
     procedure Open;
     /// Envia um método e aguarda a resposta (payload do método de resposta).
     function CallRpc(const ARequest: TBytes): TBytes;
@@ -458,14 +483,33 @@ type
     FOnDisconnect: TAMQPConnectionEvent;
     FOnReconnect: TAMQPConnectionEvent;
     FOnReconnectFailed: TAMQPConnectionEvent;
+    FOnReconnectError: TAMQPReconnectErrorEvent;
+    // --- estado de escrita e motivos (para a exceção do publish dizer POR QUÊ) ---
+    // FWritable (0/1, atômico, sem lock): 1 só entre o fim do handshake e a
+    // queda/fechamento. Fora disso, SendFrameNoLock levanta EAMQPConnection sem
+    // tocar o stream — antes, um publish numa conexão morta escrevia no stream
+    // e vazava o EWriteError da RTL. FLostReason (por que a conexão caiu) e
+    // FLastReconnectError (por que a última tentativa falhou) ficam sob
+    // FStateLock, o lock mais interno de todos: só protege as duas strings.
+    FWritable: Integer;
+    FStateLock: TCriticalSection;
+    FLostReason: string;
+    FServerCloseReason: string; // Connection.Close do broker; só a thread de leitura
+    FLastReconnectError: string;
     // --- Connection.Blocked/Unblocked (resource alarm do broker) ---
     FOnBlocked: TAMQPConnectionBlockedEvent;
     FOnUnblocked: TAMQPConnectionEvent;
     FInFlightConn: Integer; // callbacks de conexão em execução no pool (atômico)
     // --- envio (serializado por FWriteLock) ---
+    /// Escreve o frame sem olhar FWritable (o handshake escreve antes de a
+    /// conexão ficar gravável). Falha de escrita vira EAMQPConnection.
+    procedure WriteFrameNoLock(AFrameType: Byte; AChannel: Word; const APayload: TBytes);
     procedure SendFrameNoLock(AFrameType: Byte; AChannel: Word; const APayload: TBytes);
     procedure SendFrame(AFrameType: Byte; AChannel: Word; const APayload: TBytes);
     procedure SendMethod(AChannel: Word; const APayload: TBytes);
+    procedure SendHandshakeMethod(const APayload: TBytes);
+    function UnavailableMessage: string;
+    function GetLastReconnectError: string;
     // --- leitura síncrona, só durante o handshake ---
     function NextFrame: TAMQPFrame;
     function NextMethodOn(AExpectChannel: Word; out AId: TAMQPMethodId): TAMQPReader;
@@ -521,6 +565,15 @@ type
     property OnReconnect: TAMQPConnectionEvent read FOnReconnect write FOnReconnect;
     /// Disparado quando a reconexão esgota as tentativas.
     property OnReconnectFailed: TAMQPConnectionEvent read FOnReconnectFailed write FOnReconnectFailed;
+    /// Disparado a cada tentativa de reconexão que falha, com o motivo (broker
+    /// ainda fora do ar, 404 no replay da topologia...). Com
+    /// MaxReconnectAttempts = 0 a reconexão tenta para sempre: é por aqui (ou
+    /// por LastReconnectError) que se descobre que ela não está andando.
+    property OnReconnectError: TAMQPReconnectErrorEvent read FOnReconnectError write FOnReconnectError;
+    /// Mensagem da última tentativa de reconexão que falhou; '' depois de uma
+    /// reconexão bem-sucedida. É também o que a EAMQPConnection de um publish
+    /// feito durante a reconexão traz no texto.
+    property LastReconnectError: string read GetLastReconnectError;
     /// Disparado quando o broker sinaliza Connection.Blocked (resource alarm:
     /// memória/disco cheios) e para de aceitar publishes. Roda num thread do pool.
     /// Típico: setar uma flag atômica para pausar o publish até o OnUnblocked.
@@ -907,6 +960,7 @@ begin
   FHbStopEvent := TEvent.Create(nil, True, False, '');
   FReconnectLock := TCriticalSection.Create;
   FReconnectWake := TEvent.Create(nil, True, False, '');
+  FStateLock := TCriticalSection.Create;
 end;
 
 destructor TAMQPConnection.Destroy;
@@ -933,22 +987,89 @@ begin
   FHbStopEvent.Free;
   FReconnectWake.Free;
   FReconnectLock.Free;
+  FStateLock.Free;
   inherited;
 end;
 
-procedure TAMQPConnection.SendFrameNoLock(AFrameType: Byte; AChannel: Word;
+function TAMQPConnection.UnavailableMessage: string;
+var
+  LLost, LAttempt: string;
+begin
+  FStateLock.Enter;
+  try
+    LLost := FLostReason;
+    LAttempt := FLastReconnectError;
+  finally
+    FStateLock.Leave;
+  end;
+  if FDeliberateClose then
+    Result := 'connection was closed by the application'
+  else if FParams.AutoReconnect and (LLost <> '') then
+  begin
+    // O começo do texto é o de antes: há quem case por ele.
+    Result := 'connection unavailable right now (reconnecting; ' + LLost;
+    if LAttempt <> '' then
+      Result := Result + '; last attempt failed: ' + LAttempt;
+    Result := Result + ')';
+  end
+  else if LLost <> '' then
+    Result := LLost
+  else
+    Result := 'connection is not open';
+end;
+
+function TAMQPConnection.GetLastReconnectError: string;
+begin
+  FStateLock.Enter;
+  try
+    Result := FLastReconnectError;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
+procedure TAMQPConnection.WriteFrameNoLock(AFrameType: Byte; AChannel: Word;
   const APayload: TBytes);
 var
   LFrame: TAMQPFrame;
 begin
-  // Assume FWriteLock já adquirido (envio de grupo de frames, ex.: Publish).
   if not Assigned(FStream) then
-    raise EAMQPConnection.Create('connection unavailable right now (reconnecting?)');
+    raise EAMQPConnection.Create(UnavailableMessage);
   LFrame := TAMQPFrame.Create(AFrameType, AChannel, APayload);
-  LFrame.WriteTo(FStream);
+  try
+    LFrame.WriteTo(FStream);
+  except
+    // A queda ainda não percebida pela thread de leitura chega aqui como erro
+    // do stream (EWriteError da RTL, EAMQPTransport, EAMQPTls...), diferente em
+    // cada compilador e backend. Para quem chama é sempre a mesma coisa.
+    on E: EAMQPConnection do
+      raise;
+    on E: Exception do
+      raise EAMQPConnection.CreateFmt('connection write failed (%s: %s)',
+        [E.ClassName, E.Message]);
+  end;
   // Atômico: lido pela thread de heartbeat; no Win32 um store de 64 bits não é
   // atômico e poderia ser "torn" (ver PcAtomicRead64 em HeartbeatTick).
   PcAtomicWrite64(FLastWriteTick, PcTickMs);
+end;
+
+procedure TAMQPConnection.SendFrameNoLock(AFrameType: Byte; AChannel: Word;
+  const APayload: TBytes);
+begin
+  // Assume FWriteLock já adquirido (envio de grupo de frames, ex.: Publish).
+  if PcAtomicGet(FWritable) = 0 then
+    raise EAMQPConnection.Create(UnavailableMessage);
+  WriteFrameNoLock(AFrameType, AChannel, APayload);
+end;
+
+procedure TAMQPConnection.SendHandshakeMethod(const APayload: TBytes);
+begin
+  FWriteLock.Enter;
+  try
+    WriteFrameNoLock(AMQP_FRAME_METHOD, AMQP_CHANNEL_CONNECTION, APayload);
+  finally
+    FWriteLock.Leave;
+  end;
 end;
 
 procedure TAMQPConnection.SendFrame(AFrameType: Byte; AChannel: Word;
@@ -1046,7 +1167,7 @@ begin
 
     LProps := BuildClientProperties;
     try
-      SendMethod(AMQP_CHANNEL_CONNECTION, BuildStartOk(LProps, AMQP_AUTH_PLAIN,
+      SendHandshakeMethod(BuildStartOk(LProps, AMQP_AUTH_PLAIN,
         PlainAuthResponse(FParams.User, FParams.Password), AMQP_LOCALE_DEFAULT));
     finally
       LProps.Free;
@@ -1064,9 +1185,9 @@ begin
 
   FNegotiated := NegotiateTune(LServerTune,
     FParams.ChannelMax, FParams.FrameMax, FParams.Heartbeat);
-  SendMethod(AMQP_CHANNEL_CONNECTION, BuildTuneOk(FNegotiated));
+  SendHandshakeMethod(BuildTuneOk(FNegotiated));
 
-  SendMethod(AMQP_CHANNEL_CONNECTION, BuildOpen(FParams.VirtualHost));
+  SendHandshakeMethod(BuildOpen(FParams.VirtualHost));
   LReader := ExpectMethod(AMQP_CHANNEL_CONNECTION, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK);
   try
     DecodeOpenOk(LReader);
@@ -1126,6 +1247,8 @@ begin
 
   FLastWriteTick := PcTickMs;
   FLastReadTick := FLastWriteTick;
+  FServerCloseReason := '';
+  PcAtomicSet(FWritable, 1); // antes da thread de leitura: ela responde Close-Ok
   StartReadThread;     // a partir daqui, só a thread lê o socket
   StartHeartbeatThread;
   FIsOpen := True;
@@ -1133,6 +1256,7 @@ end;
 
 procedure TAMQPConnection.CloseSocketStream;
 begin
+  PcAtomicSet(FWritable, 0);
   if Assigned(FSocket) then
     try
       FSocket.Close;
@@ -1146,6 +1270,14 @@ procedure TAMQPConnection.Open;
 begin
   if FIsOpen then
     raise EAMQPConnection.Create('connection is already open');
+  // Antes de a conexão existir: uma queda logo depois do Open grava o motivo
+  // dela, que não pode ser apagado aqui.
+  FStateLock.Enter;
+  try
+    FLostReason := '';
+  finally
+    FStateLock.Leave;
+  end;
   EstablishConnection;
 end;
 
@@ -1242,13 +1374,28 @@ var
   LChan: TAMQPChannel;
   LMsg: string;
 begin
-  FIsOpen := False;
-  // Acorda quem estiver esperando Close-Ok e qualquer RPC pendente nos canais.
-  FCloseOkEvent.SetEvent;
-  if AError <> '' then
+  if FServerCloseReason <> '' then
+    LMsg := 'connection closed by server: ' + FServerCloseReason
+  else if AError <> '' then
     LMsg := 'connection closed: ' + AError
   else
     LMsg := 'connection closed';
+  // O motivo ANTES das flags: quem vê IsOpen = False ou FWritable = 0 tem de
+  // achar o motivo já gravado (a ordem inversa deu, no Linux, um publish com
+  // "connection is not open" logo depois de IsOpen cair). Durante a
+  // reconexão, quem para esta thread é a própria reconexão desmontando uma
+  // tentativa que falhou: o motivo que interessa continua o da queda original.
+  FStateLock.Enter;
+  try
+    if (not FReconnecting) or (FLostReason = '') then
+      FLostReason := LMsg;
+  finally
+    FStateLock.Leave;
+  end;
+  PcAtomicSet(FWritable, 0); // daqui em diante, publish levanta com o motivo acima
+  FIsOpen := False;
+  // Acorda quem estiver esperando Close-Ok e qualquer RPC pendente nos canais.
+  FCloseOkEvent.SetEvent;
   FChannelsLock.Enter;
   try
     LChannels := FChannels.Values.ToArray;
@@ -1300,6 +1447,8 @@ procedure TAMQPConnection.RecoverAllChannels;
 var
   LChannels: TArray<TAMQPChannel>;
   LChan: TAMQPChannel;
+  LPhase: TAMQPRecoveryPhase;
+  I, J, LEntered: Integer;
 begin
   FChannelsLock.Enter;
   try
@@ -1307,8 +1456,44 @@ begin
   finally
     FChannelsLock.Leave;
   end;
-  for LChan in LChannels do
-    LChan.Recover;
+  // Ordem de criação (ChannelId), não a do dicionário, que é a do hash —
+  // medido: com os canais 1, 2 e 3 o TDictionary entregava o 3 primeiro.
+  // Insertion sort: TArray.Sort<T> não existe no FPC, e são poucos canais.
+  for I := 1 to High(LChannels) do
+  begin
+    LChan := LChannels[I];
+    J := I - 1;
+    while (J >= 0) and (LChannels[J].ChannelId > LChan.ChannelId) do
+    begin
+      LChannels[J + 1] := LChannels[J];
+      Dec(J);
+    end;
+    LChannels[J + 1] := LChan;
+  end;
+
+  // Fase a fase sobre a conexão inteira (ver TAMQPRecoveryPhase): o declare de
+  // um canal precisa existir antes do bind/consume de outro. Cada canal segura
+  // o próprio FRpcLock do BeginRecover ao EndRecover; só esta thread segura
+  // mais de um, sempre em ordem de ChannelId, e quem usa um canal pega só o
+  // dele — não há ciclo.
+  LEntered := 0;
+  try
+    for I := 0 to High(LChannels) do
+    begin
+      LChannels[I].BeginRecover;
+      LEntered := I + 1;
+    end;
+    for LPhase := rpExchange to rpConsume do
+      for I := 0 to High(LChannels) do
+        LChannels[I].ReplayRecovery(LPhase);
+    // Topologia restaurada e confirm mode re-armado: re-publica o que ficou
+    // sem confirmação na queda (se habilitado).
+    for I := 0 to High(LChannels) do
+      LChannels[I].ResendUnconfirmed;
+  finally
+    for I := LEntered - 1 downto 0 do
+      LChannels[I].EndRecover;
+  end;
 end;
 
 procedure TAMQPConnection.StopReconnect;
@@ -1374,21 +1559,43 @@ begin
       try
         EstablishConnection; // novo socket + handshake + threads (FIsOpen := True)
         RecoverAllChannels;  // reabre canais e replaya a topologia gravada
+        // FLostReason fica: só é lido com a conexão não gravável, e a próxima
+        // queda grava o dela antes de a conexão deixar de ser.
+        FStateLock.Enter;
+        try
+          FLastReconnectError := '';
+        finally
+          FStateLock.Leave;
+        end;
         if Assigned(FOnReconnect) then
           try FOnReconnect(Self); except end;
         Exit; // sucesso
       except
-        // tentativa falhou: limpa o estado parcial e tenta de novo
-        FIsOpen := False;
-        StopHeartbeatThread;
-        StopReadThread;
-        CloseSocketStream;
-        if (FParams.MaxReconnectAttempts > 0) and
-           (LAttempt >= FParams.MaxReconnectAttempts) then
+        on E: Exception do
         begin
-          if Assigned(FOnReconnectFailed) then
-            try FOnReconnectFailed(Self); except end;
-          Break;
+          // Tentativa falhou: limpa o estado parcial, conta o motivo e tenta
+          // de novo. O motivo NÃO é engolido: vai para LastReconnectError,
+          // para o texto da EAMQPConnection do publish e para OnReconnectError
+          // — antes, um 404 no replay se repetia para sempre sem sinal nenhum.
+          FIsOpen := False;
+          StopHeartbeatThread;
+          StopReadThread;
+          CloseSocketStream;
+          FStateLock.Enter;
+          try
+            FLastReconnectError := E.Message;
+          finally
+            FStateLock.Leave;
+          end;
+          if Assigned(FOnReconnectError) then
+            try FOnReconnectError(Self, LAttempt, E.Message); except end;
+          if (FParams.MaxReconnectAttempts > 0) and
+             (LAttempt >= FParams.MaxReconnectAttempts) then
+          begin
+            if Assigned(FOnReconnectFailed) then
+              try FOnReconnectFailed(Self); except end;
+            Break;
+          end;
         end;
       end;
     end;
@@ -1440,6 +1647,7 @@ begin
     begin
       LClose := DecodeClose(LReader);
       FIsOpen := False;
+      FServerCloseReason := Format('%d %s', [LClose.ReplyCode, LClose.ReplyText]);
       SendMethod(AMQP_CHANNEL_CONNECTION, BuildCloseOk);
       FCloseOkEvent.SetEvent;
       // (canais serão sinalizados quando a thread encerrar)
@@ -1612,6 +1820,30 @@ begin
   inherited;
 end;
 
+function RecoveryPhaseOf(const APayload: TBytes): TAMQPRecoveryPhase;
+var
+  LReader: TAMQPReader;
+  LId: TAMQPMethodId;
+begin
+  LReader := TAMQPReader.Create(APayload);
+  try
+    LId := ReadMethodHeader(LReader);
+  finally
+    LReader.Free;
+  end;
+  if LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_DECLARE) then
+    Result := rpExchange
+  else if LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE) then
+    Result := rpQueue
+  else if LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_BIND) or
+          LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_BIND) then
+    Result := rpBind
+  else if LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME) then
+    Result := rpConsume
+  else
+    Result := rpChannel; // qos, confirm.select: estado do próprio canal
+end;
+
 procedure TAMQPChannel.AddRecovery(const APayload: TBytes; AAwaitReply: Boolean;
   AIsConsume: Boolean; const AConsumerTag: string;
   const ACallback: TAMQPConsumerCallback);
@@ -1620,6 +1852,7 @@ var
 begin
   LAction.Payload := APayload;
   LAction.AwaitReply := AAwaitReply;
+  LAction.Phase := RecoveryPhaseOf(APayload);
   LAction.IsConsume := AIsConsume;
   LAction.ConsumerTag := AConsumerTag;
   LAction.Callback := ACallback;
@@ -1706,12 +1939,9 @@ begin
   RemoveRecoveryMatching([LCandFalse, LCandTrue]);
 end;
 
-procedure TAMQPChannel.Recover;
-var
-  LActions: TArray<TAMQPRecoveryAction>;
-  LAction: TAMQPRecoveryAction;
+procedure TAMQPChannel.BeginRecover;
 begin
-  // Roda na thread de reconexão. Segura FRpcLock durante todo o replay para que
+  // Roda na thread de reconexão. Segura FRpcLock até o EndRecover para que
   // RPCs do usuário no canal esperem a recuperação terminar. FRpcLock é
   // recursivo (critical section), então CallRpc interno funciona.
   FRpcLock.Enter;
@@ -1736,41 +1966,53 @@ begin
 
     FConsumersLock.Enter;
     try
-      FConsumers.Clear; // registros da sessão antiga; serão re-adicionados
+      FConsumers.Clear; // registros da sessão antiga; voltam na fase rpConsume
     finally
       FConsumersLock.Leave;
     end;
 
-    FRecoveryLock.Enter;
-    try
-      LActions := FRecovery.ToArray;
-    finally
-      FRecoveryLock.Leave;
-    end;
-
-    for LAction in LActions do
-    begin
-      if LAction.IsConsume then
-      begin
-        FConsumersLock.Enter;
-        try
-          FConsumers.AddOrSetValue(LAction.ConsumerTag, LAction.Callback);
-        finally
-          FConsumersLock.Leave;
-        end;
-      end;
-      if LAction.AwaitReply then
-        CallRpc(LAction.Payload)
-      else
-        FConnection.SendMethod(FChannelId, LAction.Payload);
-    end;
-
-    // Topologia restaurada e confirm mode re-armado (via replay do confirm.select):
-    // re-publica o que ficou sem confirmação na queda (se habilitado).
-    ResendUnconfirmed;
-  finally
+    ReplayRecovery(rpChannel);
+  except
     FRpcLock.Leave;
+    raise;
   end;
+end;
+
+procedure TAMQPChannel.ReplayRecovery(APhase: TAMQPRecoveryPhase);
+var
+  LActions: TArray<TAMQPRecoveryAction>;
+  LAction: TAMQPRecoveryAction;
+begin
+  FRecoveryLock.Enter;
+  try
+    LActions := FRecovery.ToArray;
+  finally
+    FRecoveryLock.Leave;
+  end;
+
+  for LAction in LActions do
+  begin
+    if LAction.Phase <> APhase then
+      Continue;
+    if LAction.IsConsume then
+    begin
+      FConsumersLock.Enter;
+      try
+        FConsumers.AddOrSetValue(LAction.ConsumerTag, LAction.Callback);
+      finally
+        FConsumersLock.Leave;
+      end;
+    end;
+    if LAction.AwaitReply then
+      CallRpc(LAction.Payload)
+    else
+      FConnection.SendMethod(FChannelId, LAction.Payload);
+  end;
+end;
+
+procedure TAMQPChannel.EndRecover;
+begin
+  FRpcLock.Leave;
 end;
 
 function TAMQPChannel.CallRpc(const ARequest: TBytes): TBytes;

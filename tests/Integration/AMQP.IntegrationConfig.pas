@@ -22,7 +22,10 @@ uses
   AMQP.Connection;
 
 /// Parametros de conexao PLAIN da suite. Default: TAMQPConnectionParams.
-/// Localhost (RabbitMQ de dev em localhost:5672).
+/// Localhost (RabbitMQ de dev em localhost:5672). As variaveis de ambiente
+/// AMQP_TEST_HOST e AMQP_TEST_PORT trocam o default (o broker embutido da
+/// aceitacao vence as duas): numa maquina onde a 5672 e' de outro broker,
+/// aponte para um RabbitMQ proprio em outra porta.
 function IntegrationParams: TAMQPConnectionParams;
 
 /// Parametros de conexao TLS da suite. Default: TAMQPConnectionParams.
@@ -59,6 +62,9 @@ end;
 function IntegrationParams: TAMQPConnectionParams;
 begin
   Result := TAMQPConnectionParams.Localhost;
+  if GetEnvironmentVariable('AMQP_TEST_HOST') <> '' then
+    Result.Host := GetEnvironmentVariable('AMQP_TEST_HOST');
+  Result.Port := StrToIntDef(GetEnvironmentVariable('AMQP_TEST_PORT'), Result.Port);
   if GPlainPort <> 0 then
   begin
     Result.Host := '127.0.0.1';

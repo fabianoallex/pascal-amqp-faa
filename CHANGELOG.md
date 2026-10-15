@@ -6,6 +6,39 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
+Dois defeitos achados ao medir o guia de mensageria da pascal-api-infra-faa (FPC 3.2.2/Windows
+contra RabbitMQ 3).
+
+### Corrigido
+
+- **A reconexão automática não se recuperava quando a fila era declarada só noutro canal.** O
+  replay da topologia era canal a canal, na ordem do `TDictionary` dos canais (a do hash, não a
+  de criação: com os canais 1, 2 e 3 o 3 vinha primeiro). Com a fila não durável declarada no
+  canal 1 e consumida no 3, o restart do broker a apagava, o `basic.consume` do canal 3 levava
+  `404` antes de o declare do canal 1 voltar, e toda tentativa falhava igual, para sempre, sem
+  nenhum sinal. Agora o replay é da conexão inteira, fase a fase: exchanges, filas, bindings e só
+  então consumers, na ordem de criação dos canais. Medido com `docker restart`: antes, toda
+  tentativa com o broker de pé levou o mesmo `404` até o fim da medição (90 s na do guia);
+  depois, recuperado na primeira tentativa com o broker de pé.
+- **Publish numa conexão morta levantava `EWriteError` ("Stream write error") em vez de
+  `EAMQPConnection`.** A conexão passa a saber quando não é gravável (antes do handshake, depois da
+  queda) e levanta `EAMQPConnection` sem tocar o stream, com o motivo no texto
+  (`connection closed by server: 320 CONNECTION_FORCED - ...`); uma escrita que falha antes de a
+  queda ser percebida também vira `EAMQPConnection` (`connection write failed (...)`), igual nos
+  dois compiladores e em todo backend de transporte.
+
+### Adicionado
+
+- **`TAMQPConnection.OnReconnectError(Conn, Tentativa, Motivo)`**, disparado a cada tentativa de
+  reconexão que falha, e **`TAMQPConnection.LastReconnectError`**, a mensagem da última (zerada
+  quando a reconexão dá certo). A `EAMQPConnection` de um publish feito durante a reconexão traz
+  o motivo da queda e o da última tentativa; o começo do texto
+  (`connection unavailable right now (reconnecting`) é o de antes.
+- Variáveis `AMQP_TEST_HOST`/`AMQP_TEST_PORT` para apontar a suíte de integração para outro
+  RabbitMQ (o default segue `localhost:5672`).
+
 ## [0.2.0] - 2026-10-12
 
 Fase D do design de observabilidade da pascal-api-infra-faa: spans do OpenTelemetry no
@@ -145,7 +178,8 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.1.0...v0.1.1
