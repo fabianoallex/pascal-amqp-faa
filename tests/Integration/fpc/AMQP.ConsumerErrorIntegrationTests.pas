@@ -247,6 +247,7 @@ begin
     LVal := TValue.From<string>('amq.direct');
     LArgs.Put('x-dead-letter-exchange', LVal);
     LDecl := Default(TAMQPQueueDeclare);
+    LDecl.Durable := True; // RabbitMQ 4 recusa fila transiente não exclusiva (transient_nonexcl_queues)
     LDecl.QueueName := ANome;
     LDecl.Exclusive := ANome = '';
     LDecl.Arguments := LArgs;
@@ -256,6 +257,7 @@ begin
   end;
 
   LDecl := Default(TAMQPQueueDeclare);
+  LDecl.Durable := True; // RabbitMQ 4 recusa fila transiente não exclusiva (transient_nonexcl_queues)
   if ANome <> '' then
     LDecl.QueueName := ANome + '-dlq';
   LDecl.Exclusive := ANome = '';
