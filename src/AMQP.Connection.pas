@@ -52,16 +52,30 @@ uses
   AMQP.Basic.Methods;
 
 type
+  /// Base de EAMQPConnection e EAMQPChannel. Quando o erro vem de um
+  /// Connection.Close / Channel.Close do broker, ReplyCode e ReplyText trazem
+  /// o código e o texto AMQP (403 ACCESS_REFUSED, 404 NOT_FOUND, 406
+  /// PRECONDITION_FAILED, 530 NOT_ALLOWED...), para o chamador decidir sem
+  /// analisar a mensagem; senão ReplyCode = 0.
+  EAMQPError = class(Exception)
+  private
+    FReplyCode: Word;
+    FReplyText: string;
+  public
+    constructor CreateReply(const AMessage: string; AReplyCode: Word; const AReplyText: string);
+    property ReplyCode: Word read FReplyCode;
+    property ReplyText: string read FReplyText;
+  end;
   /// Erro ao nível da conexão: handshake, Open/Close, ou uso indevido
   /// (publish/CreateChannel com a conexão fechada ou reconectando). Uma
   /// EAMQPConnection não fecha o canal nem a conexão sozinha — quem decide
   /// o que fazer (retry, desistir) é o chamador.
-  EAMQPConnection = class(Exception);
+  EAMQPConnection = class(EAMQPError);
   /// Erro ao nível do canal: RPC (declare/bind/get/consume/close) que
   /// recebeu Channel.Close do broker, deu timeout, ou foi chamado com o
   /// canal já fechado — ou uso indevido (WaitForConfirm fora de confirm
   /// mode). Ver também EAMQPConnection (erros da conexão como um todo).
-  EAMQPChannel = class(Exception);
+  EAMQPChannel = class(EAMQPError);
 
   { TAMQPSocketStream foi promovido para AMQP.Transport (compartilhado com o
     broker); segue visível aqui via `uses AMQP.Transport`. }
@@ -252,6 +266,10 @@ type
     FChannelId: Word;
     FIsOpen: Boolean;
     FClosed: Boolean;
+    // Channel.Close recebido do broker com a conexão viva (ex. 406 num declare):
+    // publish/ack/nack não podem mais escrever neste canal. Uma queda da
+    // conexão não liga a flag (o publish levanta EAMQPConnection com o motivo).
+    FClosedByBroker: Boolean;
     // --- RPC (uma chamada por vez neste canal) ---
     FRpcLock: TCriticalSection;
     FRpcEvent: TEvent;
@@ -259,6 +277,8 @@ type
     FRpcMethodPayload: TBytes;
     FRpcMessage: TAMQPGetResult;
     FRpcError: string;
+    FRpcErrorCode: Word;     // ReplyCode do Channel/Connection.Close do broker (0 se não veio dele)
+    FRpcErrorText: string;   // ReplyText correspondente
     // --- montagem de conteúdo (escrita só pela thread de leitura) ---
     FAsmState: TAMQPAsmState;
     FAsmMethodId: TAMQPMethodId;
@@ -344,7 +364,10 @@ type
     // sinalizadores chamados pela thread de leitura:
     procedure SignalMethod(const APayload: TBytes);
     procedure SignalMessage(const AMessage: TAMQPGetResult);
-    procedure SignalError(const AMessage: string);
+    procedure SignalError(const AMessage: string; AReplyCode: Word = 0; const AReplyText: string = '');
+    /// Canal fechado pelo broker com a conexão viva. Durante a reconexão vale
+    /// o erro da conexão (EAMQPConnection com o motivo), não o do canal.
+    function ClosedByBroker: Boolean;
     procedure CompleteContent;
     /// Enfileira um work item no pool dedicado do canal (se houver) ou no
     /// PcPool global. Não chamar de "Dispatch": colidiria com o
@@ -556,7 +579,11 @@ type
     FWritable: Integer;
     FStateLock: TCriticalSection;
     FLostReason: string;
+    FLostReplyCode: Word;       // Connection.Close do broker que derrubou a conexão (0: rede, heartbeat...)
+    FLostReplyText: string;
     FServerCloseReason: string; // Connection.Close do broker; só a thread de leitura
+    FServerCloseCode: Word;     // idem, código e texto separados
+    FServerCloseText: string;
     FLastReconnectError: string;
     // --- Connection.Blocked/Unblocked (resource alarm do broker) ---
     FOnBlocked: TAMQPConnectionBlockedEvent;
@@ -572,6 +599,9 @@ type
     procedure SendHandshakeMethod(const APayload: TBytes);
     function UnavailableMessage: string;
     function GetLastReconnectError: string;
+    function GetLastDisconnectReason: string;
+    function GetLastDisconnectReplyCode: Word;
+    function GetLastDisconnectReplyText: string;
     // --- leitura síncrona, só durante o handshake ---
     function NextFrame: TAMQPFrame;
     function NextMethodOn(AExpectChannel: Word; out AId: TAMQPMethodId): TAMQPReader;
@@ -621,7 +651,11 @@ type
 
     property IsOpen: Boolean read FIsOpen;
     property NegotiatedTune: TAMQPConnectionTune read FNegotiated;
-    /// Disparado (em thread interna) quando a conexão cai e a reconexão inicia.
+    /// Disparado (em thread interna) uma vez quando a conexão cai sem Close da
+    /// aplicação — com ou sem AutoReconnect —, depois que os callbacks em voo
+    /// terminaram e antes de qualquer tentativa de reconexão. O motivo está em
+    /// LastDisconnectReason / LastDisconnectReplyCode. Close é permitido aqui
+    /// (encerra a reconexão); Free não.
     property OnDisconnect: TAMQPConnectionEvent read FOnDisconnect write FOnDisconnect;
     /// Disparado após reconectar e restaurar a topologia com sucesso.
     property OnReconnect: TAMQPConnectionEvent read FOnReconnect write FOnReconnect;
@@ -636,6 +670,17 @@ type
     /// reconexão bem-sucedida. É também o que a EAMQPConnection de um publish
     /// feito durante a reconexão traz no texto.
     property LastReconnectError: string read GetLastReconnectError;
+    /// Por que a conexão caiu pela última vez ('' enquanto não caiu): o mesmo
+    /// texto que os canais recebem, ex. 'connection closed by server: 320
+    /// CONNECTION_FORCED - ...' ou 'connection closed: <erro de socket>'. Já
+    /// vale quando OnDisconnect é disparado.
+    property LastDisconnectReason: string read GetLastDisconnectReason;
+    /// ReplyCode do Connection.Close do broker que derrubou a conexão (320
+    /// CONNECTION_FORCED, 541 INTERNAL_ERROR...); 0 quando a queda não veio do
+    /// broker (rede, heartbeat, DropConnectionForTest).
+    property LastDisconnectReplyCode: Word read GetLastDisconnectReplyCode;
+    /// ReplyText correspondente; '' quando LastDisconnectReplyCode = 0.
+    property LastDisconnectReplyText: string read GetLastDisconnectReplyText;
     /// Disparado quando o broker sinaliza Connection.Blocked (resource alarm:
     /// memória/disco cheios) e para de aceitar publishes. Roda num thread do pool.
     /// Típico: setar uma flag atômica para pausar o publish até o OnUnblocked.
@@ -669,6 +714,15 @@ uses
 
 const
   AMQP_RPC_TIMEOUT_MS = 30000; // tempo máximo aguardando resposta de RPC
+
+{ EAMQPError }
+
+constructor EAMQPError.CreateReply(const AMessage: string; AReplyCode: Word; const AReplyText: string);
+begin
+  inherited Create(AMessage);
+  FReplyCode := AReplyCode;
+  FReplyText := AReplyText;
+end;
 
 type
   { Thread dedicada da reconexão (substitui TThread.CreateAnonymousThread,
@@ -1103,6 +1157,36 @@ begin
   end;
 end;
 
+function TAMQPConnection.GetLastDisconnectReason: string;
+begin
+  FStateLock.Enter;
+  try
+    Result := FLostReason;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
+function TAMQPConnection.GetLastDisconnectReplyCode: Word;
+begin
+  FStateLock.Enter;
+  try
+    Result := FLostReplyCode;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
+function TAMQPConnection.GetLastDisconnectReplyText: string;
+begin
+  FStateLock.Enter;
+  try
+    Result := FLostReplyText;
+  finally
+    FStateLock.Leave;
+  end;
+end;
+
 procedure TAMQPConnection.WriteFrameNoLock(AFrameType: Byte; AChannel: Word;
   const APayload: TBytes);
 var
@@ -1189,8 +1273,8 @@ begin
     if AId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE) then
     begin
       LConnClose := DecodeClose(Result);
-      raise EAMQPConnection.CreateFmt('connection refused by server: %d %s',
-        [LConnClose.ReplyCode, LConnClose.ReplyText]);
+      raise EAMQPConnection.CreateReply(Format('connection refused by server: %d %s',
+        [LConnClose.ReplyCode, LConnClose.ReplyText]), LConnClose.ReplyCode, LConnClose.ReplyText);
     end;
     if LFrame.Channel <> AExpectChannel then
       raise EAMQPConnection.CreateFmt('unexpected channel response: %d (expected %d)',
@@ -1323,6 +1407,8 @@ begin
   FLastWriteTick := PcTickMs;
   FLastReadTick := FLastWriteTick;
   FServerCloseReason := '';
+  FServerCloseCode := 0;
+  FServerCloseText := '';
   PcAtomicSet(FWritable, 1); // antes da thread de leitura: ela responde Close-Ok
   StartReadThread;     // a partir daqui, só a thread lê o socket
   StartHeartbeatThread;
@@ -1350,6 +1436,8 @@ begin
   FStateLock.Enter;
   try
     FLostReason := '';
+    FLostReplyCode := 0;
+    FLostReplyText := '';
   finally
     FStateLock.Leave;
   end;
@@ -1463,7 +1551,11 @@ begin
   FStateLock.Enter;
   try
     if (not FReconnecting) or (FLostReason = '') then
+    begin
       FLostReason := LMsg;
+      FLostReplyCode := FServerCloseCode; // 0 se a queda não veio de um Connection.Close
+      FLostReplyText := FServerCloseText;
+    end;
   finally
     FStateLock.Leave;
   end;
@@ -1478,15 +1570,16 @@ begin
     FChannelsLock.Leave;
   end;
   for LChan in LChannels do
-    LChan.SignalError(LMsg);
+    LChan.SignalError(LMsg, FServerCloseCode, FServerCloseText);
 
   // Queda inesperada: dispara a reconexão (numa thread própria, pois esta é a
   // thread de leitura que está terminando). Sob FReconnectLock: ou o Close já
   // marcou FDeliberateClose e nada é criado, ou a thread nasce antes e o Close
-  // a encontra para unir.
+  // a encontra para unir. Sem AutoReconnect a thread também nasce: desmonta a
+  // conexão, dispara OnDisconnect e sai sem tentar (ver RunReconnect).
   FReconnectLock.Enter;
   try
-    if FParams.AutoReconnect and (not FDeliberateClose) and (not FReconnecting) then
+    if (not FDeliberateClose) and (not FReconnecting) then
     begin
       // A thread da reconexão anterior (bem-sucedida) já zerou FReconnecting,
       // que é a última coisa que ela faz: está saindo, e o join é curto.
@@ -1619,6 +1712,11 @@ begin
     if Assigned(FOnDisconnect) then
       try FOnDisconnect(Self); except end;
 
+    // Sem AutoReconnect, a queda só é notificada: a aplicação decide (fechar,
+    // criar uma conexão nova...). LastDisconnectReason/ReplyCode dizem por quê.
+    if not FParams.AutoReconnect then
+      Exit;
+
     LDelay := FParams.ReconnectDelayMs;
     if LDelay = 0 then
       LDelay := 2000;
@@ -1723,6 +1821,8 @@ begin
       LClose := DecodeClose(LReader);
       FIsOpen := False;
       FServerCloseReason := Format('%d %s', [LClose.ReplyCode, LClose.ReplyText]);
+      FServerCloseCode := LClose.ReplyCode;
+      FServerCloseText := LClose.ReplyText;
       SendMethod(AMQP_CHANNEL_CONNECTION, BuildCloseOk);
       FCloseOkEvent.SetEvent;
       // (canais serão sinalizados quando a thread encerrar)
@@ -2026,6 +2126,7 @@ begin
   FRpcLock.Enter;
   try
     FClosed := False;
+    FClosedByBroker := False;
     FAsmState := asIdle;
     // Sessão nova: o broker reinicia a numeração do WIRE em 1. Mantemos o seq-no
     // do USUÁRIO (FPublishSeqNo) monotônico e guardamos o offset da sessão para
@@ -2109,9 +2210,11 @@ begin
   FRpcLock.Enter;
   try
     if FClosed then
-      raise EAMQPChannel.Create('channel is closed');
+      raise EAMQPChannel.CreateReply('channel is closed', FRpcErrorCode, FRpcErrorText);
     FRpcKind := rkNone;
     FRpcError := '';
+    FRpcErrorCode := 0;
+    FRpcErrorText := '';
     FRpcEvent.ResetEvent;
     FConnection.SendMethod(FChannelId, ARequest);
     if FRpcEvent.WaitFor(AMQP_RPC_TIMEOUT_MS) <> wrSignaled then
@@ -2120,7 +2223,7 @@ begin
       rkMethod:
         Result := FRpcMethodPayload;
       rkError:
-        raise EAMQPChannel.Create(FRpcError);
+        raise EAMQPChannel.CreateReply(FRpcError, FRpcErrorCode, FRpcErrorText);
     else
       raise EAMQPChannel.Create('unexpected RPC response');
     end;
@@ -2143,14 +2246,21 @@ begin
   FRpcEvent.SetEvent;
 end;
 
-procedure TAMQPChannel.SignalError(const AMessage: string);
+procedure TAMQPChannel.SignalError(const AMessage: string; AReplyCode: Word; const AReplyText: string);
 begin
   FClosed := True;
   FIsOpen := False;
   FRpcError := AMessage;
+  FRpcErrorCode := AReplyCode;
+  FRpcErrorText := AReplyText;
   FRpcKind := rkError;
   FRpcEvent.SetEvent;
   FailAllUnconfirmed; // publishes pendentes viram "não confirmados"
+end;
+
+function TAMQPChannel.ClosedByBroker: Boolean;
+begin
+  Result := FClosedByBroker and not FConnection.FReconnecting;
 end;
 
 procedure TAMQPChannel.Open;
@@ -2314,6 +2424,11 @@ begin
     LMaxBody := Integer(FConnection.FNegotiated.FrameMax) - 8;
   if LMaxBody < 1 then
     LMaxBody := 1;
+
+  // Canal fechado pelo broker (ex. 406 num declare): publicar nele seria erro
+  // de conexão (504 CHANNEL_ERROR derrubaria a conexão e todos os canais).
+  if ClosedByBroker then
+    raise EAMQPChannel.CreateReply('channel is closed', FRpcErrorCode, FRpcErrorText);
 
   Result := 0;
   // Os frames de uma mensagem (método + header + body) devem sair juntos, sem
@@ -2493,9 +2608,11 @@ begin
   FRpcLock.Enter;
   try
     if FClosed then
-      raise EAMQPChannel.Create('channel is closed');
+      raise EAMQPChannel.CreateReply('channel is closed', FRpcErrorCode, FRpcErrorText);
     FRpcKind := rkNone;
     FRpcError := '';
+    FRpcErrorCode := 0;
+    FRpcErrorText := '';
     FRpcEvent.ResetEvent;
     FConnection.SendMethod(FChannelId, BuildBasicGet(AQueue, ANoAck));
     if FRpcEvent.WaitFor(AMQP_RPC_TIMEOUT_MS) <> wrSignaled then
@@ -2509,7 +2626,7 @@ begin
           Result.Found := False;
         end;
       rkError:
-        raise EAMQPChannel.Create(FRpcError);
+        raise EAMQPChannel.CreateReply(FRpcError, FRpcErrorCode, FRpcErrorText);
     else
       raise EAMQPChannel.Create('unexpected RPC response');
     end;
@@ -2521,12 +2638,19 @@ end;
 procedure TAMQPChannel.Ack(ADeliveryTag: UInt64; AMultiple: Boolean);
 begin
   SettleDeliveries(ADeliveryTag, AMultiple);
+  // Canal fechado pelo broker: um frame nele seria erro de conexão (504
+  // CHANNEL_ERROR derrubaria a conexão inteira). Não há o que confirmar: ao
+  // fechar o canal, o broker já devolveu à fila as mensagens não confirmadas.
+  if ClosedByBroker then
+    Exit;
   FConnection.SendMethod(FChannelId, BuildBasicAck(ADeliveryTag, AMultiple));
 end;
 
 procedure TAMQPChannel.Nack(ADeliveryTag: UInt64; ARequeue, AMultiple: Boolean);
 begin
   SettleDeliveries(ADeliveryTag, AMultiple);
+  if ClosedByBroker then
+    Exit; // ver Ack
   FConnection.SendMethod(FChannelId, BuildBasicNack(ADeliveryTag, AMultiple, ARequeue));
 end;
 
@@ -3103,9 +3227,10 @@ begin
     else if LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE) then
     begin
       LClose := DecodeChannelClose(LReader);
+      FClosedByBroker := True;
       FConnection.SendMethod(FChannelId, BuildChannelCloseOk);
       SignalError(Format('channel %d closed by server: %d %s',
-        [FChannelId, LClose.ReplyCode, LClose.ReplyText]));
+        [FChannelId, LClose.ReplyCode, LClose.ReplyText]), LClose.ReplyCode, LClose.ReplyText);
     end
     else
     begin
