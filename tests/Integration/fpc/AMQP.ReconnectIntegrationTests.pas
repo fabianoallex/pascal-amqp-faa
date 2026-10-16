@@ -109,6 +109,7 @@ begin
   // Fila nomeada, auto-delete (some quando o consumidor cai; a recuperação a
   // redeclara). Declarada no canal consumidor -> gravada para recuperação.
   LDecl := Default(TAMQPQueueDeclare);
+  LDecl.Durable := True; // RabbitMQ 4 recusa fila transiente não exclusiva (transient_nonexcl_queues)
   LDecl.QueueName := FQueue;
   LDecl.AutoDelete := True;
   FConsumerChan.DeclareQueue(LDecl);
@@ -513,6 +514,7 @@ begin
     LConf.ConfirmSelect;
     LCons := LConn.CreateChannel;  // canal 3: só consome
     LDecl := Default(TAMQPQueueDeclare);
+    LDecl.Durable := True; // RabbitMQ 4 recusa fila transiente não exclusiva (transient_nonexcl_queues)
     LDecl.QueueName := LQueue;
     LDecl.AutoDelete := True;
     LPub.DeclareQueue(LDecl);
@@ -549,6 +551,7 @@ begin
   // fila voltar.
   LQueue := 'test-recon-missing-' + IntToStr(PcTickMs);
   LDecl := Default(TAMQPQueueDeclare);
+  LDecl.Durable := True; // RabbitMQ 4 recusa fila transiente não exclusiva (transient_nonexcl_queues)
   LDecl.QueueName := LQueue;
   LDecl.AutoDelete := True;
   FControlChan.DeclareQueue(LDecl);
