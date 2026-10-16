@@ -4,6 +4,14 @@ Cliente AMQP 0-9-1 dual-compiler (**FPC/Lazarus + Delphi**) numa única codebase
 
 > **Histórico detalhado do submódulo broker** (bugs achados workstream a workstream, mutações de teste, contagens de suíte rodada a rodada, validações de plataforma) está em `docs/broker-worklog.md` — não é carregado automaticamente; leia sob demanda. Este arquivo guarda só o estado atual, as decisões travadas e as regras vivas.
 
+**A skill `dual-compiler-delphi-lazarus` não está neste repositório.** Fica no
+[pascal-skills-faa](https://github.com/fabianoallex/pascal-skills-faa), que é plugin e marketplace do Claude Code. Se ela
+não estiver carregada nesta sessão, peça ao usuário para instalá-la (escopo de usuário, para valer
+também numa aplicação que usa esta lib como submódulo):
+`/plugin marketplace add fabianoallex/pascal-skills-faa` e depois
+`/plugin install pascal-skills-faa@pascal-skills-faa`. O índice de todas as libs `*-faa` está em
+`dual-compiler-delphi-lazarus/references/faa-libraries.md` desse repositório.
+
 ## Regra inegociável: proveniência do código (herdada da lib original)
 
 **Nunca copiar, adaptar ou se basear em código-fonte de bibliotecas Pascal/Delphi AMQP de terceiros sem licença permissiva clara.** Este projeto deriva exclusivamente da `delphi-amqp-faa` (MIT, mesmo autor) e da especificação AMQP 0-9-1. Consultas a outras implementações são permitidas apenas como conhecimento de protocolo, nunca como fonte a transcrever. O submódulo broker (server) segue a mesma regra: deriva só da spec e do próprio cliente desta lib. O RabbitMQ (Erlang/MPL) é consultado só como conhecimento de protocolo.
