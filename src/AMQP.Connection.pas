@@ -89,7 +89,18 @@ type
     UseTls: Boolean;               // True => faz handshake TLS antes do AMQP
     TlsVerifyPeer: Boolean;        // True (padrão): valida cadeia + hostname
     TlsServerName: string;         // '' => usa Host (SNI / nome para validação)
-    /// Parâmetros padrão: localhost:5672, vhost '/', guest/guest (sem TLS).
+    // Prazos da abertura (Open e cada tentativa de reconexão), em ms; 0 = sem
+    // prazo (comportamento até a v0.4.1). ConnectTimeoutMs limita o connect TCP
+    // (a resolução de nome não entra); estouro ou recusa levantam
+    // EAMQPTransport. HandshakeTimeoutMs limita CADA leitura do handshake (TLS e
+    // AMQP): um peer que aceita o TCP e não responde (porta errada, proxy ou
+    // balanceador travado, broker sob carga) levanta EAMQPConnection em vez de
+    // prender o Open para sempre. Depois do handshake a leitura volta a ser sem
+    // prazo (quem vigia a conexão aberta é o heartbeat).
+    ConnectTimeoutMs: Cardinal;
+    HandshakeTimeoutMs: Cardinal;
+    /// Parâmetros padrão: localhost:5672, vhost '/', guest/guest (sem TLS),
+    /// prazos de abertura de 10 s.
     class function Localhost: TAMQPConnectionParams; static;
     /// Como Localhost, mas TLS na porta 5671 com validação DESLIGADA
     /// (TlsVerifyPeer=False) — conveniência para broker de dev com cert self-signed.
@@ -579,6 +590,8 @@ type
     function BuildClientProperties: TAMQPFieldTable;
     procedure Handshake;
     procedure EstablishConnection;
+    /// Stream (TLS opcional) sobre FSocket já conectado + handshake AMQP.
+    procedure ConnectStreamAndHandshake;
     procedure CloseSocketStream;
     // --- threads ---
     procedure StartReadThread;
@@ -955,6 +968,8 @@ begin
   Result.UseTls := False;
   Result.TlsVerifyPeer := True;
   Result.TlsServerName := '';
+  Result.ConnectTimeoutMs := 10000;
+  Result.HandshakeTimeoutMs := 10000;
 end;
 
 class function TAMQPConnectionParams.LocalhostTls: TAMQPConnectionParams;
@@ -1280,14 +1295,48 @@ end;
 
 procedure TAMQPConnection.EstablishConnection;
 var
+  LTimedOut: Boolean;
+begin
+  // Cria socket, faz o handshake (síncrono, inline) e sobe as threads.
+  // Usado tanto no Open inicial quanto na reconexão. Uma falha libera o socket
+  // e o stream (antes ficavam para o próximo Open/Free).
+  FSocket := TAMQPTcpSocket.Create;
+  try
+    FSocket.Connect(FParams.Host, FParams.Port, FParams.ConnectTimeoutMs);
+    if FParams.HandshakeTimeoutMs > 0 then
+      FSocket.SetReceiveTimeout(FParams.HandshakeTimeoutMs);
+    ConnectStreamAndHandshake;
+    // A thread de leitura espera sem prazo: com a conexão aberta, quem detecta
+    // um peer mudo é o heartbeat.
+    if FParams.HandshakeTimeoutMs > 0 then
+      FSocket.SetReceiveTimeout(0);
+  except
+    on E: Exception do
+    begin
+      LTimedOut := Assigned(FSocket) and FSocket.TimedOut;
+      CloseSocketStream;
+      if LTimedOut then
+        raise EAMQPConnection.CreateFmt(
+          'handshake timeout: %s:%d did not answer within %d ms (%s)',
+          [FParams.Host, FParams.Port, FParams.HandshakeTimeoutMs, E.Message]);
+      raise;
+    end;
+  end;
+
+  FLastWriteTick := PcTickMs;
+  FLastReadTick := FLastWriteTick;
+  FServerCloseReason := '';
+  PcAtomicSet(FWritable, 1); // antes da thread de leitura: ela responde Close-Ok
+  StartReadThread;     // a partir daqui, só a thread lê o socket
+  StartHeartbeatThread;
+  FIsOpen := True;
+end;
+
+procedure TAMQPConnection.ConnectStreamAndHandshake;
+var
   LPlain: TAMQPSocketStream;
   LTarget: string;
 begin
-  // Cria socket, faz o handshake (síncrono, inline) e sobe as threads.
-  // Usado tanto no Open inicial quanto na reconexão.
-  FSocket := TAMQPTcpSocket.Create;
-  FSocket.Connect(FParams.Host, FParams.Port);
-
   LPlain := TAMQPSocketStream.Create(FSocket);
   FStream := LPlain;
   if FParams.UseTls then
@@ -1319,14 +1368,6 @@ begin
   end;
 
   Handshake; // antes de qualquer thread (agora sobre TLS, se habilitado)
-
-  FLastWriteTick := PcTickMs;
-  FLastReadTick := FLastWriteTick;
-  FServerCloseReason := '';
-  PcAtomicSet(FWritable, 1); // antes da thread de leitura: ela responde Close-Ok
-  StartReadThread;     // a partir daqui, só a thread lê o socket
-  StartHeartbeatThread;
-  FIsOpen := True;
 end;
 
 procedure TAMQPConnection.CloseSocketStream;
