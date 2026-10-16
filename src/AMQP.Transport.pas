@@ -49,6 +49,7 @@ type
   TAMQPTcpSocket = class
   private
     FPeerAddress: string;
+    FTimedOut: Boolean;
     {$IFDEF FPC}
     FSock: TInetSocket;    // caminho cliente (Connect)
     FRawFd: LongInt;       // caminho aceito (>= 0); -1 quando usa FSock
@@ -69,7 +70,16 @@ type
     /// 'ip:porta' do outro lado quando o socket veio de um Accept; '' senão.
     property PeerAddress: string read FPeerAddress;
     /// Resolve o host e conecta (bloqueante). Levanta excecao em falha.
-    procedure Connect(const AHost: string; APort: Word);
+    /// ATimeoutMs > 0 limita a espera do connect TCP (a resolucao de nome nao
+    /// entra): o prazo esgotado e a conexao recusada levantam EAMQPTransport.
+    /// 0 = espera do sistema operacional (comportamento anterior).
+    procedure Connect(const AHost: string; APort: Word; ATimeoutMs: Cardinal = 0);
+    /// Prazo de cada Receive em ms (SO_RCVTIMEO); 0 = sem prazo. Um Receive
+    /// que estoura o prazo devolve -1 (como qualquer erro) e liga TimedOut.
+    procedure SetReceiveTimeout(ATimeoutMs: Cardinal);
+    /// True depois de um Receive que voltou por estouro do prazo de
+    /// SetReceiveTimeout (o chamador distingue prazo de conexao encerrada).
+    property TimedOut: Boolean read FTimedOut;
     /// Devolve os bytes lidos; 0 (ou negativo) = conexao encerrada.
     function Receive(var Buffer; ACount: Integer): Integer;
     function Send(const Buffer; ACount: Integer): Integer;
@@ -145,6 +155,7 @@ implementation
 
 {$IFDEF FPC}
 uses
+  {$IFDEF UNIX}BaseUnix, {$ENDIF}// TTimeVal (SetReceiveTimeout)
   sockets;
 
 const
@@ -166,6 +177,10 @@ function amqp_setsockopt(S: NativeUInt; ALevel, AOptName: Integer;
 function amqp_getsockopt(S: NativeUInt; ALevel, AOptName: Integer;
   AOptVal: Pointer; var AOptLen: Integer): Integer; stdcall;
   external 'ws2_32.dll' name 'getsockopt';
+
+const
+  AMQP_SOL_SOCKET = $FFFF;
+  AMQP_SO_ERROR = $1007;
   {$ENDIF}
 {$ENDIF}
 
@@ -310,16 +325,93 @@ begin
   inherited;
 end;
 
-procedure TAMQPTcpSocket.Connect(const AHost: string; APort: Word);
+procedure TAMQPTcpSocket.Connect(const AHost: string; APort: Word; ATimeoutMs: Cardinal);
+{$IFDEF FPC}
 begin
-  {$IFDEF FPC}
-  FSock := TInetSocket.Create(AHost, APort); // conecta no construtor
+  if ATimeoutMs = 0 then
+    FSock := TInetSocket.Create(AHost, APort) // conecta no construtor
+  else
+  begin
+    {$IF FPC_FULLVERSION >= 30200}
+    try
+      // Com prazo, o ssockets conecta sem bloqueio e espera no select.
+      FSock := TInetSocket.Create(AHost, APort, Integer(ATimeoutMs));
+    except
+      on E: ESocketError do
+        raise EAMQPTransport.CreateFmt('connection to %s:%d failed: %s',
+          [AHost, APort, E.Message]);
+    end;
+    {$ELSE}
+    FSock := TInetSocket.Create(AHost, APort); // FPC < 3.2: sem prazo de connect
+    {$ENDIF}
+  end;
   AmqpSetNoDelay(FSock.Handle);
-  {$ELSE}
-  FSock.Connect(AHost, '', '', APort);
+end;
+{$ELSE}
+  {$IFDEF AMQP_WINDOWS}
+var
+  LErr, LLen: Integer;
+  {$ENDIF}
+begin
+  if ATimeoutMs = 0 then
+    FSock.Connect(AHost, '', '', APort)
+  else
+  begin
+    FSock.ConnectTimeout := Integer(ATimeoutMs);
+    try
+      FSock.Connect(AHost, '', '', APort);
+    except
+      on E: ESocketTimeoutError do
+        raise EAMQPTransport.CreateFmt('connect timeout: %s:%d did not answer within %d ms',
+          [AHost, APort, ATimeoutMs]);
+    end;
+    {$IFDEF AMQP_WINDOWS}
+    // Com ConnectTimeout a RTL conecta sem bloqueio e espera no select, mas
+    // nao confere o resultado: uma conexao RECUSADA sai "conectada" e so
+    // falharia no primeiro send/recv. O SO_ERROR diz se o connect deu certo.
+    LErr := 0;
+    LLen := SizeOf(LErr);
+    if (amqp_getsockopt(NativeUInt(FSock.Handle), AMQP_SOL_SOCKET, AMQP_SO_ERROR, @LErr, LLen) = 0)
+      and (LErr <> 0) then
+      raise EAMQPTransport.CreateFmt('connection to %s:%d failed: %s (%d)',
+        [AHost, APort, SysErrorMessage(LErr), LErr]);
+    {$ENDIF}
+  end;
   AmqpSetNoDelay(FSock);
+end;
+{$ENDIF}
+
+procedure TAMQPTcpSocket.SetReceiveTimeout(ATimeoutMs: Cardinal);
+{$IFDEF FPC}
+var
+  LHandle: LongInt;
+  {$IFDEF MSWINDOWS}
+  LMs: DWord;
+  {$ELSE}
+  LTv: TTimeVal;
+  {$ENDIF}
+begin
+  if FRawFd >= 0 then
+    LHandle := FRawFd
+  else if FSock <> nil then
+    LHandle := FSock.Handle
+  else
+    Exit;
+  {$IFDEF MSWINDOWS}
+  LMs := ATimeoutMs;
+  fpSetSockOpt(LHandle, SOL_SOCKET, SO_RCVTIMEO, @LMs, SizeOf(LMs));
+  {$ELSE}
+  LTv.tv_sec := ATimeoutMs div 1000;
+  LTv.tv_usec := (ATimeoutMs mod 1000) * 1000;
+  fpSetSockOpt(LHandle, SOL_SOCKET, SO_RCVTIMEO, @LTv, SizeOf(LTv));
   {$ENDIF}
 end;
+{$ELSE}
+begin
+  if FSock <> nil then
+    FSock.ReceiveTimeout := Integer(ATimeoutMs); // 0 = sem prazo
+end;
+{$ENDIF}
 
 function TAMQPTcpSocket.NoDelay: Boolean;
 begin
@@ -339,10 +431,16 @@ function TAMQPTcpSocket.Receive(var Buffer; ACount: Integer): Integer;
 begin
   {$IFDEF FPC}
   if FRawFd >= 0 then
-    Exit(fprecv(FRawFd, @Buffer, ACount, 0));
-  if FSock = nil then
-    Exit(0);
-  Result := FSock.Read(Buffer, ACount);
+    Result := fprecv(FRawFd, @Buffer, ACount, 0)
+  else if FSock = nil then
+    Exit(0)
+  else
+    Result := FSock.Read(Buffer, ACount);
+  // Prazo de SetReceiveTimeout estourado: EWOULDBLOCK/EAGAIN no Unix,
+  // WSAETIMEDOUT (10060) no Windows.
+  if (Result < 0) and ((SocketError = EsockEWOULDBLOCK)
+    {$IFDEF MSWINDOWS} or (SocketError = 10060){$ENDIF}) then
+    FTimedOut := True;
   {$ELSE}
   if FSock = nil then
     Exit(0);
@@ -355,8 +453,14 @@ begin
     // WSAECONNRESET (10054) quando o peer fecha com RST em vez de FIN, que é o
     // que acontece quando o outro lado derruba a conexão sem close gracioso.
     // Num socket bloqueante todo erro de recv é fatal, então -1 é a resposta
-    // certa para qualquer um deles.
-    Result := -1;
+    // certa para qualquer um deles. O estouro do prazo de SetReceiveTimeout
+    // (ESocketTimeoutError) fica registrado em TimedOut.
+    on E: Exception do
+    begin
+      if E is ESocketTimeoutError then
+        FTimedOut := True;
+      Result := -1;
+    end;
   end;
   {$ENDIF}
 end;
