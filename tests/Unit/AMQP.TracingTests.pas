@@ -7,14 +7,16 @@
   verdade (publish -> process numa trace so') sao testados contra o broker
   embutido, em tests\Server\AMQP.ServerTracingTests.pas.
 
-  Espelho FPCUnit de tests\Unit\fpc\AMQP.TracingTests.pas -- mantenha os dois em
-  sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils, System.Rtti,
+  AMQP.DUnitXCompat,
+  SysUtils, Rtti,
   AMQP.Wire,
   AMQP.Basic.Methods,
   PascalCommon.Tracing,
@@ -81,7 +83,8 @@ var
 begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
-  Assert.IsTrue(MesmosBytes(BuildContentHeader(3, LProps), BuildContentHeader(3, LProps, '', 'x=1')), 'sem traceparent, os mesmos bytes');
+  TAssert.AssertTrue('sem traceparent, os mesmos bytes',
+    MesmosBytes(BuildContentHeader(3, LProps), BuildContentHeader(3, LProps, '', 'x=1')));
 end;
 
 procedure TTracingCodecTests.ContentHeader_SemHeaders_InjetaTraceParent;
@@ -93,11 +96,11 @@ begin
   LProps.SetContentType('text/plain');
   LHeader := Decodifica(BuildContentHeader(3, LProps, TP, ''));
   try
-    Assert.IsTrue(bpHeaders in LHeader.Properties.Flags, 'ganhou headers');
-    Assert.AreEqual(1, Integer(LHeader.Properties.Headers.Count), 'so o traceparent');
-    Assert.AreEqual(TP, TextoDe(LHeader.Properties.Headers, 'traceparent'), 'traceparent');
-    Assert.AreEqual('text/plain', LHeader.Properties.ContentType, 'o resto intacto');
-    Assert.AreEqual(3, Integer(LHeader.BodySize), 'body size');
+    TAssert.AssertTrue('ganhou headers', bpHeaders in LHeader.Properties.Flags);
+    TAssert.AssertEquals('so o traceparent', 1, Integer(LHeader.Properties.Headers.Count));
+    TAssert.AssertEquals('traceparent', TP, TextoDe(LHeader.Properties.Headers, 'traceparent'));
+    TAssert.AssertEquals('o resto intacto', 'text/plain', LHeader.Properties.ContentType);
+    TAssert.AssertEquals('body size', 3, Integer(LHeader.BodySize));
   finally
     LiberaHeaders(LHeader);
   end;
@@ -118,15 +121,16 @@ begin
     LProps.SetHeaders(LTabela);
     LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
     try
-      Assert.AreEqual(3, Integer(LHeader.Properties.Headers.Count), 'tres entradas');
-      Assert.AreEqual('pedido', TextoDe(LHeader.Properties.Headers, 'tipo'), 'a do chamador');
-      Assert.AreEqual(TP, TextoDe(LHeader.Properties.Headers, 'traceparent'), 'traceparent');
-      Assert.AreEqual('vendor=abc', TextoDe(LHeader.Properties.Headers, 'tracestate'), 'tracestate');
+      TAssert.AssertEquals('tres entradas', 3, Integer(LHeader.Properties.Headers.Count));
+      TAssert.AssertEquals('a do chamador', 'pedido', TextoDe(LHeader.Properties.Headers, 'tipo'));
+      TAssert.AssertEquals('traceparent', TP, TextoDe(LHeader.Properties.Headers, 'traceparent'));
+      TAssert.AssertEquals('tracestate', 'vendor=abc',
+        TextoDe(LHeader.Properties.Headers, 'tracestate'));
     finally
       LiberaHeaders(LHeader);
     end;
-    Assert.AreEqual(1, Integer(LTabela.Count), 'a tabela do chamador nao mudou');
-    Assert.IsFalse(LTabela.ContainsKey('traceparent'), 'sem traceparent nela');
+    TAssert.AssertEquals('a tabela do chamador nao mudou', 1, Integer(LTabela.Count));
+    TAssert.AssertFalse('sem traceparent nela', LTabela.ContainsKey('traceparent'));
   finally
     LTabela.Free;
   end;
@@ -145,11 +149,13 @@ begin
     LTabela.Put('traceparent', LValue);
     LProps := TAMQPBasicProperties.Empty;
     LProps.SetHeaders(LTabela);
-    Assert.IsTrue(MesmosBytes(BuildContentHeader(0, LProps), BuildContentHeader(0, LProps, TP, 'x=1')), 'nada acrescentado: os mesmos bytes');
+    TAssert.AssertTrue('nada acrescentado: os mesmos bytes',
+      MesmosBytes(BuildContentHeader(0, LProps), BuildContentHeader(0, LProps, TP, 'x=1')));
     LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'x=1'));
     try
-      Assert.AreEqual(1, Integer(LHeader.Properties.Headers.Count), 'uma entrada');
-      Assert.AreEqual(TP_DO_CHAMADOR, TextoDe(LHeader.Properties.Headers, 'traceparent'), 'o do chamador');
+      TAssert.AssertEquals('uma entrada', 1, Integer(LHeader.Properties.Headers.Count));
+      TAssert.AssertEquals('o do chamador', TP_DO_CHAMADOR,
+        TextoDe(LHeader.Properties.Headers, 'traceparent'));
     finally
       LiberaHeaders(LHeader);
     end;
@@ -173,9 +179,12 @@ begin
     LProps.SetHeaders(LTabela);
     LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
     try
-      Assert.AreEqual(2, Integer(LHeader.Properties.Headers.Count), 'duas entradas, sem nome repetido');
-      Assert.AreEqual(TP, TextoDe(LHeader.Properties.Headers, 'traceparent'), 'traceparent injetado');
-      Assert.AreEqual('meu=1', TextoDe(LHeader.Properties.Headers, 'tracestate'), 'tracestate do chamador');
+      TAssert.AssertEquals('duas entradas, sem nome repetido', 2,
+        Integer(LHeader.Properties.Headers.Count));
+      TAssert.AssertEquals('traceparent injetado', TP,
+        TextoDe(LHeader.Properties.Headers, 'traceparent'));
+      TAssert.AssertEquals('tracestate do chamador', 'meu=1',
+        TextoDe(LHeader.Properties.Headers, 'tracestate'));
     finally
       LiberaHeaders(LHeader);
     end;
@@ -190,9 +199,9 @@ var
   LParent, LState: string;
 begin
   LProps := TAMQPBasicProperties.Empty;
-  Assert.IsFalse(AmqpTraceParentOf(LProps, LParent, LState), 'sem headers');
-  Assert.AreEqual('', LParent, 'traceparent vazio');
-  Assert.AreEqual('', LState, 'tracestate vazio');
+  TAssert.AssertFalse('sem headers', AmqpTraceParentOf(LProps, LParent, LState));
+  TAssert.AssertEquals('traceparent vazio', '', LParent);
+  TAssert.AssertEquals('tracestate vazio', '', LState);
 end;
 
 procedure TTracingCodecTests.TraceParentOf_LeTraceParentETraceState;
@@ -205,9 +214,9 @@ begin
   // O caminho de verdade: a tabela decodificada do wire.
   LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
   try
-    Assert.IsTrue(AmqpTraceParentOf(LHeader.Properties, LParent, LState), 'achou');
-    Assert.AreEqual(TP, LParent, 'traceparent');
-    Assert.AreEqual('vendor=abc', LState, 'tracestate');
+    TAssert.AssertTrue('achou', AmqpTraceParentOf(LHeader.Properties, LParent, LState));
+    TAssert.AssertEquals('traceparent', TP, LParent);
+    TAssert.AssertEquals('tracestate', 'vendor=abc', LState);
   finally
     LiberaHeaders(LHeader);
   end;
@@ -226,8 +235,8 @@ begin
     LTabela.Put('traceparent', LValue);
     LProps := TAMQPBasicProperties.Empty;
     LProps.SetHeaders(LTabela);
-    Assert.IsFalse(AmqpTraceParentOf(LProps, LParent, LState), 'numero nao e traceparent');
-    Assert.AreEqual('', LParent, 'traceparent vazio');
+    TAssert.AssertFalse('numero nao e traceparent', AmqpTraceParentOf(LProps, LParent, LState));
+    TAssert.AssertEquals('traceparent vazio', '', LParent);
   finally
     LTabela.Free;
   end;
@@ -235,22 +244,22 @@ end;
 
 procedure TTracingCodecTests.SpanDestination_NomesDoSpan;
 begin
-  Assert.AreEqual('amq.default', AmqpSpanDestination('', True), 'exchange padrao');
-  Assert.AreEqual('pedidos', AmqpSpanDestination('pedidos', True), 'exchange com nome');
-  Assert.AreEqual('(temporary)', AmqpSpanDestination('amq.gen-Xy12', False), 'fila gerada');
-  Assert.AreEqual('pedidos', AmqpSpanDestination('pedidos', False), 'fila com nome');
-  Assert.AreEqual('', AmqpSpanDestination('', False), 'fila vazia nao e exchange');
+  TAssert.AssertEquals('exchange padrao', 'amq.default', AmqpSpanDestination('', True));
+  TAssert.AssertEquals('exchange com nome', 'pedidos', AmqpSpanDestination('pedidos', True));
+  TAssert.AssertEquals('fila gerada', '(temporary)', AmqpSpanDestination('amq.gen-Xy12', False));
+  TAssert.AssertEquals('fila com nome', 'pedidos', AmqpSpanDestination('pedidos', False));
+  TAssert.AssertEquals('fila vazia nao e exchange', '', AmqpSpanDestination('', False));
 end;
 
 procedure TTracingCodecTests.TracerDesligado_NaoAbreSpan;
 var
   LProps: TAMQPBasicProperties;
 begin
-  Assert.IsFalse(TPcTracing.Enabled, 'nenhum teste deixou o tracer ligado');
+  TAssert.AssertFalse('nenhum teste deixou o tracer ligado', TPcTracing.Enabled);
   LProps := TAMQPBasicProperties.Empty;
-  Assert.IsTrue(AmqpStartPublishSpan('ex', 'rk', 1, LProps) = nil, 'publish');
-  Assert.IsTrue(AmqpStartProcessSpan('q', LProps) = nil, 'process');
-  Assert.IsTrue(AmqpStartReceiveSpan('q') = nil, 'receive');
+  TAssert.AssertTrue('publish', AmqpStartPublishSpan('ex', 'rk', 1, LProps) = nil);
+  TAssert.AssertTrue('process', AmqpStartProcessSpan('q', LProps) = nil);
+  TAssert.AssertTrue('receive', AmqpStartReceiveSpan('q') = nil);
   AmqpFinishSpan(nil, nil); // nil e no-op
 end;
 

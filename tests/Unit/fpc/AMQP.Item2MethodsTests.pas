@@ -1,14 +1,20 @@
 ﻿unit AMQP.Item2MethodsTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Unit/AMQP.Item2MethodsTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Testes do codec do item 2: métodos de channel/exchange/queue/basic e o
   content header (property-flags). Sem broker. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Rtti,
+  fpcunit, testregistry,
+  SysUtils, Rtti,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Method,
@@ -102,9 +108,9 @@ begin
   R := TAMQPReader.Create(BuildChannelOpen);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN));
-    AssertEquals('reserved-1', '', R.ReadShortStr);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN));
+    TAssert.AssertEquals('reserved-1', '', R.ReadShortStr);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -124,12 +130,12 @@ begin
   R := TAMQPReader.Create(BuildChannelClose(LClose));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE));
     LDecoded := DecodeChannelClose(R);
-    AssertEquals(404, Integer(LDecoded.ReplyCode));
-    AssertEquals('NOT_FOUND', LDecoded.ReplyText);
-    AssertEquals(Integer(AMQP_CLASS_QUEUE), Integer(LDecoded.ClassId));
-    AssertEquals(Integer(AMQP_QUEUE_DECLARE), Integer(LDecoded.MethodId));
+    TAssert.AssertEquals(404, Integer(LDecoded.ReplyCode));
+    TAssert.AssertEquals('NOT_FOUND', LDecoded.ReplyText);
+    TAssert.AssertEquals(Integer(AMQP_CLASS_QUEUE), Integer(LDecoded.ClassId));
+    TAssert.AssertEquals(Integer(AMQP_QUEUE_DECLARE), Integer(LDecoded.MethodId));
   finally
     R.Free;
   end;
@@ -148,15 +154,15 @@ begin
   R := TAMQPReader.Create(BuildExchangeDeclare(LDeclare));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_DECLARE));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
-    AssertEquals('type', 'topic', R.ReadShortStr);
-    AssertFalse('passive', R.ReadBit);
-    AssertTrue('durable', R.ReadBit);
-    AssertTrue('auto-delete', R.ReadBit);
-    AssertFalse('internal', R.ReadBit);
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_DECLARE));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
+    TAssert.AssertEquals('type', 'topic', R.ReadShortStr);
+    TAssert.AssertFalse('passive', R.ReadBit);
+    TAssert.AssertTrue('durable', R.ReadBit);
+    TAssert.AssertTrue('auto-delete', R.ReadBit);
+    TAssert.AssertFalse('internal', R.ReadBit);
+    TAssert.AssertFalse('no-wait', R.ReadBit);
   finally
     R.Free;
   end;
@@ -177,19 +183,19 @@ begin
   R := TAMQPReader.Create(BuildExchangeBind(LBind));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_BIND));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('destination', 'nfe.dest', R.ReadShortStr);
-    AssertEquals('source', 'nfe.source', R.ReadShortStr);
-    AssertEquals('routing-key', 'resposta.*', R.ReadShortStr);
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_BIND));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('destination', 'nfe.dest', R.ReadShortStr);
+    TAssert.AssertEquals('source', 'nfe.source', R.ReadShortStr);
+    TAssert.AssertEquals('routing-key', 'resposta.*', R.ReadShortStr);
+    TAssert.AssertFalse('no-wait', R.ReadBit);
     LArgs := R.ReadFieldTable;
     try
-      AssertEquals('arguments vazio', 0, LArgs.Count);
+      TAssert.AssertEquals('arguments vazio', 0, LArgs.Count);
     finally
       LArgs.Free;
     end;
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -210,12 +216,12 @@ begin
   try
     LId := ReadMethodHeader(R);
     // Mesmo layout do bind, mas com o method-id de unbind (40).
-    AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_UNBIND));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('destination', 'nfe.dest', R.ReadShortStr);
-    AssertEquals('source', 'nfe.source', R.ReadShortStr);
-    AssertEquals('routing-key', 'resposta.*', R.ReadShortStr);
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_UNBIND));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('destination', 'nfe.dest', R.ReadShortStr);
+    TAssert.AssertEquals('source', 'nfe.source', R.ReadShortStr);
+    TAssert.AssertEquals('routing-key', 'resposta.*', R.ReadShortStr);
+    TAssert.AssertFalse('no-wait', R.ReadBit);
   finally
     R.Free;
   end;
@@ -232,14 +238,14 @@ begin
   R := TAMQPReader.Create(BuildQueueDeclare(LDeclare));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
-    AssertFalse('passive', R.ReadBit);
-    AssertTrue('durable', R.ReadBit);
-    AssertFalse('exclusive', R.ReadBit);
-    AssertFalse('auto-delete', R.ReadBit);
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
+    TAssert.AssertFalse('passive', R.ReadBit);
+    TAssert.AssertTrue('durable', R.ReadBit);
+    TAssert.AssertFalse('exclusive', R.ReadBit);
+    TAssert.AssertFalse('auto-delete', R.ReadBit);
+    TAssert.AssertFalse('no-wait', R.ReadBit);
   finally
     R.Free;
   end;
@@ -261,11 +267,11 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK));
       LOk := DecodeQueueDeclareOk(R);
-      AssertEquals('nfe.respostas', LOk.QueueName);
-      AssertEquals(QWord(7), QWord(LOk.MessageCount));
-      AssertEquals(QWord(2), QWord(LOk.ConsumerCount));
+      TAssert.AssertEquals('nfe.respostas', LOk.QueueName);
+      TAssert.AssertEquals(Int64(7), Int64(LOk.MessageCount));
+      TAssert.AssertEquals(Int64(2), Int64(LOk.ConsumerCount));
     finally
       R.Free;
     end;
@@ -288,12 +294,12 @@ begin
   R := TAMQPReader.Create(BuildQueueBind(LBind));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_BIND));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
-    AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
-    AssertEquals('routing-key', 'resposta.autorizada', R.ReadShortStr);
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_BIND));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
+    TAssert.AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
+    TAssert.AssertEquals('routing-key', 'resposta.autorizada', R.ReadShortStr);
+    TAssert.AssertFalse('no-wait', R.ReadBit);
   finally
     R.Free;
   end;
@@ -314,19 +320,19 @@ begin
   R := TAMQPReader.Create(BuildQueueUnbind(LUnbind));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_UNBIND));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
-    AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
-    AssertEquals('routing-key', 'resposta.autorizada', R.ReadShortStr);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_UNBIND));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
+    TAssert.AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
+    TAssert.AssertEquals('routing-key', 'resposta.autorizada', R.ReadShortStr);
     // Diferente de bind: unbind NÃO tem no-wait — vem a field-table direto.
     LArgs := R.ReadFieldTable;
     try
-      AssertEquals('arguments vazio', 0, LArgs.Count);
+      TAssert.AssertEquals('arguments vazio', 0, LArgs.Count);
     finally
       LArgs.Free;
     end;
-    AssertTrue('field-table encerra o payload', R.EndOfData);
+    TAssert.AssertTrue('field-table encerra o payload', R.EndOfData);
   finally
     R.Free;
   end;
@@ -340,12 +346,12 @@ begin
   R := TAMQPReader.Create(BuildBasicPublish('nfe.exchange', 'resposta.autorizada', True, False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
-    AssertEquals('routing-key', 'resposta.autorizada', R.ReadShortStr);
-    AssertTrue('mandatory', R.ReadBit);
-    AssertFalse('immediate', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('exchange', 'nfe.exchange', R.ReadShortStr);
+    TAssert.AssertEquals('routing-key', 'resposta.autorizada', R.ReadShortStr);
+    TAssert.AssertTrue('mandatory', R.ReadBit);
+    TAssert.AssertFalse('immediate', R.ReadBit);
   finally
     R.Free;
   end;
@@ -359,10 +365,10 @@ begin
   R := TAMQPReader.Create(BuildBasicGet('nfe.respostas', True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
-    AssertTrue('no-ack', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
+    TAssert.AssertTrue('no-ack', R.ReadBit);
   finally
     R.Free;
   end;
@@ -386,13 +392,13 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET_OK));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET_OK));
       LOk := DecodeBasicGetOk(R);
-      AssertTrue('delivery-tag', UInt64(42) = LOk.DeliveryTag);
-      AssertTrue('redelivered', LOk.Redelivered);
-      AssertEquals('nfe.ex', LOk.Exchange);
-      AssertEquals('resp.rk', LOk.RoutingKey);
-      AssertEquals(QWord(5), QWord(LOk.MessageCount));
+      TAssert.AssertTrue('delivery-tag', UInt64(42) = LOk.DeliveryTag);
+      TAssert.AssertTrue('redelivered', LOk.Redelivered);
+      TAssert.AssertEquals('nfe.ex', LOk.Exchange);
+      TAssert.AssertEquals('resp.rk', LOk.RoutingKey);
+      TAssert.AssertEquals(Int64(5), Int64(LOk.MessageCount));
     finally
       R.Free;
     end;
@@ -409,9 +415,9 @@ begin
   R := TAMQPReader.Create(BuildBasicAck(7, True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK));
-    AssertTrue('delivery-tag', UInt64(7) = R.ReadLongLongUInt);
-    AssertTrue('multiple', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK));
+    TAssert.AssertTrue('delivery-tag', UInt64(7) = R.ReadLongLongUInt);
+    TAssert.AssertTrue('multiple', R.ReadBit);
   finally
     R.Free;
   end;
@@ -425,10 +431,10 @@ begin
   R := TAMQPReader.Create(BuildBasicNack(9, False, True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_NACK));
-    AssertTrue('delivery-tag', UInt64(9) = R.ReadLongLongUInt);
-    AssertFalse('multiple', R.ReadBit);
-    AssertTrue('requeue', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_NACK));
+    TAssert.AssertTrue('delivery-tag', UInt64(9) = R.ReadLongLongUInt);
+    TAssert.AssertFalse('multiple', R.ReadBit);
+    TAssert.AssertTrue('requeue', R.ReadBit);
   finally
     R.Free;
   end;
@@ -442,10 +448,10 @@ begin
   R := TAMQPReader.Create(BuildBasicQos(10, False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_QOS));
-    AssertEquals('prefetch-size', QWord(0), QWord(R.ReadLongUInt));
-    AssertEquals('prefetch-count', 10, Integer(R.ReadShortUInt));
-    AssertFalse('global', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_QOS));
+    TAssert.AssertEquals('prefetch-size', Int64(0), Int64(R.ReadLongUInt));
+    TAssert.AssertEquals('prefetch-count', 10, Integer(R.ReadShortUInt));
+    TAssert.AssertFalse('global', R.ReadBit);
   finally
     R.Free;
   end;
@@ -463,14 +469,14 @@ begin
   R := TAMQPReader.Create(BuildBasicConsume(LConsume));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME));
-    AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
-    AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
-    AssertEquals('consumer-tag', 'ctag-1', R.ReadShortStr);
-    AssertFalse('no-local', R.ReadBit);
-    AssertFalse('no-ack', R.ReadBit);
-    AssertTrue('exclusive', R.ReadBit);
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME));
+    TAssert.AssertEquals('reserved-1', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('queue', 'nfe.respostas', R.ReadShortStr);
+    TAssert.AssertEquals('consumer-tag', 'ctag-1', R.ReadShortStr);
+    TAssert.AssertFalse('no-local', R.ReadBit);
+    TAssert.AssertFalse('no-ack', R.ReadBit);
+    TAssert.AssertTrue('exclusive', R.ReadBit);
+    TAssert.AssertFalse('no-wait', R.ReadBit);
   finally
     R.Free;
   end;
@@ -489,8 +495,8 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME_OK));
-      AssertEquals('ctag-gerada', DecodeBasicConsumeOk(R));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME_OK));
+      TAssert.AssertEquals('ctag-gerada', DecodeBasicConsumeOk(R));
     finally
       R.Free;
     end;
@@ -517,13 +523,13 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_DELIVER));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_DELIVER));
       LDeliver := DecodeBasicDeliver(R);
-      AssertEquals('ctag-1', LDeliver.ConsumerTag);
-      AssertTrue('delivery-tag', UInt64(99) = LDeliver.DeliveryTag);
-      AssertFalse(LDeliver.Redelivered);
-      AssertEquals('nfe.ex', LDeliver.Exchange);
-      AssertEquals('resp.rk', LDeliver.RoutingKey);
+      TAssert.AssertEquals('ctag-1', LDeliver.ConsumerTag);
+      TAssert.AssertTrue('delivery-tag', UInt64(99) = LDeliver.DeliveryTag);
+      TAssert.AssertFalse(LDeliver.Redelivered);
+      TAssert.AssertEquals('nfe.ex', LDeliver.Exchange);
+      TAssert.AssertEquals('resp.rk', LDeliver.RoutingKey);
     finally
       R.Free;
     end;
@@ -549,12 +555,12 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN));
       LReturn := DecodeBasicReturn(R);
-      AssertEquals(312, Integer(LReturn.ReplyCode));
-      AssertEquals('NO_ROUTE', LReturn.ReplyText);
-      AssertEquals('nfe.ex', LReturn.Exchange);
-      AssertEquals('resp.rk', LReturn.RoutingKey);
+      TAssert.AssertEquals(312, Integer(LReturn.ReplyCode));
+      TAssert.AssertEquals('NO_ROUTE', LReturn.ReplyText);
+      TAssert.AssertEquals('nfe.ex', LReturn.Exchange);
+      TAssert.AssertEquals('resp.rk', LReturn.RoutingKey);
     finally
       R.Free;
     end;
@@ -571,8 +577,8 @@ begin
   R := TAMQPReader.Create(BuildConfirmSelect(False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT));
-    AssertFalse('no-wait', R.ReadBit);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT));
+    TAssert.AssertFalse('no-wait', R.ReadBit);
   finally
     R.Free;
   end;
@@ -594,10 +600,10 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK));
       LAck := DecodeBasicAck(R);
-      AssertTrue('delivery-tag', UInt64(5) = LAck.DeliveryTag);
-      AssertTrue('multiple', LAck.Multiple);
+      TAssert.AssertTrue('delivery-tag', UInt64(5) = LAck.DeliveryTag);
+      TAssert.AssertTrue('multiple', LAck.Multiple);
     finally
       R.Free;
     end;
@@ -622,11 +628,11 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_NACK));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_NACK));
       LNack := DecodeBasicNack(R);
-      AssertTrue('delivery-tag', UInt64(8) = LNack.DeliveryTag);
-      AssertFalse('multiple', LNack.Multiple);
-      AssertFalse('requeue', LNack.Requeue);
+      TAssert.AssertTrue('delivery-tag', UInt64(8) = LNack.DeliveryTag);
+      TAssert.AssertFalse('multiple', LNack.Multiple);
+      TAssert.AssertFalse('requeue', LNack.Requeue);
     finally
       R.Free;
     end;
@@ -648,13 +654,13 @@ begin
 
   R := TAMQPReader.Create(BuildContentHeader(123, LProps));
   try
-    AssertEquals('class-id', Integer(AMQP_CLASS_BASIC), Integer(R.ReadShortUInt));
-    AssertEquals('weight', 0, Integer(R.ReadShortUInt));
-    AssertTrue('body-size', UInt64(123) = R.ReadLongLongUInt);
+    TAssert.AssertEquals('class-id', Integer(AMQP_CLASS_BASIC), Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('weight', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertTrue('body-size', UInt64(123) = R.ReadLongLongUInt);
     // content-type = bit 15 (0x8000), delivery-mode = bit 12 (0x1000) => 0x9000
-    AssertEquals('property-flags', $9000, Integer(R.ReadShortUInt));
-    AssertEquals('content-type', 'application/json', R.ReadShortStr);
-    AssertEquals('delivery-mode (octeto)', 2, Integer(R.ReadOctet));
+    TAssert.AssertEquals('property-flags', $9000, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals('content-type', 'application/json', R.ReadShortStr);
+    TAssert.AssertEquals('delivery-mode (octeto)', 2, Integer(R.ReadOctet));
   finally
     R.Free;
   end;
@@ -678,17 +684,17 @@ begin
   R := TAMQPReader.Create(BuildContentHeader(999, LProps));
   try
     LHeader := DecodeContentHeader(R);
-    AssertTrue('body-size', UInt64(999) = LHeader.BodySize);
-    AssertEquals('text/plain', LHeader.Properties.ContentType);
-    AssertEquals(2, Integer(LHeader.Properties.DeliveryMode));
-    AssertEquals('corr-42', LHeader.Properties.CorrelationId);
-    AssertEquals('msg-1', LHeader.Properties.MessageId);
-    AssertTrue(UInt64(1700000000) = LHeader.Properties.Timestamp);
-    AssertEquals('pdv', LHeader.Properties.AppId);
-    AssertEquals('nfe.autorizada', LHeader.Properties.MsgType);
-    AssertTrue(LHeader.Properties.Has(bpCorrelationId));
-    AssertFalse('priority não foi setado', LHeader.Properties.Has(bpPriority));
-    AssertFalse(LHeader.Properties.Has(bpReplyTo));
+    TAssert.AssertTrue('body-size', UInt64(999) = LHeader.BodySize);
+    TAssert.AssertEquals('text/plain', LHeader.Properties.ContentType);
+    TAssert.AssertEquals(2, Integer(LHeader.Properties.DeliveryMode));
+    TAssert.AssertEquals('corr-42', LHeader.Properties.CorrelationId);
+    TAssert.AssertEquals('msg-1', LHeader.Properties.MessageId);
+    TAssert.AssertTrue(UInt64(1700000000) = LHeader.Properties.Timestamp);
+    TAssert.AssertEquals('pdv', LHeader.Properties.AppId);
+    TAssert.AssertEquals('nfe.autorizada', LHeader.Properties.MsgType);
+    TAssert.AssertTrue(LHeader.Properties.Has(bpCorrelationId));
+    TAssert.AssertFalse('priority não foi setado', LHeader.Properties.Has(bpPriority));
+    TAssert.AssertFalse(LHeader.Properties.Has(bpReplyTo));
   finally
     R.Free;
   end;
@@ -700,8 +706,8 @@ var
 begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetPersistent;
-  AssertTrue(LProps.Has(bpDeliveryMode));
-  AssertEquals(2, Integer(LProps.DeliveryMode));
+  TAssert.AssertTrue(LProps.Has(bpDeliveryMode));
+  TAssert.AssertEquals(2, Integer(LProps.DeliveryMode));
 end;
 
 procedure TContentHeaderTests.Headers_RoundTrip;
@@ -722,9 +728,9 @@ begin
   try
     LHeader := DecodeContentHeader(R);
     try
-      AssertTrue(LHeader.Properties.Has(bpHeaders));
+      TAssert.AssertTrue(LHeader.Properties.Has(bpHeaders));
       LChaveVal := LHeader.Properties.Headers['chave-nfe'];
-      AssertEquals('NFe35240712345678000199550010000012341000012349',
+      TAssert.AssertEquals('NFe35240712345678000199550010000012341000012349',
         LChaveVal.AsString);
     finally
       LHeader.Properties.Headers.Free; // tabela decodificada
@@ -744,8 +750,8 @@ begin
     R.ReadShortUInt;   // class-id
     R.ReadShortUInt;   // weight
     R.ReadLongLongUInt; // body-size
-    AssertEquals('property-flags = 0 (nenhuma propriedade)', 0, Integer(R.ReadShortUInt));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('property-flags = 0 (nenhuma propriedade)', 0, Integer(R.ReadShortUInt));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -761,9 +767,9 @@ begin
   R := TAMQPReader.Create(BuildChannelOpen);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN));
     DecodeChannelOpen(R);
-    AssertTrue('reservado consumido', R.EndOfData);
+    TAssert.AssertTrue('reservado consumido', R.EndOfData);
   finally
     R.Free;
   end;
@@ -777,9 +783,9 @@ begin
   R := TAMQPReader.Create(BuildChannelOpenOk);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK));
     DecodeChannelOpenOk(R); // decode do CLIENTE
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -793,8 +799,8 @@ begin
   R := TAMQPReader.Create(BuildChannelFlow(False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_FLOW));
-    AssertFalse('active', DecodeChannelFlow(R));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_FLOW));
+    TAssert.AssertFalse('active', DecodeChannelFlow(R));
   finally
     R.Free;
   end;
@@ -802,8 +808,8 @@ begin
   R := TAMQPReader.Create(BuildChannelFlowOk(True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_FLOW_OK));
-    AssertTrue('active', DecodeChannelFlowOk(R));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_FLOW_OK));
+    TAssert.AssertTrue('active', DecodeChannelFlowOk(R));
   finally
     R.Free;
   end;
@@ -824,14 +830,14 @@ begin
       ReadMethodHeader(R);
       LDecoded := DecodeExchangeDeclare(R);
       try
-        AssertEquals('nome', 'eventos', LDecoded.ExchangeName);
-        AssertEquals('tipo', 'topic', LDecoded.ExchangeType);
-        AssertFalse('passive', LDecoded.Passive);
-        AssertTrue('durable', LDecoded.Durable);
-        AssertTrue('auto-delete', LDecoded.AutoDelete);
-        AssertFalse('internal', LDecoded.Internal);
-        AssertTrue('arg presente', LDecoded.Arguments.ContainsKey('alternate-exchange'));
-        AssertTrue(R.EndOfData);
+        TAssert.AssertEquals('nome', 'eventos', LDecoded.ExchangeName);
+        TAssert.AssertEquals('tipo', 'topic', LDecoded.ExchangeType);
+        TAssert.AssertFalse('passive', LDecoded.Passive);
+        TAssert.AssertTrue('durable', LDecoded.Durable);
+        TAssert.AssertTrue('auto-delete', LDecoded.AutoDelete);
+        TAssert.AssertFalse('internal', LDecoded.Internal);
+        TAssert.AssertTrue('arg presente', LDecoded.Arguments.ContainsKey('alternate-exchange'));
+        TAssert.AssertTrue(R.EndOfData);
       finally
         LDecoded.Arguments.Free;
       end;
@@ -851,9 +857,9 @@ begin
   R := TAMQPReader.Create(BuildExchangeDeclareOk);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_DECLARE_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_DECLARE_OK));
     DecodeExchangeDeclareOk(R); // decode do CLIENTE
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -874,10 +880,10 @@ begin
     ReadMethodHeader(R);
     LDecoded := DecodeExchangeBind(R);
     try
-      AssertEquals('destination', 'dest', LDecoded.Destination);
-      AssertEquals('source', 'src', LDecoded.Source);
-      AssertEquals('routing-key', 'nota.#', LDecoded.RoutingKey);
-      AssertTrue(R.EndOfData);
+      TAssert.AssertEquals('destination', 'dest', LDecoded.Destination);
+      TAssert.AssertEquals('source', 'src', LDecoded.Source);
+      TAssert.AssertEquals('routing-key', 'nota.#', LDecoded.RoutingKey);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       LDecoded.Arguments.Free;
     end;
@@ -895,9 +901,9 @@ begin
   try
     LId := ReadMethodHeader(R);
     // peculiaridade da spec estendida RabbitMQ: unbind-ok é 51, não 41.
-    AssertEquals('method-id', 51, Integer(LId.MethodId));
-    AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_UNBIND_OK));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('method-id', 51, Integer(LId.MethodId));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_EXCHANGE, AMQP_EXCHANGE_UNBIND_OK));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -918,12 +924,12 @@ begin
       ReadMethodHeader(R);
       LDecoded := DecodeQueueDeclare(R);
       try
-        AssertEquals('nome', 'fila.retry', LDecoded.QueueName);
-        AssertTrue('durable', LDecoded.Durable);
-        AssertTrue('exclusive', LDecoded.Exclusive);
-        AssertFalse('auto-delete', LDecoded.AutoDelete);
-        AssertTrue('arg presente', LDecoded.Arguments.ContainsKey('x-message-ttl'));
-        AssertTrue(R.EndOfData);
+        TAssert.AssertEquals('nome', 'fila.retry', LDecoded.QueueName);
+        TAssert.AssertTrue('durable', LDecoded.Durable);
+        TAssert.AssertTrue('exclusive', LDecoded.Exclusive);
+        TAssert.AssertFalse('auto-delete', LDecoded.AutoDelete);
+        TAssert.AssertTrue('arg presente', LDecoded.Arguments.ContainsKey('x-message-ttl'));
+        TAssert.AssertTrue(R.EndOfData);
       finally
         LDecoded.Arguments.Free;
       end;
@@ -944,12 +950,12 @@ begin
   R := TAMQPReader.Create(BuildQueueDeclareOk('amq.gen-Ab3', 5, 2));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DECLARE_OK));
     LOk := DecodeQueueDeclareOk(R); // decode do CLIENTE
-    AssertEquals('nome gerado', 'amq.gen-Ab3', LOk.QueueName);
-    AssertEquals(QWord(5), QWord(LOk.MessageCount));
-    AssertEquals(QWord(2), QWord(LOk.ConsumerCount));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('nome gerado', 'amq.gen-Ab3', LOk.QueueName);
+    TAssert.AssertEquals(Int64(5), Int64(LOk.MessageCount));
+    TAssert.AssertEquals(Int64(2), Int64(LOk.ConsumerCount));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -971,10 +977,10 @@ begin
     ReadMethodHeader(R);
     LDecoded := DecodeQueueBind(R);
     try
-      AssertEquals('queue', 'q', LDecoded.QueueName);
-      AssertEquals('exchange', 'ex', LDecoded.ExchangeName);
-      AssertEquals('routing-key', 'rk', LDecoded.RoutingKey);
-      AssertTrue(R.EndOfData);
+      TAssert.AssertEquals('queue', 'q', LDecoded.QueueName);
+      TAssert.AssertEquals('exchange', 'ex', LDecoded.ExchangeName);
+      TAssert.AssertEquals('routing-key', 'rk', LDecoded.RoutingKey);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       LDecoded.Arguments.Free;
     end;
@@ -999,10 +1005,10 @@ begin
     ReadMethodHeader(R);
     LDecoded := DecodeQueueUnbind(R);
     try
-      AssertEquals('queue', 'q', LDecoded.QueueName);
-      AssertEquals('exchange', 'ex', LDecoded.ExchangeName);
-      AssertEquals('routing-key', 'rk', LDecoded.RoutingKey);
-      AssertTrue('sem no-wait: acaba direto nos arguments', R.EndOfData);
+      TAssert.AssertEquals('queue', 'q', LDecoded.QueueName);
+      TAssert.AssertEquals('exchange', 'ex', LDecoded.ExchangeName);
+      TAssert.AssertEquals('routing-key', 'rk', LDecoded.RoutingKey);
+      TAssert.AssertTrue('sem no-wait: acaba direto nos arguments', R.EndOfData);
     finally
       LDecoded.Arguments.Free;
     end;
@@ -1020,10 +1026,10 @@ begin
   R := TAMQPReader.Create(BuildQueuePurge('q', True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_PURGE));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_PURGE));
     LPurge := DecodeQueuePurge(R);
-    AssertEquals('queue', 'q', LPurge.QueueName);
-    AssertTrue('no-wait', LPurge.NoWait);
+    TAssert.AssertEquals('queue', 'q', LPurge.QueueName);
+    TAssert.AssertTrue('no-wait', LPurge.NoWait);
   finally
     R.Free;
   end;
@@ -1031,9 +1037,9 @@ begin
   R := TAMQPReader.Create(BuildQueuePurgeOk(42));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_PURGE_OK));
-    AssertEquals(QWord(42), QWord(DecodeQueuePurgeOk(R))); // decode do CLIENTE
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_PURGE_OK));
+    TAssert.AssertEquals(Int64(42), Int64(DecodeQueuePurgeOk(R))); // decode do CLIENTE
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1055,10 +1061,10 @@ begin
   try
     ReadMethodHeader(R);
     LDecoded := DecodeQueueDelete(R);
-    AssertEquals('queue', 'q', LDecoded.QueueName);
-    AssertTrue('if-unused', LDecoded.IfUnused);
-    AssertTrue('if-empty', LDecoded.IfEmpty);
-    AssertFalse('no-wait', LDecoded.NoWait);
+    TAssert.AssertEquals('queue', 'q', LDecoded.QueueName);
+    TAssert.AssertTrue('if-unused', LDecoded.IfUnused);
+    TAssert.AssertTrue('if-empty', LDecoded.IfEmpty);
+    TAssert.AssertFalse('no-wait', LDecoded.NoWait);
   finally
     R.Free;
   end;
@@ -1066,9 +1072,9 @@ begin
   R := TAMQPReader.Create(BuildQueueDeleteOk(3));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DELETE_OK));
-    AssertEquals(QWord(3), QWord(DecodeQueueDeleteOk(R)));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_QUEUE, AMQP_QUEUE_DELETE_OK));
+    TAssert.AssertEquals(Int64(3), Int64(DecodeQueueDeleteOk(R)));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1083,12 +1089,12 @@ begin
   R := TAMQPReader.Create(BuildBasicQos(20, True, 0));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_QOS));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_QOS));
     LQos := DecodeBasicQos(R);
-    AssertEquals(QWord(0), QWord(LQos.PrefetchSize));
-    AssertEquals(20, Integer(LQos.PrefetchCount));
-    AssertTrue('global', LQos.Global);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals(Int64(0), Int64(LQos.PrefetchSize));
+    TAssert.AssertEquals(20, Integer(LQos.PrefetchCount));
+    TAssert.AssertTrue('global', LQos.Global);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1096,8 +1102,8 @@ begin
   R := TAMQPReader.Create(BuildBasicQosOk);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_QOS_OK));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_QOS_OK));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1112,13 +1118,13 @@ begin
   R := TAMQPReader.Create(BuildBasicPublish('ex', 'chave', True, False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_PUBLISH));
     LPub := DecodeBasicPublish(R);
-    AssertEquals('exchange', 'ex', LPub.Exchange);
-    AssertEquals('routing-key', 'chave', LPub.RoutingKey);
-    AssertTrue('mandatory', LPub.Mandatory);
-    AssertFalse('immediate', LPub.Immediate);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('exchange', 'ex', LPub.Exchange);
+    TAssert.AssertEquals('routing-key', 'chave', LPub.RoutingKey);
+    TAssert.AssertTrue('mandatory', LPub.Mandatory);
+    TAssert.AssertFalse('immediate', LPub.Immediate);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1138,13 +1144,13 @@ begin
     ReadMethodHeader(R);
     LDecoded := DecodeBasicConsume(R);
     try
-      AssertEquals('queue', 'fila', LDecoded.Queue);
-      AssertEquals('consumer-tag', 'ctag-1', LDecoded.ConsumerTag);
-      AssertFalse('no-local', LDecoded.NoLocal);
-      AssertTrue('no-ack', LDecoded.NoAck);
-      AssertTrue('exclusive', LDecoded.Exclusive);
-      AssertFalse('no-wait', LDecoded.NoWait);
-      AssertTrue(R.EndOfData);
+      TAssert.AssertEquals('queue', 'fila', LDecoded.Queue);
+      TAssert.AssertEquals('consumer-tag', 'ctag-1', LDecoded.ConsumerTag);
+      TAssert.AssertFalse('no-local', LDecoded.NoLocal);
+      TAssert.AssertTrue('no-ack', LDecoded.NoAck);
+      TAssert.AssertTrue('exclusive', LDecoded.Exclusive);
+      TAssert.AssertFalse('no-wait', LDecoded.NoWait);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       LDecoded.Arguments.Free;
     end;
@@ -1161,9 +1167,9 @@ begin
   R := TAMQPReader.Create(BuildBasicConsumeOk('ctag-9'));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME_OK));
-    AssertEquals('ctag-9', DecodeBasicConsumeOk(R)); // decode do CLIENTE
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME_OK));
+    TAssert.AssertEquals('ctag-9', DecodeBasicConsumeOk(R)); // decode do CLIENTE
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1178,11 +1184,11 @@ begin
   R := TAMQPReader.Create(BuildBasicCancel('ctag-1', True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CANCEL));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CANCEL));
     LCancel := DecodeBasicCancelArgs(R);
-    AssertEquals('consumer-tag', 'ctag-1', LCancel.ConsumerTag);
-    AssertTrue('no-wait', LCancel.NoWait);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('consumer-tag', 'ctag-1', LCancel.ConsumerTag);
+    TAssert.AssertTrue('no-wait', LCancel.NoWait);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1190,8 +1196,8 @@ begin
   R := TAMQPReader.Create(BuildBasicCancelOk('ctag-1'));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CANCEL_OK));
-    AssertEquals('ctag-1', DecodeBasicCancelOk(R)); // decode do CLIENTE
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CANCEL_OK));
+    TAssert.AssertEquals('ctag-1', DecodeBasicCancelOk(R)); // decode do CLIENTE
   finally
     R.Free;
   end;
@@ -1206,11 +1212,11 @@ begin
   R := TAMQPReader.Create(BuildBasicGet('fila', False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET));
     LGet := DecodeBasicGet(R);
-    AssertEquals('queue', 'fila', LGet.Queue);
-    AssertFalse('no-ack', LGet.NoAck);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('queue', 'fila', LGet.Queue);
+    TAssert.AssertFalse('no-ack', LGet.NoAck);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1232,14 +1238,14 @@ begin
   R := TAMQPReader.Create(BuildBasicGetOk(LGetOk));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET_OK));
     LDecoded := DecodeBasicGetOk(R); // decode do CLIENTE
-    AssertEquals(QWord(77), QWord(LDecoded.DeliveryTag));
-    AssertTrue('redelivered', LDecoded.Redelivered);
-    AssertEquals('ex', LDecoded.Exchange);
-    AssertEquals('rk', LDecoded.RoutingKey);
-    AssertEquals(QWord(4), QWord(LDecoded.MessageCount));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals(Int64(77), Int64(LDecoded.DeliveryTag));
+    TAssert.AssertTrue('redelivered', LDecoded.Redelivered);
+    TAssert.AssertEquals('ex', LDecoded.Exchange);
+    TAssert.AssertEquals('rk', LDecoded.RoutingKey);
+    TAssert.AssertEquals(Int64(4), Int64(LDecoded.MessageCount));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1253,9 +1259,9 @@ begin
   R := TAMQPReader.Create(BuildBasicGetEmpty);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET_EMPTY));
-    AssertEquals('reserved-1', '', R.ReadShortStr);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_GET_EMPTY));
+    TAssert.AssertEquals('reserved-1', '', R.ReadShortStr);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1277,14 +1283,14 @@ begin
   R := TAMQPReader.Create(BuildBasicDeliver(LDeliver));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_DELIVER));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_DELIVER));
     LDecoded := DecodeBasicDeliver(R); // decode do CLIENTE
-    AssertEquals('ctag', LDecoded.ConsumerTag);
-    AssertEquals(QWord(12), QWord(LDecoded.DeliveryTag));
-    AssertFalse(LDecoded.Redelivered);
-    AssertEquals('ex', LDecoded.Exchange);
-    AssertEquals('rk', LDecoded.RoutingKey);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals('ctag', LDecoded.ConsumerTag);
+    TAssert.AssertEquals(Int64(12), Int64(LDecoded.DeliveryTag));
+    TAssert.AssertFalse(LDecoded.Redelivered);
+    TAssert.AssertEquals('ex', LDecoded.Exchange);
+    TAssert.AssertEquals('rk', LDecoded.RoutingKey);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1305,13 +1311,13 @@ begin
   R := TAMQPReader.Create(BuildBasicReturn(LReturn));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN));
     LDecoded := DecodeBasicReturn(R); // decode do CLIENTE
-    AssertEquals(312, Integer(LDecoded.ReplyCode));
-    AssertEquals('NO_ROUTE', LDecoded.ReplyText);
-    AssertEquals('ex', LDecoded.Exchange);
-    AssertEquals('rk', LDecoded.RoutingKey);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals(312, Integer(LDecoded.ReplyCode));
+    TAssert.AssertEquals('NO_ROUTE', LDecoded.ReplyText);
+    TAssert.AssertEquals('ex', LDecoded.Exchange);
+    TAssert.AssertEquals('rk', LDecoded.RoutingKey);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1326,11 +1332,11 @@ begin
   R := TAMQPReader.Create(BuildBasicReject(55, False));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_REJECT));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_REJECT));
     LReject := DecodeBasicReject(R);
-    AssertEquals(QWord(55), QWord(LReject.DeliveryTag));
-    AssertFalse('requeue', LReject.Requeue);
-    AssertTrue(R.EndOfData);
+    TAssert.AssertEquals(Int64(55), Int64(LReject.DeliveryTag));
+    TAssert.AssertFalse('requeue', LReject.Requeue);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1344,9 +1350,9 @@ begin
   R := TAMQPReader.Create(BuildConfirmSelect(True));
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT));
-    AssertTrue('no-wait', DecodeConfirmSelect(R));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT));
+    TAssert.AssertTrue('no-wait', DecodeConfirmSelect(R));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -1354,8 +1360,8 @@ begin
   R := TAMQPReader.Create(BuildConfirmSelectOk);
   try
     LId := ReadMethodHeader(R);
-    AssertTrue(LId.Matches(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT_OK));
-    AssertTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT_OK));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;

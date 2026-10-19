@@ -1,11 +1,12 @@
 ﻿unit AMQP.ConnectionMethodsTests;
 
+
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Rtti,
+  AMQP.DUnitXCompat,
+  SysUtils, Rtti,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Method,
@@ -71,6 +72,7 @@ var
   LPayload: TBytes;
   R: TAMQPReader;
   LId: TAMQPMethodId;
+  LProdutoVal: TValue;
 begin
   LProps := DefaultClientProperties;
   try
@@ -80,20 +82,21 @@ begin
     R := TAMQPReader.Create(LPayload);
     try
       LId := ReadMethodHeader(R);
-      Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START_OK),
-        'class/method de Start-Ok');
+      TAssert.AssertTrue('class/method de Start-Ok',
+        LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START_OK));
 
       LDecoded := R.ReadFieldTable;
       try
-        Assert.AreEqual('pascal-amqp-faa', LDecoded['product'].AsString);
+        LProdutoVal := LDecoded['product'];
+        TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
       finally
         LDecoded.Free;
       end;
 
-      Assert.AreEqual(AMQP_AUTH_PLAIN, R.ReadShortStr, 'mechanism');
-      Assert.AreEqual(PlainAuthResponse('guest', 'guest'), R.ReadLongStr, 'response');
-      Assert.AreEqual(AMQP_LOCALE_DEFAULT, R.ReadShortStr, 'locale');
-      Assert.IsTrue(R.EndOfData);
+      TAssert.AssertEquals('mechanism', AMQP_AUTH_PLAIN, R.ReadShortStr);
+      TAssert.AssertEquals('response', PlainAuthResponse('guest', 'guest'), R.ReadLongStr);
+      TAssert.AssertEquals('locale', AMQP_LOCALE_DEFAULT, R.ReadShortStr);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       R.Free;
     end;
@@ -109,6 +112,7 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
   LStart: TAMQPConnectionStart;
+  LProdutoVal: TValue;
 begin
   // Monta um Start como o servidor mandaria.
   LServerProps := TAMQPFieldTable.Create;
@@ -125,14 +129,15 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START));
       LStart := DecodeStart(R);
       try
-        Assert.AreEqual(0, Integer(LStart.VersionMajor));
-        Assert.AreEqual(9, Integer(LStart.VersionMinor));
-        Assert.AreEqual('PLAIN AMQPLAIN', LStart.Mechanisms);
-        Assert.AreEqual('en_US', LStart.Locales);
-        Assert.AreEqual('RabbitMQ', LStart.ServerProperties['product'].AsString);
+        TAssert.AssertEquals(0, Integer(LStart.VersionMajor));
+        TAssert.AssertEquals(9, Integer(LStart.VersionMinor));
+        TAssert.AssertEquals('PLAIN AMQPLAIN', LStart.Mechanisms);
+        TAssert.AssertEquals('en_US', LStart.Locales);
+        LProdutoVal := LStart.ServerProperties['product'];
+        TAssert.AssertEquals('RabbitMQ', LProdutoVal.AsString);
       finally
         LStart.ServerProperties.Free;
       end;
@@ -151,10 +156,10 @@ var
 begin
   LStart.Mechanisms := 'PLAIN AMQPLAIN';
   LStart.ServerProperties := nil;
-  Assert.IsTrue(LStart.SupportsMechanism('PLAIN'));
-  Assert.IsTrue(LStart.SupportsMechanism('plain'), 'case-insensitive');
-  Assert.IsTrue(LStart.SupportsMechanism('AMQPLAIN'));
-  Assert.IsFalse(LStart.SupportsMechanism('EXTERNAL'));
+  TAssert.AssertTrue(LStart.SupportsMechanism('PLAIN'));
+  TAssert.AssertTrue('case-insensitive', LStart.SupportsMechanism('plain'));
+  TAssert.AssertTrue(LStart.SupportsMechanism('AMQPLAIN'));
+  TAssert.AssertFalse(LStart.SupportsMechanism('EXTERNAL'));
 end;
 
 procedure TConnectionMethodsTests.Tune_DecodeEBuildTuneOk;
@@ -176,11 +181,11 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE));
       LTune := DecodeTune(R);
-      Assert.AreEqual(Word(2047), LTune.ChannelMax);
-      Assert.AreEqual(Cardinal(131072), LTune.FrameMax);
-      Assert.AreEqual(Word(60), LTune.Heartbeat);
+      TAssert.AssertEquals(2047, Integer(LTune.ChannelMax));
+      TAssert.AssertEquals(Int64(131072), Int64(LTune.FrameMax));
+      TAssert.AssertEquals(60, Integer(LTune.Heartbeat));
     finally
       R.Free;
     end;
@@ -196,11 +201,11 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK));
-    Assert.AreEqual(Word(2047), R.ReadShortUInt);
-    Assert.AreEqual(Cardinal(131072), R.ReadLongUInt);
-    Assert.AreEqual(Word(60), R.ReadShortUInt);
-    Assert.IsTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK));
+    TAssert.AssertEquals(2047, Integer(R.ReadShortUInt));
+    TAssert.AssertEquals(Int64(131072), Int64(R.ReadLongUInt));
+    TAssert.AssertEquals(60, Integer(R.ReadShortUInt));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -216,10 +221,10 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN));
-    Assert.AreEqual('/', R.ReadShortStr, 'virtual-host');
-    Assert.AreEqual('', R.ReadShortStr, 'reserved-1');
-    Assert.IsFalse(R.ReadBit, 'reserved-2 (insist)');
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN));
+    TAssert.AssertEquals('virtual-host', '/', R.ReadShortStr);
+    TAssert.AssertEquals('reserved-1', '', R.ReadShortStr);
+    TAssert.AssertFalse('reserved-2 (insist)', R.ReadBit);
   finally
     R.Free;
   end;
@@ -238,9 +243,9 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK));
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK));
       DecodeOpenOk(R);
-      Assert.IsTrue(R.EndOfData);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       R.Free;
     end;
@@ -265,12 +270,12 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE));
     LDecoded := DecodeClose(R);
-    Assert.AreEqual(Word(320), LDecoded.ReplyCode);
-    Assert.AreEqual('CONNECTION_FORCED', LDecoded.ReplyText);
-    Assert.AreEqual(Word(0), LDecoded.ClassId);
-    Assert.AreEqual(Word(0), LDecoded.MethodId);
+    TAssert.AssertEquals(320, Integer(LDecoded.ReplyCode));
+    TAssert.AssertEquals('CONNECTION_FORCED', LDecoded.ReplyText);
+    TAssert.AssertEquals(0, Integer(LDecoded.ClassId));
+    TAssert.AssertEquals(0, Integer(LDecoded.MethodId));
   finally
     R.Free;
   end;
@@ -290,9 +295,9 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
-      Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED));
-      Assert.AreEqual('low on memory', DecodeBlocked(R), 'reason');
-      Assert.IsTrue(R.EndOfData);
+      TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED));
+      TAssert.AssertEquals('reason', 'low on memory', DecodeBlocked(R));
+      TAssert.AssertTrue(R.EndOfData);
     finally
       R.Free;
     end;
@@ -307,19 +312,21 @@ var
 begin
   // #0 guest #0 guest -> 1 + 5 + 1 + 5 = 12 caracteres
   S := PlainAuthResponse('guest', 'guest');
-  Assert.AreEqual(12, Length(S));
-  Assert.IsTrue(S[1] = #0, 'separador inicial');
-  Assert.IsTrue(S[7] = #0, 'separador entre usuario e senha');
+  TAssert.AssertEquals(12, Length(S));
+  TAssert.AssertTrue('separador inicial', S[1] = #0);
+  TAssert.AssertTrue('separador entre usuario e senha', S[7] = #0);
 end;
 
 procedure TConnectionMethodsTests.DefaultClientProperties_TemProduct;
 var
   P: TAMQPFieldTable;
+  LProdutoVal: TValue;
 begin
   P := DefaultClientProperties;
   try
-    Assert.AreEqual('pascal-amqp-faa', P['product'].AsString);
-    Assert.IsTrue(P.ContainsKey('capabilities'));
+    LProdutoVal := P['product'];
+    TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+    TAssert.AssertTrue(P.ContainsKey('capabilities'));
   finally
     P.Free;
   end;
@@ -328,14 +335,18 @@ end;
 procedure TConnectionMethodsTests.DefaultClientProperties_AnunciaConnectionBlocked;
 var
   P, LCaps: TAMQPFieldTable;
+  LCapsVal, LBlockedVal: TValue;
 begin
   // O broker só envia Connection.Blocked/Unblocked se o cliente anunciar esta
   // capability em client-properties -> tem de estar presente e True.
   P := DefaultClientProperties;
   try
-    LCaps := P['capabilities'].AsType<TAMQPFieldTable>;
-    Assert.IsTrue(LCaps.ContainsKey('connection.blocked'), 'capability presente');
-    Assert.IsTrue(LCaps['connection.blocked'].AsBoolean, 'capability = True');
+    LCapsVal := P['capabilities'];
+    // TValue.AsType<T> nao existe no FPC (ver CLAUDE.md) -> AsObject + cast.
+    LCaps := TAMQPFieldTable(LCapsVal.AsObject);
+    TAssert.AssertTrue('capability presente', LCaps.ContainsKey('connection.blocked'));
+    LBlockedVal := LCaps['connection.blocked'];
+    TAssert.AssertTrue('capability = True', LBlockedVal.AsBoolean);
   finally
     P.Free;
   end;
@@ -350,6 +361,7 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
   LStart: TAMQPConnectionStart;
+  LProdutoVal: TValue;
 begin
   LProps := DefaultServerProperties;
   try
@@ -361,17 +373,18 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START),
-      'class/method de Start');
+    TAssert.AssertTrue('class/method de Start',
+      LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START));
+    // Decodifica com o mesmo DecodeStart que o cliente usa.
     LStart := DecodeStart(R);
     try
-      Assert.AreEqual(0, Integer(LStart.VersionMajor));
-      Assert.AreEqual(9, Integer(LStart.VersionMinor));
-      Assert.AreEqual('PLAIN', LStart.Mechanisms);
-      Assert.AreEqual('en_US', LStart.Locales);
-      Assert.AreEqual('pascal-amqp-faa (broker)',
-        LStart.ServerProperties['product'].AsString);
-      Assert.IsTrue(R.EndOfData);
+      TAssert.AssertEquals(0, Integer(LStart.VersionMajor));
+      TAssert.AssertEquals(9, Integer(LStart.VersionMinor));
+      TAssert.AssertEquals('PLAIN', LStart.Mechanisms);
+      TAssert.AssertEquals('en_US', LStart.Locales);
+      LProdutoVal := LStart.ServerProperties['product'];
+      TAssert.AssertEquals('pascal-amqp-faa (broker)', LProdutoVal.AsString);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       LStart.ServerProperties.Free;
     end;
@@ -387,6 +400,7 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
   LStartOk: TAMQPConnectionStartOk;
+  LProdutoVal: TValue;
 begin
   LClientProps := DefaultClientProperties;
   try
@@ -399,13 +413,14 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START_OK));
     LStartOk := DecodeStartOk(R);
     try
-      Assert.AreEqual(AMQP_AUTH_PLAIN, LStartOk.Mechanism, 'mechanism');
-      Assert.AreEqual(AMQP_LOCALE_DEFAULT, LStartOk.Locale, 'locale');
-      Assert.AreEqual('pascal-amqp-faa', LStartOk.ClientProperties['product'].AsString);
-      Assert.IsTrue(R.EndOfData);
+      TAssert.AssertEquals('mechanism', AMQP_AUTH_PLAIN, LStartOk.Mechanism);
+      TAssert.AssertEquals('locale', AMQP_LOCALE_DEFAULT, LStartOk.Locale);
+      LProdutoVal := LStartOk.ClientProperties['product'];
+      TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       LStartOk.ClientProperties.Free;
     end;
@@ -436,13 +451,14 @@ begin
     ReadMethodHeader(R);
     LStartOk := DecodeStartOk(R);
     try
-      // A resposta SASL (#0 guest #0 secret) tem de sobreviver byte-a-byte.
-      Assert.AreEqual(Length(LEsperado), Length(LStartOk.Response), 'tamanho');
+      // A resposta SASL (#0 guest #0 secret) tem de sobreviver byte-a-byte:
+      // nada de passar por AmqpUtf8Decode e perder os #0.
+      TAssert.AssertEquals('tamanho da resposta', Length(LEsperado), Length(LStartOk.Response));
       for I := 0 to High(LEsperado) do
-        Assert.AreEqual(Integer(LEsperado[I]), Integer(LStartOk.Response[I]),
-          'byte ' + IntToStr(I));
-      Assert.AreEqual(0, Integer(LStartOk.Response[0]), 'separador inicial');
-      Assert.AreEqual(0, Integer(LStartOk.Response[6]), 'separador do meio');
+        TAssert.AssertEquals('byte ' + IntToStr(I),
+          Integer(LEsperado[I]), Integer(LStartOk.Response[I]));
+      TAssert.AssertEquals('separador inicial', 0, Integer(LStartOk.Response[0]));
+      TAssert.AssertEquals('separador do meio', 0, Integer(LStartOk.Response[6]));
     finally
       LStartOk.ClientProperties.Free;
     end;
@@ -466,12 +482,12 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK));
     LDecoded := DecodeTuneOk(R); // decode do SERVIDOR
-    Assert.AreEqual(Word(100), LDecoded.ChannelMax);
-    Assert.AreEqual(Cardinal(65536), LDecoded.FrameMax);
-    Assert.AreEqual(Word(30), LDecoded.Heartbeat);
-    Assert.IsTrue(R.EndOfData);
+    TAssert.AssertEquals(100, Integer(LDecoded.ChannelMax));
+    TAssert.AssertEquals(Int64(65536), Int64(LDecoded.FrameMax));
+    TAssert.AssertEquals(30, Integer(LDecoded.Heartbeat));
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -481,10 +497,10 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE));
     LDecoded := DecodeTune(R);
-    Assert.AreEqual(Word(100), LDecoded.ChannelMax);
-    Assert.AreEqual(Word(30), LDecoded.Heartbeat);
+    TAssert.AssertEquals(100, Integer(LDecoded.ChannelMax));
+    TAssert.AssertEquals(30, Integer(LDecoded.Heartbeat));
   finally
     R.Free;
   end;
@@ -501,10 +517,10 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN));
     LOpen := DecodeOpen(R);
-    Assert.AreEqual('/app', LOpen.VirtualHost, 'virtual-host');
-    Assert.IsTrue(R.EndOfData, 'reservados consumidos');
+    TAssert.AssertEquals('virtual-host', '/app', LOpen.VirtualHost);
+    TAssert.AssertTrue('reservados consumidos', R.EndOfData);
   finally
     R.Free;
   end;
@@ -520,9 +536,9 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK));
     DecodeOpenOk(R); // decode do CLIENTE
-    Assert.IsTrue(R.EndOfData);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -538,9 +554,9 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED));
-    Assert.AreEqual('low on memory', DecodeBlocked(R), 'reason'); // decode do CLIENTE
-    Assert.IsTrue(R.EndOfData);
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED));
+    TAssert.AssertEquals('reason', 'low on memory', DecodeBlocked(R)); // decode do CLIENTE
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -556,8 +572,8 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_UNBLOCKED));
-    Assert.IsTrue(R.EndOfData, 'sem argumentos');
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_UNBLOCKED));
+    TAssert.AssertTrue('sem argumentos', R.EndOfData);
   finally
     R.Free;
   end;
@@ -565,22 +581,24 @@ end;
 
 procedure TConnectionServerCodecTests.Secure_RoundTrip;
 var
-  LPayload, LResp, LEsperado: TBytes;
+  LPayload, LResp: TBytes;
   R: TAMQPReader;
   LId: TAMQPMethodId;
   W: TAMQPWriter;
   I: Integer;
+  LEsperado: TBytes;
 begin
   LPayload := BuildSecure('rabbit-challenge');
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_SECURE));
-    Assert.AreEqual('rabbit-challenge', R.ReadLongStr, 'challenge');
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_SECURE));
+    TAssert.AssertEquals('challenge', 'rabbit-challenge', R.ReadLongStr);
   finally
     R.Free;
   end;
 
+  // Secure-Ok: o servidor lê a resposta crua.
   W := TAMQPWriter.Create;
   try
     WriteMethodHeader(W, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_SECURE_OK);
@@ -594,9 +612,9 @@ begin
   try
     ReadMethodHeader(R);
     LResp := DecodeSecureOk(R);
-    Assert.AreEqual(Length(LEsperado), Length(LResp));
+    TAssert.AssertEquals(Length(LEsperado), Length(LResp));
     for I := 0 to High(LEsperado) do
-      Assert.AreEqual(Integer(LEsperado[I]), Integer(LResp[I]));
+      TAssert.AssertEquals(Integer(LEsperado[I]), Integer(LResp[I]));
   finally
     R.Free;
   end;
@@ -612,9 +630,9 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    Assert.IsTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE_OK));
+    TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE_OK));
     DecodeCloseOk(R);
-    Assert.IsTrue(R.EndOfData);
+    TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
   end;
@@ -623,15 +641,19 @@ end;
 procedure TConnectionServerCodecTests.DefaultServerProperties_TemProductECapabilities;
 var
   P, LCaps: TAMQPFieldTable;
+  LProdutoVal, LCapsVal, LConfirmsVal: TValue;
 begin
   P := DefaultServerProperties;
   try
-    Assert.AreEqual('pascal-amqp-faa (broker)', P['product'].AsString);
-    Assert.IsTrue(P.ContainsKey('capabilities'));
-    LCaps := P['capabilities'].AsType<TAMQPFieldTable>;
-    Assert.IsTrue(LCaps.ContainsKey('publisher_confirms'), 'publisher_confirms');
-    Assert.IsTrue(LCaps['publisher_confirms'].AsBoolean);
-    Assert.IsTrue(LCaps.ContainsKey('basic.nack'), 'basic.nack');
+    LProdutoVal := P['product'];
+    TAssert.AssertEquals('pascal-amqp-faa (broker)', LProdutoVal.AsString);
+    TAssert.AssertTrue(P.ContainsKey('capabilities'));
+    LCapsVal := P['capabilities'];
+    LCaps := TAMQPFieldTable(LCapsVal.AsObject);
+    TAssert.AssertTrue('publisher_confirms', LCaps.ContainsKey('publisher_confirms'));
+    LConfirmsVal := LCaps['publisher_confirms'];
+    TAssert.AssertTrue(LConfirmsVal.AsBoolean);
+    TAssert.AssertTrue('basic.nack', LCaps.ContainsKey('basic.nack'));
   finally
     P.Free;
   end;
@@ -642,35 +664,35 @@ end;
 procedure TTuneNegotiationTests.ChannelMax_ClienteZero_AdotaServidor;
 begin
   // Cliente quer "sem limite" (0), servidor propõe 2047 -> usa 2047, nunca 0.
-  Assert.AreEqual(Word(2047), NegotiateChannelMax(2047, 0));
+  TAssert.AssertEquals(2047, Integer(NegotiateChannelMax(2047, 0)));
 end;
 
 procedure TTuneNegotiationTests.ChannelMax_NuncaExcedeServidor;
 begin
   // Cliente pede mais do que o servidor permite -> limita ao servidor.
-  Assert.AreEqual(Word(2047), NegotiateChannelMax(2047, 5000));
+  TAssert.AssertEquals(2047, Integer(NegotiateChannelMax(2047, 5000)));
 end;
 
 procedure TTuneNegotiationTests.ChannelMax_ServidorZero_UsaCliente;
 begin
-  Assert.AreEqual(Word(100), NegotiateChannelMax(0, 100));
+  TAssert.AssertEquals(100, Integer(NegotiateChannelMax(0, 100)));
 end;
 
 procedure TTuneNegotiationTests.ChannelMax_AmbosZero_FicaZero;
 begin
-  Assert.AreEqual(Word(0), NegotiateChannelMax(0, 0));
+  TAssert.AssertEquals(0, Integer(NegotiateChannelMax(0, 0)));
 end;
 
 procedure TTuneNegotiationTests.ChannelMax_AmbosFinitos_MenorVence;
 begin
-  Assert.AreEqual(Word(100), NegotiateChannelMax(2047, 100));
+  TAssert.AssertEquals(100, Integer(NegotiateChannelMax(2047, 100)));
 end;
 
 procedure TTuneNegotiationTests.FrameMax_Negocia;
 begin
-  Assert.AreEqual(Cardinal(131072), NegotiateFrameMax(131072, 0));
-  Assert.AreEqual(Cardinal(65536), NegotiateFrameMax(131072, 65536));
-  Assert.AreEqual(Cardinal(131072), NegotiateFrameMax(0, 131072));
+  TAssert.AssertEquals(Int64(131072), Int64(NegotiateFrameMax(131072, 0)));
+  TAssert.AssertEquals(Int64(65536), Int64(NegotiateFrameMax(131072, 65536)));
+  TAssert.AssertEquals(Int64(131072), Int64(NegotiateFrameMax(0, 131072)));
 end;
 
 procedure TTuneNegotiationTests.NegotiateTune_Combina;
@@ -682,9 +704,9 @@ begin
   LServer.Heartbeat := 60;
   // Cliente: channel-max 0 (sem limite), frame-max 0, heartbeat 30.
   LResult := NegotiateTune(LServer, 0, 0, 30);
-  Assert.AreEqual(Word(2047), LResult.ChannelMax, 'channel-max adota servidor');
-  Assert.AreEqual(Cardinal(131072), LResult.FrameMax, 'frame-max adota servidor');
-  Assert.AreEqual(Word(30), LResult.Heartbeat, 'heartbeat menor vence');
+  TAssert.AssertEquals('channel-max adota servidor', 2047, Integer(LResult.ChannelMax));
+  TAssert.AssertEquals('frame-max adota servidor', Int64(131072), Int64(LResult.FrameMax));
+  TAssert.AssertEquals('heartbeat menor vence', 30, Integer(LResult.Heartbeat));
 end;
 
 initialization

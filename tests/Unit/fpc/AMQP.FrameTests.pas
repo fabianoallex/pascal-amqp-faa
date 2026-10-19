@@ -2,10 +2,17 @@
 
 {$mode delphi}{$H+}
 
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Unit/AMQP.FrameTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
+
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, AMQP.Protocol, AMQP.Frame;
+  fpcunit, testregistry,
+  AMQP.TestSupport,
+  SysUtils, Classes, AMQP.Protocol, AMQP.Frame;
 
 type
   TAMQPFrameTests = class(TTestCase)
@@ -60,7 +67,7 @@ begin
     LFrame.WriteTo(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
     // type=1, channel=00 01, size=00 00 00 02, payload=AA BB, end=CE => 10 octetos
-    AssertEquals(10, Length(B));
+    TAssert.AssertEquals(10, Length(B));
     EqualByte(AMQP_FRAME_METHOD, B[0]);
     EqualByte($00, B[1]);
     EqualByte($01, B[2]);
@@ -105,10 +112,10 @@ begin
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
     EqualByte(AMQP_FRAME_METHOD, LIn.FrameType);
-    AssertEquals(7, Integer(LIn.Channel));
-    AssertEquals(4, Length(LIn.Payload));
+    TAssert.AssertEquals(7, Integer(LIn.Channel));
+    TAssert.AssertEquals(4, Length(LIn.Payload));
     EqualByte(30, LIn.Payload[2]);
-    AssertTrue(LIn.IsMethod);
+    TAssert.AssertTrue(LIn.IsMethod);
   finally
     LStream.Free;
   end;
@@ -125,8 +132,8 @@ begin
     LOut.WriteTo(LStream);
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
-    AssertEquals(0, Length(LIn.Payload));
-    AssertEquals(0, Integer(LIn.Channel));
+    TAssert.AssertEquals(0, Length(LIn.Payload));
+    TAssert.AssertEquals(0, Integer(LIn.Channel));
   finally
     LStream.Free;
   end;
@@ -142,7 +149,7 @@ begin
     TAMQPFrame.Heartbeat.WriteTo(LStream);
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
-    AssertTrue(LIn.IsHeartbeat);
+    TAssert.AssertTrue(LIn.IsHeartbeat);
   finally
     LStream.Free;
   end;
@@ -158,7 +165,7 @@ begin
   // type=1, channel=0, size=1, payload=00, frame-end=FF (invalido)
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 1, 0, $FF]);
   try
-    AssertException(EAMQPFrame, DoReadFrameEndInvalido);
+    ChecaLevanta(EAMQPFrame, DoReadFrameEndInvalido);
   finally
     FTruncStream.Free;
   end;
@@ -175,8 +182,8 @@ begin
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 10, 1, 2, 3]);
   try
     // EAMQPFrameEOF (subclasse de EAMQPFrame): fim de stream, nao frame
-    // malformado. O AssertException do FPCUnit exige a classe exata.
-    AssertException(EAMQPFrameEOF, DoReadStreamTruncado);
+    // malformado. O ChecaLevanta exige a classe exata.
+    ChecaLevanta(EAMQPFrameEOF, DoReadStreamTruncado);
   finally
     FTruncStream.Free;
   end;
@@ -192,7 +199,7 @@ begin
   // size=100, mas passamos AMaxPayload=16
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 100]);
   try
-    AssertException(EAMQPFrame, DoReadPayloadAcimaDoMaximo);
+    ChecaLevanta(EAMQPFrame, DoReadPayloadAcimaDoMaximo);
   finally
     FTruncStream.Free;
   end;
@@ -207,7 +214,7 @@ begin
   try
     WriteProtocolHeader(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
-    AssertEquals(8, Length(B));
+    TAssert.AssertEquals(8, Length(B));
     EqualByte(Ord('A'), B[0]);
     EqualByte(Ord('M'), B[1]);
     EqualByte(Ord('Q'), B[2]);
@@ -235,9 +242,9 @@ begin
     LStream.Position := 0;
     R1 := TAMQPFrame.ReadFrom(LStream);
     R2 := TAMQPFrame.ReadFrom(LStream);
-    AssertEquals(1, Integer(R1.Channel));
+    TAssert.AssertEquals(1, Integer(R1.Channel));
     EqualByte($11, R1.Payload[0]);
-    AssertEquals(2, Integer(R2.Channel));
+    TAssert.AssertEquals(2, Integer(R2.Channel));
     EqualByte($33, R2.Payload[1]);
   finally
     LStream.Free;

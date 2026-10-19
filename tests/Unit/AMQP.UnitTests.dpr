@@ -9,6 +9,8 @@ uses
   DUnitX.Loggers.Xml.NUnit,
   DUnitX.TestFramework,
   AMQP.TestTimeLogger in '..\AMQP.TestTimeLogger.pas',
+  AMQP.DUnitXCompat in 'AMQP.DUnitXCompat.pas',
+  AMQP.TestSupport in '..\AMQP.TestSupport.pas',
   AMQP.Protocol in '..\..\src\AMQP.Protocol.pas',
   AMQP.Wire in '..\..\src\AMQP.Wire.pas',
   AMQP.Frame in '..\..\src\AMQP.Frame.pas',

@@ -1,17 +1,22 @@
 ﻿unit AMQP.FrameTests;
 
+
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  AMQP.Protocol,
-  AMQP.Frame;
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes, AMQP.Protocol, AMQP.Frame;
 
 type
   [TestFixture]
   TAMQPFrameTests = class
+  private
+    FTruncStream: TBytesStream;
+    procedure DoReadFrameEndInvalido;
+    procedure DoReadStreamTruncado;
+    procedure DoReadPayloadAcimaDoMaximo;
   public
     [Test] procedure WriteTo_LayoutBinario;
     [Test] procedure WriteTo_TerminaComFrameEnd;
@@ -27,11 +32,10 @@ type
 
 implementation
 
-// Forca a sobrecarga nao-generica Assert.AreEqual(Integer, Integer).
-procedure EqualByte(const AExpected: Integer; const AActual: Byte;
-  const AMessage: string = '');
+// Forca a sobrecarga nao-generica AssertEquals(Integer, Integer).
+procedure EqualByte(AExpected: Integer; AActual: Byte);
 begin
-  Assert.AreEqual(AExpected, Integer(AActual), AMessage);
+  TAssert.AssertEquals(AExpected, Integer(AActual));
 end;
 
 function BuildStream(const ABytes: array of Byte): TBytesStream;
@@ -59,7 +63,7 @@ begin
     LFrame.WriteTo(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
     // type=1, channel=00 01, size=00 00 00 02, payload=AA BB, end=CE => 10 octetos
-    Assert.AreEqual(10, Integer(Length(B)));
+    TAssert.AssertEquals(10, Length(B));
     EqualByte(AMQP_FRAME_METHOD, B[0]);
     EqualByte($00, B[1]);
     EqualByte($01, B[2]);
@@ -104,10 +108,10 @@ begin
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
     EqualByte(AMQP_FRAME_METHOD, LIn.FrameType);
-    Assert.AreEqual(Word(7), LIn.Channel);
-    Assert.AreEqual(4, Integer(Length(LIn.Payload)));
+    TAssert.AssertEquals(7, Integer(LIn.Channel));
+    TAssert.AssertEquals(4, Length(LIn.Payload));
     EqualByte(30, LIn.Payload[2]);
-    Assert.IsTrue(LIn.IsMethod);
+    TAssert.AssertTrue(LIn.IsMethod);
   finally
     LStream.Free;
   end;
@@ -124,8 +128,8 @@ begin
     LOut.WriteTo(LStream);
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
-    Assert.AreEqual(0, Integer(Length(LIn.Payload)));
-    Assert.AreEqual(Word(0), LIn.Channel);
+    TAssert.AssertEquals(0, Length(LIn.Payload));
+    TAssert.AssertEquals(0, Integer(LIn.Channel));
   finally
     LStream.Free;
   end;
@@ -141,63 +145,59 @@ begin
     TAMQPFrame.Heartbeat.WriteTo(LStream);
     LStream.Position := 0;
     LIn := TAMQPFrame.ReadFrom(LStream);
-    Assert.IsTrue(LIn.IsHeartbeat);
+    TAssert.AssertTrue(LIn.IsHeartbeat);
   finally
     LStream.Free;
   end;
+end;
+
+procedure TAMQPFrameTests.DoReadFrameEndInvalido;
+begin
+  TAMQPFrame.ReadFrom(FTruncStream);
 end;
 
 procedure TAMQPFrameTests.ReadFrom_FrameEndInvalido_Levanta;
-var
-  LStream: TBytesStream;
 begin
   // type=1, channel=0, size=1, payload=00, frame-end=FF (invalido)
-  LStream := BuildStream([1, 0, 0, 0, 0, 0, 1, 0, $FF]);
+  FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 1, 0, $FF]);
   try
-    Assert.WillRaise(
-      procedure
-      begin
-        TAMQPFrame.ReadFrom(LStream);
-      end,
-      EAMQPFrame);
+    ChecaLevanta(EAMQPFrame, DoReadFrameEndInvalido);
   finally
-    LStream.Free;
+    FTruncStream.Free;
   end;
+end;
+
+procedure TAMQPFrameTests.DoReadStreamTruncado;
+begin
+  TAMQPFrame.ReadFrom(FTruncStream);
 end;
 
 procedure TAMQPFrameTests.ReadFrom_StreamTruncado_Levanta;
-var
-  LStream: TBytesStream;
 begin
   // cabecalho diz size=10 mas o stream acaba antes
-  LStream := BuildStream([1, 0, 0, 0, 0, 0, 10, 1, 2, 3]);
+  FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 10, 1, 2, 3]);
   try
-    Assert.WillRaise(
-      procedure
-      begin
-        TAMQPFrame.ReadFrom(LStream);
-      end,
-      EAMQPFrameEOF); // subclasse: fim de stream, nao frame malformado
+    // EAMQPFrameEOF (subclasse de EAMQPFrame): fim de stream, nao frame
+    // malformado. O ChecaLevanta exige a classe exata.
+    ChecaLevanta(EAMQPFrameEOF, DoReadStreamTruncado);
   finally
-    LStream.Free;
+    FTruncStream.Free;
   end;
 end;
 
+procedure TAMQPFrameTests.DoReadPayloadAcimaDoMaximo;
+begin
+  TAMQPFrame.ReadFrom(FTruncStream, 16);
+end;
+
 procedure TAMQPFrameTests.ReadFrom_PayloadAcimaDoMaximo_Levanta;
-var
-  LStream: TBytesStream;
 begin
   // size=100, mas passamos AMaxPayload=16
-  LStream := BuildStream([1, 0, 0, 0, 0, 0, 100]);
+  FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 100]);
   try
-    Assert.WillRaise(
-      procedure
-      begin
-        TAMQPFrame.ReadFrom(LStream, 16);
-      end,
-      EAMQPFrame);
+    ChecaLevanta(EAMQPFrame, DoReadPayloadAcimaDoMaximo);
   finally
-    LStream.Free;
+    FTruncStream.Free;
   end;
 end;
 
@@ -210,7 +210,7 @@ begin
   try
     WriteProtocolHeader(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
-    Assert.AreEqual(8, Integer(Length(B)));
+    TAssert.AssertEquals(8, Length(B));
     EqualByte(Ord('A'), B[0]);
     EqualByte(Ord('M'), B[1]);
     EqualByte(Ord('Q'), B[2]);
@@ -238,9 +238,9 @@ begin
     LStream.Position := 0;
     R1 := TAMQPFrame.ReadFrom(LStream);
     R2 := TAMQPFrame.ReadFrom(LStream);
-    Assert.AreEqual(Word(1), R1.Channel);
+    TAssert.AssertEquals(1, Integer(R1.Channel));
     EqualByte($11, R1.Payload[0]);
-    Assert.AreEqual(Word(2), R2.Channel);
+    TAssert.AssertEquals(2, Integer(R2.Channel));
     EqualByte($33, R2.Payload[1]);
   finally
     LStream.Free;

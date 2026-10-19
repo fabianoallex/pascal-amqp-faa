@@ -1,11 +1,18 @@
-unit AMQP.WireTests;
+﻿unit AMQP.WireTests;
 
 {$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Unit/AMQP.WireTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Rtti, AMQP.Wire;
+  fpcunit, testregistry,
+  AMQP.TestSupport,
+  SysUtils, Rtti, AMQP.Wire;
 
 type
   TAMQPWriterTests = class(TTestCase)
@@ -58,9 +65,8 @@ type
 
 implementation
 
-// Compara um octeto esperado (como Integer) com o octeto real — mesma ideia
-// do EqualByte do DUnitX, so' que chamando o AssertEquals de classe do
-// FPCUnit (TAssert), ja que aqui e' uma funcao solta, nao um metodo.
+// Compara um octeto esperado (como Integer) com o octeto real, forcando a
+// sobrecarga AssertEquals(Integer, Integer).
 procedure EqualByte(AExpected: Integer; AActual: Byte);
 begin
   TAssert.AssertEquals(AExpected, Integer(AActual));
@@ -101,7 +107,7 @@ var
 begin
   FWriter.WriteOctet($7F);
   B := FWriter.ToBytes;
-  AssertEquals(1, Length(B));
+  TAssert.AssertEquals(1, Length(B));
   EqualByte($7F, B[0]);
 end;
 
@@ -111,7 +117,7 @@ var
 begin
   FWriter.WriteShortUInt($1234);
   B := FWriter.ToBytes;
-  AssertEquals(2, Length(B));
+  TAssert.AssertEquals(2, Length(B));
   EqualByte($12, B[0]);
   EqualByte($34, B[1]);
 end;
@@ -122,7 +128,7 @@ var
 begin
   FWriter.WriteLongUInt($DEADBEEF);
   B := FWriter.ToBytes;
-  AssertEquals(4, Length(B));
+  TAssert.AssertEquals(4, Length(B));
   EqualByte($DE, B[0]);
   EqualByte($AD, B[1]);
   EqualByte($BE, B[2]);
@@ -135,7 +141,7 @@ var
 begin
   FWriter.WriteLongLongUInt(UInt64($0102030405060708));
   B := FWriter.ToBytes;
-  AssertEquals(8, Length(B));
+  TAssert.AssertEquals(8, Length(B));
   EqualByte($01, B[0]);
   EqualByte($08, B[7]);
 end;
@@ -146,7 +152,7 @@ var
 begin
   FWriter.WriteShortStr('hi');
   B := FWriter.ToBytes;
-  AssertEquals(3, Length(B));
+  TAssert.AssertEquals(3, Length(B));
   EqualByte(2, B[0]);
   EqualByte(Ord('h'), B[1]);
   EqualByte(Ord('i'), B[2]);
@@ -159,7 +165,7 @@ begin
   // 'á' = 2 octetos em UTF-8 (0xC3 0xA1).
   FWriter.WriteShortStr('á');
   B := FWriter.ToBytes;
-  AssertEquals(3, Length(B));
+  TAssert.AssertEquals(3, Length(B));
   EqualByte(2, B[0]);
   EqualByte($C3, B[1]);
   EqualByte($A1, B[2]);
@@ -167,7 +173,7 @@ end;
 
 procedure TAMQPWriterTests.ShortStr_AcimaDe255_Levanta;
 begin
-  AssertException(EAMQPWire, DoWriteShortStrTooLong);
+  ChecaLevanta(EAMQPWire, DoWriteShortStrTooLong);
 end;
 
 procedure TAMQPWriterTests.LongStr_PrefixaComprimentoEmU32;
@@ -176,7 +182,7 @@ var
 begin
   FWriter.WriteLongStr('AB');
   B := FWriter.ToBytes;
-  AssertEquals(6, Length(B));
+  TAssert.AssertEquals(6, Length(B));
   EqualByte(0, B[0]);
   EqualByte(0, B[1]);
   EqualByte(0, B[2]);
@@ -193,7 +199,7 @@ begin
   FWriter.WriteBit(False);
   FWriter.WriteBit(True);
   B := FWriter.ToBytes;
-  AssertEquals(1, Length(B));
+  TAssert.AssertEquals(1, Length(B));
   EqualByte($05, B[0]);
 end;
 
@@ -207,7 +213,7 @@ begin
     FWriter.WriteBit(True);
   FWriter.WriteBit(True);
   B := FWriter.ToBytes;
-  AssertEquals(2, Length(B));
+  TAssert.AssertEquals(2, Length(B));
   EqualByte($FF, B[0]);
   EqualByte($01, B[1]);
 end;
@@ -219,7 +225,7 @@ begin
   FWriter.WriteBit(True);       // octeto parcial = 0x01
   FWriter.WriteOctet($AA);      // deve descarregar o bit antes
   B := FWriter.ToBytes;
-  AssertEquals(2, Length(B));
+  TAssert.AssertEquals(2, Length(B));
   EqualByte($01, B[0]);
   EqualByte($AA, B[1]);
 end;
@@ -237,7 +243,7 @@ begin
     R := TAMQPReader.Create(W.ToBytes);
     try
       EqualByte(200, R.ReadOctet);
-      AssertTrue(R.EndOfData);
+      TAssert.AssertTrue(R.EndOfData);
     finally
       R.Free;
     end;
@@ -257,8 +263,8 @@ begin
     W.WriteShortUInt(65535);
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertEquals(0, Integer(R.ReadShortUInt));
-      AssertEquals(65535, Integer(R.ReadShortUInt));
+      TAssert.AssertEquals(0, Integer(R.ReadShortUInt));
+      TAssert.AssertEquals(65535, Integer(R.ReadShortUInt));
     finally
       R.Free;
     end;
@@ -278,8 +284,8 @@ begin
     W.WriteLongUInt(Cardinal($FFFFFFFF));
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertEquals(QWord(0), QWord(R.ReadLongUInt));
-      AssertEquals(QWord($FFFFFFFF), QWord(R.ReadLongUInt));
+      TAssert.AssertEquals(Int64(0), Int64(R.ReadLongUInt));
+      TAssert.AssertEquals(Int64($FFFFFFFF), Int64(R.ReadLongUInt));
     finally
       R.Free;
     end;
@@ -300,7 +306,7 @@ begin
     W.WriteLongLongUInt(V);
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertTrue(V = R.ReadLongLongUInt);
+      TAssert.AssertTrue(V = R.ReadLongLongUInt);
     finally
       R.Free;
     end;
@@ -319,7 +325,7 @@ begin
     W.WriteShortStr('emissão-NFe');
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertEquals('emissão-NFe', R.ReadShortStr);
+      TAssert.AssertEquals('emissão-NFe', R.ReadShortStr);
     finally
       R.Free;
     end;
@@ -338,7 +344,7 @@ begin
     W.WriteLongStr('');
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertEquals('', R.ReadLongStr);
+      TAssert.AssertEquals('', R.ReadLongStr);
     finally
       R.Free;
     end;
@@ -359,7 +365,7 @@ begin
     W.WriteTimestamp(V);
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertTrue(V = R.ReadTimestamp);
+      TAssert.AssertTrue(V = R.ReadTimestamp);
     finally
       R.Free;
     end;
@@ -381,10 +387,10 @@ begin
     W.WriteBit(True);
     R := TAMQPReader.Create(W.ToBytes);
     try
-      AssertTrue(R.ReadBit);
-      AssertFalse(R.ReadBit);
-      AssertTrue(R.ReadBit);
-      AssertTrue(R.ReadBit);
+      TAssert.AssertTrue(R.ReadBit);
+      TAssert.AssertFalse(R.ReadBit);
+      TAssert.AssertTrue(R.ReadBit);
+      TAssert.AssertTrue(R.ReadBit);
     finally
       R.Free;
     end;
@@ -422,18 +428,18 @@ begin
     try
       LOut := R.ReadFieldTable;
       try
-        AssertTrue('flag', LOut['flag'].AsBoolean);
-        AssertEquals('numero', 42, LOut['numero'].AsInteger);
-        AssertEquals('grande', Int64(9876543210), LOut['grande'].AsInt64);
+        TAssert.AssertTrue('flag', LOut['flag'].AsBoolean);
+        TAssert.AssertEquals('numero', 42, LOut['numero'].AsInteger);
+        TAssert.AssertEquals('grande', Int64(9876543210), LOut['grande'].AsInt64);
         // .AsString/.AsExtended encadeados direto no indexador (Tabela['x'].AsY)
         // disparam um erro interno do FPC 3.2.2 (ver nota acima) — por isso o
         // valor do indexador vai para uma TValue local antes do accessor.
         LTextoVal := LOut['texto'];
         LTexto := LTextoVal.AsString;
-        AssertEquals('texto', 'olá', LTexto);
+        TAssert.AssertEquals('texto', 'olá', LTexto);
         LPrecoVal := LOut['preco'];
         LPreco := LPrecoVal.AsExtended;
-        AssertEquals('preco', Double(19.9), LPreco, 0.0001);
+        TAssert.AssertEquals('preco', Double(19.9), LPreco, 0.0001);
       finally
         LOut.Free;
       end;
@@ -470,7 +476,7 @@ begin
         LCapsVal := LOut['capabilities'];
         LOutNested := TAMQPFieldTable(LCapsVal.AsObject);
         LFlagVal := LOutNested['authentication_failure_close'];
-        AssertTrue(LFlagVal.AsBoolean);
+        TAssert.AssertTrue(LFlagVal.AsBoolean);
       finally
         LOut.Free; // libera tambem a tabela aninhada decodificada
       end;
@@ -495,7 +501,7 @@ begin
     W.WriteFieldTable(LIn);
     B := W.ToBytes;
     // Apenas o u32 de comprimento = 0.
-    AssertEquals(4, Length(B));
+    TAssert.AssertEquals(4, Length(B));
     EqualByte(0, B[0]);
     EqualByte(0, B[3]);
   finally
@@ -517,8 +523,8 @@ begin
   try
     T := R.ReadFieldTable;
     try
-      AssertTrue(T.ContainsKey('k'));
-      AssertTrue(T['k'].AsBoolean);
+      TAssert.AssertTrue(T.ContainsKey('k'));
+      TAssert.AssertTrue(T['k'].AsBoolean);
     finally
       T.Free;
     end;
@@ -542,7 +548,7 @@ begin
     T := R.ReadFieldTable;
     try
       LVal := T['v'];
-      AssertEquals('hi', LVal.AsString);
+      TAssert.AssertEquals('hi', LVal.AsString);
     finally
       T.Free;
     end;
@@ -610,24 +616,24 @@ begin
   try
     LOut := R.ReadFieldTable;
     try
-      AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
-      AssertTrue('valor deve ser array', LVal.IsArray);
-      AssertEquals('um elemento', 1, LVal.GetArrayLength);
+      TAssert.AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
+      TAssert.AssertTrue('valor deve ser array', LVal.IsArray);
+      TAssert.AssertEquals('um elemento', 1, LVal.GetArrayLength);
       // AmqpUnwrapValue e' obrigatorio: o GetArrayElement devolve o elemento
       // re-embrulhado num TValue tkRecord — sem o unwrap, IsObject daria
       // False. Vale no Delphi tambem: nenhum dos dois colapsa no Make.
       LEntrada := AmqpUnwrapValue(LVal.GetArrayElement(0));
-      AssertTrue('elemento deve ser objeto', LEntrada.IsObject);
-      AssertTrue('elemento deve ser tabela', LEntrada.AsObject is TAMQPFieldTable);
+      TAssert.AssertTrue('elemento deve ser objeto', LEntrada.IsObject);
+      TAssert.AssertTrue('elemento deve ser tabela', LEntrada.AsObject is TAMQPFieldTable);
       LTab := TAMQPFieldTable(LEntrada.AsObject);
-      AssertTrue('tabela deve ter queue', LTab.TryGetValue('queue', LCampo));
+      TAssert.AssertTrue('tabela deve ter queue', LTab.TryGetValue('queue', LCampo));
       LTexto := LCampo.AsString;
-      AssertEquals('queue', 'fila-trab', LTexto);
-      AssertTrue('tabela deve ter reason', LTab.TryGetValue('reason', LCampo));
+      TAssert.AssertEquals('queue', 'fila-trab', LTexto);
+      TAssert.AssertTrue('tabela deve ter reason', LTab.TryGetValue('reason', LCampo));
       LTexto := LCampo.AsString;
-      AssertEquals('reason', 'rejected', LTexto);
-      AssertTrue('tabela deve ter count', LTab.TryGetValue('count', LCampo));
-      AssertEquals('count', 2, Integer(LCampo.AsInt64));
+      TAssert.AssertEquals('reason', 'rejected', LTexto);
+      TAssert.AssertTrue('tabela deve ter count', LTab.TryGetValue('count', LCampo));
+      TAssert.AssertEquals('count', 2, Integer(LCampo.AsInt64));
     finally
       // Tambem exercita o destrutor: a tabela aninhada DENTRO do array deve
       // ser liberada (fazia leak no FPC antes do AmqpUnwrapValue no Destroy).
@@ -680,28 +686,28 @@ begin
     LOut.Free; // dona da entrada aninhada dentro do array
   end;
 
-  AssertTrue('deve ter escrito bytes', Length(LBytes) > 0);
+  TAssert.AssertTrue('deve ter escrito bytes', Length(LBytes) > 0);
 
   R := TAMQPReader.Create(LBytes);
   try
     LOut := R.ReadFieldTable;
     try
-      AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
+      TAssert.AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
       LVal := AmqpUnwrapValue(LVal);
-      AssertTrue('valor deve ser array', LVal.IsArray);
-      AssertEquals('um elemento', 1, LVal.GetArrayLength);
+      TAssert.AssertTrue('valor deve ser array', LVal.IsArray);
+      TAssert.AssertEquals('um elemento', 1, LVal.GetArrayLength);
       LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
-      AssertTrue('elemento deve ser objeto', LElem.IsObject);
-      AssertTrue('elemento deve ser tabela', LElem.AsObject is TAMQPFieldTable);
+      TAssert.AssertTrue('elemento deve ser objeto', LElem.IsObject);
+      TAssert.AssertTrue('elemento deve ser tabela', LElem.AsObject is TAMQPFieldTable);
       LTab := TAMQPFieldTable(LElem.AsObject);
-      AssertTrue('deve ter queue', LTab.TryGetValue('queue', LCampo));
+      TAssert.AssertTrue('deve ter queue', LTab.TryGetValue('queue', LCampo));
       LTexto := LCampo.AsString;
-      AssertEquals('queue', 'fila-trab', LTexto);
-      AssertTrue('deve ter reason', LTab.TryGetValue('reason', LCampo));
+      TAssert.AssertEquals('queue', 'fila-trab', LTexto);
+      TAssert.AssertTrue('deve ter reason', LTab.TryGetValue('reason', LCampo));
       LTexto := LCampo.AsString;
-      AssertEquals('reason', 'expired', LTexto);
-      AssertTrue('deve ter count', LTab.TryGetValue('count', LCampo));
-      AssertEquals('count', 3, Integer(LCampo.AsInt64));
+      TAssert.AssertEquals('reason', 'expired', LTexto);
+      TAssert.AssertTrue('deve ter count', LTab.TryGetValue('count', LCampo));
+      TAssert.AssertEquals('count', 3, Integer(LCampo.AsInt64));
     finally
       LOut.Free;
     end;
@@ -750,16 +756,16 @@ begin
     R.Free;
   end;
   try
-    AssertTrue('deve ter lista', LT2.TryGetValue('lista', LVal));
+    TAssert.AssertTrue('deve ter lista', LT2.TryGetValue('lista', LVal));
     LVal := AmqpUnwrapValue(LVal);
-    AssertEquals('tres elementos', 3, LVal.GetArrayLength);
+    TAssert.AssertEquals('tres elementos', 3, LVal.GetArrayLength);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
     LTexto := LElem.AsString;
-    AssertEquals('elemento 0', 'um', LTexto);
+    TAssert.AssertEquals('elemento 0', 'um', LTexto);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(1));
-    AssertEquals('elemento 1', 42, Integer(LElem.AsInt64));
+    TAssert.AssertEquals('elemento 1', 42, Integer(LElem.AsInt64));
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(2));
-    AssertTrue('elemento 2', LElem.AsBoolean);
+    TAssert.AssertTrue('elemento 2', LElem.AsBoolean);
 
     W := TAMQPWriter.Create;
     try
@@ -772,7 +778,7 @@ begin
     LT2.Free;
   end;
 
-  AssertEquals('os bytes tem de ser estaveis na segunda passada',
+  TAssert.AssertEquals('os bytes tem de ser estaveis na segunda passada',
     BytesHex(B1), BytesHex(B2));
 end;
 
@@ -805,10 +811,10 @@ begin
   try
     LT2 := R.ReadFieldTable;
     try
-      AssertTrue('deve ter a chave', LT2.TryGetValue('nada', LVal));
+      TAssert.AssertTrue('deve ter a chave', LT2.TryGetValue('nada', LVal));
       LVal := AmqpUnwrapValue(LVal);
-      AssertTrue('deve ser array', LVal.IsArray);
-      AssertEquals('sem elementos', 0, LVal.GetArrayLength);
+      TAssert.AssertTrue('deve ser array', LVal.IsArray);
+      TAssert.AssertEquals('sem elementos', 0, LVal.GetArrayLength);
     finally
       LT2.Free;
     end;
@@ -849,21 +855,21 @@ begin
   end;
 
   // 4 (tamanho da tabela) + 1 (tamanho do nome) + 4 ('blob') = offset do tag.
-  AssertEquals('tag do valor tem de ser x (FV_BYTES), nao A',
+  TAssert.AssertEquals('tag do valor tem de ser x (FV_BYTES), nao A',
     Ord('x'), Integer(LBytes[9]));
 
   R := TAMQPReader.Create(LBytes);
   try
     LT2 := R.ReadFieldTable;
     try
-      AssertTrue('deve ter blob', LT2.TryGetValue('blob', LVal));
+      TAssert.AssertTrue('deve ter blob', LT2.TryGetValue('blob', LVal));
       // AsType<T> nao existe no FPC 3.2 -- extrai elemento a elemento, que
       // funciona nos dois compiladores.
       SetLength(LVolta, LVal.GetArrayLength);
       for I := 0 to High(LVolta) do
         LVolta[I] := Byte(LVal.GetArrayElement(I).AsInteger);
-      AssertEquals('quatro bytes de volta', 4, Length(LVolta));
-      AssertEquals('conteudo intacto', BytesHex(LOrig), BytesHex(LVolta));
+      TAssert.AssertEquals('quatro bytes de volta', 4, Length(LVolta));
+      TAssert.AssertEquals('conteudo intacto', BytesHex(LOrig), BytesHex(LVolta));
     finally
       LT2.Free;
     end;
@@ -900,11 +906,11 @@ begin
       LOut := R.ReadFieldTable;
       try
         LProdutoVal := LOut['product'];
-        AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+        TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
         LCapsVal := LOut['capabilities'];
         LCapsOut := TAMQPFieldTable(LCapsVal.AsObject);
         LConfirmsVal := LCapsOut['publisher_confirms'];
-        AssertTrue(LConfirmsVal.AsBoolean);
+        TAssert.AssertTrue(LConfirmsVal.AsBoolean);
       finally
         LOut.Free;
       end;
