@@ -1,16 +1,22 @@
 ﻿unit AMQP.ReconnectIntegrationTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Integration/AMQP.ReconnectIntegrationTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Integração de reconexão automática — precisa de RabbitMQ em localhost:5672.
   Simula queda (fecha o socket), aguarda a auto-reconexão + recuperação de
   topologia (redeclara a fila e re-consome) e confere que o consumer volta a
   receber mensagens publicadas por uma conexão de controle separada. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
+  fpcunit, testregistry,
+  SysUtils, Classes, Generics.Collections,
   PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
@@ -227,7 +233,7 @@ begin
   // 1) Publica antes da queda e confirma o consumo.
   FControlChan.PublishText('', FQueue, 'antes-da-queda');
   WaitReceived('antes-da-queda', 5000);
-  AssertTrue('deveria consumir antes da queda', ReceivedContains('antes-da-queda'));
+  TAssert.AssertTrue('deveria consumir antes da queda', ReceivedContains('antes-da-queda'));
 
   // 2) Simula a queda de rede.
   FConsumerConn.DropConnectionForTest;
@@ -235,15 +241,15 @@ begin
   // 3) Aguarda a auto-reconexão + recuperação (OnReconnect dispara após
   //    redeclarar a fila e re-consumir).
   WaitReconnected(15000);
-  AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FReconnected));
-  AssertTrue('conexão deveria estar aberta após reconectar', FConsumerConn.IsOpen);
+  TAssert.AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FReconnected));
+  TAssert.AssertTrue('conexão deveria estar aberta após reconectar', FConsumerConn.IsOpen);
 
   // 4) Publica depois da recuperação e confirma que o consumo voltou.
   //    15s: logo após o recovery o broker/canal ainda podem estar assentando
   //    (flakeou com 5s sob carga — broker compartilhado com outra suíte).
   FControlChan.PublishText('', FQueue, 'depois-da-recuperacao');
   WaitReceived('depois-da-recuperacao', 15000);
-  AssertTrue('deveria voltar a consumir após a reconexão',
+  TAssert.AssertTrue('deveria voltar a consumir após a reconexão',
     ReceivedContains('depois-da-recuperacao'));
 end;
 
@@ -280,11 +286,11 @@ begin
       TThread.Sleep(50);
       Inc(LWaited, 50);
     end;
-    AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FDropTestReconnected));
+    TAssert.AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FDropTestReconnected));
 
     // Os publishes pendentes na queda foram PERDIDOS: WaitForConfirms deve
     // reportar False. (Bug: Recover limpava FNacked e isto retornava True.)
-    AssertFalse('WaitForConfirms deve reportar False para publishes perdidos na queda',
+    TAssert.AssertFalse('WaitForConfirms deve reportar False para publishes perdidos na queda',
       LChan.WaitForConfirms(3000));
   finally
     LConn.Free;
@@ -336,7 +342,7 @@ begin
       TThread.Sleep(50);
       Inc(LWaited, 50);
     end;
-    AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FRepublishTestReconnected));
+    TAssert.AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FRepublishTestReconnected));
 
     // Drena pela conexão de controle: as 100 devem chegar (at-least-once — pode
     // haver duplicatas de mensagens cujo ack se perdeu na queda, por isso >= 100).
@@ -353,7 +359,7 @@ begin
         Inc(LWaited, 50);
       end;
     end;
-    AssertTrue(Format('reenvio deveria entregar >= 100 msgs; entregou %d', [LCount]),
+    TAssert.AssertTrue(Format('reenvio deveria entregar >= 100 msgs; entregou %d', [LCount]),
       LCount >= 100);
   finally
     LPubChan.Free;
@@ -376,15 +382,15 @@ begin
     LConn.Open;
     LConn.DropConnectionForTest;
     WaitCounter(FCloseTestDisconnected, 10000);
-    AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
+    TAssert.AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
     LInicio := PcTickMs;
     FreeAndNil(LConn);
     LGasto := PcTickMs - LInicio;
   finally
     LConn.Free;
   end;
-  AssertTrue('fechar na espera da reconexão não espera os 3000 ms (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
-  AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
+  TAssert.AssertTrue('fechar na espera da reconexão não espera os 3000 ms (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+  TAssert.AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
 end;
 
 procedure TAMQPReconnectIntegrationTests.Close_ComReconnectDelayAlto_VoltaComAThreadEncerrada;
@@ -401,15 +407,15 @@ begin
     LConn.Open;
     LConn.DropConnectionForTest;
     WaitCounter(FCloseTestDisconnected, 10000);
-    AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
+    TAssert.AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
     LInicio := PcTickMs;
     FreeAndNil(LConn);
     LGasto := PcTickMs - LInicio;
   finally
     LConn.Free;
   end;
-  AssertEquals('Close/Destroy só voltam com a thread de reconexão encerrada', 0, AmqpReconnectThreadsAlive);
-  AssertTrue('e voltam logo (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+  TAssert.AssertEquals('Close/Destroy só voltam com a thread de reconexão encerrada', 0, AmqpReconnectThreadsAlive);
+  TAssert.AssertTrue('e voltam logo (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
 end;
 
 procedure TAMQPReconnectIntegrationTests.Close_DeDentroDoOnDisconnect_NaoTrava;
@@ -427,13 +433,13 @@ begin
     LConn.DropConnectionForTest;
     WaitCounter(FSelfCloseDone, 10000);
     LGasto := PcTickMs - LInicio;
-    AssertEquals('o Close de dentro do OnDisconnect voltou', 1, PcAtomicGet(FSelfCloseDone));
-    AssertTrue('e voltou logo (' + IntToStr(LGasto) + ' ms)', LGasto < 3000);
-    AssertTrue('a conexão ficou fechada', not LConn.IsOpen);
+    TAssert.AssertEquals('o Close de dentro do OnDisconnect voltou', 1, PcAtomicGet(FSelfCloseDone));
+    TAssert.AssertTrue('e voltou logo (' + IntToStr(LGasto) + ' ms)', LGasto < 3000);
+    TAssert.AssertTrue('a conexão ficou fechada', not LConn.IsOpen);
   finally
     LConn.Free;
   end;
-  AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
+  TAssert.AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
 end;
 
 procedure TAMQPReconnectIntegrationTests.HandleCrossReconnect(AConnection: TAMQPConnection);
@@ -520,16 +526,16 @@ begin
 
     LPub.PublishText('', LQueue, 'cruzado-antes');
     WaitReceived('cruzado-antes', 5000);
-    AssertTrue('deveria consumir antes da queda', ReceivedContains('cruzado-antes'));
+    TAssert.AssertTrue('deveria consumir antes da queda', ReceivedContains('cruzado-antes'));
 
     LConn.DropConnectionForTest;
     WaitCounter(FCrossReconnected, 15000);
-    AssertEquals('deveria ter reconectado (última falha: ' + LConn.LastReconnectError + ')', 1, PcAtomicGet(FCrossReconnected));
-    AssertEquals('reconexão bem-sucedida zera o motivo', '', LConn.LastReconnectError);
+    TAssert.AssertEquals('deveria ter reconectado (última falha: ' + LConn.LastReconnectError + ')', 1, PcAtomicGet(FCrossReconnected));
+    TAssert.AssertEquals('reconexão bem-sucedida zera o motivo', '', LConn.LastReconnectError);
 
     LPub.PublishText('', LQueue, 'cruzado-depois');
     WaitReceived('cruzado-depois', 15000);
-    AssertTrue('o consumer do canal 3 deveria voltar a receber', ReceivedContains('cruzado-depois'));
+    TAssert.AssertTrue('o consumer do canal 3 deveria voltar a receber', ReceivedContains('cruzado-depois'));
   finally
     LConn.Free; // libera os três canais
   end;
@@ -563,25 +569,25 @@ begin
 
     LConn.DropConnectionForTest;
     WaitFor404(LErro, 15000);
-    AssertTrue('OnReconnectError deveria trazer o 404 do replay', Pos('404', LErro) > 0);
-    AssertEquals('sem a fila, a reconexão não pode se dar por concluída', 0, PcAtomicGet(FCrossReconnected));
-    AssertTrue('LastReconnectError: ' + LConn.LastReconnectError, Pos('404', LConn.LastReconnectError) > 0);
+    TAssert.AssertTrue('OnReconnectError deveria trazer o 404 do replay', Pos('404', LErro) > 0);
+    TAssert.AssertEquals('sem a fila, a reconexão não pode se dar por concluída', 0, PcAtomicGet(FCrossReconnected));
+    TAssert.AssertTrue('LastReconnectError: ' + LConn.LastReconnectError, Pos('404', LConn.LastReconnectError) > 0);
 
     // Logo depois de uma tentativa falhar há ReconnectDelayMs até a próxima: o
     // publish cai na conexão indisponível e a exceção diz por quê.
     LPubErro := PublishError(LChan, LQueue);
-    AssertTrue('publish durante a reconexão: ' + LPubErro, Pos('EAMQPConnection', LPubErro) = 1);
-    AssertTrue('a exceção do publish deveria trazer o motivo: ' + LPubErro, Pos('404', LPubErro) > 0);
+    TAssert.AssertTrue('publish durante a reconexão: ' + LPubErro, Pos('EAMQPConnection', LPubErro) = 1);
+    TAssert.AssertTrue('a exceção do publish deveria trazer o motivo: ' + LPubErro, Pos('404', LPubErro) > 0);
 
     // A fila volta (outro processo a redeclara, no mundo real): a próxima
     // tentativa recupera.
     FControlChan.DeclareQueue(LDecl);
     WaitCounter(FCrossReconnected, 15000);
-    AssertEquals('deveria reconectar quando a fila voltasse (última falha: ' + LConn.LastReconnectError + ')', 1, PcAtomicGet(FCrossReconnected));
+    TAssert.AssertEquals('deveria reconectar quando a fila voltasse (última falha: ' + LConn.LastReconnectError + ')', 1, PcAtomicGet(FCrossReconnected));
 
     FControlChan.PublishText('', LQueue, 'fila-voltou');
     WaitReceived('fila-voltou', 15000);
-    AssertTrue('o consumer deveria voltar a receber', ReceivedContains('fila-voltou'));
+    TAssert.AssertTrue('o consumer deveria voltar a receber', ReceivedContains('fila-voltou'));
   finally
     LConn.Free;
   end;
@@ -606,7 +612,7 @@ begin
 
     LConn.DropConnectionForTest;
     LErro := PublishError(LChan, 'test-sem-reconexao');
-    AssertTrue('logo após a queda: ' + LErro, Pos('EAMQPConnection', LErro) = 1);
+    TAssert.AssertTrue('logo após a queda: ' + LErro, Pos('EAMQPConnection', LErro) = 1);
 
     LWaited := 0;
     while LConn.IsOpen and (LWaited < 5000) do
@@ -614,10 +620,10 @@ begin
       TThread.Sleep(20);
       Inc(LWaited, 20);
     end;
-    AssertTrue('a queda deveria ter sido percebida', not LConn.IsOpen);
+    TAssert.AssertTrue('a queda deveria ter sido percebida', not LConn.IsOpen);
     LErro := PublishError(LChan, 'test-sem-reconexao');
-    AssertTrue('depois de percebida: ' + LErro, Pos('EAMQPConnection', LErro) = 1);
-    AssertTrue('a exceção diz que a conexão caiu: ' + LErro, Pos('connection closed', LErro) > 0);
+    TAssert.AssertTrue('depois de percebida: ' + LErro, Pos('EAMQPConnection', LErro) = 1);
+    TAssert.AssertTrue('a exceção diz que a conexão caiu: ' + LErro, Pos('connection closed', LErro) > 0);
   finally
     LConn.Free;
   end;

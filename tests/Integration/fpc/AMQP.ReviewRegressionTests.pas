@@ -1,16 +1,22 @@
 ﻿unit AMQP.ReviewRegressionTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Integration/AMQP.ReviewRegressionTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Regressões dos achados da revisão que dão para testar de forma determinística:
   - bug_006: Close/Free do canal espera (drena) callbacks em voo (sem UAF).
   - bug_002: CreateChannel concorrente gera IDs distintos, sem erro nem leak.
   Precisa de RabbitMQ em localhost:5672. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
+  fpcunit, testregistry,
+  SysUtils, Classes, Generics.Collections,
   PascalCommon.Threading,
   PascalCommon.ThreadPool,
   AMQP.Connection,
@@ -135,14 +141,14 @@ begin
       TThread.Sleep(20);
       Inc(LWaited, 20);
     end;
-    AssertEquals('o callback deveria ter começado', 1, PcAtomicGet(FStarted));
-    AssertEquals('o callback ainda deveria estar em voo (dormindo)',
+    TAssert.AssertEquals('o callback deveria ter começado', 1, PcAtomicGet(FStarted));
+    TAssert.AssertEquals('o callback ainda deveria estar em voo (dormindo)',
       0, PcAtomicGet(FFinished));
 
     // Fecha o canal COM o callback em voo: DrainInFlight deve esperar terminar.
     LChan.Close;
 
-    AssertEquals('Close deveria ter drenado (esperado) o callback em voo antes de retornar',
+    TAssert.AssertEquals('Close deveria ter drenado (esperado) o callback em voo antes de retornar',
       1, PcAtomicGet(FFinished));
   finally
     LChan.Free;
@@ -179,20 +185,20 @@ begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
   end;
-  AssertEquals('todos os N itens deveriam terminar', N, PcAtomicGet(LDone));
+  TAssert.AssertEquals('todos os N itens deveriam terminar', N, PcAtomicGet(LDone));
 
   LSeen := TDictionary<Word, Boolean>.Create;
   try
     for I := 0 to N - 1 do
     begin
-      AssertEquals(Format('thread %d falhou ao criar canal: %s', [I, LErrors[I]]),
+      TAssert.AssertEquals(Format('thread %d falhou ao criar canal: %s', [I, LErrors[I]]),
         '', LErrors[I]);
-      AssertNotNull(Format('canal %d não foi criado', [I]), LChannels[I]);
+      TAssert.AssertTrue(Format('canal %d não foi criado', [I]), Assigned(LChannels[I]));
       LId := LChannels[I].ChannelId;
-      AssertFalse(Format('channel-id duplicado: %d', [LId]), LSeen.ContainsKey(LId));
+      TAssert.AssertFalse(Format('channel-id duplicado: %d', [LId]), LSeen.ContainsKey(LId));
       LSeen.Add(LId, True);
     end;
-    AssertEquals('deveria haver N canais com IDs distintos', N, LSeen.Count);
+    TAssert.AssertEquals('deveria haver N canais com IDs distintos', N, LSeen.Count);
   finally
     LSeen.Free;
     for I := 0 to N - 1 do

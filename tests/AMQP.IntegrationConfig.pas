@@ -12,13 +12,15 @@
   (tests\Acceptance\fpc) sobe um TAMQPServer em porta efemera e chama
   AmqpUseEmbeddedBroker antes de rodar os testes.
 
-  Espelho FPCUnit de tests\Integration\fpc\AMQP.IntegrationConfig.pas -- mantenha
-  os dois em sincronia. }
+  Uma copia so', compilada pelos runners Delphi e FPC (integracao e
+  aceitacao). }
+
+{$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
 interface
 
 uses
-  System.SysUtils,
+  SysUtils,
   AMQP.Connection;
 
 /// Parametros de conexao PLAIN da suite. Default: TAMQPConnectionParams.

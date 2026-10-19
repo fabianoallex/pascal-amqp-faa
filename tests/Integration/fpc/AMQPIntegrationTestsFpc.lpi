@@ -24,6 +24,7 @@
             <Filename Value="AMQPIntegrationTestsFpc"/>
           </Target>
           <SearchPaths>
+            <OtherUnitFiles Value="..\.."/>
             <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -86,6 +87,7 @@
       <Filename Value="AMQPIntegrationTestsFpc"/>
     </Target>
     <SearchPaths>
+      <OtherUnitFiles Value="..\.."/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

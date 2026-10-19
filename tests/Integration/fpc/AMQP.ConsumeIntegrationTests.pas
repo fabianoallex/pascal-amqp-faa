@@ -1,15 +1,21 @@
 ﻿unit AMQP.ConsumeIntegrationTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Integration/AMQP.ConsumeIntegrationTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Integração de consumo concorrente — precisa de RabbitMQ em localhost:5672.
   Valida o critério de aceite do MVP: Basic.Consume com despacho para thread
   pool, ack manual e processamento NÃO serializado de mensagens diferentes. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, Generics.Collections,
+  fpcunit, testregistry,
+  SysUtils, Classes, Generics.Collections,
   PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
@@ -159,8 +165,8 @@ begin
 
   LList := FReceived.LockList;
   try
-    AssertEquals('deveria ter recebido 1 mensagem', 1, LList.Count);
-    AssertEquals('resposta-nfe-123', LList[0]);
+    TAssert.AssertEquals('deveria ter recebido 1 mensagem', 1, LList.Count);
+    TAssert.AssertEquals('resposta-nfe-123', LList[0]);
   finally
     FReceived.UnlockList;
   end;
@@ -188,11 +194,11 @@ begin
 
   LList := FReceived.LockList;
   try
-    AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
+    TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
   finally
     FReceived.UnlockList;
   end;
-  AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
+  TAssert.AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
     PcAtomicGet(FPeak) > 1);
 end;
 
@@ -219,14 +225,14 @@ begin
 
   LList := FReceived.LockList;
   try
-    AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
+    TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
     for I := 1 to N do
-      AssertEquals('worker dedicado deveria preservar a ordem de entrega',
+      TAssert.AssertEquals('worker dedicado deveria preservar a ordem de entrega',
         Format('msg-%d', [I]), LList[I - 1]);
   finally
     FReceived.UnlockList;
   end;
-  AssertEquals('worker dedicado nunca deveria rodar 2 callbacks ao mesmo tempo (pico deveria ser 1)',
+  TAssert.AssertEquals('worker dedicado nunca deveria rodar 2 callbacks ao mesmo tempo (pico deveria ser 1)',
     1, PcAtomicGet(FPeak));
 end;
 

@@ -25,7 +25,7 @@
           </Target>
           <SearchPaths>
             <IncludeFiles Value="..\..\..\src"/>
-            <OtherUnitFiles Value="..\..\Integration\fpc"/>
+            <OtherUnitFiles Value="..\..\Integration\fpc;..\.."/>
             <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -93,7 +93,7 @@
     </Target>
     <SearchPaths>
       <IncludeFiles Value="..\..\..\src"/>
-      <OtherUnitFiles Value="..\..\Integration\fpc"/>
+      <OtherUnitFiles Value="..\..\Integration\fpc;..\.."/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

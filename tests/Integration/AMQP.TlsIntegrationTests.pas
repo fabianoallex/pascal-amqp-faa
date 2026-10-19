@@ -6,23 +6,27 @@
   (ver o cabeçalho de docker/docker-compose.tls.yml para gerar os certs).
 
   Se o broker TLS NÃO estiver no ar, o Setup não consegue conectar e os testes
-  saem via Assert.Pass com a mensagem 'IGNORADO: ...' — o DUnitX desta versão
-  não tem skip em runtime (o resultado Ignored só existe pro atributo estático
-  [Ignore]), então eles ainda CONTAM como Passed no sumário, mas o log de
-  console mostra 'Success. : IGNORADO: ...' em cada um, deixando explícito que
-  não conectaram. Isso evita quebrar a suíte quando só o broker plain (5672)
-  está up. }
+  se marcam como IGNORADOS (IgnoraTeste, de AMQP.TestSupport: no FPCUnit
+  aparecem no "Number of ignored tests" do relatório; no DUnitX, que não tem
+  ignorado em tempo de execução, saem como Passed com a mensagem
+  'IGNORADO: ...'), para não quebrar a suíte quando só o broker plain (5672)
+  está up. O mesmo caminho cobre builds sem backend TLS
+  (fora do Windows sem -dAMQP_OPENSSL): o Open levanta EAMQPConnection e os
+  testes se auto-ignoram. Para rodá-los de verdade fora do Windows, compile o
+  runner com -dAMQP_OPENSSL (precisa de libssl/libcrypto instaladas). }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.SyncObjs,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes,
+  PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
-  AMQP.Transport, // EAMQPTls
+  AMQP.Transport, // EAMQPTls (vale pra SChannel e OpenSSL)
   AMQP.Queue.Methods;
 
 type
@@ -32,6 +36,8 @@ type
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
     FAvailable: Boolean; // broker TLS acessível? (senão, testes são ignorados)
+    FVerifyPeerParams: TAMQPConnectionParams;
+    FPlainPortParams: TAMQPConnectionParams;
     FCount: Integer;      // mensagens processadas (atômico)
     FCurrent: Integer;    // callbacks rodando agora (atômico)
     FPeak: Integer;       // pico de concorrência observado (atômico)
@@ -41,10 +47,11 @@ type
     function BuildBigBody(ASize: Integer): string;
     procedure WaitCount(AExpected, ATimeoutMs: Integer);
     procedure HandleDeliveryConcurrent(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure DoOpenWithVerifyPeer;
+    procedure DoOpenAgainstPlainPort;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure Tls_PublishEBusca;
     [Test] procedure Tls_PayloadGrande_Integro;
     [Test] procedure Tls_ConsumoConcorrente_ComAck;
@@ -54,7 +61,7 @@ type
 
 implementation
 
-procedure TAMQPTlsIntegrationTests.Setup;
+procedure TAMQPTlsIntegrationTests.SetUp;
 begin
   FAvailable := False;
   FCount := 0;
@@ -78,15 +85,14 @@ begin
   FConn.Free;
 end;
 
-// True = sem broker TLS (ou build sem backend). Assert.Pass marca o teste com
-// a mensagem 'IGNORADO: ...' (visível no log de console como 'Success. : ...');
-// ainda conta como Passed — o DUnitX não tem Ignored de runtime. O Exit no
-// chamador é defensivo, caso Assert.Pass não interrompa.
+// True = sem broker TLS (ou build sem backend): marca o teste como ignorado
+// (ver o cabeçalho). O Exit no chamador cobre o caso de IgnoraTeste não
+// interromper o teste.
 function TAMQPTlsIntegrationTests.TlsIndisponivel: Boolean;
 begin
   Result := not FAvailable;
   if Result then
-    Assert.Pass('IGNORADO: broker TLS (5671) indisponível ou build sem backend TLS');
+    IgnoraTeste('broker TLS (5671) indisponível ou build sem backend TLS');
 end;
 
 function TAMQPTlsIntegrationTests.DeclareTempQueue: string;
@@ -128,8 +134,7 @@ var
   LWaited: Integer;
 begin
   LWaited := 0;
-  while (TInterlocked.CompareExchange(FCount, 0, 0) < AExpected) and
-        (LWaited < ATimeoutMs) do
+  while (PcAtomicGet(FCount) < AExpected) and (LWaited < ATimeoutMs) do
   begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
@@ -141,29 +146,29 @@ procedure TAMQPTlsIntegrationTests.HandleDeliveryConcurrent(AChannel: TAMQPChann
 var
   LCur, LOldPeak, LWaited: Integer;
 begin
-  LCur := TInterlocked.Increment(FCurrent);
+  LCur := PcAtomicInc(FCurrent);
   // atualiza o pico de concorrência (CAS)
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
-  until TInterlocked.CompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
+  until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
   // Segura o callback até OBSERVAR outro rodando junto (ou timeout): prova a
   // sobreposição sem depender de janela de timing (um sleep fixo flakeia
   // quando os workers do pool demoram a subir sob carga). Se o pico >= 2 já
   // foi registrado, a prova está feita e ninguém mais precisa esperar.
   LWaited := 0;
-  while (TInterlocked.CompareExchange(FCurrent, 0, 0) < 2) and
-        (TInterlocked.CompareExchange(FPeak, 0, 0) < 2) and (LWaited < 2000) do
+  while (PcAtomicGet(FCurrent) < 2) and (PcAtomicGet(FPeak) < 2) and
+        (LWaited < 2000) do
   begin
     TThread.Sleep(10);
     Inc(LWaited, 10);
   end;
 
   AChannel.Ack(ADelivery.DeliveryTag);
-  TInterlocked.Decrement(FCurrent);
-  TInterlocked.Increment(FCount);
+  PcAtomicDec(FCurrent);
+  PcAtomicInc(FCount);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_PublishEBusca;
@@ -178,8 +183,8 @@ begin
   FChan.PublishText('', LQueue, 'olá sobre TLS');
 
   LResult := GetWithRetry(LQueue);
-  Assert.IsTrue(LResult.Found, 'mensagem deveria ter sido entregue sobre TLS');
-  Assert.AreEqual('olá sobre TLS', LResult.BodyAsText);
+  TAssert.AssertTrue('mensagem deveria ter sido entregue sobre TLS', LResult.Found);
+  TAssert.AssertEquals('olá sobre TLS', LResult.BodyAsText);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_PayloadGrande_Integro;
@@ -200,10 +205,10 @@ begin
   FChan.PublishText('', LQueue, LBody);
 
   LResult := GetWithRetry(LQueue);
-  Assert.IsTrue(LResult.Found, 'mensagem grande deveria ter sido entregue sobre TLS');
-  Assert.AreEqual(BODY_SIZE, Length(LResult.BodyAsText), 'tamanho do corpo');
-  // Igualdade direta (sem AreEqual) pra não imprimir 300KB no relatório em falha.
-  Assert.IsTrue(LResult.BodyAsText = LBody, 'corpo deveria voltar íntegro, byte a byte');
+  TAssert.AssertTrue('mensagem grande deveria ter sido entregue sobre TLS', LResult.Found);
+  TAssert.AssertEquals('tamanho do corpo', BODY_SIZE, Length(LResult.BodyAsText));
+  // Igualdade direta (sem AssertEquals) pra não imprimir 300KB no relatório em falha.
+  TAssert.AssertTrue('corpo deveria voltar íntegro, byte a byte', LResult.BodyAsText = LBody);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_ConsumoConcorrente_ComAck;
@@ -230,66 +235,62 @@ begin
   // ao fim e falha na asserção de pico (a mensagem certa), não na contagem.
   WaitCount(N, 30000);
 
-  Assert.AreEqual(N, TInterlocked.CompareExchange(FCount, 0, 0),
-    'todas as mensagens deveriam ter sido processadas sobre TLS');
-  Assert.IsTrue(TInterlocked.CompareExchange(FPeak, 0, 0) > 1,
-    'processamento deveria ser concorrente (pico > 1), não serializado');
+  TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas sobre TLS',
+    N, PcAtomicGet(FCount));
+  TAssert.AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
+    PcAtomicGet(FPeak) > 1);
+end;
+
+procedure TAMQPTlsIntegrationTests.DoOpenAgainstPlainPort;
+var
+  LConn: TAMQPConnection;
+begin
+  LConn := TAMQPConnection.Create(FPlainPortParams);
+  try
+    LConn.Open; // deve levantar EAMQPTls (handshake contra porta sem TLS)
+  finally
+    LConn.Free;
+  end;
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_ContraPortaPlain_LevantaEAMQPTls;
-var
-  LParams: TAMQPConnectionParams;
 begin
   if TlsIndisponivel then
     Exit; // também garante que HÁ broker no ar (senão a falha seria de socket, não de TLS)
 
   // Handshake TLS contra a porta plain (5672): o broker responde com o header
   // AMQP e fecha — deve virar EAMQPTls rápido, sem travar a suíte.
-  LParams := IntegrationTlsParams;
-  LParams.Port := 5672;
+  FPlainPortParams := IntegrationTlsParams;
+  FPlainPortParams.Port := 5672;
 
-  Assert.WillRaise(
-    procedure
-    var
-      LConn: TAMQPConnection;
-    begin
-      LConn := TAMQPConnection.Create(LParams);
-      try
-        LConn.Open; // deve levantar EAMQPTls (handshake contra porta sem TLS)
-      finally
-        LConn.Free;
-      end;
-    end,
-    EAMQPTls,
-    'handshake TLS contra a porta plain deveria falhar com EAMQPTls');
+  ChecaLevanta('handshake TLS contra a porta plain deveria falhar com EAMQPTls',
+    EAMQPTls, DoOpenAgainstPlainPort);
+end;
+
+procedure TAMQPTlsIntegrationTests.DoOpenWithVerifyPeer;
+var
+  LConn: TAMQPConnection;
+begin
+  LConn := TAMQPConnection.Create(FVerifyPeerParams);
+  try
+    LConn.Open; // deve levantar EAMQPTls (cert não confiável)
+  finally
+    LConn.Free;
+  end;
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_VerifyPeerTrue_RejeitaCertSelfSigned;
-var
-  LParams: TAMQPConnectionParams;
 begin
   if TlsIndisponivel then
     Exit; // sem broker TLS não dá para provar a validação
 
   // Mesmo broker (cert self-signed), mas AGORA exigindo validação da cadeia +
   // hostname: o handshake TLS deve FALHAR (prova que TlsVerifyPeer=True valida).
-  LParams := IntegrationTlsParams;
-  LParams.TlsVerifyPeer := True;
+  FVerifyPeerParams := IntegrationTlsParams;
+  FVerifyPeerParams.TlsVerifyPeer := True;
 
-  Assert.WillRaise(
-    procedure
-    var
-      LConn: TAMQPConnection;
-    begin
-      LConn := TAMQPConnection.Create(LParams);
-      try
-        LConn.Open; // deve levantar EAMQPTls (cert não confiável)
-      finally
-        LConn.Free;
-      end;
-    end,
-    EAMQPTls,
-    'validar o cert self-signed deveria recusar a conexão');
+  ChecaLevanta('validar o cert self-signed deveria recusar a conexão',
+    EAMQPTls, DoOpenWithVerifyPeer);
 end;
 
 initialization

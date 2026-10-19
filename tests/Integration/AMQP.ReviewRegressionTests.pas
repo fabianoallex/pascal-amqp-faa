@@ -5,20 +5,43 @@
   - bug_002: CreateChannel concorrente gera IDs distintos, sem erro nem leak.
   Precisa de RabbitMQ em localhost:5672. }
 
+
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.SyncObjs,
-  System.Threading,
-  System.Generics.Collections,
+  AMQP.DUnitXCompat,
+  SysUtils, Classes, Generics.Collections,
+  PascalCommon.Threading,
+  PascalCommon.ThreadPool,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Queue.Methods;
 
 type
+  // Tipos nomeados (nao "array of X" direto como parametro, que seria open
+  // array — semantica de VALOR, copia os elementos): um dynamic array named
+  // type passado por parametro compartilha o mesmo buffer com o chamador.
+  TAMQPChannelArr = array of TAMQPChannel;
+  TAMQPStringArr = array of string;
+
+  // System.Threading (TParallel.For) nao existe no FPC (ver CLAUDE.md) —
+  // dispara N criacoes de canal concorrentes via PcPool (o thread pool
+  // proprio da lib) em vez disso. O pool assume a posse do item: nao se
+  // libera manualmente apos Queue.
+  TCreateChannelWorkItem = class(TPcWorkItem)
+  private
+    FConn: TAMQPConnection;
+    FIndex: Integer;
+    FChannels: TAMQPChannelArr; // compartilhado com o chamador (mesmo buffer)
+    FErrors: TAMQPStringArr;
+    FDone: PInteger;
+  public
+    constructor Create(AConn: TAMQPConnection; AIndex: Integer;
+      AChannels: TAMQPChannelArr; AErrors: TAMQPStringArr; ADone: PInteger);
+    procedure Execute; override;
+  end;
+
   [TestFixture]
   TAMQPReviewRegressionTests = class
   private
@@ -26,19 +49,44 @@ type
     FStarted: Integer;
     FFinished: Integer;
     // Callback de consumer é 'of object' na lib (ver CLAUDE.md) — sem métodos
-    // anônimos.
+    // anônimos. TInterlocked não existe no FPC -> PcAtomic*.
     procedure HandleSlowDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure CloseDoCanal_EsperaCallbackEmVoo;   // bug_006
     [Test] procedure CreateChannelConcorrente_IdsDistintos; // bug_002
   end;
 
 implementation
 
-procedure TAMQPReviewRegressionTests.Setup;
+{ TCreateChannelWorkItem }
+
+constructor TCreateChannelWorkItem.Create(AConn: TAMQPConnection; AIndex: Integer;
+  AChannels: TAMQPChannelArr; AErrors: TAMQPStringArr; ADone: PInteger);
+begin
+  inherited Create;
+  FConn := AConn;
+  FIndex := AIndex;
+  FChannels := AChannels; // copia so' a referencia (mesmo buffer do chamador)
+  FErrors := AErrors;
+  FDone := ADone;
+end;
+
+procedure TCreateChannelWorkItem.Execute;
+begin
+  try
+    FChannels[FIndex] := FConn.CreateChannel;
+  except
+    on E: Exception do
+      FErrors[FIndex] := E.Message;
+  end;
+  PcAtomicInc(FDone^);
+end;
+
+{ TAMQPReviewRegressionTests }
+
+procedure TAMQPReviewRegressionTests.SetUp;
 begin
   FConn := TAMQPConnection.Create(IntegrationParams);
   FConn.Open;
@@ -54,9 +102,9 @@ end;
 procedure TAMQPReviewRegressionTests.HandleSlowDelivery(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery);
 begin
-  TInterlocked.Exchange(FStarted, 1);
+  PcAtomicSet(FStarted, 1);
   TThread.Sleep(6000);
-  TInterlocked.Exchange(FFinished, 1);
+  PcAtomicSet(FFinished, 1);
 end;
 
 procedure TAMQPReviewRegressionTests.CloseDoCanal_EsperaCallbackEmVoo;
@@ -83,21 +131,20 @@ begin
 
     // Espera o callback começar (mas ainda dormindo).
     LWaited := 0;
-    while (TInterlocked.CompareExchange(FStarted, 0, 0) = 0) and (LWaited < 5000) do
+    while (PcAtomicGet(FStarted) = 0) and (LWaited < 5000) do
     begin
       TThread.Sleep(20);
       Inc(LWaited, 20);
     end;
-    Assert.AreEqual(1, TInterlocked.CompareExchange(FStarted, 0, 0),
-      'o callback deveria ter começado');
-    Assert.AreEqual(0, TInterlocked.CompareExchange(FFinished, 0, 0),
-      'o callback ainda deveria estar em voo (dormindo)');
+    TAssert.AssertEquals('o callback deveria ter começado', 1, PcAtomicGet(FStarted));
+    TAssert.AssertEquals('o callback ainda deveria estar em voo (dormindo)',
+      0, PcAtomicGet(FFinished));
 
     // Fecha o canal COM o callback em voo: DrainInFlight deve esperar terminar.
     LChan.Close;
 
-    Assert.AreEqual(1, TInterlocked.CompareExchange(FFinished, 0, 0),
-      'Close deveria ter drenado (esperado) o callback em voo antes de retornar');
+    TAssert.AssertEquals('Close deveria ter drenado (esperado) o callback em voo antes de retornar',
+      1, PcAtomicGet(FFinished));
   finally
     LChan.Free;
   end;
@@ -107,46 +154,46 @@ procedure TAMQPReviewRegressionTests.CreateChannelConcorrente_IdsDistintos;
 const
   N = 8;
 var
-  LChannels: array[0 .. N - 1] of TAMQPChannel;
-  LErrors: array[0 .. N - 1] of string;
+  LChannels: TAMQPChannelArr;
+  LErrors: TAMQPStringArr;
   LSeen: TDictionary<Word, Boolean>;
-  I: Integer;
+  I, LDone, LWaited: Integer;
   LId: Word;
 begin
+  SetLength(LChannels, N);
+  SetLength(LErrors, N);
   for I := 0 to N - 1 do
   begin
     LChannels[I] := nil;
     LErrors[I] := '';
   end;
 
-  // Cria N canais concorrentemente. TParallel.For passa o índice por parâmetro
-  // (sem o problema de captura de variável de laço). O TProc<Integer> aqui é do
-  // próprio System.Threading (Delphi), não da lib — não entra na regra do
-  // CLAUDE.md sobre callbacks 'of object'.
-  TParallel.For(0, N - 1,
-    procedure(AIndex: Integer)
-    begin
-      try
-        LChannels[AIndex] := FConn.CreateChannel;
-      except
-        on E: Exception do
-          LErrors[AIndex] := E.Message;
-      end;
-    end);
+  // Cria N canais concorrentemente via PcPool (thread pool proprio da lib,
+  // ver comentario do TCreateChannelWorkItem acima).
+  LDone := 0;
+  for I := 0 to N - 1 do
+    PcPool.Queue(TCreateChannelWorkItem.Create(FConn, I, LChannels, LErrors, @LDone));
+
+  LWaited := 0;
+  while (PcAtomicGet(LDone) < N) and (LWaited < 10000) do
+  begin
+    TThread.Sleep(20);
+    Inc(LWaited, 20);
+  end;
+  TAssert.AssertEquals('todos os N itens deveriam terminar', N, PcAtomicGet(LDone));
 
   LSeen := TDictionary<Word, Boolean>.Create;
   try
     for I := 0 to N - 1 do
     begin
-      Assert.AreEqual('', LErrors[I],
-        Format('thread %d falhou ao criar canal: %s', [I, LErrors[I]]));
-      Assert.IsNotNull(LChannels[I], Format('canal %d não foi criado', [I]));
+      TAssert.AssertEquals(Format('thread %d falhou ao criar canal: %s', [I, LErrors[I]]),
+        '', LErrors[I]);
+      TAssert.AssertTrue(Format('canal %d não foi criado', [I]), Assigned(LChannels[I]));
       LId := LChannels[I].ChannelId;
-      Assert.IsFalse(LSeen.ContainsKey(LId),
-        Format('channel-id duplicado: %d', [LId]));
+      TAssert.AssertFalse(Format('channel-id duplicado: %d', [LId]), LSeen.ContainsKey(LId));
       LSeen.Add(LId, True);
     end;
-    Assert.AreEqual(N, Integer(LSeen.Count), 'deveria haver N canais com IDs distintos');
+    TAssert.AssertEquals('deveria haver N canais com IDs distintos', N, LSeen.Count);
   finally
     LSeen.Free;
     for I := 0 to N - 1 do

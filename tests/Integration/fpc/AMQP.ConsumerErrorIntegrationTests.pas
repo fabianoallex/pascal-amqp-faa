@@ -1,5 +1,11 @@
 ﻿unit AMQP.ConsumerErrorIntegrationTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Integration/AMQP.ConsumerErrorIntegrationTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Exceção no callback de consumer (v0.4.0) — precisa de um broker (RabbitMQ
   ou o embutido, pela aceitação).
 
@@ -15,16 +21,15 @@
   principal tem dead-letter para amq.direct, onde a DLQ espera pela chave da
   fila principal: é por ela que se vê o Nack sem requeue.
 
-  Espelho DUnitX em tests\Integration\AMQP.ConsumerErrorIntegrationTests.pas:
-  os corpos dos testes são idênticos; só as pontes Checa*, o uses e o
-  registro mudam de lado. }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ é gerado por tools/gen_fpc_mirror.py. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, SyncObjs, Rtti,
+  fpcunit, testregistry,
+  SysUtils, Classes, SyncObjs, Rtti,
   PascalCommon.Threading,
   AMQP.Wire,
   AMQP.Basic.Methods,
@@ -100,7 +105,8 @@ const
 
   ESPERA_MS = 10000;
 
-// As pontes para as asserções do dialeto: só elas mudam entre os espelhos.
+// Asserções com o tipo fixado: o valor entra já convertido, e a sobrecarga
+// do TAssert é a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
   TAssert.AssertEquals(AMsg, AEsperado, AObtido);

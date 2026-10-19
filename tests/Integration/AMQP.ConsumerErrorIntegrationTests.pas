@@ -15,18 +15,16 @@
   principal tem dead-letter para amq.direct, onde a DLQ espera pela chave da
   fila principal: é por ela que se vê o Nack sem requeue.
 
-  Espelho FPCUnit em tests\Integration\fpc\AMQP.ConsumerErrorIntegrationTests.pas:
-  os corpos dos testes são idênticos; só as pontes Checa*, o uses e o
-  registro mudam de lado. }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ é gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.SyncObjs,
-  System.Rtti,
+  AMQP.DUnitXCompat,
+  SysUtils, Classes, SyncObjs, Rtti,
   PascalCommon.Threading,
   AMQP.Wire,
   AMQP.Basic.Methods,
@@ -73,9 +71,8 @@ type
     function LeDlq(AChannel: TAMQPChannel; ATimeoutMs: Integer): string;
     procedure PublicaRuimEBoas(ABoas: Integer);
   public
-    [Setup]    procedure SetUp;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure SemHandler_CallbackLevanta_NackSemRequeue_E_NaoTrava;
     [Test] procedure Handler_RecebeExcecaoEntrega_E_AcaoInicialReject;
     [Test] procedure Handler_Requeue_ReentregaComRedelivered;
@@ -103,20 +100,21 @@ const
 
   ESPERA_MS = 10000;
 
-// As pontes para as asserções do dialeto: só elas mudam entre os espelhos.
+// Asserções com o tipo fixado: o valor entra já convertido, e a sobrecarga
+// do TAssert é a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaStr(const AMsg: string; const AEsperado, AObtido: string);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaOk(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsTrue(ACond, AMsg);
+  TAssert.AssertTrue(AMsg, ACond);
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.SetUp;

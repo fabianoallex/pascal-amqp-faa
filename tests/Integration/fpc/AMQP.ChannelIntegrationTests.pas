@@ -1,14 +1,20 @@
 ﻿unit AMQP.ChannelIntegrationTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Integration/AMQP.ChannelIntegrationTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Integração de canais/publish/get — precisa de RabbitMQ em localhost:5672.
   Sobe com: docker compose -f docker/docker-compose.yml up -d }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, Rtti,
+  fpcunit, testregistry,
+  SysUtils, Classes, Rtti,
   PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
@@ -138,12 +144,12 @@ begin
   FChan.Publish('', LQueue, TEncoding.UTF8.GetBytes('{"chave":"NFe123"}'), LProps);
 
   LResult := GetWithRetry(LQueue);
-  AssertTrue('mensagem deveria ter sido entregue', LResult.Found);
-  AssertEquals('corpo', '{"chave":"NFe123"}', LResult.BodyAsText);
-  AssertEquals('content-type', 'application/json', LResult.Properties.ContentType);
-  AssertEquals('correlation-id', 'corr-99', LResult.Properties.CorrelationId);
-  AssertEquals('message-id', 'msg-77', LResult.Properties.MessageId);
-  AssertEquals('delivery-mode persistente', 2, Integer(LResult.Properties.DeliveryMode));
+  TAssert.AssertTrue('mensagem deveria ter sido entregue', LResult.Found);
+  TAssert.AssertEquals('corpo', '{"chave":"NFe123"}', LResult.BodyAsText);
+  TAssert.AssertEquals('content-type', 'application/json', LResult.Properties.ContentType);
+  TAssert.AssertEquals('correlation-id', 'corr-99', LResult.Properties.CorrelationId);
+  TAssert.AssertEquals('message-id', 'msg-77', LResult.Properties.MessageId);
+  TAssert.AssertEquals('delivery-mode persistente', 2, Integer(LResult.Properties.DeliveryMode));
 end;
 
 procedure TAMQPChannelIntegrationTests.PublishText_EBusca;
@@ -155,9 +161,9 @@ begin
   FChan.PublishText('', LQueue, 'olá mundo NFe');
 
   LResult := GetWithRetry(LQueue);
-  AssertTrue(LResult.Found);
-  AssertEquals('olá mundo NFe', LResult.BodyAsText);
-  AssertEquals('text/plain', LResult.Properties.ContentType);
+  TAssert.AssertTrue(LResult.Found);
+  TAssert.AssertEquals('olá mundo NFe', LResult.BodyAsText);
+  TAssert.AssertEquals('text/plain', LResult.Properties.ContentType);
 end;
 
 procedure TAMQPChannelIntegrationTests.GetEmpty_QuandoFilaVazia;
@@ -167,7 +173,7 @@ var
 begin
   LQueue := DeclareTempQueue;
   LResult := FChan.BasicGet(LQueue, True);
-  AssertFalse('fila recém-criada deveria estar vazia', LResult.Found);
+  TAssert.AssertFalse('fila recém-criada deveria estar vazia', LResult.Found);
 end;
 
 procedure TAMQPChannelIntegrationTests.DeclareQueue_RetornaNomeGerado;
@@ -175,7 +181,7 @@ var
   LQueue: string;
 begin
   LQueue := DeclareTempQueue;
-  AssertTrue('servidor deveria gerar um nome de fila', LQueue <> '');
+  TAssert.AssertTrue('servidor deveria gerar um nome de fila', LQueue <> '');
 end;
 
 procedure TAMQPChannelIntegrationTests.Unbind_ParaDeRotearParaAFila;
@@ -207,8 +213,8 @@ begin
   // Com o bind, a mensagem chega à fila.
   FChan.PublishText(LExchange, LRk, 'antes-do-unbind');
   LResult := GetWithRetry(LQueue);
-  AssertTrue('com o bind, a mensagem deveria chegar', LResult.Found);
-  AssertEquals('antes-do-unbind', LResult.BodyAsText);
+  TAssert.AssertTrue('com o bind, a mensagem deveria chegar', LResult.Found);
+  TAssert.AssertEquals('antes-do-unbind', LResult.BodyAsText);
 
   // Desfaz o binding.
   LUnbind := Default(TAMQPQueueUnbind);
@@ -221,7 +227,7 @@ begin
   FChan.PublishText(LExchange, LRk, 'depois-do-unbind');
   TThread.Sleep(200); // dá tempo de o broker rotear (ou descartar)
   LResult := FChan.BasicGet(LQueue, True);
-  AssertFalse('após o unbind, a fila não deveria mais receber', LResult.Found);
+  TAssert.AssertFalse('após o unbind, a fila não deveria mais receber', LResult.Found);
 end;
 
 procedure TAMQPChannelIntegrationTests.ExchangeBind_RoteiaSourceParaDest;
@@ -264,8 +270,8 @@ begin
   // Publica na source com a routing-key do binding: source -> dest -> fila.
   FChan.PublishText(LSource, LRk, 'via-exchange-bind');
   LResult := GetWithRetry(LQueue);
-  AssertTrue('a mensagem deveria rotear source->dest->fila', LResult.Found);
-  AssertEquals('via-exchange-bind', LResult.BodyAsText);
+  TAssert.AssertTrue('a mensagem deveria rotear source->dest->fila', LResult.Found);
+  TAssert.AssertEquals('via-exchange-bind', LResult.BodyAsText);
 end;
 
 procedure TAMQPChannelIntegrationTests.PublishMandatory_SemRota_DisparaOnBasicReturn;
@@ -285,8 +291,8 @@ begin
     TThread.Sleep(25);
   end;
 
-  AssertEquals('OnBasicReturn deveria disparar', 1, PcAtomicGet(FGotReturn));
-  AssertEquals('sem destino', FReturned.BodyAsText);
+  TAssert.AssertEquals('OnBasicReturn deveria disparar', 1, PcAtomicGet(FGotReturn));
+  TAssert.AssertEquals('sem destino', FReturned.BodyAsText);
 end;
 
 procedure TAMQPChannelIntegrationTests.Confirm_PublishRoteavel_Ackado;
@@ -301,8 +307,8 @@ begin
 
   // Exchange padrão + routing-key = nome da fila: roteável, o broker confirma.
   LSeq := FChan.PublishText('', LQueue, 'confirma isso');
-  AssertTrue('primeiro publish em confirm mode deveria receber seq-no 1', UInt64(1) = LSeq);
-  AssertTrue('broker deveria confirmar (ack) o publish', FChan.WaitForConfirm(LSeq, 5000));
+  TAssert.AssertTrue('primeiro publish em confirm mode deveria receber seq-no 1', UInt64(1) = LSeq);
+  TAssert.AssertTrue('broker deveria confirmar (ack) o publish', FChan.WaitForConfirm(LSeq, 5000));
 
   for I := 1 to 80 do
   begin
@@ -310,8 +316,8 @@ begin
       Break;
     TThread.Sleep(25);
   end;
-  AssertEquals('OnConfirm deveria disparar com ack', 1, PcAtomicGet(FAckFlag));
-  AssertTrue('OnConfirm deveria trazer o seq-no 1', UInt64(1) = FConfirmedSeq);
+  TAssert.AssertEquals('OnConfirm deveria disparar com ack', 1, PcAtomicGet(FAckFlag));
+  TAssert.AssertTrue('OnConfirm deveria trazer o seq-no 1', UInt64(1) = FConfirmedSeq);
 end;
 
 procedure TAMQPChannelIntegrationTests.Confirm_WaitForConfirms_VariosPublishes;
@@ -326,9 +332,9 @@ begin
   LLast := 0;
   for I := 1 to 10 do
     LLast := FChan.PublishText('', LQueue, 'msg ' + IntToStr(I));
-  AssertTrue('décimo publish deveria receber seq-no 10', UInt64(10) = LLast);
+  TAssert.AssertTrue('décimo publish deveria receber seq-no 10', UInt64(10) = LLast);
 
-  AssertTrue('todos os publishes roteáveis deveriam ser confirmados',
+  TAssert.AssertTrue('todos os publishes roteáveis deveriam ser confirmados',
     FChan.WaitForConfirms(5000));
 end;
 
@@ -379,12 +385,12 @@ begin
 
   // Prova que o cenário funcionou (1 ack + 1 nack) — se o broker não nack-ar,
   // esta asserção falha com mensagem clara, em vez de mascarar o teste real.
-  AssertEquals('o publish B deveria ter sido nack-ado (reject-publish)',
+  TAssert.AssertEquals('o publish B deveria ter sido nack-ado (reject-publish)',
     1, PcAtomicGet(FNackCount));
 
   // O achado #1: como um publish do lote foi nack-ado, WaitForConfirms deve
   // retornar False — mesmo o nack tendo chegado ANTES da chamada.
-  AssertFalse('WaitForConfirms deve reportar False quando um publish do lote foi nack-ado',
+  TAssert.AssertFalse('WaitForConfirms deve reportar False quando um publish do lote foi nack-ado',
     FChan.WaitForConfirms(2000));
 end;
 

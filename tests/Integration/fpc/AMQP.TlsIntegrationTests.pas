@@ -1,24 +1,33 @@
 ﻿unit AMQP.TlsIntegrationTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Integration/AMQP.TlsIntegrationTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Integração TLS (amqps://) — precisa de um RabbitMQ com listener TLS em
   localhost:5671, cert self-signed. Sobe com:
     docker compose -f docker/docker-compose.yml -f docker/docker-compose.tls.yml up -d
   (ver o cabeçalho de docker/docker-compose.tls.yml para gerar os certs).
 
   Se o broker TLS NÃO estiver no ar, o Setup não consegue conectar e os testes
-  se marcam como IGNORADOS de verdade (Ignore() do FPCUnit — aparecem no
-  "Number of ignored tests" do relatório), para não quebrar a suíte quando só
-  o broker plain (5672) está up. O mesmo caminho cobre builds sem backend TLS
+  se marcam como IGNORADOS (IgnoraTeste, de AMQP.TestSupport: no FPCUnit
+  aparecem no "Number of ignored tests" do relatório; no DUnitX, que não tem
+  ignorado em tempo de execução, saem como Passed com a mensagem
+  'IGNORADO: ...'), para não quebrar a suíte quando só o broker plain (5672)
+  está up. O mesmo caminho cobre builds sem backend TLS
   (fora do Windows sem -dAMQP_OPENSSL): o Open levanta EAMQPConnection e os
   testes se auto-ignoram. Para rodá-los de verdade fora do Windows, compile o
   runner com -dAMQP_OPENSSL (precisa de libssl/libcrypto instaladas). }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes,
+  fpcunit, testregistry,
+  AMQP.TestSupport,
+  SysUtils, Classes,
   PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
@@ -81,14 +90,14 @@ begin
   FConn.Free;
 end;
 
-// True = sem broker TLS (ou build sem backend): marca o teste como IGNORED no
-// relatório (não como Passed silencioso). O Exit no chamador cobre o caso de
-// EnableIgnores=False, em que Ignore() não levanta nada.
+// True = sem broker TLS (ou build sem backend): marca o teste como ignorado
+// (ver o cabeçalho). O Exit no chamador cobre o caso de IgnoraTeste não
+// interromper o teste.
 function TAMQPTlsIntegrationTests.TlsIndisponivel: Boolean;
 begin
   Result := not FAvailable;
   if Result then
-    Ignore('broker TLS (5671) indisponível ou build sem backend TLS');
+    IgnoraTeste('broker TLS (5671) indisponível ou build sem backend TLS');
 end;
 
 function TAMQPTlsIntegrationTests.DeclareTempQueue: string;
@@ -179,8 +188,8 @@ begin
   FChan.PublishText('', LQueue, 'olá sobre TLS');
 
   LResult := GetWithRetry(LQueue);
-  AssertTrue('mensagem deveria ter sido entregue sobre TLS', LResult.Found);
-  AssertEquals('olá sobre TLS', LResult.BodyAsText);
+  TAssert.AssertTrue('mensagem deveria ter sido entregue sobre TLS', LResult.Found);
+  TAssert.AssertEquals('olá sobre TLS', LResult.BodyAsText);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_PayloadGrande_Integro;
@@ -201,10 +210,10 @@ begin
   FChan.PublishText('', LQueue, LBody);
 
   LResult := GetWithRetry(LQueue);
-  AssertTrue('mensagem grande deveria ter sido entregue sobre TLS', LResult.Found);
-  AssertEquals('tamanho do corpo', BODY_SIZE, Length(LResult.BodyAsText));
+  TAssert.AssertTrue('mensagem grande deveria ter sido entregue sobre TLS', LResult.Found);
+  TAssert.AssertEquals('tamanho do corpo', BODY_SIZE, Length(LResult.BodyAsText));
   // Igualdade direta (sem AssertEquals) pra não imprimir 300KB no relatório em falha.
-  AssertTrue('corpo deveria voltar íntegro, byte a byte', LResult.BodyAsText = LBody);
+  TAssert.AssertTrue('corpo deveria voltar íntegro, byte a byte', LResult.BodyAsText = LBody);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_ConsumoConcorrente_ComAck;
@@ -231,9 +240,9 @@ begin
   // ao fim e falha na asserção de pico (a mensagem certa), não na contagem.
   WaitCount(N, 30000);
 
-  AssertEquals('todas as mensagens deveriam ter sido processadas sobre TLS',
+  TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas sobre TLS',
     N, PcAtomicGet(FCount));
-  AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
+  TAssert.AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
     PcAtomicGet(FPeak) > 1);
 end;
 
@@ -259,7 +268,7 @@ begin
   FPlainPortParams := IntegrationTlsParams;
   FPlainPortParams.Port := 5672;
 
-  AssertException('handshake TLS contra a porta plain deveria falhar com EAMQPTls',
+  ChecaLevanta('handshake TLS contra a porta plain deveria falhar com EAMQPTls',
     EAMQPTls, DoOpenAgainstPlainPort);
 end;
 
@@ -285,7 +294,7 @@ begin
   FVerifyPeerParams := IntegrationTlsParams;
   FVerifyPeerParams.TlsVerifyPeer := True;
 
-  AssertException('validar o cert self-signed deveria recusar a conexão',
+  ChecaLevanta('validar o cert self-signed deveria recusar a conexão',
     EAMQPTls, DoOpenWithVerifyPeer);
 end;
 

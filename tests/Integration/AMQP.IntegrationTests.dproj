@@ -136,7 +136,9 @@
         <DCCReference Include="..\..\src\AMQP.Transport.Tls.pas"/>
         <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
         <DCCReference Include="AMQP.HandshakeIntegrationTests.pas"/>
-        <DCCReference Include="AMQP.IntegrationConfig.pas"/>
+        <DCCReference Include="..\Unit\AMQP.DUnitXCompat.pas"/>
+        <DCCReference Include="..\AMQP.TestSupport.pas"/>
+        <DCCReference Include="..\AMQP.IntegrationConfig.pas"/>
         <DCCReference Include="AMQP.ChannelIntegrationTests.pas"/>
         <DCCReference Include="AMQP.ConsumeIntegrationTests.pas"/>
         <DCCReference Include="AMQP.ConsumerErrorIntegrationTests.pas"/>

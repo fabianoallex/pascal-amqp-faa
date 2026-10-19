@@ -4,12 +4,14 @@
   localhost:5672 (guest/guest). Suba com: docker compose -f docker/docker-compose.yml up -d
   Sem broker, os testes que abrem conexão vão ERRAR (não é falha da lib). }
 
+
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes,
   AMQP.Connection,
   AMQP.IntegrationConfig,
   AMQP.Connection.Methods,
@@ -18,6 +20,9 @@ uses
 type
   [TestFixture]
   TAMQPHandshakeIntegrationTests = class
+  private
+    FParams: TAMQPConnectionParams;
+    procedure DoOpenWithParams;
   public
     [Test] procedure Conecta_FazHandshake_E_Fecha;
     [Test] procedure TuneNegociado_TemLimitesRazoaveis;
@@ -30,6 +35,18 @@ implementation
 
 { TAMQPHandshakeIntegrationTests }
 
+procedure TAMQPHandshakeIntegrationTests.DoOpenWithParams;
+var
+  LConn: TAMQPConnection;
+begin
+  LConn := TAMQPConnection.Create(FParams);
+  try
+    LConn.Open;
+  finally
+    LConn.Free;
+  end;
+end;
+
 procedure TAMQPHandshakeIntegrationTests.Conecta_FazHandshake_E_Fecha;
 var
   LConn: TAMQPConnection;
@@ -37,9 +54,9 @@ begin
   LConn := TAMQPConnection.Create(IntegrationParams);
   try
     LConn.Open;
-    Assert.IsTrue(LConn.IsOpen, 'deveria estar aberta após o handshake');
+    TAssert.AssertTrue('deveria estar aberta após o handshake', LConn.IsOpen);
     LConn.Close;
-    Assert.IsFalse(LConn.IsOpen, 'deveria estar fechada após Close');
+    TAssert.AssertFalse('deveria estar fechada após Close', LConn.IsOpen);
   finally
     LConn.Free;
   end;
@@ -56,10 +73,10 @@ begin
     LTune := LConn.NegotiatedTune;
     // channel-max negociado nunca deve exceder o proposto pelo cliente (2047)
     // nem ser 0 (o RabbitMQ 3.13 propõe 2047 por padrão).
-    Assert.IsTrue(LTune.ChannelMax > 0, 'channel-max deveria ser > 0');
-    Assert.IsTrue(LTune.ChannelMax <= 2047, 'channel-max não deveria exceder 2047');
+    TAssert.AssertTrue('channel-max deveria ser > 0', LTune.ChannelMax > 0);
+    TAssert.AssertTrue('channel-max não deveria exceder 2047', LTune.ChannelMax <= 2047);
     // frame-max deve respeitar o mínimo do protocolo (4096).
-    Assert.IsTrue(LTune.FrameMax >= 4096, 'frame-max deveria ser >= 4096');
+    TAssert.AssertTrue('frame-max deveria ser >= 4096', LTune.FrameMax >= 4096);
     LConn.Close;
   finally
     LConn.Free;
@@ -68,46 +85,31 @@ end;
 
 procedure TAMQPHandshakeIntegrationTests.CredenciaisInvalidas_Levanta;
 var
-  LParams: TAMQPConnectionParams;
+  LRaised: Boolean;
 begin
-  LParams := IntegrationParams;
-  LParams.Password := 'senha-obviamente-errada';
+  FParams := IntegrationParams;
+  FParams.Password := 'senha-obviamente-errada';
   // Com a capability authentication_failure_close, o servidor responde
   // Connection.Close (403) — mas aceitamos qualquer exceção (broker pode só
-  // derrubar o socket em versões antigas).
-  Assert.WillRaise(
-    procedure
-    var
-      LConn: TAMQPConnection;
-    begin
-      LConn := TAMQPConnection.Create(LParams);
-      try
-        LConn.Open;
-      finally
-        LConn.Free;
-      end;
-    end);
+  // derrubar o socket em versões antigas). O ChecaLevanta exige a classe
+  // EXATA, então "qualquer exceção" precisa de try/except manual (Fail()
+  // dentro do try seria capturado pelo próprio except, já que a falha de
+  // asserção também é Exception).
+  LRaised := False;
+  try
+    DoOpenWithParams;
+  except
+    on E: Exception do
+      LRaised := True;
+  end;
+  TAssert.AssertTrue('deveria ter levantado uma exceção para credenciais inválidas', LRaised);
 end;
 
 procedure TAMQPHandshakeIntegrationTests.VirtualHostInexistente_Levanta;
-var
-  LParams: TAMQPConnectionParams;
 begin
-  LParams := IntegrationParams;
-  LParams.VirtualHost := '/vhost-que-nao-existe';
-  Assert.WillRaise(
-    procedure
-    var
-      LConn: TAMQPConnection;
-    begin
-      LConn := TAMQPConnection.Create(LParams);
-      try
-        LConn.Open;
-      finally
-        LConn.Free;
-      end;
-    end,
-    EAMQPConnection);
+  FParams := IntegrationParams;
+  FParams.VirtualHost := '/vhost-que-nao-existe';
+  ChecaLevanta(EAMQPConnection, DoOpenWithParams);
 end;
 
 procedure TAMQPHandshakeIntegrationTests.Heartbeat_MantemConexaoViva;
@@ -122,14 +124,14 @@ begin
   LConn := TAMQPConnection.Create(LParams);
   try
     LConn.Open;
-    Assert.IsTrue(LConn.NegotiatedTune.Heartbeat > 0, 'heartbeat deveria ser > 0');
-    Assert.IsTrue(LConn.NegotiatedTune.Heartbeat <= 2, 'heartbeat negociado <= 2s');
+    TAssert.AssertTrue('heartbeat deveria ser > 0', LConn.NegotiatedTune.Heartbeat > 0);
+    TAssert.AssertTrue('heartbeat negociado <= 2s', LConn.NegotiatedTune.Heartbeat <= 2);
 
     // Fica ocioso por mais que 2x o intervalo. Sem heartbeat, o broker
     // derrubaria a conexão; com heartbeat, ela continua viva.
     TThread.Sleep(5000);
 
-    Assert.IsTrue(LConn.IsOpen, 'conexão deveria continuar aberta após ociosidade');
+    TAssert.AssertTrue('conexão deveria continuar aberta após ociosidade', LConn.IsOpen);
 
     // E continua utilizável:
     LChan := LConn.CreateChannel;
@@ -137,8 +139,8 @@ begin
       LDecl := Default(TAMQPQueueDeclare);
       LDecl.Exclusive := True;
       LDecl.AutoDelete := True;
-      Assert.IsTrue(LChan.DeclareQueue(LDecl).QueueName <> '',
-        'canal deveria funcionar após o período ocioso');
+      TAssert.AssertTrue('canal deveria funcionar após o período ocioso',
+        LChan.DeclareQueue(LDecl).QueueName <> '');
     finally
       LChan.Free;
     end;
