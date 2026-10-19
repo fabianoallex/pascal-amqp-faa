@@ -22,19 +22,17 @@
      arquivo NENHUM -- nem sequer cria o diretorio. E' o que garante que o
      caminho da Fase 3 continua intacto para quem nao pediu durabilidade.
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerTopologyTests.pas -- mantenha
-  os dois em sincronia (mesmos nomes de teste, mesmas assercoes). Como nas
-  outras suites do server, o lado Delphi ACHATA a fixture-base do lado FPC e
-  ica os helpers para funcoes de unit. }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.Rtti,
-  System.IOUtils,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes, Rtti,
   AMQP.Wire,
   AMQP.Exchange.Methods,
   AMQP.Queue.Methods,
@@ -60,26 +58,27 @@ type
 
   { Sobe um broker com DataDir proprio, deixa o teste declarar topologia com o
     cliente de verdade, e depois le' o WAL. }
+
   [TestFixture]
   TTopoPersistTests = class
-  private
+  protected
     FBroker: TAMQPServer;
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
     FDir: string;
     /// Fecha o cliente, para o broker e devolve os registros do WAL, um por
-    /// linha, no formato 'kind:detalhe'.
+    /// linha, no formato 'kind:detalhe' (ver MontaLinha).
     function FechaELeWal: TStringList;
     function DeclaraFila(const ANome: string; ADurable, AExclusive,
       AAutoDelete: Boolean; AArgs: TAMQPFieldTable = nil): string;
     procedure DeclaraExchange(const ANome, ATipo: string;
       ADurable, AAutoDelete: Boolean);
     procedure Liga(const AFila, AExchange, AChave: string);
+    /// Quantas linhas comecam com APrefixo.
     function Conta(L: TStringList; const APrefixo: string): Integer;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure ExchangeDuravel_EhGravado;
     [Test] procedure ExchangeTransiente_NaoEhGravado;
     [Test] procedure FilaDuravel_EhGravada;
@@ -116,7 +115,7 @@ var
 function DirNovo(const APrefixo: string): string;
 begin
   Inc(GSeq);
-  Result := IncludeTrailingPathDelimiter(TPath.GetTempPath) + APrefixo + '-'
+  Result := IncludeTrailingPathDelimiter(DirTemporario) + APrefixo + '-'
     + IntToStr(GSeq);
 end;
 
@@ -129,11 +128,10 @@ begin
     try
       repeat
         if (LRec.Attr and faDirectory) = 0 then
-          System.SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir)
-            + LRec.Name);
+          DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
       until FindNext(LRec) <> 0;
     finally
-      System.SysUtils.FindClose(LRec);
+      FindClose(LRec);
     end;
   end;
 end;
@@ -151,7 +149,7 @@ begin
           Inc(Result);
       until FindNext(LRec) <> 0;
     finally
-      System.SysUtils.FindClose(LRec);
+      FindClose(LRec);
     end;
   end;
 end;
@@ -254,14 +252,14 @@ begin
     R.Arguments.Free;
   end;
   try
-    Assert.AreEqual('/', R2.VHost, 'vhost');
-    Assert.AreEqual('ex.um', R2.Name, 'nome');
-    Assert.AreEqual('topic', R2.ExchangeType, 'tipo');
-    Assert.IsTrue(R2.Durable, 'durable');
-    Assert.IsFalse(R2.AutoDelete, 'auto-delete');
-    Assert.IsTrue(R2.Internal, 'internal');
-    Assert.IsTrue(R2.Arguments <> nil, 'argumentos vieram');
-    Assert.AreEqual(1, Integer(R2.Arguments.Count), 'uma chave');
+    TAssert.AssertEquals('vhost', '/', R2.VHost);
+    TAssert.AssertEquals('nome', 'ex.um', R2.Name);
+    TAssert.AssertEquals('tipo', 'topic', R2.ExchangeType);
+    TAssert.AssertTrue('durable', R2.Durable);
+    TAssert.AssertFalse('auto-delete', R2.AutoDelete);
+    TAssert.AssertTrue('internal', R2.Internal);
+    TAssert.AssertTrue('argumentos vieram', R2.Arguments <> nil);
+    TAssert.AssertEquals('uma chave', 1, R2.Arguments.Count);
   finally
     R2.Arguments.Free;
   end;
@@ -283,11 +281,11 @@ begin
     R.Arguments.Free;
   end;
   try
-    Assert.AreEqual('/vh', R2.VHost, 'vhost');
-    Assert.AreEqual('q.um', R2.Name, 'nome');
-    Assert.IsTrue(R2.Durable, 'durable');
-    Assert.IsTrue(R2.AutoDelete, 'auto-delete');
-    Assert.IsTrue(R2.Arguments <> nil, 'argumentos vieram');
+    TAssert.AssertEquals('vhost', '/vh', R2.VHost);
+    TAssert.AssertEquals('nome', 'q.um', R2.Name);
+    TAssert.AssertTrue('durable', R2.Durable);
+    TAssert.AssertTrue('auto-delete', R2.AutoDelete);
+    TAssert.AssertTrue('argumentos vieram', R2.Arguments <> nil);
   finally
     R2.Arguments.Free;
   end;
@@ -304,9 +302,9 @@ begin
   R.Arguments := nil;
   R2 := AmqpDecodeRecBinding(AmqpEncodeRecBinding(R));
   try
-    Assert.AreEqual('ex', R2.Source, 'source');
-    Assert.AreEqual('q', R2.Destination, 'destination');
-    Assert.AreEqual('a.b.c', R2.RoutingKey, 'routing-key');
+    TAssert.AssertEquals('source', 'ex', R2.Source);
+    TAssert.AssertEquals('destination', 'q', R2.Destination);
+    TAssert.AssertEquals('routing-key', 'a.b.c', R2.RoutingKey);
   finally
     R2.Arguments.Free;
   end;
@@ -319,8 +317,8 @@ begin
   R.VHost := '/outro';
   R.Name := 'q.apagada';
   R2 := AmqpDecodeRecName(AmqpEncodeRecName(R));
-  Assert.AreEqual('/outro', R2.VHost, 'vhost');
-  Assert.AreEqual('q.apagada', R2.Name, 'nome');
+  TAssert.AssertEquals('vhost', '/outro', R2.VHost);
+  TAssert.AssertEquals('nome', 'q.apagada', R2.Name);
 end;
 
 procedure TTopoRecordTests.ArgumentosVazios_VoltamComoNil;
@@ -340,7 +338,7 @@ begin
   finally
     R.Arguments.Free;
   end;
-  Assert.IsTrue(R2.Arguments = nil, 'tabela vazia volta como nil');
+  TAssert.AssertTrue('tabela vazia volta como nil', R2.Arguments = nil);
 end;
 
 procedure TTopoRecordTests.ArgumentosNil_CodificamIgualATabelaVazia;
@@ -369,24 +367,22 @@ begin
     for I := 0 to High(LComNil) do
       if LComNil[I] <> LComVazia[I] then
         LIgual := False;
-  Assert.IsTrue(LIgual, 'nil e tabela vazia dao o MESMO byte');
+  TAssert.AssertTrue('nil e tabela vazia dao o MESMO byte', LIgual);
 end;
 
 procedure TTopoRecordTests.KindsDeTopologia_SaoReconhecidos;
 begin
-  Assert.IsTrue(AmqpIsTopoRecord(AMQP_REC_EXCHANGE_DECLARE),
-    'declare de exchange');
-  Assert.IsTrue(AmqpIsTopoRecord(AMQP_REC_EXCHANGE_UNBIND),
-    'unbind de exchange');
+  TAssert.AssertTrue('declare de exchange', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_DECLARE));
+  TAssert.AssertTrue('unbind de exchange', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_UNBIND));
   // A faixa 20-29 e' de conteudo/colocacao (D22) e NAO e' topologia -- e' o
   // que a recuperacao usa para separar os dois passes.
-  Assert.IsFalse(AmqpIsTopoRecord(20), '20 ja e conteudo');
-  Assert.IsFalse(AmqpIsTopoRecord(0), '0 nao e nada');
+  TAssert.AssertFalse('20 ja e conteudo', AmqpIsTopoRecord(20));
+  TAssert.AssertFalse('0 nao e nada', AmqpIsTopoRecord(0));
 end;
 
-{ TTopoPersistTests }
+{ TTopoPersistTests: ajudantes e SetUp/TearDown }
 
-procedure TTopoPersistTests.Setup;
+procedure TTopoPersistTests.SetUp;
 var
   LParams: TAMQPConnectionParams;
 begin
@@ -437,8 +433,8 @@ begin
   Result := LeWal(FDir);
 end;
 
-function TTopoPersistTests.DeclaraFila(const ANome: string; ADurable,
-  AExclusive, AAutoDelete: Boolean; AArgs: TAMQPFieldTable): string;
+function TTopoPersistTests.DeclaraFila(const ANome: string; ADurable, AExclusive,
+  AAutoDelete: Boolean; AArgs: TAMQPFieldTable): string;
 var
   LDecl: TAMQPQueueDeclare;
 begin
@@ -471,8 +467,7 @@ begin
   FChan.BindQueue(LBind);
 end;
 
-function TTopoPersistTests.Conta(L: TStringList;
-  const APrefixo: string): Integer;
+function TTopoPersistTests.Conta(L: TStringList; const APrefixo: string): Integer;
 var
   I: Integer;
 begin
@@ -482,6 +477,8 @@ begin
       Inc(Result);
 end;
 
+{ TTopoPersistTests }
+
 procedure TTopoPersistTests.ExchangeDuravel_EhGravado;
 var
   L: TStringList;
@@ -489,8 +486,8 @@ begin
   DeclaraExchange('ex.dur', 'topic', True, False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'exchange.declare:ex.dur'),
-      'um registro do exchange');
+    TAssert.AssertEquals('um registro do exchange', 1,
+      Conta(L, 'exchange.declare:ex.dur'));
   finally
     L.Free;
   end;
@@ -503,8 +500,8 @@ begin
   DeclaraExchange('ex.tra', 'direct', False, False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(0, Conta(L, 'exchange.declare:ex.tra'),
-      'exchange transiente nao vai para o disco');
+    TAssert.AssertEquals('exchange transiente nao vai para o disco', 0,
+      Conta(L, 'exchange.declare:ex.tra'));
   finally
     L.Free;
   end;
@@ -517,7 +514,7 @@ begin
   DeclaraFila('q.dur', True, False, False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'queue.declare:q.dur'), 'um registro da fila');
+    TAssert.AssertEquals('um registro da fila', 1, Conta(L, 'queue.declare:q.dur'));
   finally
     L.Free;
   end;
@@ -530,8 +527,8 @@ begin
   DeclaraFila('q.tra', False, False, False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(0, Conta(L, 'queue.declare:q.tra'),
-      'fila transiente nao vai para o disco');
+    TAssert.AssertEquals('fila transiente nao vai para o disco', 0,
+      Conta(L, 'queue.declare:q.tra'));
   finally
     L.Free;
   end;
@@ -547,8 +544,8 @@ begin
   DeclaraFila('q.exc', True, True, False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(0, Conta(L, 'queue.declare:q.exc'),
-      'exclusiva nao vai, mesmo declarada duravel');
+    TAssert.AssertEquals('exclusiva nao vai, mesmo declarada duravel', 0,
+      Conta(L, 'queue.declare:q.exc'));
   finally
     L.Free;
   end;
@@ -565,8 +562,8 @@ begin
   DeclaraFila('q.dur', True, False, False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'queue.declare:q.dur'),
-      'tres declares, UM registro');
+    TAssert.AssertEquals('tres declares, UM registro', 1,
+      Conta(L, 'queue.declare:q.dur'));
   finally
     L.Free;
   end;
@@ -581,16 +578,14 @@ begin
   DeclaraExchange('ex.tra', 'direct', False, False);
   DeclaraFila('q.dur', True, False, False);
   DeclaraFila('q.tra', False, False, False);
-  Liga('q.dur', 'ex.dur', 'k');  // duravel x duravel   -> grava
-  Liga('q.tra', 'ex.dur', 'k');  // fila transiente     -> nao grava
-  Liga('q.dur', 'ex.tra', 'k');  // exchange transiente -> nao grava
+  Liga('q.dur', 'ex.dur', 'k');  // duravel x duravel  -> grava
+  Liga('q.tra', 'ex.dur', 'k');  // fila transiente    -> nao grava
+  Liga('q.dur', 'ex.tra', 'k');  // exchange transiente-> nao grava
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'queue.bind:ex.dur->q.dur'),
-      'duravel x duravel');
-    Assert.AreEqual(0, Conta(L, 'queue.bind:ex.dur->q.tra'), 'fila transiente');
-    Assert.AreEqual(0, Conta(L, 'queue.bind:ex.tra->q.dur'),
-      'exchange transiente');
+    TAssert.AssertEquals('duravel x duravel', 1, Conta(L, 'queue.bind:ex.dur->q.dur'));
+    TAssert.AssertEquals('fila transiente', 0, Conta(L, 'queue.bind:ex.dur->q.tra'));
+    TAssert.AssertEquals('exchange transiente', 0, Conta(L, 'queue.bind:ex.tra->q.dur'));
   finally
     L.Free;
   end;
@@ -613,9 +608,8 @@ begin
   end;
   L := FechaELeWal;
   try
-    Assert.AreEqual(1,
-      Conta(L, 'queue.declare:q.args:dur=True:ad=False:args=1'),
-      'registro com argumentos');
+    TAssert.AssertEquals('registro com argumentos', 1,
+      Conta(L, 'queue.declare:q.args:dur=True:ad=False:args=1'));
   finally
     L.Free;
   end;
@@ -634,8 +628,7 @@ begin
   FChan.DeleteQueue(LDel);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'queue.delete:q.dur'),
-      'o sumico foi registrado');
+    TAssert.AssertEquals('o sumico foi registrado', 1, Conta(L, 'queue.delete:q.dur'));
   finally
     L.Free;
   end;
@@ -655,8 +648,8 @@ begin
   Sleep(400);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'queue.delete:q.ad'),
-      'auto-delete de fila duravel registrado');
+    TAssert.AssertEquals('auto-delete de fila duravel registrado', 1,
+      Conta(L, 'queue.delete:q.ad'));
   finally
     L.Free;
   end;
@@ -679,8 +672,8 @@ begin
   Sleep(400);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'exchange.delete:ex.ad'),
-      'auto-delete de exchange duravel registrado');
+    TAssert.AssertEquals('auto-delete de exchange duravel registrado', 1,
+      Conta(L, 'exchange.delete:ex.ad'));
   finally
     L.Free;
   end;
@@ -697,7 +690,7 @@ begin
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    Assert.IsTrue(B.Journal = nil, 'DataDir vazio nao cria journal');
+    TAssert.AssertTrue('DataDir vazio nao cria journal', B.Journal = nil);
     B.Stop;
   finally
     B.Free;
@@ -740,7 +733,7 @@ begin
   finally
     B.Free;
   end;
-  Assert.AreEqual(0, ContaArquivos(LDir), 'nenhum arquivo no diretorio');
+  TAssert.AssertEquals('nenhum arquivo no diretorio', 0, ContaArquivos(LDir));
 end;
 
 procedure TTopoSemDataDirTests.DataDir_NaoMudaComBrokerNoAr;
@@ -760,8 +753,7 @@ begin
       on E: Exception do
         LLevantou := True;
     end;
-    Assert.IsTrue(LLevantou,
-      'trocar DataDir com o broker no ar tem de levantar');
+    TAssert.AssertTrue('trocar DataDir com o broker no ar tem de levantar', LLevantou);
     B.Stop;
   finally
     B.Free;
@@ -787,10 +779,9 @@ begin
     LJournal.Start;
     LEngine.Journal := LJournal;
     LJournal.Stop;
-    Assert.IsTrue(
+    TAssert.AssertTrue('declare duravel avisa que nao da',
       LEngine.DeclareQueue('/', 'q.dur', False, True, False, False, nil, 0,
-        LMsg, LCons) = amqerNoDurability,
-      'declare duravel avisa que nao da');
+        LMsg, LCons) = amqerNoDurability);
   finally
     LEngine.Free;
     LJournal.Free;
@@ -813,10 +804,9 @@ begin
     LJournal.Start;
     LEngine.Journal := LJournal;
     LJournal.Stop;
-    Assert.IsTrue(
+    TAssert.AssertTrue('declare transiente segue normal',
       LEngine.DeclareQueue('/', 'q.tra', False, False, False, False, nil, 0,
-        LMsg, LCons) = amqerOk,
-      'declare transiente segue normal');
+        LMsg, LCons) = amqerOk);
   finally
     LEngine.Free;
     LJournal.Free;

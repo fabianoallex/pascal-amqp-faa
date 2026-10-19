@@ -1,5 +1,11 @@
 ﻿unit AMQP.ServerConfirmTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerConfirmTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Confirm assincrono preso a marca d'agua -- WS5 da Fase 4 (durabilidade,
   ver CLAUDE.md, decisoes D19-D28; esta e' a D24).
 
@@ -29,15 +35,15 @@
   As tres funcoes Checa* existem para os corpos dos testes serem IDENTICOS nos
   dois dialetos: so' a implementacao delas muda de lado. }
 
-{ Espelho DUnitX de tests\Server\AMQP.ServerConfirmTests.pas -- mantenha os
-  dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+{ Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes,
+  fpcunit, testregistry,
+  SysUtils, Classes,
   AMQP.Protocol,
   AMQP.Frame,
   AMQP.Wire,
@@ -69,29 +75,29 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-     procedure SemLsnESemPendente_NaoAdia;
-     procedure ComLsn_Adia_ESoSaiDepoisDaMarca;
-     procedure TransienteAtrasDePersistente_Espera;
-     procedure VariosPersistentes_SaemNumAckSoComMultiple;
-     procedure MarcaParcial_LiberaSoOPrefixo;
-     procedure Nack_SaiSozinho_ECortaOColapso;
-     procedure JournalFalho_TudoPendenteViraNack;
-     procedure CanalMorto_NaoEscreveNada;
-     procedure SaidaCheia_NaoBloqueiaQuemLibera;
+    procedure SemLsnESemPendente_NaoAdia;
+    procedure ComLsn_Adia_ESoSaiDepoisDaMarca;
+    procedure TransienteAtrasDePersistente_Espera;
+    procedure VariosPersistentes_SaemNumAckSoComMultiple;
+    procedure MarcaParcial_LiberaSoOPrefixo;
+    procedure Nack_SaiSozinho_ECortaOColapso;
+    procedure JournalFalho_TudoPendenteViraNack;
+    procedure CanalMorto_NaoEscreveNada;
+    procedure SaidaCheia_NaoBloqueiaQuemLibera;
   end;
 
   { O registro: a ponte entre a thread do journal e os canais. }
   TConfirmRegistryTests = class(TTestCase)
   published
-     procedure Durable_LiberaTodosOsRastreadores;
-     procedure Unregister_ParaDeAvisar;
-     procedure Watermark_AcompanhaOUltimoDurable;
+    procedure Durable_LiberaTodosOsRastreadores;
+    procedure Unregister_ParaDeAvisar;
+    procedure Watermark_AcompanhaOUltimoDurable;
   end;
 
 implementation
 
-// As tres pontes para as assercoes do dialeto. Existem para os corpos dos
-// testes serem IDENTICOS nos dois espelhos: so' estas tres mudam de lado.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
   TAssert.AssertEquals(AMsg, AEsperado, AObtido);
@@ -146,7 +152,6 @@ end;
 
 procedure TConfirmTrackerTests.SetUp;
 begin
-  inherited SetUp;
   FStream := TStreamGravador.Create;
   FWriter := TAMQPFrameWriter.Create(FStream);
   FTracker := TAMQPConfirmTracker.Create(FWriter, 7);
@@ -157,7 +162,6 @@ begin
   FTracker := nil;
   FWriter.Free;
   FStream.Free;
-  inherited TearDown;
 end;
 
 function TConfirmTrackerTests.Confirms: TArray<TConfirmLido>;

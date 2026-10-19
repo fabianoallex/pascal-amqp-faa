@@ -1,5 +1,11 @@
 ﻿unit AMQP.ServerQueueTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerQueueTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Testes da fila-ator (AMQP.Server.Queue) -- WS3 da Fase 2 (engine de
   roteamento em memoria, ver CLAUDE.md).
 
@@ -11,15 +17,15 @@
   sincronizacao, portanto -- so' no teste de estresse, que espera os
   produtores terminarem.
 
-  Espelho DUnitX de tests\Server\AMQP.ServerQueueTests.pas -- mantenha os dois
-  em sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes,
+  fpcunit, testregistry,
+  SysUtils, Classes,
   AMQP.Wire,
   PascalCommon.Threading,
   PascalCommon.ThreadPool,
@@ -309,10 +315,10 @@ begin
     end;
     // O sincrono so' volta depois de o assincrono ter rodado (caixa serial).
     LStats := LQ.Stats;
-    AssertEquals('prontas', 1, LStats.MessageCount);
-    AssertEquals('nao-confirmadas', 0, LStats.UnackedCount);
-    AssertEquals('consumidores', 0, LStats.ConsumerCount);
-    AssertEquals('descartadas', 0, Integer(LStats.DroppedCount));
+    TAssert.AssertEquals('prontas', 1, LStats.MessageCount);
+    TAssert.AssertEquals('nao-confirmadas', 0, LStats.UnackedCount);
+    TAssert.AssertEquals('consumidores', 0, LStats.ConsumerCount);
+    TAssert.AssertEquals('descartadas', 0, Integer(LStats.DroppedCount));
   finally
     LQ.Free;
   end;
@@ -335,10 +341,10 @@ begin
         LMsg.Release;
       end;
     end;
-    AssertEquals('primeira', 'm1', GetCorpo(LQ, 1));
-    AssertEquals('segunda', 'm2', GetCorpo(LQ, 2));
-    AssertEquals('terceira', 'm3', GetCorpo(LQ, 3));
-    AssertEquals('esvaziou', 0, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('primeira', 'm1', GetCorpo(LQ, 1));
+    TAssert.AssertEquals('segunda', 'm2', GetCorpo(LQ, 2));
+    TAssert.AssertEquals('terceira', 'm3', GetCorpo(LQ, 3));
+    TAssert.AssertEquals('esvaziou', 0, LQ.Stats.MessageCount);
   finally
     LQ.Free;
   end;
@@ -352,8 +358,8 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    AssertFalse('fila vazia', LQ.Get(1, 1, True, LMsg, LRedelivered));
-    AssertTrue('sem mensagem', LMsg = nil);
+    TAssert.AssertFalse('fila vazia', LQ.Get(1, 1, True, LMsg, LRedelivered));
+    TAssert.AssertTrue('sem mensagem', LMsg = nil);
   finally
     LQ.Free;
   end;
@@ -372,9 +378,9 @@ begin
     finally
       LMsg.Release;
     end;
-    AssertEquals('corpo', 'a', GetCorpo(LQ, 7));
-    AssertEquals('no-ack nao gera nao-confirmada', 0, LQ.Stats.UnackedCount);
-    AssertEquals('saiu do estoque', 0, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('corpo', 'a', GetCorpo(LQ, 7));
+    TAssert.AssertEquals('no-ack nao gera nao-confirmada', 0, LQ.Stats.UnackedCount);
+    TAssert.AssertEquals('saiu do estoque', 0, LQ.Stats.MessageCount);
   finally
     LQ.Free;
   end;
@@ -395,16 +401,16 @@ begin
       LMsg.Release;
     end;
 
-    AssertTrue('get', LQ.Get(5, 100, False, LSaida, LRedelivered));
+    TAssert.AssertTrue('get', LQ.Get(5, 100, False, LSaida, LRedelivered));
     try
-      AssertFalse('primeira entrega nao e reentrega', LRedelivered);
-      AssertEquals('ficou nao-confirmada', 1, LQ.Stats.UnackedCount);
-      AssertEquals('saiu das prontas', 0, LQ.Stats.MessageCount);
+      TAssert.AssertFalse('primeira entrega nao e reentrega', LRedelivered);
+      TAssert.AssertEquals('ficou nao-confirmada', 1, LQ.Stats.UnackedCount);
+      TAssert.AssertEquals('saiu das prontas', 0, LQ.Stats.MessageCount);
       // Ack de outro canal com a mesma tag NAO pode limpar.
       LQ.PostAck(6, 100, False);
-      AssertEquals('ack de outro canal nao conta', 1, LQ.Stats.UnackedCount);
+      TAssert.AssertEquals('ack de outro canal nao conta', 1, LQ.Stats.UnackedCount);
       LQ.PostAck(5, 100, False);
-      AssertEquals('ack limpou', 0, LQ.Stats.UnackedCount);
+      TAssert.AssertEquals('ack limpou', 0, LQ.Stats.UnackedCount);
     finally
       LSaida.Release;
     end;
@@ -433,16 +439,16 @@ begin
     end;
     for I := 1 to 3 do
     begin
-      AssertTrue('get ' + IntToStr(I),
+      TAssert.AssertTrue('get ' + IntToStr(I),
         LQ.Get(9, I, False, LSaida, LRedelivered));
       LSaida.Release;
     end;
-    AssertEquals('tres nao-confirmadas', 3, LQ.Stats.UnackedCount);
+    TAssert.AssertEquals('tres nao-confirmadas', 3, LQ.Stats.UnackedCount);
 
     LQ.PostAck(9, 2, True); // multiple: tags 1 e 2
-    AssertEquals('sobrou a tag 3', 1, LQ.Stats.UnackedCount);
+    TAssert.AssertEquals('sobrou a tag 3', 1, LQ.Stats.UnackedCount);
     LQ.PostAck(9, 3, False);
-    AssertEquals('limpou', 0, LQ.Stats.UnackedCount);
+    TAssert.AssertEquals('limpou', 0, LQ.Stats.UnackedCount);
   finally
     LQ.Free;
   end;
@@ -469,19 +475,19 @@ begin
       LMsg.Release;
     end;
 
-    AssertTrue('get', LQ.Get(1, 10, False, LSaida, LRedelivered));
-    AssertEquals('tirou a primeira', 'primeira', CorpoDe(LSaida));
+    TAssert.AssertTrue('get', LQ.Get(1, 10, False, LSaida, LRedelivered));
+    TAssert.AssertEquals('tirou a primeira', 'primeira', CorpoDe(LSaida));
     LSaida.Release;
 
     LQ.PostNack(1, 10, False, True); // requeue
-    AssertEquals('voltou para as prontas', 2, LQ.Stats.MessageCount);
-    AssertEquals('saiu das nao-confirmadas', 0, LQ.Stats.UnackedCount);
+    TAssert.AssertEquals('voltou para as prontas', 2, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('saiu das nao-confirmadas', 0, LQ.Stats.UnackedCount);
 
     // Volta na CABECA (antes da 'segunda') e marcada como reentrega.
-    AssertTrue('get de novo', LQ.Get(1, 11, True, LSaida, LRedelivered));
+    TAssert.AssertTrue('get de novo', LQ.Get(1, 11, True, LSaida, LRedelivered));
     try
-      AssertEquals('voltou na cabeca', 'primeira', CorpoDe(LSaida));
-      AssertTrue('redelivered', LRedelivered);
+      TAssert.AssertEquals('voltou na cabeca', 'primeira', CorpoDe(LSaida));
+      TAssert.AssertTrue('redelivered', LRedelivered);
     finally
       LSaida.Release;
     end;
@@ -501,13 +507,13 @@ begin
     LMsg := NovaMensagem('a');
     try
       LQ.PostMessage(LMsg);
-      AssertTrue('get', LQ.Get(1, 1, False, LSaida, LRedelivered));
+      TAssert.AssertTrue('get', LQ.Get(1, 1, False, LSaida, LRedelivered));
       LSaida.Release;
       LQ.PostNack(1, 1, False, False); // sem requeue: descarta (DLX e Fase 3)
-      AssertEquals('nao voltou', 0, LQ.Stats.MessageCount);
-      AssertEquals('saiu das nao-confirmadas', 0, LQ.Stats.UnackedCount);
+      TAssert.AssertEquals('nao voltou', 0, LQ.Stats.MessageCount);
+      TAssert.AssertEquals('saiu das nao-confirmadas', 0, LQ.Stats.UnackedCount);
       // So' a referencia do teste sobrou.
-      AssertEquals('fila soltou a referencia dela', 1, LMsg.RefCount);
+      TAssert.AssertEquals('fila soltou a referencia dela', 1, LMsg.RefCount);
     finally
       LMsg.Release;
     end;
@@ -530,15 +536,15 @@ begin
     finally
       LMsg.Release;
     end;
-    AssertTrue('get', LQ.Get(3, 42, False, LSaida, LRedelivered));
+    TAssert.AssertTrue('get', LQ.Get(3, 42, False, LSaida, LRedelivered));
     LSaida.Release;
 
     LQ.PostReject(3, 42, True);
-    AssertEquals('voltou', 1, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('voltou', 1, LQ.Stats.MessageCount);
 
-    AssertTrue('get de novo', LQ.Get(3, 43, True, LSaida, LRedelivered));
+    TAssert.AssertTrue('get de novo', LQ.Get(3, 43, True, LSaida, LRedelivered));
     try
-      AssertTrue('redelivered', LRedelivered);
+      TAssert.AssertTrue('redelivered', LRedelivered);
     finally
       LSaida.Release;
     end;
@@ -565,18 +571,18 @@ begin
     finally
       LMsg.Release;
     end;
-    AssertTrue('get', LQ.Get(77, 1, False, LSaida, LRedelivered));
+    TAssert.AssertTrue('get', LQ.Get(77, 1, False, LSaida, LRedelivered));
     LSaida.Release;
 
     LQ.PostRemoveChannel(77);
     LStats := LQ.Stats;
-    AssertEquals('sobrou o consumidor do canal 88', 1, LStats.ConsumerCount);
-    AssertEquals('nao-confirmada do canal morto saiu', 0, LStats.UnackedCount);
-    AssertEquals('e voltou para as prontas', 1, LStats.MessageCount);
+    TAssert.AssertEquals('sobrou o consumidor do canal 88', 1, LStats.ConsumerCount);
+    TAssert.AssertEquals('nao-confirmada do canal morto saiu', 0, LStats.UnackedCount);
+    TAssert.AssertEquals('e voltou para as prontas', 1, LStats.MessageCount);
 
-    AssertTrue('get de novo', LQ.Get(88, 1, True, LSaida, LRedelivered));
+    TAssert.AssertTrue('get de novo', LQ.Get(88, 1, True, LSaida, LRedelivered));
     try
-      AssertTrue('redelivered depois da queda do canal', LRedelivered);
+      TAssert.AssertTrue('redelivered depois da queda do canal', LRedelivered);
     finally
       LSaida.Release;
     end;
@@ -593,14 +599,14 @@ begin
   try
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, AlvoQueRecusa(1)));
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', True, False, AlvoQueRecusa(1)));
-    AssertEquals('dois consumidores', 2, LQ.Stats.ConsumerCount);
+    TAssert.AssertEquals('dois consumidores', 2, LQ.Stats.ConsumerCount);
 
     // Tag certa, canal errado: nao remove.
     LQ.PostRemoveConsumer(2, 'ct-a');
-    AssertEquals('canal errado nao remove', 2, LQ.Stats.ConsumerCount);
+    TAssert.AssertEquals('canal errado nao remove', 2, LQ.Stats.ConsumerCount);
 
     LQ.PostRemoveConsumer(1, 'ct-a');
-    AssertEquals('removeu o ct-a', 1, LQ.Stats.ConsumerCount);
+    TAssert.AssertEquals('removeu o ct-a', 1, LQ.Stats.ConsumerCount);
   finally
     LQ.Free;
   end;
@@ -625,12 +631,12 @@ begin
       end;
     end;
     LStats := LQ.Stats;
-    AssertEquals('segurou o teto', 3, LStats.MessageCount);
-    AssertEquals('contou os descartes', 2, Integer(LStats.DroppedCount));
+    TAssert.AssertEquals('segurou o teto', 3, LStats.MessageCount);
+    TAssert.AssertEquals('contou os descartes', 2, Integer(LStats.DroppedCount));
     // Sobraram as MAIS NOVAS: descarte e' da cabeca.
-    AssertEquals('cabeca depois do descarte', 'm3', GetCorpo(LQ, 1));
-    AssertEquals('seguinte', 'm4', GetCorpo(LQ, 2));
-    AssertEquals('ultima', 'm5', GetCorpo(LQ, 3));
+    TAssert.AssertEquals('cabeca depois do descarte', 'm3', GetCorpo(LQ, 1));
+    TAssert.AssertEquals('seguinte', 'm4', GetCorpo(LQ, 2));
+    TAssert.AssertEquals('ultima', 'm5', GetCorpo(LQ, 3));
   finally
     LQ.Free;
   end;
@@ -655,8 +661,8 @@ begin
       end;
     end;
     LStats := LQ.Stats;
-    AssertEquals('guardou todas', 50, LStats.MessageCount);
-    AssertEquals('nada descartado', 0, Integer(LStats.DroppedCount));
+    TAssert.AssertEquals('guardou todas', 50, LStats.MessageCount);
+    TAssert.AssertEquals('nada descartado', 0, Integer(LStats.DroppedCount));
   finally
     LQ.Free;
   end;
@@ -681,13 +687,13 @@ begin
         LMsg.Release;
       end;
     end;
-    AssertTrue('get', LQ.Get(1, 1, False, LSaida, LRedelivered));
+    TAssert.AssertTrue('get', LQ.Get(1, 1, False, LSaida, LRedelivered));
     try
-      AssertEquals('purgou so as prontas', 3, LQ.Purge);
+      TAssert.AssertEquals('purgou so as prontas', 3, LQ.Purge);
       LStats := LQ.Stats;
-      AssertEquals('vazia', 0, LStats.MessageCount);
-      AssertEquals('nao-confirmada intacta', 1, LStats.UnackedCount);
-      AssertEquals('purge nao e descarte', 0, Integer(LStats.DroppedCount));
+      TAssert.AssertEquals('vazia', 0, LStats.MessageCount);
+      TAssert.AssertEquals('nao-confirmada intacta', 1, LStats.UnackedCount);
+      TAssert.AssertEquals('purge nao e descarte', 0, Integer(LStats.DroppedCount));
     finally
       LSaida.Release;
     end;
@@ -704,10 +710,10 @@ begin
   LQ := TAMQPServerQueue.Create('q');
   try
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False, AlvoQueRecusa(1)));
-    AssertTrue('if-unused com consumidor',
+    TAssert.AssertTrue('if-unused com consumidor',
       LQ.Delete(True, False, LCount) = amqqdInUse);
     // A fila continua viva.
-    AssertEquals('fila segue atendendo', 1, LQ.Stats.ConsumerCount);
+    TAssert.AssertEquals('fila segue atendendo', 1, LQ.Stats.ConsumerCount);
   finally
     LQ.Free;
   end;
@@ -727,9 +733,9 @@ begin
     finally
       LMsg.Release;
     end;
-    AssertTrue('if-empty com mensagem',
+    TAssert.AssertTrue('if-empty com mensagem',
       LQ.Delete(False, True, LCount) = amqqdNotEmpty);
-    AssertEquals('fila segue atendendo', 1, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('fila segue atendendo', 1, LQ.Stats.MessageCount);
   finally
     LQ.Free;
   end;
@@ -753,8 +759,8 @@ begin
         LMsg.Release;
       end;
     end;
-    AssertTrue('delete', LQ.Delete(False, False, LCount) = amqqdOk);
-    AssertEquals('contagem do Delete-Ok', 3, LCount);
+    TAssert.AssertTrue('delete', LQ.Delete(False, False, LCount) = amqqdOk);
+    TAssert.AssertEquals('contagem do Delete-Ok', 3, LCount);
 
     // Fila apagada nao volta a atender.
     LLevantou := False;
@@ -764,7 +770,7 @@ begin
       on E: EAMQPQueueActor do
         LLevantou := True;
     end;
-    AssertTrue('sincrono numa fila apagada levanta', LLevantou);
+    TAssert.AssertTrue('sincrono numa fila apagada levanta', LLevantou);
   finally
     LQ.Free;
   end;
@@ -782,7 +788,7 @@ begin
     try
       // Publish nao pode falhar por corrida de teardown: descarta em silencio.
       LQ.PostMessage(LMsg);
-      AssertEquals('fila parada nao reteve referencia nenhuma', 1,
+      TAssert.AssertEquals('fila parada nao reteve referencia nenhuma', 1,
         LMsg.RefCount);
     finally
       LMsg.Release;
@@ -808,7 +814,7 @@ begin
       on E: EAMQPQueueActor do
         LLevantou := True;
     end;
-    AssertTrue('sincrono numa fila parada levanta', LLevantou);
+    TAssert.AssertTrue('sincrono numa fila parada levanta', LLevantou);
   finally
     LQ.Free;
   end;
@@ -823,12 +829,12 @@ begin
   try
     LMsg := NovaMensagem('a');
     try
-      AssertEquals('so o criador', 1, LMsg.RefCount);
+      TAssert.AssertEquals('so o criador', 1, LMsg.RefCount);
       LQ.PostMessage(LMsg);
       LQ.Stats; // barreira: o enqueue ja rodou
-      AssertEquals('a fila tirou a dela', 2, LMsg.RefCount);
-      AssertEquals('purgou', 1, LQ.Purge);
-      AssertEquals('a fila devolveu a dela', 1, LMsg.RefCount);
+      TAssert.AssertEquals('a fila tirou a dela', 2, LMsg.RefCount);
+      TAssert.AssertEquals('purgou', 1, LQ.Purge);
+      TAssert.AssertEquals('a fila devolveu a dela', 1, LMsg.RefCount);
     finally
       LMsg.Release;
     end;
@@ -851,10 +857,10 @@ begin
       LMsg.Release;
     end;
     LQ.Stats; // barreira
-    AssertTrue('a espia rodou dentro do ator', LQ.Tentou);
-    AssertTrue('sincrono de dentro do ator tem de levantar EAMQPQueueActor',
+    TAssert.AssertTrue('a espia rodou dentro do ator', LQ.Tentou);
+    TAssert.AssertTrue('sincrono de dentro do ator tem de levantar EAMQPQueueActor',
       LQ.GuardBarrou);
-    AssertEquals('o comando seguiu normalmente', 1, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('o comando seguiu normalmente', 1, LQ.Stats.MessageCount);
   finally
     LQ.Free;
   end;
@@ -886,16 +892,16 @@ begin
       LQ.Stats;
       Inc(LVoltas);
     end;
-    AssertEquals('produtores terminaram dentro do prazo', PRODUTORES,
+    TAssert.AssertEquals('produtores terminaram dentro do prazo', PRODUTORES,
       PcAtomicGet(LConcluidos));
-    AssertTrue('os comandos sincronos concorreram de fato com os produtores',
+    TAssert.AssertTrue('os comandos sincronos concorreram de fato com os produtores',
       LVoltas > 0);
 
     LStats := LQ.Stats;
-    AssertEquals('nenhum comando perdido nem duplicado',
+    TAssert.AssertEquals('nenhum comando perdido nem duplicado',
       PRODUTORES * POR_PRODUTOR, LStats.MessageCount);
-    AssertEquals('nada descartado', 0, Integer(LStats.DroppedCount));
-    AssertEquals('purge devolve o total', PRODUTORES * POR_PRODUTOR, LQ.Purge);
+    TAssert.AssertEquals('nada descartado', 0, Integer(LStats.DroppedCount));
+    TAssert.AssertEquals('purge devolve o total', PRODUTORES * POR_PRODUTOR, LQ.Purge);
   finally
     LQ.Free;
   end;
@@ -922,9 +928,9 @@ begin
     while (PcAtomicGet(LQ.FConcluiu) = 0) and (PcTickMs < LDeadline) do
       Sleep(10);
 
-    AssertEquals('o comando postado na janela do fim de rodada tem de ser atendido',
+    TAssert.AssertEquals('o comando postado na janela do fim de rodada tem de ser atendido',
       1, PcAtomicGet(LQ.FConcluiu));
-    AssertEquals('e sem levantar', 1, PcAtomicGet(LQ.FOk));
+    TAssert.AssertEquals('e sem levantar', 1, PcAtomicGet(LQ.FOk));
   finally
     LQ.Free;
   end;
@@ -948,11 +954,11 @@ begin
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, LRefA));
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', False, False, LRefB));
 
-    AssertTrue('delete', LQ.Delete(False, False, LCount) = amqqdOk);
+    TAssert.AssertTrue('delete', LQ.Delete(False, False, LCount) = amqqdOk);
 
     // A fila sumiu debaixo dos consumidores: os dois tem de saber.
-    AssertEquals('o primeiro foi avisado', 'ct-a', LA.Cancelados);
-    AssertEquals('o segundo tambem', 'ct-b', LB.Cancelados);
+    TAssert.AssertEquals('o primeiro foi avisado', 'ct-a', LA.Cancelados);
+    TAssert.AssertEquals('o segundo tambem', 'ct-b', LB.Cancelados);
   finally
     LQ.Free;
   end;
@@ -964,21 +970,22 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    AssertFalse('fila nova nunca teve consumidor', LQ.Stats.EverHadConsumer);
+    TAssert.AssertFalse('fila nova nunca teve consumidor', LQ.Stats.EverHadConsumer);
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
       AlvoQueRecusa(1)));
-    AssertTrue('agora teve', LQ.Stats.EverHadConsumer);
+    TAssert.AssertTrue('agora teve', LQ.Stats.EverHadConsumer);
     LQ.PostRemoveConsumer(1, 'ct');
     // Continua verdade DEPOIS de o consumidor sair -- e' o que distingue
     // "auto-delete que perdeu o ultimo" de "auto-delete que nunca teve".
-    AssertTrue('e continua tendo tido', LQ.Stats.EverHadConsumer);
-    AssertEquals('sem consumidor agora', 0, LQ.Stats.ConsumerCount);
+    TAssert.AssertTrue('e continua tendo tido', LQ.Stats.EverHadConsumer);
+    TAssert.AssertEquals('sem consumidor agora', 0, LQ.Stats.ConsumerCount);
   finally
     LQ.Free;
   end;
 end;
 
-// Wrappers de assercao: mantem o CORPO da fixture identico nos dois arquivos.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AReal: Int64);
 begin
   TAssert.AssertEquals(AMsg, AEsperado, AReal);

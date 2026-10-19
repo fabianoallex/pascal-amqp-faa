@@ -1,16 +1,22 @@
 ﻿unit AMQP.ServerSkeletonTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerSkeletonTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Testes do esqueleto do broker (WS6): virtual-hosts, TAMQPFrameWriter,
   TAMQPTcpListener e o ciclo accept/registro/reap do TAMQPServer. Os "clientes"
   aqui são sockets crus: só o protocol-header e frames soltos, sem handshake.
   A FSM de handshake é exercitada em AMQP.ServerHandshakeTests (WS4). }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes,
+  fpcunit, testregistry,
+  SysUtils, Classes,
   AMQP.Protocol,
   AMQP.Frame,
   PascalCommon.Threading,
@@ -210,8 +216,8 @@ var
 begin
   R := TAMQPVirtualHostRegistry.Create;
   try
-    AssertTrue('raiz presente por default', R.Contains('/'));
-    AssertFalse(R.Contains('/inexistente'));
+    TAssert.AssertTrue('raiz presente por default', R.Contains('/'));
+    TAssert.AssertFalse(R.Contains('/inexistente'));
   finally
     R.Free;
   end;
@@ -224,12 +230,12 @@ begin
   R := TAMQPVirtualHostRegistry.Create;
   try
     R.Add('/app');
-    AssertTrue(R.Contains('/app'));
+    TAssert.AssertTrue(R.Contains('/app'));
     R.Add('/app'); // idempotente
-    AssertEquals(2, Length(R.ToArray));
+    TAssert.AssertEquals(2, Length(R.ToArray));
     R.Remove('/app');
-    AssertFalse(R.Contains('/app'));
-    AssertTrue('raiz intacta', R.Contains('/'));
+    TAssert.AssertFalse(R.Contains('/app'));
+    TAssert.AssertTrue('raiz intacta', R.Contains('/'));
   finally
     R.Free;
   end;
@@ -260,10 +266,10 @@ begin
     while Pos + 9 <= S.LogLen do
     begin
       Inc(Seen);
-      AssertEquals('ordem no frame ' + IntToStr(Seen), Seen, Integer(S.Log[Pos + 7]));
+      TAssert.AssertEquals('ordem no frame ' + IntToStr(Seen), Seen, Integer(S.Log[Pos + 7]));
       Inc(Pos, 9);
     end;
-    AssertEquals(20, Seen);
+    TAssert.AssertEquals(20, Seen);
   finally
     S.Free;
   end;
@@ -291,11 +297,11 @@ begin
     Pos := 0;
     while Pos + 27 <= S.LogLen do
     begin
-      AssertEquals('trinca coesa (h)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 16]));
-      AssertEquals('trinca coesa (b)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 25]));
+      TAssert.AssertEquals('trinca coesa (h)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 16]));
+      TAssert.AssertEquals('trinca coesa (b)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 25]));
       Inc(Pos, 27);
     end;
-    AssertEquals('todos os 80 lotes sairam', 80 * 27, S.LogLen);
+    TAssert.AssertEquals('todos os 80 lotes sairam', 80 * 27, S.LogLen);
   finally
     S.Free;
   end;
@@ -325,9 +331,9 @@ begin
       on EAMQPTransport do
         LRaised := True;
     end;
-    AssertTrue('Post* deve levantar apos a falha', LRaised or W.Failed);
-    AssertTrue('Failed=True', W.Failed);
-    AssertTrue('LastError preenchido', W.LastError <> '');
+    TAssert.AssertTrue('Post* deve levantar apos a falha', LRaised or W.Failed);
+    TAssert.AssertTrue('Failed=True', W.Failed);
+    TAssert.AssertTrue('LastError preenchido', W.LastError <> '');
     W.Stop;
     W.Free;
   finally
@@ -344,7 +350,7 @@ begin
   L := TAMQPTcpListener.Create;
   try
     L.Listen('127.0.0.1', 0);
-    AssertTrue('porta efetiva > 0', L.Port > 0);
+    TAssert.AssertTrue('porta efetiva > 0', L.Port > 0);
   finally
     L.Free;
   end;
@@ -371,11 +377,11 @@ begin
         S := 'oi';
         Cli.Send(S[1], 2);
         Probe.WaitFor;
-        AssertNotNull('Accept devolveu um socket', Probe.Accepted);
-        AssertTrue('peer preenchido', Pos('127.0.0.1:', Probe.Accepted.PeerAddress) = 1);
+        TAssert.AssertTrue('Accept devolveu um socket', Assigned(Probe.Accepted));
+        TAssert.AssertTrue('peer preenchido', Pos('127.0.0.1:', Probe.Accepted.PeerAddress) = 1);
         SetLength(Buf, 16);
         N := Probe.Accepted.Receive(Buf[0], 16);
-        AssertEquals(2, N);
+        TAssert.AssertEquals(2, N);
         Probe.Accepted.Free;
       finally
         Cli.Free;
@@ -406,9 +412,9 @@ begin
       try
         Cli.Connect('127.0.0.1', L.Port);
         Probe.WaitFor;
-        AssertNotNull('Accept devolveu um socket', Probe.Accepted);
-        AssertTrue('socket do cliente com TCP_NODELAY', Cli.NoDelay);
-        AssertTrue('socket aceito com TCP_NODELAY', Probe.Accepted.NoDelay);
+        TAssert.AssertTrue('Accept devolveu um socket', Assigned(Probe.Accepted));
+        TAssert.AssertTrue('socket do cliente com TCP_NODELAY', Cli.NoDelay);
+        TAssert.AssertTrue('socket aceito com TCP_NODELAY', Probe.Accepted.NoDelay);
         Probe.Accepted.Free;
       finally
         Cli.Free;
@@ -434,7 +440,7 @@ begin
       Sleep(100);
       L.Close;
       Probe.WaitFor;
-      AssertTrue('Accept devolveu nil apos Close', Probe.GotNil);
+      TAssert.AssertTrue('Accept devolveu nil apos Close', Probe.GotNil);
     finally
       Probe.Free;
     end;
@@ -454,11 +460,11 @@ begin
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    AssertTrue('rodando', B.Running);
-    AssertTrue('porta efetiva', B.Port > 0);
+    TAssert.AssertTrue('rodando', B.Running);
+    TAssert.AssertTrue('porta efetiva', B.Port > 0);
     B.Start; // no-op
     B.Stop;
-    AssertFalse(B.Running);
+    TAssert.AssertFalse(B.Running);
     B.Stop; // no-op
   finally
     B.Free;
@@ -477,12 +483,11 @@ begin
     B.Start;
 
     C := RawConnect(B.Port, True);
-    AssertTrue('conexao registrada', WaitConnCount(B, 1, 2000));
-    AssertEquals(1, B.TotalAccepted);
-    AssertTrue('protocol-header aceito', True);
+    TAssert.AssertTrue('conexao registrada', WaitConnCount(B, 1, 2000));
+    TAssert.AssertEquals(1, B.TotalAccepted);
 
     C.Free; // desconecta
-    AssertTrue('conexao reapada apos desconexao', WaitConnCount(B, 0, 2000));
+    TAssert.AssertTrue('conexao reapada apos desconexao', WaitConnCount(B, 0, 2000));
 
     B.Stop;
   finally
@@ -503,9 +508,9 @@ begin
 
     C := RawConnect(B.Port, True, True); // header errado
     try
-      AssertTrue('conexao foi aceita', WaitAccepted(B, 1, 2000));
+      TAssert.AssertTrue('conexao foi aceita', WaitAccepted(B, 1, 2000));
       // o servidor fecha sozinho -> a conexao some do registro
-      AssertTrue('conexao fechada pelo servidor', WaitConnCount(B, 0, 2000));
+      TAssert.AssertTrue('conexao fechada pelo servidor', WaitConnCount(B, 0, 2000));
     finally
       C.Free;
     end;
@@ -530,12 +535,12 @@ begin
 
     for I := 0 to High(Conns) do
       Conns[I] := RawConnect(B.Port, True);
-    AssertTrue('10 conexoes vivas', WaitConnCount(B, 10, 3000));
+    TAssert.AssertTrue('10 conexoes vivas', WaitConnCount(B, 10, 3000));
 
     for I := 0 to High(Conns) do
       Conns[I].Free;
-    AssertTrue('todas reapadas', WaitConnCount(B, 0, 3000));
-    AssertEquals(10, B.TotalAccepted);
+    TAssert.AssertTrue('todas reapadas', WaitConnCount(B, 0, 3000));
+    TAssert.AssertEquals(10, B.TotalAccepted);
 
     B.Stop;
   finally
@@ -557,12 +562,12 @@ begin
     B.Start;
     for I := 0 to High(Conns) do
       Conns[I] := RawConnect(B.Port, True);
-    AssertTrue(WaitConnCount(B, 5, 3000));
+    TAssert.AssertTrue(WaitConnCount(B, 5, 3000));
 
     LStart := PcTickMs;
     B.Stop; // deve derrubar as 5 e voltar rapido
-    AssertTrue('Stop nao travou', PcTickMs - LStart < 5000);
-    AssertFalse(B.Running);
+    TAssert.AssertTrue('Stop nao travou', PcTickMs - LStart < 5000);
+    TAssert.AssertFalse(B.Running);
 
     for I := 0 to High(Conns) do
       Conns[I].Free;
@@ -599,7 +604,7 @@ begin
         // Desde o WS4 o broker manda Connection.Start assim que o
         // protocol-header e' aceito: drena esse frame antes.
         Reply := TAMQPFrame.ReadFrom(Strm, 131072);
-        AssertTrue('primeiro frame e Connection.Start', Reply.IsMethod);
+        TAssert.AssertTrue('primeiro frame e Connection.Start', Reply.IsMethod);
 
         HB := TAMQPFrame.Heartbeat;
         HB.WriteTo(Strm);
@@ -613,8 +618,8 @@ begin
           Sleep(10);
           Conns := B.Connections;
         end;
-        AssertEquals('conexao viva', 1, Length(Conns));
-        AssertTrue('heartbeat contabilizado', Conns[0].FramesRead >= 1);
+        TAssert.AssertEquals('conexao viva', 1, Length(Conns));
+        TAssert.AssertTrue('heartbeat contabilizado', Conns[0].FramesRead >= 1);
       finally
         Strm.Free;
       end;

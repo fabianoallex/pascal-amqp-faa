@@ -1,5 +1,11 @@
 ﻿unit AMQP.ServerWalTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerWalTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Testes da camada de arquivo do WAL (AMQP.Server.Wal) -- WS1 da Fase 4
   (durabilidade, ver CLAUDE.md, decisoes D19-D28).
 
@@ -31,15 +37,16 @@
      com estado adiantado em relacao ao arquivo. Nenhuma das duas seria
      observavel por fora.
 
-  Espelho DUnitX de tests\Server\AMQP.ServerWalTests.pas -- mantenha os dois em
-  sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes,
+  fpcunit, testregistry,
+  AMQP.TestSupport,
+  SysUtils, Classes,
   PascalCommon.Threading,
   AMQP.Threading,
   AMQP.Server.Wal,
@@ -63,21 +70,19 @@ type
     procedure RecusaOutraExtensao;
   end;
 
-  { Base com o par (duble, interface) montado. O duble e' TInterfacedObject: a
+  { As tres fixtures abaixo montam o par (duble, interface) no SetUp
+    (WalSetUp). O duble e' TInterfacedObject: a
     referencia de CLASSE existe para o teste espiar os contadores, e a de
     INTERFACE e' quem o mantem vivo -- guardar so' a de classe seria o erro de
     duble que ja' mordeu esta codebase. }
-  TWalFixture = class(TTestCase)
-  protected
+
+  TWalSegmentTests = class(TTestCase)
+  private
     FDuble: TAMQPWalFileFalso;
     FArq: IAMQPWalFile;
+  protected
     procedure SetUp; override;
     procedure TearDown; override;
-    function Bytes(const S: string): TBytes;
-    function ComoTexto(const B: TBytes): string;
-  end;
-
-  TWalSegmentTests = class(TWalFixture)
   published
     procedure SegmentoNovo_TemSoOCabecalho;
     procedure RoundTrip_CinquentaRegistros;
@@ -91,7 +96,13 @@ type
     procedure CabecalhoTruncado_Levanta;
   end;
 
-  TWalRecoveryTests = class(TWalFixture)
+  TWalRecoveryTests = class(TTestCase)
+  private
+    FDuble: TAMQPWalFileFalso;
+    FArq: IAMQPWalFile;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
   published
     procedure TruncamentoExaustivo_TodoOffsetDaPrefixoConsistente;
     procedure CorrupcaoExaustiva_TodoBitTrocadoDaPrefixoConsistente;
@@ -103,7 +114,13 @@ type
     procedure LsnForaDeOrdem_ParaComLsn;
   end;
 
-  TWalFileSeamTests = class(TWalFixture)
+  TWalFileSeamTests = class(TTestCase)
+  private
+    FDuble: TAMQPWalFileFalso;
+    FArq: IAMQPWalFile;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
   published
     procedure CreateNew_SincronizaOCabecalho;
     procedure Sync_ChegaAoArquivo;
@@ -141,23 +158,23 @@ type
 implementation
 
 
-{ TWalFixture }
+{ O que TWalSegmentTests, TWalRecoveryTests e TWalFileSeamTests dividem.
+  O gerador de espelhos (tools/gen_fpc_mirror.py) nao aceita heranca entre
+  fixtures: cada uma guarda os proprios campos e chama as rotinas abaixo. }
 
-procedure TWalFixture.SetUp;
+procedure WalSetUp(var FDuble: TAMQPWalFileFalso; var FArq: IAMQPWalFile);
 begin
-  inherited SetUp;
   FDuble := TAMQPWalFileFalso.Create;
   FArq := FDuble;
 end;
 
-procedure TWalFixture.TearDown;
+procedure WalTearDown(var FDuble: TAMQPWalFileFalso; var FArq: IAMQPWalFile);
 begin
   FArq := nil;
   FDuble := nil;
-  inherited TearDown;
 end;
 
-function TWalFixture.Bytes(const S: string): TBytes;
+function Bytes(const S: string): TBytes;
 var
   I: Integer;
 begin
@@ -166,7 +183,7 @@ begin
     Result[I - 1] := Byte(S[I]);
 end;
 
-function TWalFixture.ComoTexto(const B: TBytes): string;
+function ComoTexto(const B: TBytes): string;
 var
   I: Integer;
 begin
@@ -195,11 +212,11 @@ begin
   // provam que isto e' um CRC-32 de verdade, e nao um checksum caseiro que
   // ninguem de fora consegue conferir.
   LB := nil;
-  AssertEquals('vazio', Int64($00000000), Int64(AmqpCrc32(LB)));
-  AssertEquals('"a"', Int64($E8B7BE43), Int64(AmqpCrc32(Bs('a'))));
-  AssertEquals('"123456789"', Int64($CBF43926),
+  TAssert.AssertEquals('vazio', Int64($00000000), Int64(AmqpCrc32(LB)));
+  TAssert.AssertEquals('"a"', Int64($E8B7BE43), Int64(AmqpCrc32(Bs('a'))));
+  TAssert.AssertEquals('"123456789"', Int64($CBF43926),
     Int64(AmqpCrc32(Bs('123456789'))));
-  AssertEquals('pangrama', Int64($414FA339),
+  TAssert.AssertEquals('pangrama', Int64($414FA339),
     Int64(AmqpCrc32(Bs('The quick brown fox jumps over the lazy dog'))));
 end;
 
@@ -217,7 +234,7 @@ begin
   // e o payload numa passada so'.
   LParcial := AmqpCrc32($FFFFFFFF, LB, 0, 30);
   LParcial := AmqpCrc32(LParcial, LB, 30, 34) xor $FFFFFFFF;
-  AssertEquals('dois pedacos == inteiro', Int64(AmqpCrc32(LB)), Int64(LParcial));
+  TAssert.AssertEquals('dois pedacos == inteiro', Int64(AmqpCrc32(LB)), Int64(LParcial));
 end;
 
 procedure TWalCrc32Tests.ByteTrocado_MudaOCrc;
@@ -231,15 +248,15 @@ begin
     LB[I] := Byte(I);
   LAntes := AmqpCrc32(LB);
   LB[17] := LB[17] xor $01; // um unico bit
-  AssertTrue('um bit trocado muda o CRC', AmqpCrc32(LB) <> LAntes);
+  TAssert.AssertTrue('um bit trocado muda o CRC', AmqpCrc32(LB) <> LAntes);
 end;
 
 { TWalSegmentNameTests }
 
 procedure TWalSegmentNameTests.Formato_ComZerosAEsquerda;
 begin
-  AssertEquals('seg-0000000001.wal', AmqpWalSegmentName(1));
-  AssertEquals('seg-0000000042.wal', AmqpWalSegmentName(42));
+  TAssert.AssertEquals('seg-0000000001.wal', AmqpWalSegmentName(1));
+  TAssert.AssertEquals('seg-0000000042.wal', AmqpWalSegmentName(42));
 end;
 
 procedure TWalSegmentNameTests.RoundTrip_CobreTodoOCardinal;
@@ -249,19 +266,19 @@ begin
   // O maior Cardinal tem de sobreviver ao round-trip. Com menos digitos no
   // nome, ele geraria um arquivo que o proprio parser nao reconheceria de
   // volta -- e o segmento sumiria da listagem em silencio.
-  AssertTrue('parseou o maior Cardinal',
+  TAssert.AssertTrue('parseou o maior Cardinal',
     AmqpWalParseSegmentName(AmqpWalSegmentName(High(Cardinal)), LNo));
-  AssertEquals('valor de volta', Int64(High(Cardinal)), Int64(LNo));
-  AssertTrue('parseou o 1',
+  TAssert.AssertEquals('valor de volta', Int64(High(Cardinal)), Int64(LNo));
+  TAssert.AssertTrue('parseou o 1',
     AmqpWalParseSegmentName(AmqpWalSegmentName(1), LNo));
-  AssertEquals('valor de volta', Int64(1), Int64(LNo));
+  TAssert.AssertEquals('valor de volta', Int64(1), Int64(LNo));
 end;
 
 procedure TWalSegmentNameTests.RecusaNomeNaoNumerico;
 var
   LNo: Cardinal;
 begin
-  AssertFalse('letra no meio',
+  TAssert.AssertFalse('letra no meio',
     AmqpWalParseSegmentName('seg-000000001a.wal', LNo));
 end;
 
@@ -271,7 +288,7 @@ var
 begin
   // StrToInt64Def sozinho aceitaria ' 12', e um nome desses viraria segmento
   // fantasma com o numero de outro.
-  AssertFalse('espaco a esquerda',
+  TAssert.AssertFalse('espaco a esquerda',
     AmqpWalParseSegmentName('seg- 000000001.wal', LNo));
 end;
 
@@ -279,11 +296,41 @@ procedure TWalSegmentNameTests.RecusaOutraExtensao;
 var
   LNo: Cardinal;
 begin
-  AssertFalse('extensao errada',
+  TAssert.AssertFalse('extensao errada',
     AmqpWalParseSegmentName('seg-0000000001.log', LNo));
 end;
 
 { TWalSegmentTests }
+
+procedure TWalSegmentTests.SetUp;
+begin
+  WalSetUp(FDuble, FArq);
+end;
+
+procedure TWalSegmentTests.TearDown;
+begin
+  WalTearDown(FDuble, FArq);
+end;
+
+procedure TWalRecoveryTests.SetUp;
+begin
+  WalSetUp(FDuble, FArq);
+end;
+
+procedure TWalRecoveryTests.TearDown;
+begin
+  WalTearDown(FDuble, FArq);
+end;
+
+procedure TWalFileSeamTests.SetUp;
+begin
+  WalSetUp(FDuble, FArq);
+end;
+
+procedure TWalFileSeamTests.TearDown;
+begin
+  WalTearDown(FDuble, FArq);
+end;
 
 procedure TWalSegmentTests.SegmentoNovo_TemSoOCabecalho;
 var
@@ -291,12 +338,12 @@ var
 begin
   LSeg := TAMQPWalSegment.CreateNew(FArq, 3);
   try
-    AssertEquals('fim logo apos o cabecalho',
+    TAssert.AssertEquals('fim logo apos o cabecalho',
       Int64(AMQP_WAL_SEG_HEADER_SIZE), LSeg.EndOffset);
-    AssertEquals('tamanho do arquivo',
+    TAssert.AssertEquals('tamanho do arquivo',
       Int64(AMQP_WAL_SEG_HEADER_SIZE), FDuble.Size);
-    AssertEquals('sem LSN', Int64(0), Int64(LSeg.LastLsn));
-    AssertEquals('numero do segmento', Int64(3), Int64(LSeg.SegNo));
+    TAssert.AssertEquals('sem LSN', Int64(0), Int64(LSeg.LastLsn));
+    TAssert.AssertEquals('numero do segmento', Int64(3), Int64(LSeg.SegNo));
   finally
     LSeg.Free;
   end;
@@ -314,16 +361,16 @@ begin
     for I := 1 to 50 do
       LSeg.Append(I, Byte(I mod 7), Bytes(StringOfChar('x', I)));
     LN := LSeg.ReadPrefix(LRecs, LStop);
-    AssertEquals('leu todos', 50, LN);
-    AssertTrue('parou no fim', LStop = awsEnd);
-    AssertEquals('primeiro lsn', Int64(1), Int64(LRecs[0].Lsn));
-    AssertEquals('ultimo lsn', Int64(50), Int64(LRecs[49].Lsn));
-    AssertEquals('kind do 5o', Int64(5 mod 7), Int64(LRecs[4].Kind));
-    AssertEquals('tamanho do payload do 50o', 50, Length(LRecs[49].Payload));
-    AssertEquals('conteudo do 50o', StringOfChar('x', 50),
+    TAssert.AssertEquals('leu todos', 50, LN);
+    TAssert.AssertTrue('parou no fim', LStop = awsEnd);
+    TAssert.AssertEquals('primeiro lsn', Int64(1), Int64(LRecs[0].Lsn));
+    TAssert.AssertEquals('ultimo lsn', Int64(50), Int64(LRecs[49].Lsn));
+    TAssert.AssertEquals('kind do 5o', Int64(5 mod 7), Int64(LRecs[4].Kind));
+    TAssert.AssertEquals('tamanho do payload do 50o', 50, Length(LRecs[49].Payload));
+    TAssert.AssertEquals('conteudo do 50o', StringOfChar('x', 50),
       ComoTexto(LRecs[49].Payload));
-    AssertEquals('LastLsn', Int64(50), Int64(LSeg.LastLsn));
-    AssertEquals('sem cauda', Int64(0), LSeg.BytesDescartados);
+    TAssert.AssertEquals('LastLsn', Int64(50), Int64(LSeg.LastLsn));
+    TAssert.AssertEquals('sem cauda', Int64(0), LSeg.BytesDescartados);
   finally
     LSeg.Free;
   end;
@@ -341,10 +388,10 @@ begin
   try
     LSeg.Append(1, 9, nil);
     LSeg.Append(2, 9, Bytes('depois'));
-    AssertEquals('dois registros', 2, LSeg.ReadPrefix(LRecs, LStop));
-    AssertTrue('integro ate o fim', LStop = awsEnd);
-    AssertEquals('payload vazio', 0, Length(LRecs[0].Payload));
-    AssertEquals('o seguinte continua legivel', 'depois',
+    TAssert.AssertEquals('dois registros', 2, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertTrue('integro ate o fim', LStop = awsEnd);
+    TAssert.AssertEquals('payload vazio', 0, Length(LRecs[0].Payload));
+    TAssert.AssertEquals('o seguinte continua legivel', 'depois',
       ComoTexto(LRecs[1].Payload));
   finally
     LSeg.Free;
@@ -367,11 +414,11 @@ begin
 
   LSeg := TAMQPWalSegment.OpenExisting(FArq);
   try
-    AssertEquals('segno veio do cabecalho', Int64(5), Int64(LSeg.SegNo));
-    AssertEquals('LastLsn recuperado', Int64(2), Int64(LSeg.LastLsn));
+    TAssert.AssertEquals('segno veio do cabecalho', Int64(5), Int64(LSeg.SegNo));
+    TAssert.AssertEquals('LastLsn recuperado', Int64(2), Int64(LSeg.LastLsn));
     LSeg.Append(3, 0, Bytes('tres'));
-    AssertEquals('tres registros', 3, LSeg.ReadPrefix(LRecs, LStop));
-    AssertEquals('o novo esta la', 'tres', ComoTexto(LRecs[2].Payload));
+    TAssert.AssertEquals('tres registros', 3, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertEquals('o novo esta la', 'tres', ComoTexto(LRecs[2].Payload));
   finally
     LSeg.Free;
   end;
@@ -392,7 +439,7 @@ begin
       on E: EAMQPWal do
         LLevantou := True;
     end;
-    AssertTrue('LSN repetido tem de levantar', LLevantou);
+    TAssert.AssertTrue('LSN repetido tem de levantar', LLevantou);
   finally
     LSeg.Free;
   end;
@@ -416,7 +463,7 @@ begin
       on E: EAMQPWal do
         LLevantou := True;
     end;
-    AssertTrue('LSN menor tem de levantar', LLevantou);
+    TAssert.AssertTrue('LSN menor tem de levantar', LLevantou);
   finally
     LSeg.Free;
   end;
@@ -437,7 +484,7 @@ begin
       LLevantou := True;
   end;
   LSeg.Free;
-  AssertTrue('CreateNew sobre arquivo com bytes tem de levantar', LLevantou);
+  TAssert.AssertTrue('CreateNew sobre arquivo com bytes tem de levantar', LLevantou);
 end;
 
 procedure TWalSegmentTests.AssinaturaErrada_Levanta;
@@ -465,7 +512,7 @@ begin
       LLevantou := True;
   end;
   LSeg.Free;
-  AssertTrue('assinatura errada tem de levantar', LLevantou);
+  TAssert.AssertTrue('assinatura errada tem de levantar', LLevantou);
 end;
 
 procedure TWalSegmentTests.VersaoErrada_Levanta;
@@ -490,7 +537,7 @@ begin
       LLevantou := True;
   end;
   LSeg.Free;
-  AssertTrue('versao desconhecida tem de levantar', LLevantou);
+  TAssert.AssertTrue('versao desconhecida tem de levantar', LLevantou);
 end;
 
 procedure TWalSegmentTests.CabecalhoTruncado_Levanta;
@@ -508,7 +555,7 @@ begin
       LLevantou := True;
   end;
   LSeg.Free;
-  AssertTrue('cabecalho incompleto tem de levantar', LLevantou);
+  TAssert.AssertTrue('cabecalho incompleto tem de levantar', LLevantou);
 end;
 
 { TWalRecoveryTests }
@@ -541,7 +588,7 @@ begin
     LSeg.Free;
   end;
   LOrig := FDuble.Bytes;
-  AssertEquals('tamanho previsto', LFim[20], Length(LOrig));
+  TAssert.AssertEquals('tamanho previsto', LFim[20], Length(LOrig));
 
   for LCorte := AMQP_WAL_SEG_HEADER_SIZE to Length(LOrig) do
   begin
@@ -558,10 +605,10 @@ begin
       LSeg := TAMQPWalSegment.OpenExisting(LArq2, False);
       try
         LN := LSeg.ReadPrefix(LRecs, LStop);
-        AssertEquals('corte em ' + IntToStr(LCorte) + ': numero de registros',
+        TAssert.AssertEquals('corte em ' + IntToStr(LCorte) + ': numero de registros',
           LEsperado, LN);
         if LN > 0 then
-          AssertEquals('corte em ' + IntToStr(LCorte) + ': ultimo LSN',
+          TAssert.AssertEquals('corte em ' + IntToStr(LCorte) + ': ultimo LSN',
             Int64(LEsperado), Int64(LRecs[LN - 1].Lsn));
       finally
         LSeg.Free;
@@ -622,10 +669,10 @@ begin
       LSeg := TAMQPWalSegment.OpenExisting(LArq2, False);
       try
         LN := LSeg.ReadPrefix(LRecs, LStop);
-        AssertEquals('bit trocado no byte ' + IntToStr(LPos) + ' (registro '
+        TAssert.AssertEquals('bit trocado no byte ' + IntToStr(LPos) + ' (registro '
           + IntToStr(K) + ')', LEsperado, LN);
         if LN > 0 then
-          AssertEquals('bit trocado no byte ' + IntToStr(LPos)
+          TAssert.AssertEquals('bit trocado no byte ' + IntToStr(LPos)
             + ': ultimo LSN', Int64(LEsperado), Int64(LRecs[LN - 1].Lsn));
       finally
         LSeg.Free;
@@ -661,7 +708,7 @@ begin
 
   LSeg := TAMQPWalSegment.OpenExisting(FArq, False);
   try
-    AssertEquals('para nos 4 anteriores', 4, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertEquals('para nos 4 anteriores', 4, LSeg.ReadPrefix(LRecs, LStop));
   finally
     LSeg.Free;
   end;
@@ -691,7 +738,7 @@ begin
   LSeg := TAMQPWalSegment.OpenExisting(FArq, False);
   try
     LSeg.ReadPrefix(LRecs, LStop);
-    AssertTrue('corrupcao no meio e CRC, nao cauda', LStop = awsCrc);
+    TAssert.AssertTrue('corrupcao no meio e CRC, nao cauda', LStop = awsCrc);
   finally
     LSeg.Free;
   end;
@@ -724,9 +771,9 @@ begin
 
   LSeg := TAMQPWalSegment.OpenExisting(FArq, True);
   try
-    AssertEquals('contou os bytes descartados', Int64(7), LSeg.BytesDescartados);
-    AssertTrue('motivo foi cauda', LSeg.Stop = awsTruncated);
-    AssertEquals('e o arquivo encolheu de verdade', Int64(LAntes), FDuble.Size);
+    TAssert.AssertEquals('contou os bytes descartados', Int64(7), LSeg.BytesDescartados);
+    TAssert.AssertTrue('motivo foi cauda', LSeg.Stop = awsTruncated);
+    TAssert.AssertEquals('e o arquivo encolheu de verdade', Int64(LAntes), FDuble.Size);
   finally
     LSeg.Free;
   end;
@@ -760,9 +807,9 @@ begin
   LSeg := TAMQPWalSegment.OpenExisting(FArq, True);
   try
     LSeg.Append(3, 0, Bytes('tres'));
-    AssertEquals('os tres estao la', 3, LSeg.ReadPrefix(LRecs, LStop));
-    AssertTrue('integro ate o fim', LStop = awsEnd);
-    AssertEquals('o terceiro e alcancavel', Int64(3), Int64(LRecs[2].Lsn));
+    TAssert.AssertEquals('os tres estao la', 3, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertTrue('integro ate o fim', LStop = awsEnd);
+    TAssert.AssertEquals('o terceiro e alcancavel', Int64(3), Int64(LRecs[2].Lsn));
   finally
     LSeg.Free;
   end;
@@ -797,8 +844,8 @@ begin
 
   LSeg := TAMQPWalSegment.OpenExisting(FArq, False);
   try
-    AssertEquals('so o primeiro', 1, LSeg.ReadPrefix(LRecs, LStop));
-    AssertTrue('motivo foi tamanho', LStop = awsSize);
+    TAssert.AssertEquals('so o primeiro', 1, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertTrue('motivo foi tamanho', LStop = awsSize);
   finally
     LSeg.Free;
   end;
@@ -850,8 +897,8 @@ begin
 
   LSeg := TAMQPWalSegment.OpenExisting(FArq, False);
   try
-    AssertEquals('para no primeiro', 1, LSeg.ReadPrefix(LRecs, LStop));
-    AssertTrue('motivo foi LSN, nao CRC', LStop = awsLsn);
+    TAssert.AssertEquals('para no primeiro', 1, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertTrue('motivo foi LSN, nao CRC', LStop = awsLsn);
   finally
     LSeg.Free;
   end;
@@ -866,10 +913,10 @@ begin
   // O cabecalho e' a unica parte do arquivo que replay nenhum reconstroi: sem
   // ele o segmento inteiro fica irreconhecivel. Por isso vai ao disco na hora,
   // e nao no primeiro lote -- e isto so' e' observavel pela costura.
-  AssertEquals('nenhum sync antes', 0, FDuble.Syncs);
+  TAssert.AssertEquals('nenhum sync antes', 0, FDuble.Syncs);
   LSeg := TAMQPWalSegment.CreateNew(FArq, 1);
   try
-    AssertEquals('cabecalho sincronizado na criacao', 1, FDuble.Syncs);
+    TAssert.AssertEquals('cabecalho sincronizado na criacao', 1, FDuble.Syncs);
   finally
     LSeg.Free;
   end;
@@ -884,9 +931,9 @@ begin
   try
     LAntes := FDuble.Syncs;
     LSeg.Append(1, 0, Bytes('a'));
-    AssertEquals('append sozinho NAO sincroniza', LAntes, FDuble.Syncs);
+    TAssert.AssertEquals('append sozinho NAO sincroniza', LAntes, FDuble.Syncs);
     LSeg.Sync;
-    AssertEquals('e o Sync sincroniza uma vez', LAntes + 1, FDuble.Syncs);
+    TAssert.AssertEquals('e o Sync sincroniza uma vez', LAntes + 1, FDuble.Syncs);
   finally
     LSeg.Free;
   end;
@@ -902,7 +949,7 @@ begin
   try
     LSeg.Append(1, 0, Bytes('a'));
     FDuble.SetSyncOk(False);
-    AssertFalse('Sync devolve False', LSeg.Sync);
+    TAssert.AssertFalse('Sync devolve False', LSeg.Sync);
   finally
     LSeg.Free;
   end;
@@ -932,14 +979,14 @@ begin
       on E: EAMQPWal do
         LLevantou := True;
     end;
-    AssertTrue('a falha chega ao chamador', LLevantou);
-    AssertEquals('fim nao andou', LFimAntes, LSeg.EndOffset);
-    AssertEquals('LastLsn nao andou', Int64(LLsnAntes), Int64(LSeg.LastLsn));
+    TAssert.AssertTrue('a falha chega ao chamador', LLevantou);
+    TAssert.AssertEquals('fim nao andou', LFimAntes, LSeg.EndOffset);
+    TAssert.AssertEquals('LastLsn nao andou', Int64(LLsnAntes), Int64(LSeg.LastLsn));
 
     // e o LSN 2 continua disponivel
     FDuble.SetFalharEscritaNa(-1);
     LSeg.Append(2, 0, Bytes('b'));
-    AssertEquals('LSN 2 aceito na retentativa', Int64(2), Int64(LSeg.LastLsn));
+    TAssert.AssertEquals('LSN 2 aceito na retentativa', Int64(2), Int64(LSeg.LastLsn));
   finally
     LSeg.Free;
   end;
@@ -949,7 +996,7 @@ end;
 
 function TWalDirLockTests.DirTeste: string;
 begin
-  Result := IncludeTrailingPathDelimiter(GetTempDir) + 'amqpwal-lock-teste';
+  Result := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpwal-lock-teste';
 end;
 
 procedure TWalDirLockTests.SegundoDono_EhRecusado;
@@ -970,7 +1017,7 @@ begin
         LLevantou := True;
     end;
     L2.Free;
-    AssertTrue('o segundo dono tem de ser recusado', LLevantou);
+    TAssert.AssertTrue('o segundo dono tem de ser recusado', LLevantou);
   finally
     L1.Free;
   end;
@@ -984,7 +1031,7 @@ begin
   L.Free;
   L := TAMQPWalDirLock.Create(DirTeste);
   try
-    AssertTrue('o lock e liberado no destrutor', L.Path <> '');
+    TAssert.AssertTrue('o lock e liberado no destrutor', L.Path <> '');
   finally
     L.Free;
   end;
@@ -994,7 +1041,7 @@ end;
 
 function TWalOsFileTests.DirTeste: string;
 begin
-  Result := IncludeTrailingPathDelimiter(GetTempDir) + 'amqpwal-os-teste';
+  Result := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpwal-os-teste';
 end;
 
 function TWalOsFileTests.Bytes(const S: string): TBytes;
@@ -1017,7 +1064,7 @@ begin
     try
       repeat
         if (LRec.Attr and faDirectory) = 0 then
-          SysUtils.DeleteFile(IncludeTrailingPathDelimiter(DirTeste)
+          DeleteFile(IncludeTrailingPathDelimiter(DirTeste)
             + LRec.Name);
       until FindNext(LRec) <> 0;
     finally
@@ -1045,7 +1092,7 @@ begin
   try
     for I := 1 to 30 do
       LSeg.Append(I, Byte(I), Bytes(StringOfChar('d', I * 2)));
-    AssertTrue('fsync de verdade funciona', LSeg.Sync);
+    TAssert.AssertTrue('fsync de verdade funciona', LSeg.Sync);
   finally
     LSeg.Free;
     LArq := nil;
@@ -1054,9 +1101,9 @@ begin
   LArq := TAMQPWalOsFile.Create(LPath, False);
   LSeg := TAMQPWalSegment.OpenExisting(LArq);
   try
-    AssertEquals('leu do disco', 30, LSeg.ReadPrefix(LRecs, LStop));
-    AssertTrue('integro', LStop = awsEnd);
-    AssertEquals('ultimo payload', 60, Length(LRecs[29].Payload));
+    TAssert.AssertEquals('leu do disco', 30, LSeg.ReadPrefix(LRecs, LStop));
+    TAssert.AssertTrue('integro', LStop = awsEnd);
+    TAssert.AssertEquals('ultimo payload', 60, Length(LRecs[29].Payload));
   finally
     LSeg.Free;
     LArq := nil;
@@ -1086,11 +1133,11 @@ begin
     LArq := nil;
   end;
   LSegs := AmqpWalListSegments(DirTeste);
-  AssertEquals('achou os quatro', 4, Length(LSegs));
-  AssertEquals('1o', Int64(1), Int64(LSegs[0]));
-  AssertEquals('2o', Int64(2), Int64(LSegs[1]));
-  AssertEquals('3o', Int64(10), Int64(LSegs[2]));
-  AssertEquals('4o', Int64(33), Int64(LSegs[3]));
+  TAssert.AssertEquals('achou os quatro', 4, Length(LSegs));
+  TAssert.AssertEquals('1o', Int64(1), Int64(LSegs[0]));
+  TAssert.AssertEquals('2o', Int64(2), Int64(LSegs[1]));
+  TAssert.AssertEquals('3o', Int64(10), Int64(LSegs[2]));
+  TAssert.AssertEquals('4o', Int64(33), Int64(LSegs[3]));
 end;
 
 procedure TWalOsFileTests.CriarSobreExistente_Levanta;
@@ -1111,7 +1158,7 @@ begin
       LLevantou := True;
   end;
   LArq := nil;
-  AssertTrue('criar por cima tem de levantar', LLevantou);
+  TAssert.AssertTrue('criar por cima tem de levantar', LLevantou);
 end;
 
 procedure TWalOsFileTests.AbrirInexistente_Levanta;
@@ -1129,7 +1176,7 @@ begin
       LLevantou := True;
   end;
   LArq := nil;
-  AssertTrue('abrir o que nao existe tem de levantar', LLevantou);
+  TAssert.AssertTrue('abrir o que nao existe tem de levantar', LLevantou);
 end;
 
 { TWalClockTests }
@@ -1143,8 +1190,8 @@ begin
   // pega isso sozinho (o erro e' de horas, nao de anos); pega o caso grosseiro
   // de a expressao estar em segundos, ou na epoch errada.
   LMs := AmqpWallMs;
-  AssertTrue('depois de 2020-01-01', LMs > Int64(1577836800000));
-  AssertTrue('antes de 2100-01-01', LMs < Int64(4102444800000));
+  TAssert.AssertTrue('depois de 2020-01-01', LMs > Int64(1577836800000));
+  TAssert.AssertTrue('antes de 2100-01-01', LMs < Int64(4102444800000));
 end;
 
 procedure TWalClockTests.WallMs_NaoAndaParaTras;
@@ -1153,7 +1200,7 @@ var
 begin
   A := AmqpWallMs;
   B := AmqpWallMs;
-  AssertTrue('duas leituras seguidas nao voltam no tempo', B >= A);
+  TAssert.AssertTrue('duas leituras seguidas nao voltam no tempo', B >= A);
 end;
 
 procedure TWalClockTests.WallMs_DifereDoMonotonico;
@@ -1161,7 +1208,7 @@ begin
   // Sao relogios de origens diferentes (epoch x boot). Se um dia alguem
   // "simplificar" AmqpWallMs para devolver PcTickMs, a D21 inteira cai --
   // e este e o teste que grita.
-  AssertTrue('parede e monotonico sao relogios diferentes',
+  TAssert.AssertTrue('parede e monotonico sao relogios diferentes',
     AmqpWallMs <> Int64(PcTickMs));
 end;
 

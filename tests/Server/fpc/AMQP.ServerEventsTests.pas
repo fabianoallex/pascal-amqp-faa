@@ -1,5 +1,11 @@
 ﻿unit AMQP.ServerEventsTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerEventsTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Testes da observabilidade do broker (Fase 4.1, Inc. 1 -- D29-D36).
 
   Duas fixturas, com alvos diferentes:
@@ -40,12 +46,13 @@
   As quatro funcoes Checa* existem para os corpos dos testes serem IDENTICOS
   nos dois dialetos: so' a implementacao delas muda de lado. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, SyncObjs,
+  fpcunit, testregistry,
+  AMQP.TestSupport,
+  SysUtils, Classes, SyncObjs,
   PascalCommon.Threading,
   PascalCommon.ThreadPool,
   AMQP.Wire,
@@ -101,7 +108,7 @@ type
     FBus: TAMQPEventBus;
     FCap: TCaptura;
   protected
-    procedure Setup; override;
+    procedure SetUp; override;
     procedure TearDown; override;
   published
     procedure SemAssinante_NaoQuerNenhumTipo;
@@ -124,7 +131,7 @@ type
     procedure ConsumidorDeTeste(AChannel: TAMQPChannel;
       const ADelivery: TAMQPDelivery);
   protected
-    procedure Setup; override;
+    procedure SetUp; override;
     procedure TearDown; override;
   published
     procedure Conexao_EmiteEstabelecidaEAutenticada;
@@ -145,8 +152,8 @@ type
 
 implementation
 
-// As quatro pontes para as assercoes do dialeto. Existem para os corpos dos
-// testes serem IDENTICOS nos dois espelhos: so' estas quatro mudam de lado.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
   TAssert.AssertEquals(AMsg, AEsperado, AObtido);
@@ -172,7 +179,7 @@ end;
 // GetTempDir do FPC contra o TPath.GetTempPath do Delphi.
 function DirTempDeTeste: string;
 begin
-  Result := IncludeTrailingPathDelimiter(GetTempDir) + 'amqpobs-'
+  Result := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpobs-'
     + FormatDateTime('yyyymmddhhnnsszzz', Now);
 end;
 

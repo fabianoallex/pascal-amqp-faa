@@ -7,15 +7,16 @@
   Sao testes unitarios puros: nenhum dos dois sobe um broker (ao contrario das
   fixtures de AMQP.ServerHandshakeTests).
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerEngineTests.pas -- mantenha
-  os dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Rtti,
+  AMQP.DUnitXCompat,
+  SysUtils, Rtti,
   AMQP.Wire,
   AMQP.Exchange.Methods,
   AMQP.Basic.Methods,
@@ -147,7 +148,7 @@ var
 begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, nil);
   try
-    Assert.AreEqual(1, LMsg.RefCount, 'refcount inicial');
+    TAssert.AssertEquals('refcount inicial', 1, LMsg.RefCount);
   finally
     LMsg.Release; // unico Release: chega a 0 e libera de fato
   end;
@@ -158,10 +159,10 @@ var
   LMsg: TAMQPMessage;
 begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, nil);
-  Assert.AreEqual(2, LMsg.AddRef, 'AddRef devolve o novo valor');
-  Assert.AreEqual(2, LMsg.RefCount, 'refcount apos AddRef');
-  Assert.AreEqual(1, LMsg.Release, 'Release devolve o novo valor');
-  Assert.AreEqual(1, LMsg.RefCount, 'refcount apos o primeiro Release');
+  TAssert.AssertEquals('AddRef devolve o novo valor', 2, LMsg.AddRef);
+  TAssert.AssertEquals('refcount apos AddRef', 2, LMsg.RefCount);
+  TAssert.AssertEquals('Release devolve o novo valor', 1, LMsg.Release);
+  TAssert.AssertEquals('refcount apos o primeiro Release', 1, LMsg.RefCount);
   LMsg.Release; // segundo Release: chega a 0 e libera de fato
 end;
 
@@ -170,9 +171,11 @@ var
   LMsg: TAMQPMessage;
 begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, nil);
-  // O ultimo Release devolve 0 e libera o objeto de fato -- se nao liberasse,
-  // o ReportMemoryLeaksOnShutdown do runner acusaria o vazamento.
-  Assert.AreEqual(0, LMsg.Release, 'ultimo release chega a 0');
+  // O ultimo Release devolve 0 e libera o objeto -- nao ha' mais nada pra
+  // asserir sobre LMsg depois disso (o teste em si prova que nao vazou nem
+  // deu duplo-free: o heaptrc do FPC e o ReportMemoryLeaksOnShutdown do
+  // Delphi acusam se este Release nao liberar de fato).
+  TAssert.AssertEquals('ultimo release chega a 0', 0, LMsg.Release);
 end;
 
 procedure TMessageTests.CorpoCompartilhadoSemCopia;
@@ -184,8 +187,8 @@ begin
   LOriginal[0] := 1;
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, LOriginal);
   try
-    Assert.IsTrue(Pointer(LMsg.Body) = Pointer(LOriginal),
-      'corpo compartilhado -- mesmo buffer, sem copia');
+    TAssert.AssertTrue('corpo compartilhado -- mesmo buffer, sem copia',
+      Pointer(LMsg.Body) = Pointer(LOriginal));
   finally
     LMsg.Release;
   end;
@@ -203,10 +206,10 @@ begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, nil);
   try
     LGot := LMsg.HeaderPayload;
-    Assert.AreEqual(Length(LHdr), Length(LGot), 'tamanho do header payload');
+    TAssert.AssertEquals('tamanho do header payload', Length(LHdr), Length(LGot));
     for I := 0 to High(LHdr) do
-      Assert.AreEqual(Integer(LHdr[I]), Integer(LGot[I]),
-        Format('octeto %d do header payload', [I]));
+      TAssert.AssertEquals(Format('octeto %d do header payload', [I]),
+        Integer(LHdr[I]), Integer(LGot[I]));
   finally
     LMsg.Release;
   end;
@@ -225,13 +228,13 @@ begin
 
   LMsg := TAMQPMessage.FromServerMessage(LSrv);
   try
-    Assert.AreEqual(1, LMsg.RefCount, 'refcount inicial');
-    Assert.AreEqual('x.ws1', LMsg.Exchange, 'exchange');
-    Assert.AreEqual('rk.ws1', LMsg.RoutingKey, 'routing key');
-    Assert.AreEqual('guest', LMsg.UserId, 'user id');
-    Assert.AreEqual('hdr', AmqpUtf8Decode(LMsg.HeaderPayload), 'header payload');
-    Assert.AreEqual('corpo', AmqpUtf8Decode(LMsg.Body), 'body');
-    Assert.AreEqual(5, LMsg.BodySize, 'body size');
+    TAssert.AssertEquals('refcount inicial', 1, LMsg.RefCount);
+    TAssert.AssertEquals('exchange', 'x.ws1', LMsg.Exchange);
+    TAssert.AssertEquals('routing key', 'rk.ws1', LMsg.RoutingKey);
+    TAssert.AssertEquals('user id', 'guest', LMsg.UserId);
+    TAssert.AssertEquals('header payload', 'hdr', AmqpUtf8Decode(LMsg.HeaderPayload));
+    TAssert.AssertEquals('body', 'corpo', AmqpUtf8Decode(LMsg.Body));
+    TAssert.AssertEquals('body size', 5, LMsg.BodySize);
   finally
     LMsg.Release;
   end;
@@ -242,7 +245,7 @@ var
   LChunks: TAMQPBodyChunks;
 begin
   LChunks := AmqpSplitBody(nil, 4096);
-  Assert.AreEqual(0, Integer(Length(LChunks)), 'corpo vazio -> 0 pedacos');
+  TAssert.AssertEquals('corpo vazio -> 0 pedacos', 0, Length(LChunks));
 end;
 
 procedure TMessageTests.Split_CorpoMenorQueOMaximo;
@@ -252,8 +255,8 @@ var
 begin
   LBody := AmqpUtf8Encode('um corpo pequeno');
   LChunks := AmqpSplitBody(LBody, 4096);
-  Assert.AreEqual(1, Integer(Length(LChunks)), 'um pedaco so');
-  Assert.AreEqual(Length(LBody), Length(LChunks[0]), 'tamanho do pedaco unico');
+  TAssert.AssertEquals('um pedaco so', 1, Length(LChunks));
+  TAssert.AssertEquals('tamanho do pedaco unico', Length(LBody), Length(LChunks[0]));
 end;
 
 procedure TMessageTests.Split_CorpoGrandeEmVariosPedacos;
@@ -269,16 +272,16 @@ begin
     LBody[I] := Byte(I and $FF);
 
   LChunks := AmqpSplitBody(LBody, 4096);
-  Assert.AreEqual(75, Integer(Length(LChunks)), 'numero de pedacos');
+  TAssert.AssertEquals('numero de pedacos', 75, Length(LChunks));
 
   LTotal := 0;
   for I := 0 to High(LChunks) do
   begin
-    Assert.IsTrue(Length(LChunks[I]) <= 4096,
-      Format('pedaco %d nao excede o maximo', [I]));
+    TAssert.AssertTrue(Format('pedaco %d nao excede o maximo', [I]),
+      Length(LChunks[I]) <= 4096);
     Inc(LTotal, Length(LChunks[I]));
   end;
-  Assert.AreEqual(Integer(Length(LBody)), LTotal, 'soma dos pedacos bate com o corpo');
+  TAssert.AssertEquals('soma dos pedacos bate com o corpo', Length(LBody), LTotal);
 
   // A concatenacao dos pedacos reproduz o corpo original.
   SetLength(LRebuilt, LTotal);
@@ -291,7 +294,7 @@ begin
   end;
   for I := 0 to High(LBody) do
     if LRebuilt[I] <> LBody[I] then
-      Assert.Fail(Format('corpo remontado diverge no octeto %d', [I]));
+      TAssert.Fail(Format('corpo remontado diverge no octeto %d', [I]));
 end;
 
 procedure TMessageTests.Split_MaximoZero_UmPedacoSo;
@@ -301,9 +304,9 @@ var
 begin
   SetLength(LBody, 10000);
   LChunks := AmqpSplitBody(LBody, 0);
-  Assert.AreEqual(1, Integer(Length(LChunks)), 'maximo 0 -> um pedaco unico');
-  Assert.AreEqual(Length(LBody), Length(LChunks[0]),
-    'pedaco unico tem o corpo inteiro');
+  TAssert.AssertEquals('maximo 0 -> um pedaco unico', 1, Length(LChunks));
+  TAssert.AssertEquals('pedaco unico tem o corpo inteiro',
+    Length(LBody), Length(LChunks[0]));
 end;
 
 { TResourceTests }
@@ -319,7 +322,7 @@ begin
     A.Put('n', 42);
     B.Put('x-match', 'all');
     B.Put('n', 42);
-    Assert.IsTrue(AmqpArgsEqual(A, B), 'tabelas com as mesmas chaves/valores');
+    TAssert.AssertTrue('tabelas com as mesmas chaves/valores', AmqpArgsEqual(A, B));
   finally
     A.Free;
     B.Free;
@@ -335,7 +338,7 @@ begin
   try
     A.Put('n', 1);
     B.Put('n', 2);
-    Assert.IsFalse(AmqpArgsEqual(A, B), 'mesma chave, valor diferente');
+    TAssert.AssertFalse('mesma chave, valor diferente', AmqpArgsEqual(A, B));
   finally
     A.Free;
     B.Free;
@@ -352,7 +355,7 @@ begin
     A.Put('n', 1);
     B.Put('n', 1);
     B.Put('extra', 2);
-    Assert.IsFalse(AmqpArgsEqual(A, B), 'B tem uma chave a mais');
+    TAssert.AssertFalse('B tem uma chave a mais', AmqpArgsEqual(A, B));
   finally
     A.Free;
     B.Free;
@@ -365,9 +368,9 @@ var
 begin
   LVazia := TAMQPFieldTable.Create;
   try
-    Assert.IsTrue(AmqpArgsEqual(nil, LVazia), 'nil == tabela vazia');
-    Assert.IsTrue(AmqpArgsEqual(LVazia, nil), 'tabela vazia == nil');
-    Assert.IsTrue(AmqpArgsEqual(nil, nil), 'nil == nil');
+    TAssert.AssertTrue('nil == tabela vazia', AmqpArgsEqual(nil, LVazia));
+    TAssert.AssertTrue('tabela vazia == nil', AmqpArgsEqual(LVazia, nil));
+    TAssert.AssertTrue('nil == nil', AmqpArgsEqual(nil, nil));
   finally
     LVazia.Free;
   end;
@@ -375,8 +378,8 @@ begin
   LComItem := TAMQPFieldTable.Create;
   try
     LComItem.Put('a', 1);
-    Assert.IsFalse(AmqpArgsEqual(nil, LComItem), 'nil != tabela com item');
-    Assert.IsFalse(AmqpArgsEqual(LComItem, nil), 'tabela com item != nil');
+    TAssert.AssertFalse('nil != tabela com item', AmqpArgsEqual(nil, LComItem));
+    TAssert.AssertFalse('tabela com item != nil', AmqpArgsEqual(LComItem, nil));
   finally
     LComItem.Free;
   end;
@@ -401,8 +404,8 @@ begin
     A.Put('nested', TValue.From<TAMQPFieldTable>(LInnerA));
     B.Put('nested', TValue.From<TAMQPFieldTable>(LInnerB));
     C.Put('nested', TValue.From<TAMQPFieldTable>(LInnerC));
-    Assert.IsTrue(AmqpArgsEqual(A, B), 'tabelas aninhadas iguais');
-    Assert.IsFalse(AmqpArgsEqual(A, C), 'tabela aninhada diverge');
+    TAssert.AssertTrue('tabelas aninhadas iguais', AmqpArgsEqual(A, B));
+    TAssert.AssertFalse('tabela aninhada diverge', AmqpArgsEqual(A, C));
   finally
     A.Free; // libera tambem a tabela aninhada (dono e' a tabela pai)
     B.Free;
@@ -421,10 +424,10 @@ begin
   E := TAMQPFieldTable.Create;
   try
     E.Put('x-lista', 7); // escalar onde o outro tem array
-    Assert.IsTrue(AmqpArgsEqual(A, B), 'arrays iguais elemento a elemento');
-    Assert.IsFalse(AmqpArgsEqual(A, C), 'elemento string diverge');
-    Assert.IsFalse(AmqpArgsEqual(A, D), 'elemento inteiro diverge');
-    Assert.IsFalse(AmqpArgsEqual(A, E), 'escalar nao e igual a array');
+    TAssert.AssertTrue('arrays iguais elemento a elemento', AmqpArgsEqual(A, B));
+    TAssert.AssertFalse('elemento string diverge', AmqpArgsEqual(A, C));
+    TAssert.AssertFalse('elemento inteiro diverge', AmqpArgsEqual(A, D));
+    TAssert.AssertFalse('escalar nao e igual a array', AmqpArgsEqual(A, E));
   finally
     A.Free;
     B.Free;
@@ -436,22 +439,22 @@ end;
 
 procedure TResourceTests.ReservedName;
 begin
-  Assert.IsTrue(AmqpIsReservedName('amq.direct'), 'prefixo amq.');
-  Assert.IsTrue(AmqpIsReservedName('amq.'), 'so o prefixo');
-  Assert.IsFalse(AmqpIsReservedName('minha.fila'), 'sem o prefixo');
-  Assert.IsFalse(AmqpIsReservedName('am.direct'), 'prefixo parcial nao conta');
-  Assert.IsFalse(AmqpIsReservedName(''), 'vazio');
+  TAssert.AssertTrue('prefixo amq.', AmqpIsReservedName('amq.direct'));
+  TAssert.AssertTrue('so o prefixo', AmqpIsReservedName('amq.'));
+  TAssert.AssertFalse('sem o prefixo', AmqpIsReservedName('minha.fila'));
+  TAssert.AssertFalse('prefixo parcial nao conta', AmqpIsReservedName('am.direct'));
+  TAssert.AssertFalse('vazio', AmqpIsReservedName(''));
 end;
 
 procedure TResourceTests.ValidExchangeType;
 begin
-  Assert.IsTrue(AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_DIRECT), 'direct');
-  Assert.IsTrue(AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_FANOUT), 'fanout');
-  Assert.IsTrue(AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_TOPIC), 'topic');
-  Assert.IsTrue(AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_HEADERS), 'headers');
-  Assert.IsFalse(AmqpIsValidExchangeType('custom'), 'tipo desconhecido');
-  Assert.IsFalse(AmqpIsValidExchangeType('Direct'),
-    'case-sensitive: maiusculas nao contam');
+  TAssert.AssertTrue('direct', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_DIRECT));
+  TAssert.AssertTrue('fanout', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_FANOUT));
+  TAssert.AssertTrue('topic', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_TOPIC));
+  TAssert.AssertTrue('headers', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_HEADERS));
+  TAssert.AssertFalse('tipo desconhecido', AmqpIsValidExchangeType('custom'));
+  TAssert.AssertFalse('case-sensitive: maiusculas nao contam',
+    AmqpIsValidExchangeType('Direct'));
 end;
 
 procedure TResourceTests.ExchangeDef_EquivalentTo;
@@ -476,9 +479,9 @@ begin
   D := TAMQPExchangeDef.Create('ex', AMQP_EXCHANGE_TYPE_TOPIC, False, False,
     False, LArgsD);
   try
-    Assert.IsTrue(A.EquivalentTo(B), 'mesmo tipo/flags/argumentos');
-    Assert.IsFalse(A.EquivalentTo(C), 'argumentos divergem');
-    Assert.IsFalse(A.EquivalentTo(D), 'durable diverge');
+    TAssert.AssertTrue('mesmo tipo/flags/argumentos', A.EquivalentTo(B));
+    TAssert.AssertFalse('argumentos divergem', A.EquivalentTo(C));
+    TAssert.AssertFalse('durable diverge', A.EquivalentTo(D));
   finally
     A.Free;
     B.Free;
@@ -505,14 +508,14 @@ begin
   C := TAMQPQueueDef.Create('q', True, False, False, LArgsC);
   D := TAMQPQueueDef.Create('q', True, True, False, LArgsD);
   try
-    Assert.IsTrue(A.EquivalentTo(B), 'mesmos flags/argumentos');
-    Assert.IsFalse(A.EquivalentTo(C), 'argumentos divergem');
-    Assert.IsFalse(A.EquivalentTo(D), 'exclusive diverge');
+    TAssert.AssertTrue('mesmos flags/argumentos', A.EquivalentTo(B));
+    TAssert.AssertFalse('argumentos divergem', A.EquivalentTo(C));
+    TAssert.AssertFalse('exclusive diverge', A.EquivalentTo(D));
 
     // OwnerId nao entra na comparacao -- dono nao e' parte do redeclare.
     A.OwnerId := 123;
     B.OwnerId := 456;
-    Assert.IsTrue(A.EquivalentTo(B), 'OwnerId nao afeta EquivalentTo');
+    TAssert.AssertTrue('OwnerId nao afeta EquivalentTo', A.EquivalentTo(B));
   finally
     A.Free;
     B.Free;
@@ -522,29 +525,27 @@ begin
 end;
 
 
-{ Wrappers de assercao usados so' pela TQueuePolicyTests. Existem para o CORPO
-  da fixture ficar LITERALMENTE identico nas duas suites -- a divergencia de
-  espelho ja' mordeu antes (o helper ExpectChannelClose que so' existia do lado
-  FPCUnit). Aqui a unica coisa que difere entre os dois arquivos sao estas
-  quatro linhas. }
+{ Assercoes usadas so' pela TQueuePolicyTests, com o tipo fixado: o valor
+  entra ja' convertido, e a sobrecarga do TAssert e' a mesma nos dois
+  compiladores. }
 procedure ChecaOk(AOk: Boolean; const AErro: string);
 begin
-  Assert.IsTrue(AOk, 'parse deveria passar, erro: ' + AErro);
+  TAssert.AssertTrue('parse deveria passar, erro: ' + AErro, AOk);
 end;
 
 procedure ChecaInt(const AMsg: string; AEsperado, AReal: Int64);
 begin
-  Assert.AreEqual(AEsperado, AReal, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AReal);
 end;
 
 procedure ChecaBool(const AMsg: string; AEsperado, AReal: Boolean);
 begin
-  Assert.IsTrue(AReal = AEsperado, AMsg);
+  TAssert.AssertTrue(AMsg, AReal = AEsperado);
 end;
 
 procedure ChecaStr(const AMsg, AEsperado, AReal: string);
 begin
-  Assert.AreEqual(AEsperado, AReal, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AReal);
 end;
 
 { TQueuePolicyTests }

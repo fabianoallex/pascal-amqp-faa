@@ -14,17 +14,19 @@
     delivery-tags, o prefetch, o Channel.Flow, o detach e a recusa sem
     bloquear quando a fila de escrita enche.
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerDeliveryTests.pas -- mantenha
-  os dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.SyncObjs,
-  System.Generics.Collections,
+  AMQP.DUnitXCompat,
+  SysUtils,
+  Classes,
+  SyncObjs,
+  Generics.Collections,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Frame,
@@ -111,14 +113,14 @@ begin
     Publicar(LQ, 'a');
 
     LStats := LQ.Stats; // barreira: a caixa e serial
-    Assert.AreEqual(1, LAlvo.Count, 'entregou');
-    Assert.AreEqual('a', LAlvo.Entrega(0).Corpo, 'corpo');
-    Assert.AreEqual('ct', LAlvo.Entrega(0).ConsumerTag, 'consumer tag');
-    Assert.AreEqual('q', LAlvo.Entrega(0).QueueName, 'nome da fila');
-    Assert.IsFalse(LAlvo.Entrega(0).Redelivered, 'primeira entrega');
-    Assert.AreEqual(0, LStats.MessageCount, 'saiu das prontas');
-    Assert.AreEqual(1, LStats.UnackedCount, 'virou nao-confirmada');
-    Assert.AreEqual(1, Integer(LStats.DeliveredCount), 'contou a entrega');
+    TAssert.AssertEquals('entregou', 1, LAlvo.Count);
+    TAssert.AssertEquals('corpo', 'a', LAlvo.Entrega(0).Corpo);
+    TAssert.AssertEquals('consumer tag', 'ct', LAlvo.Entrega(0).ConsumerTag);
+    TAssert.AssertEquals('nome da fila', 'q', LAlvo.Entrega(0).QueueName);
+    TAssert.AssertFalse('primeira entrega', LAlvo.Entrega(0).Redelivered);
+    TAssert.AssertEquals('saiu das prontas', 0, LStats.MessageCount);
+    TAssert.AssertEquals('virou nao-confirmada', 1, LStats.UnackedCount);
+    TAssert.AssertEquals('contou a entrega', 1, Integer(LStats.DeliveredCount));
   finally
     LQ.Free;
   end;
@@ -134,13 +136,13 @@ begin
   try
     Publicar(LQ, 'a');
     Publicar(LQ, 'b');
-    Assert.AreEqual(2, LQ.Stats.MessageCount, 'acumulou sem consumidor');
+    TAssert.AssertEquals('acumulou sem consumidor', 2, LQ.Stats.MessageCount);
 
     LAlvo := TAlvoFalso.Create(1);
     LRef := LAlvo;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LRef));
-    Assert.AreEqual(0, LQ.Stats.MessageCount, 'drenou ao entrar o consumidor');
-    Assert.AreEqual('a|b', LAlvo.Corpos, 'na ordem da fila');
+    TAssert.AssertEquals('drenou ao entrar o consumidor', 0, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('na ordem da fila', 'a|b', LAlvo.Corpos);
   finally
     LQ.Free;
   end;
@@ -162,9 +164,9 @@ begin
     LMsg := NovaMensagem('a');
     try
       LQ.PostMessage(LMsg);
-      Assert.AreEqual(0, LQ.Stats.UnackedCount, 'no-ack nao gera pendencia');
-      Assert.AreEqual(1, LAlvo.Count, 'entregou');
-      Assert.AreEqual(1, LMsg.RefCount, 'a fila soltou a referencia dela');
+      TAssert.AssertEquals('no-ack nao gera pendencia', 0, LQ.Stats.UnackedCount);
+      TAssert.AssertEquals('entregou', 1, LAlvo.Count);
+      TAssert.AssertEquals('a fila soltou a referencia dela', 1, LMsg.RefCount);
     finally
       LMsg.Release;
     end;
@@ -193,10 +195,10 @@ begin
       Publicar(LQ, 'm' + IntToStr(I));
     LQ.Stats; // barreira
 
-    Assert.AreEqual(2, LA.Count, 'metade para o primeiro');
-    Assert.AreEqual(2, LB.Count, 'metade para o segundo');
-    Assert.AreEqual('m1|m3', LA.Corpos, 'alternou');
-    Assert.AreEqual('m2|m4', LB.Corpos, 'alternou');
+    TAssert.AssertEquals('metade para o primeiro', 2, LA.Count);
+    TAssert.AssertEquals('metade para o segundo', 2, LB.Count);
+    TAssert.AssertEquals('alternou', 'm1|m3', LA.Corpos);
+    TAssert.AssertEquals('alternou', 'm2|m4', LB.Corpos);
   finally
     LQ.Free;
   end;
@@ -222,10 +224,9 @@ begin
     for I := 1 to 3 do
       Publicar(LQ, 'm' + IntToStr(I));
 
-    Assert.AreEqual(0, LQ.Stats.MessageCount, 'nada ficou preso');
-    Assert.AreEqual(0, LA.Count, 'o que recusa nao recebe');
-    Assert.AreEqual('m1|m2|m3', LB.Corpos,
-      'o outro consumidor recebe tudo, sem head-of-line');
+    TAssert.AssertEquals('nada ficou preso', 0, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('o que recusa nao recebe', 0, LA.Count);
+    TAssert.AssertEquals('o outro consumidor recebe tudo, sem head-of-line', 'm1|m2|m3', LB.Corpos);
   finally
     LQ.Free;
   end;
@@ -246,8 +247,8 @@ begin
 
     Publicar(LQ, 'a');
     Publicar(LQ, 'b');
-    Assert.AreEqual(2, LQ.Stats.MessageCount, 'ficaram na fila');
-    Assert.AreEqual(0, LA.Count, 'nada entregue');
+    TAssert.AssertEquals('ficaram na fila', 2, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('nada entregue', 0, LA.Count);
   finally
     LQ.Free;
   end;
@@ -267,14 +268,14 @@ begin
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', True, False, LRefA));
     Publicar(LQ, 'a');
     Publicar(LQ, 'b');
-    Assert.AreEqual(2, LQ.Stats.MessageCount, 'recusadas');
+    TAssert.AssertEquals('recusadas', 2, LQ.Stats.MessageCount);
 
     // O canal drenou. Sem ack nenhum (consumidor em no-ack), o unico jeito de
     // a fila reexaminar e' o tick -- e' o caso degradado da D3.
     LA.Recusar := False;
     LQ.PostDeliverTick;
-    Assert.AreEqual(0, LQ.Stats.MessageCount, 'o tick retomou a entrega');
-    Assert.AreEqual('a|b', LA.Corpos, 'na ordem, sem perder nenhuma');
+    TAssert.AssertEquals('o tick retomou a entrega', 0, LQ.Stats.MessageCount);
+    TAssert.AssertEquals('na ordem, sem perder nenhuma', 'a|b', LA.Corpos);
   finally
     LQ.Free;
   end;
@@ -296,9 +297,9 @@ begin
 
     Publicar(LQ, 'a');
     LStats := LQ.Stats;
-    Assert.AreEqual(0, LStats.ConsumerCount, 'consumidor de canal morto sai');
-    Assert.AreEqual(1, LStats.MessageCount, 'e a mensagem continua na fila');
-    Assert.AreEqual(0, LA.Count, 'nada foi entregue');
+    TAssert.AssertEquals('consumidor de canal morto sai', 0, LStats.ConsumerCount);
+    TAssert.AssertEquals('e a mensagem continua na fila', 1, LStats.MessageCount);
+    TAssert.AssertEquals('nada foi entregue', 0, LA.Count);
   finally
     LQ.Free;
   end;
@@ -317,15 +318,15 @@ begin
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', False, False, LRefA));
     Publicar(LQ, 'a');
     LQ.Stats; // barreira: a caixa e serial, o enqueue ja rodou
-    Assert.AreEqual(1, LA.Count, 'primeira entrega');
-    Assert.IsFalse(LA.Entrega(0).Redelivered, 'nao e reentrega');
+    TAssert.AssertEquals('primeira entrega', 1, LA.Count);
+    TAssert.AssertFalse('nao e reentrega', LA.Entrega(0).Redelivered);
 
     // O consumidor devolve: a mensagem volta e sai de novo, agora marcada.
     LQ.PostNack(7, LA.Entrega(0).DeliveryTag, False, True);
     LQ.Stats; // barreira
-    Assert.AreEqual(2, LA.Count, 'entregue de novo');
-    Assert.IsTrue(LA.Entrega(1).Redelivered, 'agora e reentrega');
-    Assert.AreEqual('a', LA.Entrega(1).Corpo, 'mesma mensagem');
+    TAssert.AssertEquals('entregue de novo', 2, LA.Count);
+    TAssert.AssertTrue('agora e reentrega', LA.Entrega(1).Redelivered);
+    TAssert.AssertEquals('mesma mensagem', 'a', LA.Entrega(1).Corpo);
   finally
     LQ.Free;
   end;
@@ -344,17 +345,17 @@ begin
     LRefA := LA;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', False, False, LRefA));
     Publicar(LQ, 'a');
-    Assert.AreEqual(1, LQ.Stats.UnackedCount, 'entregue e nao confirmada');
+    TAssert.AssertEquals('entregue e nao confirmada', 1, LQ.Stats.UnackedCount);
 
     // A conexao caiu antes do ack: a mensagem tem de voltar para a fila
     // EXATAMENTE uma vez.
     LA.Vivo := False;
     LQ.PostRemoveChannel(42);
     LStats := LQ.Stats;
-    Assert.AreEqual(0, LStats.UnackedCount, 'saiu das nao-confirmadas');
-    Assert.AreEqual(1, LStats.MessageCount, 'voltou para as prontas');
-    Assert.AreEqual(0, LStats.ConsumerCount, 'e o consumidor foi embora');
-    Assert.AreEqual(1, LA.Count, 'nao foi reentregue no canal morto');
+    TAssert.AssertEquals('saiu das nao-confirmadas', 0, LStats.UnackedCount);
+    TAssert.AssertEquals('voltou para as prontas', 1, LStats.MessageCount);
+    TAssert.AssertEquals('e o consumidor foi embora', 0, LStats.ConsumerCount);
+    TAssert.AssertEquals('nao foi reentregue no canal morto', 1, LA.Count);
   finally
     LQ.Free;
   end;
@@ -390,20 +391,19 @@ begin
     LMsg := TAMQPMessage.Create('ex1', 'rk1', 'guest', LHeaderCru,
       AmqpUtf8Encode('hello'));
     try
-      Assert.IsTrue(LAlvo.TryDeliver('ctag', 'fila', True, False, LMsg, LTag),
-        'entregou');
-      Assert.AreEqual(1, Integer(LTag), 'primeira tag do canal e 1');
+      TAssert.AssertTrue('entregou', LAlvo.TryDeliver('ctag', 'fila', True, False, LMsg, LTag));
+      TAssert.AssertEquals('primeira tag do canal e 1', 1, Integer(LTag));
     finally
       LMsg.Release;
     end;
 
     LFrames := FramesEscritos(LWriter, LStream);
-    Assert.AreEqual(3, Integer(Length(LFrames)), 'method + header + body');
-    Assert.AreEqual(Integer(AMQP_FRAME_METHOD), Integer(LFrames[0].FrameType), 'tipo do 1o');
-    Assert.AreEqual(Integer(AMQP_FRAME_HEADER), Integer(LFrames[1].FrameType), 'tipo do 2o');
-    Assert.AreEqual(Integer(AMQP_FRAME_BODY), Integer(LFrames[2].FrameType), 'tipo do 3o');
-    Assert.AreEqual(3, Integer(LFrames[0].Channel), 'canal do method');
-    Assert.AreEqual(3, Integer(LFrames[2].Channel), 'canal do body');
+    TAssert.AssertEquals('method + header + body', 3, Length(LFrames));
+    TAssert.AssertEquals('tipo do 1o', Integer(AMQP_FRAME_METHOD), Integer(LFrames[0].FrameType));
+    TAssert.AssertEquals('tipo do 2o', Integer(AMQP_FRAME_HEADER), Integer(LFrames[1].FrameType));
+    TAssert.AssertEquals('tipo do 3o', Integer(AMQP_FRAME_BODY), Integer(LFrames[2].FrameType));
+    TAssert.AssertEquals('canal do method', 3, Integer(LFrames[0].Channel));
+    TAssert.AssertEquals('canal do body', 3, Integer(LFrames[2].Channel));
 
     LReader := TAMQPReader.Create(LFrames[0].Payload);
     try
@@ -413,16 +413,14 @@ begin
     finally
       LReader.Free;
     end;
-    Assert.AreEqual('ctag', LDeliver.ConsumerTag, 'consumer tag');
-    Assert.AreEqual(1, Integer(LDeliver.DeliveryTag), 'delivery tag');
-    Assert.AreEqual('ex1', LDeliver.Exchange, 'exchange');
-    Assert.AreEqual('rk1', LDeliver.RoutingKey, 'routing key');
-    Assert.IsFalse(LDeliver.Redelivered, 'redelivered');
+    TAssert.AssertEquals('consumer tag', 'ctag', LDeliver.ConsumerTag);
+    TAssert.AssertEquals('delivery tag', 1, Integer(LDeliver.DeliveryTag));
+    TAssert.AssertEquals('exchange', 'ex1', LDeliver.Exchange);
+    TAssert.AssertEquals('routing key', 'rk1', LDeliver.RoutingKey);
+    TAssert.AssertFalse('redelivered', LDeliver.Redelivered);
 
-    Assert.AreEqual(AmqpUtf8Decode(LHeaderCru),
-      AmqpUtf8Decode(LFrames[1].Payload),
-      'o content-header sai byte a byte como entrou (D1)');
-    Assert.AreEqual('hello', AmqpUtf8Decode(LFrames[2].Payload), 'corpo');
+    TAssert.AssertEquals('o content-header sai byte a byte como entrou (D1)', AmqpUtf8Decode(LHeaderCru), AmqpUtf8Decode(LFrames[1].Payload));
+    TAssert.AssertEquals('corpo', 'hello', AmqpUtf8Decode(LFrames[2].Payload));
   finally
     LWriter.Free;
     LStream.Free;
@@ -449,21 +447,20 @@ begin
     LRef := LAlvo;
     LMsg := NovaMensagem(LCorpo);
     try
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag), 'entregou');
+      TAssert.AssertTrue('entregou', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
 
     LFrames := FramesEscritos(LWriter, LStream);
-    Assert.AreEqual(5, Integer(Length(LFrames)), 'method + header + 3 body (250/100)');
+    TAssert.AssertEquals('method + header + 3 body (250/100)', 5, Length(LFrames));
     LJunto := '';
     for I := 2 to High(LFrames) do
     begin
-      Assert.IsTrue(Length(LFrames[I].Payload) <= 100,
-        'nenhum body frame passa do frame-max');
+      TAssert.AssertTrue('nenhum body frame passa do frame-max', Length(LFrames[I].Payload) <= 100);
       LJunto := LJunto + AmqpUtf8Decode(LFrames[I].Payload);
     end;
-    Assert.AreEqual(LCorpo, LJunto, 'corpo remontado byte a byte');
+    TAssert.AssertEquals('corpo remontado byte a byte', LCorpo, LJunto);
   finally
     LWriter.Free;
     LStream.Free;
@@ -489,15 +486,13 @@ begin
     begin
       LMsg := NovaMensagem('m');
       try
-        Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-          'entrega ' + IntToStr(I));
-        Assert.AreEqual(I, Integer(LTag), 'tag monotonica');
+        TAssert.AssertTrue('entrega ' + IntToStr(I), LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+        TAssert.AssertEquals('tag monotonica', I, Integer(LTag));
       finally
         LMsg.Release;
       end;
     end;
-    Assert.AreEqual(4, Integer(LAlvo.NextDeliveryTag),
-      'o Basic.Get puxa da mesma sequencia do canal');
+    TAssert.AssertEquals('o Basic.Get puxa da mesma sequencia do canal', 4, Integer(LAlvo.NextDeliveryTag));
   finally
     LWriter.Stop;
     LWriter.Free;
@@ -523,17 +518,15 @@ begin
 
     LMsg := NovaMensagem('m');
     try
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag), '1a');
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag), '2a');
-      Assert.IsFalse(LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag),
-        '3a recusada: prefetch cheio');
-      Assert.AreEqual(2, LAlvo.UnackedCount, 'duas pendentes');
+      TAssert.AssertTrue('1a', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertTrue('2a', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertFalse('3a recusada: prefetch cheio', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertEquals('duas pendentes', 2, LAlvo.UnackedCount);
 
       LAlvo.NoteResolved(1, False); // o cliente confirmou a tag 1
-      Assert.AreEqual(1, LAlvo.UnackedCount, 'liberou uma');
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag),
-        'com vaga, entrega de novo');
-      Assert.AreEqual(3, Integer(LTag), 'a tag seguiu de 2 para 3');
+      TAssert.AssertEquals('liberou uma', 1, LAlvo.UnackedCount);
+      TAssert.AssertTrue('com vaga, entrega de novo', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertEquals('a tag seguiu de 2 para 3', 3, Integer(LTag));
     finally
       LMsg.Release;
     end;
@@ -560,16 +553,15 @@ begin
     LRef := LAlvo;
     LMsg := NovaMensagem('m');
     try
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag), '1a');
-      Assert.AreEqual(1, Integer(LTag), 'tag 1');
+      TAssert.AssertTrue('1a', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertEquals('tag 1', 1, Integer(LTag));
 
       LAlvo.SetActive(False); // recusa por flow
-      Assert.IsFalse(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag), 'recusou');
+      TAssert.AssertFalse('recusou', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
       LAlvo.SetActive(True);
 
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag), '2a');
-      Assert.AreEqual(2, Integer(LTag),
-        'a recusa nao abriu buraco na sequencia do canal');
+      TAssert.AssertTrue('2a', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertEquals('a recusa nao abriu buraco na sequencia do canal', 2, Integer(LTag));
     finally
       LMsg.Release;
     end;
@@ -599,10 +591,8 @@ begin
     LMsg := NovaMensagem('m');
     try
       for I := 1 to 5 do
-        Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-          'entrega ' + IntToStr(I) + ' em no-ack');
-      Assert.AreEqual(0, LAlvo.UnackedCount,
-        'entrega em no-ack nunca fica pendente');
+        TAssert.AssertTrue('entrega ' + IntToStr(I) + ' em no-ack', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertEquals('entrega em no-ack nunca fica pendente', 0, LAlvo.UnackedCount);
     finally
       LMsg.Release;
     end;
@@ -630,11 +620,9 @@ begin
     LMsg := NovaMensagem('m');
     try
       LAlvo.SetActive(False);
-      Assert.IsFalse(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-        'Channel.Flow desligado recusa');
+      TAssert.AssertFalse('Channel.Flow desligado recusa', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
       LAlvo.SetActive(True);
-      Assert.IsTrue(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-        'religado, entrega');
+      TAssert.AssertTrue('religado, entrega', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
@@ -664,15 +652,13 @@ begin
     try
       for I := 1 to 4 do
         LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag);
-      Assert.AreEqual(4, LAlvo.UnackedCount, 'quatro pendentes');
+      TAssert.AssertEquals('quatro pendentes', 4, LAlvo.UnackedCount);
 
-      Assert.AreEqual(2, Integer(Length(LAlvo.NoteResolved(2, True))), 'multiple ate a tag 2');
-      Assert.AreEqual(2, LAlvo.UnackedCount, 'sobraram duas');
-      Assert.AreEqual(0, Integer(Length(LAlvo.NoteResolved(2, False))),
-        'tag ja resolvida nao conta de novo');
-      Assert.AreEqual(2, Integer(Length(LAlvo.NoteResolved(0, True))),
-        'multiple com tag 0 resolve todas as pendentes');
-      Assert.AreEqual(0, LAlvo.UnackedCount, 'nada pendente');
+      TAssert.AssertEquals('multiple ate a tag 2', 2, Length(LAlvo.NoteResolved(2, True)));
+      TAssert.AssertEquals('sobraram duas', 2, LAlvo.UnackedCount);
+      TAssert.AssertEquals('tag ja resolvida nao conta de novo', 0, Length(LAlvo.NoteResolved(2, False)));
+      TAssert.AssertEquals('multiple com tag 0 resolve todas as pendentes', 2, Length(LAlvo.NoteResolved(0, True)));
+      TAssert.AssertEquals('nada pendente', 0, LAlvo.UnackedCount);
     finally
       LMsg.Release;
     end;
@@ -697,15 +683,14 @@ begin
   try
     LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
     LRef := LAlvo;
-    Assert.IsTrue(LAlvo.IsAlive, 'nasce vivo');
+    TAssert.AssertTrue('nasce vivo', LAlvo.IsAlive);
 
     LAlvo.Detach;
-    Assert.IsFalse(LAlvo.IsAlive, 'depois do detach, morto');
+    TAssert.AssertFalse('depois do detach, morto', LAlvo.IsAlive);
 
     LMsg := NovaMensagem('m');
     try
-      Assert.IsFalse(LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-        'nao entrega depois do detach');
+      TAssert.AssertFalse('nao entrega depois do detach', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
@@ -747,9 +732,8 @@ begin
           LRecusou := True;
           Break;
         end;
-      Assert.IsTrue(LRecusou, 'com a fila de escrita cheia, o alvo recusa');
-      Assert.IsTrue(PcTickMs - LInicio < 2000,
-        'e recusa SEM BLOQUEAR -- e o que a D2/D3 exige do ator');
+      TAssert.AssertTrue('com a fila de escrita cheia, o alvo recusa', LRecusou);
+      TAssert.AssertTrue('e recusa SEM BLOQUEAR -- e o que a D2/D3 exige do ator', PcTickMs - LInicio < 2000);
     finally
       LMsg.Release;
     end;
@@ -787,15 +771,13 @@ begin
         LCoube := False;
         Break;
       end;
-    Assert.IsFalse(LCoube, 'a fila de escrita encheu');
-    Assert.IsFalse(LWriter.TryPostFrames(LLote),
-      'lote nao cabe: recusa inteiro');
+    TAssert.AssertFalse('a fila de escrita encheu', LCoube);
+    TAssert.AssertFalse('lote nao cabe: recusa inteiro', LWriter.TryPostFrames(LLote));
 
     LStream.Liberar;
     LFrames := FramesEscritos(LWriter, LStream);
     for I := 0 to High(LFrames) do
-      Assert.AreEqual('x', AmqpUtf8Decode(LFrames[I].Payload),
-        'nenhum frame do lote recusado vazou para o wire');
+      TAssert.AssertEquals('nenhum frame do lote recusado vazou para o wire', 'x', AmqpUtf8Decode(LFrames[I].Payload));
   finally
     LStream.Liberar;
     LWriter.Free;
@@ -818,19 +800,19 @@ begin
     LCanal := TAMQPServerChannel.Create(5);
     LCanal.AttachDelivery(LWriter, 0);
     LRef := LCanal.DeliveryTarget; // e' o que uma fila guardaria no consumidor
-    Assert.IsTrue(LRef.IsAlive, 'alvo vivo com o canal aberto');
+    TAssert.AssertTrue('alvo vivo com o canal aberto', LRef.IsAlive);
 
     // O canal morre (Channel.Close, queda da conexao, reaper...). A fila ainda
     // segura a interface -- e e' exatamente por isso que o objeto NAO pode
     // estar liberado, nem continuar escrevendo num writer que vai embora.
     LCanal.Free;
 
-    Assert.IsFalse(LRef.IsAlive,
-      'liberar o canal tem de destacar o alvo, senao a fila entrega num writer morto');
+    TAssert.AssertFalse('liberar o canal tem de destacar o alvo, senao a fila entrega num writer morto',
+      LRef.IsAlive);
     LMsg := NovaMensagem('m');
     try
-      Assert.IsFalse(LRef.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-        'e toda entrega posterior falha limpo');
+      TAssert.AssertFalse('e toda entrega posterior falha limpo',
+        LRef.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
@@ -861,15 +843,15 @@ begin
       try
         // Channel.Flow chega ao alvo.
         LCanal.Active := False;
-        Assert.IsFalse(LRef.TryDeliver('ct', 'q', True, False, LMsg, LTag),
-          'Channel.Flow=False para a entrega');
+        TAssert.AssertFalse('Channel.Flow=False para a entrega',
+          LRef.TryDeliver('ct', 'q', True, False, LMsg, LTag));
         LCanal.Active := True;
 
         // Basic.Qos tambem.
         LCanal.PrefetchCount := 1;
-        Assert.IsTrue(LRef.TryDeliver('ct', 'q', False, False, LMsg, LTag), '1a');
-        Assert.IsFalse(LRef.TryDeliver('ct', 'q', False, False, LMsg, LTag),
-          'prefetch do canal vale para o alvo');
+        TAssert.AssertTrue('1a', LRef.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+        TAssert.AssertFalse('prefetch do canal vale para o alvo',
+          LRef.TryDeliver('ct', 'q', False, False, LMsg, LTag));
       finally
         LMsg.Release;
       end;

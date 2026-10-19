@@ -7,7 +7,7 @@
 
   1. Que o group commit AGRUPA. Nao basta "gravou tudo": a D25 inteira e' a
      aposta de que o lote cresce sozinho sob carga, e o numero que mostra isso
-     e' Registros/Syncs. Sem esta medida, uma implementacao que da' um fsync
+     e' Records/Syncs. Sem esta medida, uma implementacao que da' um fsync
      por registro passaria em todos os outros testes.
 
   2. Que o lote e' INDIVISIVEL. Quatro threads submetendo pares (aN, bN) em uma
@@ -31,18 +31,17 @@
   teste precisam do mesmo objeto, e duplicar andaime e' a superficie onde esta
   codebase ja' errou (corrigir um lado e esquecer o gemeo).
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerJournalTests.pas -- mantenha os
-  dois em sincronia (mesmos nomes de teste, mesmas assercoes). Como nas outras
-  suites do server, o lado Delphi ACHATA a fixture-base do lado FPC e ica os
-  helpers para funcoes de unit. }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.IOUtils,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes,
   PascalCommon.Threading,
   AMQP.Server.Wal,
   AMQP.Server.Journal,
@@ -105,14 +104,16 @@ type
     property Erros: Integer read FErros;
   end;
 
+  { As fixtures do journal: diretorio proprio por teste e limpeza
+    (JournalSetUp/JournalTearDown). }
+
   [TestFixture]
   TJournalLsnTests = class
   private
     FDir: string;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure Submit_DevolveOLsnDoUltimo;
     [Test] procedure LsnsSaoContiguosEntreLotes;
     [Test] procedure SubmitVazio_Levanta;
@@ -125,9 +126,8 @@ type
   private
     FDir: string;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure CargaConcorrente_AgrupaEmMenosFsyncsQueRegistros;
     [Test] procedure LoteEhIndivisivel_ParesSaemAdjacentes;
     [Test] procedure SubmitNaJanelaDoLote_NaoSePerde;
@@ -138,9 +138,8 @@ type
   private
     FDir: string;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure FsyncOk_AvancaAMarcaDagua;
     [Test] procedure FsyncFalho_NaoAvancaAMarcaDagua;
     [Test] procedure FsyncFalho_NaoDerrubaOJournal;
@@ -153,9 +152,8 @@ type
   private
     FDir: string;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure FalhaDeEscrita_FechaAPorta;
     [Test] procedure FalhaDeEscrita_AvisaOSinkUmaVez;
     [Test] procedure DepoisDaFalha_SubmitLevanta;
@@ -167,9 +165,8 @@ type
   private
     FDir: string;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure SubmitNoWait_NuncaBloqueia;
     [Test] procedure Reinicio_LsnContinuaDeOndeParou;
     [Test] procedure Reinicio_MarcaDaguaNasceNoQueJaEstava;
@@ -183,8 +180,6 @@ implementation
 var
   GSeq: Integer = 0;
 
-// --- helpers de unit (o lado FPC os tem na fixture-base) --------------------
-
 function TextoDe(const B: TBytes): string;
 var
   I: Integer;
@@ -192,49 +187,6 @@ begin
   SetLength(Result, Length(B));
   for I := 0 to High(B) do
     Result[I + 1] := Char(B[I]);
-end;
-
-function Rec(AKind: Byte; const S: string): TAMQPJournalRecord;
-var
-  I: Integer;
-begin
-  Result.Kind := AKind;
-  SetLength(Result.Payload, Length(S));
-  for I := 1 to Length(S) do
-    Result.Payload[I - 1] := Byte(S[I]);
-end;
-
-function Um(AKind: Byte; const S: string): TAMQPJournalRecords;
-begin
-  SetLength(Result, 1);
-  Result[0] := Rec(AKind, S);
-end;
-
-procedure LimpaDir(const ADir: string);
-var
-  LRec: TSearchRec;
-begin
-  if FindFirst(IncludeTrailingPathDelimiter(ADir) + '*', faAnyFile, LRec) = 0 then
-  begin
-    try
-      repeat
-        if (LRec.Attr and faDirectory) = 0 then
-          System.SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir)
-            + LRec.Name);
-      until FindNext(LRec) <> 0;
-    finally
-      System.SysUtils.FindClose(LRec);
-    end;
-  end;
-end;
-
-function NovoDir: string;
-begin
-  Inc(GSeq);
-  Result := IncludeTrailingPathDelimiter(TPath.GetTempPath) + 'amqpjournal-'
-    + IntToStr(GSeq);
-  LimpaDir(Result);
-  ForceDirectories(Result);
 end;
 
 { TJournalSobreDuble }
@@ -297,14 +249,23 @@ end;
 
 procedure TProdutorFalso.Execute;
 var
-  I: Integer;
+  I, K: Integer;
   LRecs: TAMQPJournalRecords;
+  LTxt: string;
 begin
   SetLength(LRecs, 2);
   for I := 1 to FQuantos do
   begin
-    LRecs[0] := Rec(1, 'a' + IntToStr(I));
-    LRecs[1] := Rec(2, 'b' + IntToStr(I));
+    LTxt := 'a' + IntToStr(I);
+    LRecs[0].Kind := 1;
+    SetLength(LRecs[0].Payload, Length(LTxt));
+    for K := 1 to Length(LTxt) do
+      LRecs[0].Payload[K - 1] := Byte(LTxt[K]);
+    LTxt := 'b' + IntToStr(I);
+    LRecs[1].Kind := 2;
+    SetLength(LRecs[1].Payload, Length(LTxt));
+    for K := 1 to Length(LTxt) do
+      LRecs[1].Payload[K - 1] := Byte(LTxt[K]);
     try
       FJournal.Submit(LRecs);
     except
@@ -313,16 +274,102 @@ begin
   end;
 end;
 
+{ O que as fixtures do journal dividem.
+  O gerador de espelhos (tools/gen_fpc_mirror.py) nao aceita heranca entre
+  fixtures: cada uma guarda os proprios campos e chama as rotinas abaixo. }
+
+procedure JournalTearDown(var FDir: string);
+var
+  LRec: TSearchRec;
+begin
+  if FindFirst(IncludeTrailingPathDelimiter(FDir) + '*', faAnyFile, LRec) = 0 then
+  begin
+    try
+      repeat
+        if (LRec.Attr and faDirectory) = 0 then
+          DeleteFile(IncludeTrailingPathDelimiter(FDir) + LRec.Name);
+      until FindNext(LRec) <> 0;
+    finally
+      FindClose(LRec);
+    end;
+  end;
+end;
+
+procedure JournalSetUp(var FDir: string);
+begin
+  Inc(GSeq);
+  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpjournal-'
+    + IntToStr(GSeq);
+  JournalTearDown(FDir); // garante diretorio limpo mesmo apos uma execucao interrompida
+  ForceDirectories(FDir);
+end;
+
+function Rec(AKind: Byte; const S: string): TAMQPJournalRecord;
+var
+  I: Integer;
+begin
+  Result.Kind := AKind;
+  SetLength(Result.Payload, Length(S));
+  for I := 1 to Length(S) do
+    Result.Payload[I - 1] := Byte(S[I]);
+end;
+
+function Um(AKind: Byte; const S: string): TAMQPJournalRecords;
+begin
+  SetLength(Result, 1);
+  Result[0] := Rec(AKind, S);
+end;
+
 { TJournalLsnTests }
 
-procedure TJournalLsnTests.Setup;
+procedure TJournalLsnTests.SetUp;
 begin
-  FDir := NovoDir;
+  JournalSetUp(FDir);
 end;
 
 procedure TJournalLsnTests.TearDown;
 begin
-  LimpaDir(FDir);
+  JournalTearDown(FDir);
+end;
+
+procedure TJournalGroupCommitTests.SetUp;
+begin
+  JournalSetUp(FDir);
+end;
+
+procedure TJournalGroupCommitTests.TearDown;
+begin
+  JournalTearDown(FDir);
+end;
+
+procedure TJournalDurabilidadeTests.SetUp;
+begin
+  JournalSetUp(FDir);
+end;
+
+procedure TJournalDurabilidadeTests.TearDown;
+begin
+  JournalTearDown(FDir);
+end;
+
+procedure TJournalFalhaTests.SetUp;
+begin
+  JournalSetUp(FDir);
+end;
+
+procedure TJournalFalhaTests.TearDown;
+begin
+  JournalTearDown(FDir);
+end;
+
+procedure TJournalCicloDeVidaTests.SetUp;
+begin
+  JournalSetUp(FDir);
+end;
+
+procedure TJournalCicloDeVidaTests.TearDown;
+begin
+  JournalTearDown(FDir);
 end;
 
 procedure TJournalLsnTests.Submit_DevolveOLsnDoUltimo;
@@ -339,8 +386,8 @@ begin
     LRecs[0] := Rec(1, 'um');
     LRecs[1] := Rec(1, 'dois');
     LRecs[2] := Rec(1, 'tres');
-    Assert.AreEqual(Int64(3), Int64(J.Submit(LRecs)), 'LSN do ultimo do lote');
-    Assert.IsTrue(J.WaitDurable(3, 5000), 'e ele fica duravel');
+    TAssert.AssertEquals('LSN do ultimo do lote', Int64(3), Int64(J.Submit(LRecs)));
+    TAssert.AssertTrue('e ele fica duravel', J.WaitDurable(3, 5000));
   finally
     J.Free;
   end;
@@ -353,10 +400,10 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    Assert.AreEqual(Int64(1), Int64(J.Submit(Um(1, 'a'))), '1o lote');
-    Assert.AreEqual(Int64(2), Int64(J.Submit(Um(1, 'b'))), '2o lote continua');
-    Assert.AreEqual(Int64(3), Int64(J.Submit(Um(1, 'c'))), '3o lote continua');
-    Assert.IsTrue(J.WaitDurable(3, 5000), 'tudo duravel');
+    TAssert.AssertEquals('1o lote', Int64(1), Int64(J.Submit(Um(1, 'a'))));
+    TAssert.AssertEquals('2o lote continua', Int64(2), Int64(J.Submit(Um(1, 'b'))));
+    TAssert.AssertEquals('3o lote continua', Int64(3), Int64(J.Submit(Um(1, 'c'))));
+    TAssert.AssertTrue('tudo duravel', J.WaitDurable(3, 5000));
   finally
     J.Free;
   end;
@@ -379,7 +426,7 @@ begin
       on E: EAMQPJournal do
         LLevantou := True;
     end;
-    Assert.IsTrue(LLevantou, 'submit sem registro tem de levantar');
+    TAssert.AssertTrue('submit sem registro tem de levantar', LLevantou);
   finally
     J.Free;
   end;
@@ -399,7 +446,7 @@ begin
       on E: EAMQPJournal do
         LLevantou := True;
     end;
-    Assert.IsTrue(LLevantou, 'journal parado nao aceita submit');
+    TAssert.AssertTrue('journal parado nao aceita submit', LLevantou);
   finally
     J.Free;
   end;
@@ -422,23 +469,13 @@ begin
       on E: EAMQPJournal do
         LLevantou := True;
     end;
-    Assert.IsTrue(LLevantou, 'depois do Stop nao aceita mais');
+    TAssert.AssertTrue('depois do Stop nao aceita mais', LLevantou);
   finally
     J.Free;
   end;
 end;
 
 { TJournalGroupCommitTests }
-
-procedure TJournalGroupCommitTests.Setup;
-begin
-  FDir := NovoDir;
-end;
-
-procedure TJournalGroupCommitTests.TearDown;
-begin
-  LimpaDir(FDir);
-end;
 
 procedure TJournalGroupCommitTests.CargaConcorrente_AgrupaEmMenosFsyncsQueRegistros;
 var
@@ -458,16 +495,18 @@ begin
     for I := 0 to 3 do
     begin
       P[I].WaitFor;
-      Assert.AreEqual(0, P[I].Erros, 'produtor sem erro');
+      TAssert.AssertEquals('produtor sem erro', 0, P[I].Erros);
       P[I].Free;
     end;
-    Assert.IsTrue(J.WaitDurable(2000, 30000), 'tudo duravel');
+    TAssert.AssertTrue('tudo duravel', J.WaitDurable(2000, 30000));
     LS := J.Stats;
-    Assert.AreEqual(Int64(2000), LS.Records, 'gravou tudo');
-    Assert.IsTrue(LS.Syncs < LS.Records, 'agrupou: menos fsyncs que registros ('
-      + IntToStr(LS.Syncs) + ' x ' + IntToStr(LS.Records) + ')');
-    Assert.IsTrue((LS.Records div LS.Syncs) >= 3,
-      'lote medio bem acima de 1 (' + IntToStr(LS.Records div LS.Syncs) + ')');
+    TAssert.AssertEquals('gravou tudo', Int64(2000), LS.Records);
+    TAssert.AssertTrue('agrupou: menos fsyncs que registros ('
+      + IntToStr(LS.Syncs) + ' x ' + IntToStr(LS.Records) + ')',
+      LS.Syncs < LS.Records);
+    TAssert.AssertTrue('lote medio bem acima de 1 ('
+      + IntToStr(LS.Records div LS.Syncs) + ')',
+      (LS.Records div LS.Syncs) >= 3);
   finally
     J.Free;
   end;
@@ -494,7 +533,7 @@ begin
       P[I].WaitFor;
       P[I].Free;
     end;
-    Assert.IsTrue(J.WaitDurable(2000, 30000), 'tudo duravel');
+    TAssert.AssertTrue('tudo duravel', J.WaitDurable(2000, 30000));
   finally
     J.Free;
   end;
@@ -504,7 +543,7 @@ begin
   LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
   try
     LN := LSeg.ReadPrefix(LRegs, LStop);
-    Assert.AreEqual(2000, LN, 'leu tudo do arquivo');
+    TAssert.AssertEquals('leu tudo do arquivo', 2000, LN);
     LPares := 0;
     LQuebras := 0;
     I := 0;
@@ -525,8 +564,8 @@ begin
       else
         Inc(I);
     end;
-    Assert.AreEqual(0, LQuebras, 'nenhum par quebrado');
-    Assert.AreEqual(1000, LPares, 'os 1000 pares adjacentes');
+    TAssert.AssertEquals('nenhum par quebrado', 0, LQuebras);
+    TAssert.AssertEquals('os 1000 pares adjacentes', 1000, LPares);
   finally
     LSeg.Free;
     LArq := nil;
@@ -540,27 +579,17 @@ begin
   J := TJournalComJanela.Create(FDir);
   try
     J.Start;
-    Assert.IsTrue(J.WaitDurable(J.Submit(Um(1, 'gatilho')), 5000),
-      'o gatilho fica duravel');
-    Assert.IsTrue(J.WaitDurable(J.LsnInjetado, 5000),
-      'o injetado NA JANELA tambem');
-    Assert.AreEqual(Int64(2), J.Stats.Records, 'e nada se perdeu');
+    TAssert.AssertTrue('o gatilho fica duravel', J.WaitDurable(J.Submit(Um(1, 'gatilho')),
+      5000));
+    TAssert.AssertTrue('o injetado NA JANELA tambem',
+      J.WaitDurable(J.LsnInjetado, 5000));
+    TAssert.AssertEquals('e nada se perdeu', Int64(2), J.Stats.Records);
   finally
     J.Free;
   end;
 end;
 
 { TJournalDurabilidadeTests }
-
-procedure TJournalDurabilidadeTests.Setup;
-begin
-  FDir := NovoDir;
-end;
-
-procedure TJournalDurabilidadeTests.TearDown;
-begin
-  LimpaDir(FDir);
-end;
 
 procedure TJournalDurabilidadeTests.FsyncOk_AvancaAMarcaDagua;
 var
@@ -571,8 +600,8 @@ begin
   try
     J.Start;
     LSN := J.Submit(Um(1, 'a'));
-    Assert.IsTrue(J.WaitDurable(LSN, 5000), 'ficou duravel');
-    Assert.IsTrue(J.DurableLsn >= LSN, 'marca d agua alcancou o LSN');
+    TAssert.AssertTrue('ficou duravel', J.WaitDurable(LSN, 5000));
+    TAssert.AssertTrue('marca d agua alcancou o LSN', J.DurableLsn >= LSN);
   finally
     J.Free;
   end;
@@ -593,10 +622,9 @@ begin
 
     J.Arq.SetSyncOk(False);
     LSN := J.Submit(Um(1, 'com fsync falhando'));
-    Assert.IsFalse(J.WaitDurable(LSN, 800), 'nao pode ficar duravel');
-    Assert.AreEqual(Int64(LAntes), Int64(J.DurableLsn),
-      'marca d agua nao andou');
-    Assert.IsTrue(J.Stats.FailedSyncs > 0, 'e o fsync falho foi contado');
+    TAssert.AssertFalse('nao pode ficar duravel', J.WaitDurable(LSN, 800));
+    TAssert.AssertEquals('marca d agua nao andou', Int64(LAntes), Int64(J.DurableLsn));
+    TAssert.AssertTrue('e o fsync falho foi contado', J.Stats.FailedSyncs > 0);
   finally
     J.Free;
   end;
@@ -613,7 +641,7 @@ begin
     J.Arq.SetSyncOk(False);
     J.Submit(Um(1, 'x'));
     Sleep(300);
-    Assert.IsFalse(J.Failed, 'journal continua de pe');
+    TAssert.AssertFalse('journal continua de pe', J.Failed);
   finally
     J.Free;
   end;
@@ -629,11 +657,11 @@ begin
     J.Start;
     J.Arq.SetSyncOk(False);
     LSN := J.Submit(Um(1, 'no escuro'));
-    Assert.IsFalse(J.WaitDurable(LSN, 500), 'ainda nao');
+    TAssert.AssertFalse('ainda nao', J.WaitDurable(LSN, 500));
     J.Arq.SetSyncOk(True);
     J.Submit(Um(1, 'com fsync de novo'));
-    Assert.IsTrue(J.WaitDurable(LSN, 5000),
-      'o fsync seguinte cobre o lote anterior');
+    TAssert.AssertTrue('o fsync seguinte cobre o lote anterior',
+      J.WaitDurable(LSN, 5000));
   finally
     J.Free;
   end;
@@ -653,7 +681,7 @@ begin
     J.DurabilitySink := ISink;
     J.Start;
     LSN := J.Submit(Um(1, 'a'));
-    Assert.IsTrue(J.WaitDurable(LSN, 5000), 'duravel');
+    TAssert.AssertTrue('duravel', J.WaitDurable(LSN, 5000));
     // ESPERA o aviso, em vez de exigi-lo ja' na volta do WaitDurable: a marca
     // d'agua avanca ANTES de o sink ser chamado, e essa ordem e' deliberada --
     // inverte-la poria um callback de fora na frente de acordar os waiters. Sao
@@ -662,24 +690,14 @@ begin
     LPrazo := PcTickMs + 5000;
     while (S.Avisos = 0) and (PcTickMs < LPrazo) do
       Sleep(2);
-    Assert.IsTrue(S.Avisos > 0, 'sink foi avisado');
-    Assert.AreEqual(Int64(LSN), Int64(S.Ultimo), 'com o MAIOR LSN do lote');
+    TAssert.AssertTrue('sink foi avisado', S.Avisos > 0);
+    TAssert.AssertEquals('com o MAIOR LSN do lote', Int64(LSN), Int64(S.Ultimo));
   finally
     J.Free;
   end;
 end;
 
 { TJournalFalhaTests }
-
-procedure TJournalFalhaTests.Setup;
-begin
-  FDir := NovoDir;
-end;
-
-procedure TJournalFalhaTests.TearDown;
-begin
-  LimpaDir(FDir);
-end;
 
 procedure TJournalFalhaTests.FalhaDeEscrita_FechaAPorta;
 var
@@ -698,8 +716,8 @@ begin
     LPrazo := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
-    Assert.IsTrue(J.Failed, 'journal em falha');
-    Assert.IsTrue(J.LastError <> '', 'com mensagem');
+    TAssert.AssertTrue('journal em falha', J.Failed);
+    TAssert.AssertTrue('com mensagem', J.LastError <> '');
   finally
     J.Free;
   end;
@@ -723,7 +741,7 @@ begin
     LPrazo := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
-    Assert.AreEqual(1, S.Falhas, 'avisado exatamente uma vez');
+    TAssert.AssertEquals('avisado exatamente uma vez', 1, S.Falhas);
   finally
     J.Free;
   end;
@@ -750,7 +768,7 @@ begin
       on E: EAMQPJournal do
         LLevantou := True;
     end;
-    Assert.IsTrue(LLevantou, 'submit depois da falha tem de levantar');
+    TAssert.AssertTrue('submit depois da falha tem de levantar', LLevantou);
   finally
     J.Free;
   end;
@@ -769,24 +787,14 @@ begin
     LPrazo := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LPrazo) do
       Sleep(5);
-    Assert.IsFalse(J.WaitDurable(99, 300),
-      'quem esperava durabilidade e liberado com False');
+    TAssert.AssertFalse('quem esperava durabilidade e' + ' liberado com False',
+      J.WaitDurable(99, 300));
   finally
     J.Free;
   end;
 end;
 
 { TJournalCicloDeVidaTests }
-
-procedure TJournalCicloDeVidaTests.Setup;
-begin
-  FDir := NovoDir;
-end;
-
-procedure TJournalCicloDeVidaTests.TearDown;
-begin
-  LimpaDir(FDir);
-end;
 
 procedure TJournalCicloDeVidaTests.SubmitNoWait_NuncaBloqueia;
 var
@@ -803,8 +811,8 @@ begin
     LSN := 0;
     for I := 1 to 200 do
       LSN := J.SubmitNoWait(Um(9, StringOfChar('z', 64)));
-    Assert.AreEqual(Int64(200), Int64(LSN), 'os 200 foram aceitos');
-    Assert.IsTrue(J.WaitDurable(LSN, 20000), 'e todos ficam duraveis');
+    TAssert.AssertEquals('os 200 foram aceitos', Int64(200), Int64(LSN));
+    TAssert.AssertTrue('e todos ficam duraveis', J.WaitDurable(LSN, 20000));
   finally
     J.Free;
   end;
@@ -828,10 +836,10 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    Assert.AreEqual(Int64(LSN + 1), Int64(J.Stats.NextLsn),
-      'proximo LSN continua');
-    Assert.IsTrue(J.WaitDurable(J.Submit(Um(1, 'depois')), 5000),
-      'e grava depois do restart');
+    TAssert.AssertEquals('proximo LSN continua', Int64(LSN + 1),
+      Int64(J.Stats.NextLsn));
+    TAssert.AssertTrue('e grava depois do restart',
+      J.WaitDurable(J.Submit(Um(1, 'depois')), 5000));
   finally
     J.Free;
   end;
@@ -856,8 +864,8 @@ begin
     J.Start;
     // O que ja' estava no arquivo esta' no disco por definicao: a marca d'agua
     // nao pode nascer ATRAS dele.
-    Assert.AreEqual(Int64(LSN), Int64(J.DurableLsn),
-      'marca d agua nasce no que ja estava');
+    TAssert.AssertEquals('marca d agua nasce no que ja estava', Int64(LSN),
+      Int64(J.DurableLsn));
   finally
     J.Free;
   end;
@@ -888,9 +896,9 @@ begin
     IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(1), False);
   LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
   try
-    Assert.AreEqual(300, LSeg.ReadPrefix(LRegs, LStop),
-      'os 300 aceitos foram ao disco');
-    Assert.IsTrue(LStop = awsEnd, 'integro');
+    TAssert.AssertEquals('os 300 aceitos foram ao disco', 300,
+      LSeg.ReadPrefix(LRegs, LStop));
+    TAssert.AssertTrue('integro', LStop = awsEnd);
   finally
     LSeg.Free;
     LArq := nil;
@@ -905,8 +913,8 @@ begin
   try
     J.Start;
     J.Start; // nao pode roubar o proprio lock nem subir duas threads
-    Assert.IsTrue(J.Running, 'continua rodando');
-    Assert.IsTrue(J.WaitDurable(J.Submit(Um(1, 'x')), 5000), 'e grava');
+    TAssert.AssertTrue('continua rodando', J.Running);
+    TAssert.AssertTrue('e grava', J.WaitDurable(J.Submit(Um(1, 'x')), 5000));
   finally
     J.Free;
   end;
@@ -930,7 +938,7 @@ begin
       on E: Exception do
         LLevantou := True;
     end;
-    Assert.IsTrue(LLevantou, 'o segundo journal tem de ser recusado');
+    TAssert.AssertTrue('o segundo journal tem de ser recusado', LLevantou);
   finally
     J2.Free;
     J1.Free;

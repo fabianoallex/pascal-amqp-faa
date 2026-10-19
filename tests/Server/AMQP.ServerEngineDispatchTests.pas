@@ -14,17 +14,19 @@
   - TErrorTableTests: uma asserção por linha da tabela de erros do plano --
     reply-code exato e escopo (canal) certo.
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerEngineDispatchTests.pas --
-  mantenha os dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.Rtti,
-  System.SyncObjs,
+  AMQP.DUnitXCompat,
+  SysUtils,
+  Classes,
+  Rtti,
+  SyncObjs,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Exchange.Methods,
@@ -54,7 +56,7 @@ type
     function Corpos: string;
     function QuantasRecebidas: Integer;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
     [Test] procedure PublicaEConsomeComAck;
@@ -82,7 +84,7 @@ type
     procedure OnDelivery(AChannel: TAMQPChannel;
       const ADelivery: TAMQPDelivery);
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
     [Test] procedure Erro404_ConsumeDeFilaInexistente;
@@ -117,7 +119,7 @@ type
     function EsperaDevolucoes(ACount, ATimeoutMs: Integer): Boolean;
     function QuantasDevolvidas: Integer;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
     [Test] procedure Confirm_PublishRecebeAck;
@@ -144,7 +146,7 @@ type
     function EsperaFilaSumir(AConn: TAMQPConnection; const ANome: string;
       ATimeoutMs: Integer): Boolean;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
     [Test] procedure Exclusiva_SomeComAConexaoDona;
@@ -178,9 +180,8 @@ type
     procedure SoltaPcPool;
     procedure AoEntregar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
     [Test] procedure PcPoolSaturado_BrokerContinuaRespondendo;
     [Test] procedure PcPoolSaturado_FreeDoCanalEsperaOCallbackEnfileirado;
     [Test] procedure PcPoolSaturado_CanalComThreadPropria_NaoDependeDoPcPool;
@@ -249,7 +250,7 @@ end;
 
 { --- TEngineDispatchTests --- }
 
-procedure TEngineDispatchTests.Setup;
+procedure TEngineDispatchTests.SetUp;
 begin
   FBroker := NovoBroker;
   FLock := TCriticalSection.Create;
@@ -337,8 +338,8 @@ begin
     LCh.Consume('q.ack', OnDelivery, False);
     LCh.PublishText('', 'q.ack', 'ola');
 
-    Assert.IsTrue(EsperaEntregas(1, 5000), 'a mensagem chegou ao consumidor');
-    Assert.AreEqual('ola', Corpos, 'corpo integro');
+    TAssert.AssertTrue('a mensagem chegou ao consumidor', EsperaEntregas(1, 5000));
+    TAssert.AssertEquals('corpo integro', 'ola', Corpos);
   finally
     LConn.Free;
   end;
@@ -359,14 +360,13 @@ begin
     LCh.PublishText('', 'q.get', 'segunda');
 
     LGet := LCh.BasicGet('q.get', True);
-    Assert.IsTrue(LGet.Found, 'achou a primeira');
-    Assert.AreEqual('primeira', LGet.BodyAsText, 'corpo');
-    Assert.AreEqual(1, Integer(LGet.MessageCount),
-      'message-count do Get-Ok: quantas sobraram');
+    TAssert.AssertTrue('achou a primeira', LGet.Found);
+    TAssert.AssertEquals('corpo', 'primeira', LGet.BodyAsText);
+    TAssert.AssertEquals('message-count do Get-Ok: quantas sobraram', 1, Integer(LGet.MessageCount));
 
     LGet := LCh.BasicGet('q.get', True);
-    Assert.IsTrue(LGet.Found, 'achou a segunda');
-    Assert.AreEqual('segunda', LGet.BodyAsText, 'corpo');
+    TAssert.AssertTrue('achou a segunda', LGet.Found);
+    TAssert.AssertEquals('corpo', 'segunda', LGet.BodyAsText);
   finally
     LConn.Free;
   end;
@@ -384,7 +384,7 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.vazia'));
     LGet := LCh.BasicGet('q.vazia', True);
-    Assert.IsFalse(LGet.Found, 'fila vazia devolve Get-Empty');
+    TAssert.AssertFalse('fila vazia devolve Get-Empty', LGet.Found);
   finally
     LConn.Free;
   end;
@@ -412,17 +412,16 @@ begin
 
     // A fila especifica so' recebe o que casa; a curinga recebe as duas.
     LGet := LCh.BasicGet('q.aprovada', True);
-    Assert.IsTrue(LGet.Found, 'q.aprovada recebeu');
-    Assert.AreEqual('A', LGet.BodyAsText, 'so a que casa');
-    Assert.IsFalse(LCh.BasicGet('q.aprovada', True).Found,
-      'e nada alem dela');
+    TAssert.AssertTrue('q.aprovada recebeu', LGet.Found);
+    TAssert.AssertEquals('so a que casa', 'A', LGet.BodyAsText);
+    TAssert.AssertFalse('e nada alem dela', LCh.BasicGet('q.aprovada', True).Found);
 
     LGet := LCh.BasicGet('q.todas', True);
-    Assert.IsTrue(LGet.Found, 'q.todas recebeu a primeira');
-    Assert.AreEqual('A', LGet.BodyAsText, 'ordem preservada');
+    TAssert.AssertTrue('q.todas recebeu a primeira', LGet.Found);
+    TAssert.AssertEquals('ordem preservada', 'A', LGet.BodyAsText);
     LGet := LCh.BasicGet('q.todas', True);
-    Assert.IsTrue(LGet.Found, 'q.todas recebeu a segunda');
-    Assert.AreEqual('C', LGet.BodyAsText, 'ordem preservada');
+    TAssert.AssertTrue('q.todas recebeu a segunda', LGet.Found);
+    TAssert.AssertEquals('ordem preservada', 'C', LGet.BodyAsText);
   finally
     LConn.Free;
   end;
@@ -447,10 +446,8 @@ begin
     LCh.PublishText('ex.fan', 'qualquer', 'broadcast');
 
     // UMA mensagem, DUAS filas -- corpo compartilhado sem copia.
-    Assert.AreEqual('broadcast', LCh.BasicGet('q.f1', True).BodyAsText,
-      'chegou na primeira');
-    Assert.AreEqual('broadcast', LCh.BasicGet('q.f2', True).BodyAsText,
-      'e na segunda');
+    TAssert.AssertEquals('chegou na primeira', 'broadcast', LCh.BasicGet('q.f1', True).BodyAsText);
+    TAssert.AssertEquals('e na segunda', 'broadcast', LCh.BasicGet('q.f2', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -473,10 +470,9 @@ begin
     for I := 1 to 5 do
       LCh.PublishText('', 'q.qos', 'm' + IntToStr(I));
 
-    Assert.IsTrue(EsperaEntregas(1, 5000), 'entregou a primeira');
+    TAssert.AssertTrue('entregou a primeira', EsperaEntregas(1, 5000));
     Sleep(300); // tempo de sobra para entregar mais, se o prefetch falhasse
-    Assert.AreEqual(1, QuantasRecebidas,
-      'com prefetch=1 e nenhum ack, so uma entrega fica em voo');
+    TAssert.AssertEquals('com prefetch=1 e nenhum ack, so uma entrega fica em voo', 1, QuantasRecebidas);
   finally
     LConn.Free;
   end;
@@ -496,14 +492,14 @@ begin
     LCh.PublishText('', 'q.nack', 'volta');
 
     LGet := LCh.BasicGet('q.nack', False); // com ack
-    Assert.IsTrue(LGet.Found, 'buscou');
-    Assert.IsFalse(LGet.Redelivered, 'primeira vez');
+    TAssert.AssertTrue('buscou', LGet.Found);
+    TAssert.AssertFalse('primeira vez', LGet.Redelivered);
     LCh.Nack(LGet.DeliveryTag, True); // requeue
 
     LGet := LCh.BasicGet('q.nack', True);
-    Assert.IsTrue(LGet.Found, 'voltou para a fila');
-    Assert.AreEqual('volta', LGet.BodyAsText, 'mesma mensagem');
-    Assert.IsTrue(LGet.Redelivered, 'marcada como reentrega');
+    TAssert.AssertTrue('voltou para a fila', LGet.Found);
+    TAssert.AssertEquals('mesma mensagem', 'volta', LGet.BodyAsText);
+    TAssert.AssertTrue('marcada como reentrega', LGet.Redelivered);
   finally
     LConn.Free;
   end;
@@ -522,15 +518,14 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.cancel'));
     LTag := LCh.Consume('q.cancel', OnDelivery, True);
     LCh.PublishText('', 'q.cancel', 'antes');
-    Assert.IsTrue(EsperaEntregas(1, 5000), 'entregou antes do cancel');
+    TAssert.AssertTrue('entregou antes do cancel', EsperaEntregas(1, 5000));
 
     LCh.Cancel(LTag);
     LCh.PublishText('', 'q.cancel', 'depois');
     Sleep(300);
-    Assert.AreEqual(1, QuantasRecebidas, 'nada foi entregue apos o cancel');
+    TAssert.AssertEquals('nada foi entregue apos o cancel', 1, QuantasRecebidas);
     // E a mensagem continua na fila, esperando outro consumidor.
-    Assert.AreEqual('depois', LCh.BasicGet('q.cancel', True).BodyAsText,
-      'a mensagem ficou na fila');
+    TAssert.AssertEquals('a mensagem ficou na fila', 'depois', LCh.BasicGet('q.cancel', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -552,9 +547,9 @@ begin
 
     // Redeclare equivalente devolve as contagens de verdade.
     LOk := LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.cont'));
-    Assert.AreEqual('q.cont', LOk.QueueName, 'nome');
-    Assert.AreEqual(2, Integer(LOk.MessageCount), 'message-count');
-    Assert.AreEqual(0, Integer(LOk.ConsumerCount), 'consumer-count');
+    TAssert.AssertEquals('nome', 'q.cont', LOk.QueueName);
+    TAssert.AssertEquals('message-count', 2, Integer(LOk.MessageCount));
+    TAssert.AssertEquals('consumer-count', 0, Integer(LOk.ConsumerCount));
   finally
     LConn.Free;
   end;
@@ -572,8 +567,7 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.del'));
     LCh.PublishText('', 'q.del', 'a');
-    Assert.AreEqual(1, Integer(LCh.DeleteQueue(NovoDelete('q.del', False, False))),
-      'delete devolve quantas mensagens foram junto');
+    TAssert.AssertEquals('delete devolve quantas mensagens foram junto', 1, Integer(LCh.DeleteQueue(NovoDelete('q.del', False, False))));
 
     // Apagada de verdade: um consume nela agora e 404.
     LCodigo := 0;
@@ -583,7 +577,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(404, LCodigo, 'a fila sumiu mesmo');
+    TAssert.AssertEquals('a fila sumiu mesmo', 404, LCodigo);
   finally
     LConn.Free;
   end;
@@ -603,7 +597,7 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.orfa'));
     LCh.PublishText('', 'q.orfa', 'pendente');
     LGet := LCh.BasicGet('q.orfa', False); // com ack, e NAO vamos ackar
-    Assert.IsTrue(LGet.Found, 'buscou');
+    TAssert.AssertTrue('buscou', LGet.Found);
   finally
     LConn.Free; // conexao cai com a entrega em aberto
   end;
@@ -616,11 +610,10 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.orfa'));
     LGet := LCh.BasicGet('q.orfa', True);
-    Assert.IsTrue(LGet.Found, 'a nao-confirmada voltou para a fila');
-    Assert.AreEqual('pendente', LGet.BodyAsText, 'mesma mensagem');
-    Assert.IsTrue(LGet.Redelivered, 'marcada como reentrega');
-    Assert.IsFalse(LCh.BasicGet('q.orfa', True).Found,
-      'e voltou UMA vez, nao duas');
+    TAssert.AssertTrue('a nao-confirmada voltou para a fila', LGet.Found);
+    TAssert.AssertEquals('mesma mensagem', 'pendente', LGet.BodyAsText);
+    TAssert.AssertTrue('marcada como reentrega', LGet.Redelivered);
+    TAssert.AssertFalse('e voltou UMA vez, nao duas', LCh.BasicGet('q.orfa', True).Found);
   finally
     LConn.Free;
   end;
@@ -639,14 +632,12 @@ begin
     LCh := LConn.CreateChannel;
     LDecl := TAMQPQueueDeclare.Create('');
     LOk := LCh.DeclareQueue(LDecl);
-    Assert.IsTrue(LOk.QueueName <> '', 'o broker gerou um nome');
-    Assert.IsTrue(Pos('amq.gen-', LOk.QueueName) = 1,
-      'com o prefixo reservado do servidor');
+    TAssert.AssertTrue('o broker gerou um nome', LOk.QueueName <> '');
+    TAssert.AssertTrue('com o prefixo reservado do servidor', Pos('amq.gen-', LOk.QueueName) = 1);
 
     // E a fila gerada funciona.
     LCh.PublishText('', LOk.QueueName, 'anon');
-    Assert.AreEqual('anon',
-      LCh.BasicGet(LOk.QueueName, True).BodyAsText, 'entregou');
+    TAssert.AssertEquals('entregou', 'anon', LCh.BasicGet(LOk.QueueName, True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -682,7 +673,7 @@ begin
           LDecl := TAMQPQueueDeclare.Create('');
           LDecl.Exclusive := True;
           LNome := LConns[K].CreateChannel.DeclareQueue(LDecl).QueueName;
-          Assert.IsTrue(LNomes.IndexOf(LNome) < 0, 'nome gerado repetido entre conexoes: ' + LNome);
+          TAssert.AssertTrue('nome gerado repetido entre conexoes: ' + LNome, LNomes.IndexOf(LNome) < 0);
           LNomes.Add(LNome);
         end;
       finally
@@ -690,7 +681,7 @@ begin
         LConns[0].Free;
       end;
     end;
-    Assert.AreEqual(40, LNomes.Count, 'quarenta nomes distintos');
+    TAssert.AssertEquals('quarenta nomes distintos', 40, LNomes.Count);
   finally
     LNomes.Free;
   end;
@@ -711,9 +702,8 @@ begin
     // silencio (sem mandatory nao ha Basic.Return -- isso e' WS6).
     LCh.PublishText('ex.sem.bind', 'nada', 'perdida');
     Sleep(100);
-    Assert.IsTrue(LCh.IsOpen, 'publish sem rota nao fecha o canal');
-    Assert.IsTrue(FBroker.Engine.UnroutedCount >= 1,
-      'e o broker contabiliza a publicacao sem rota');
+    TAssert.AssertTrue('publish sem rota nao fecha o canal', LCh.IsOpen);
+    TAssert.AssertTrue('e o broker contabiliza a publicacao sem rota', FBroker.Engine.UnroutedCount >= 1);
   finally
     LConn.Free;
   end;
@@ -721,7 +711,7 @@ end;
 
 { --- TErrorTableTests --- }
 
-procedure TErrorTableTests.Setup;
+procedure TErrorTableTests.SetUp;
 begin
   FBroker := NovoBroker;
 end;
@@ -759,7 +749,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(404, LCodigo, 'consume de fila inexistente e 404');
+    TAssert.AssertEquals('consume de fila inexistente e 404', 404, LCodigo);
   finally
     LConn.Free;
   end;
@@ -782,7 +772,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(404, LCodigo, 'get de fila inexistente e 404');
+    TAssert.AssertEquals('get de fila inexistente e 404', 404, LCodigo);
   finally
     LConn.Free;
   end;
@@ -805,7 +795,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(404, LCodigo, 'bind com fila inexistente e 404');
+    TAssert.AssertEquals('bind com fila inexistente e 404', 404, LCodigo);
   finally
     LConn.Free;
   end;
@@ -828,8 +818,7 @@ begin
     LDeadline := PcTickMs + 3000;
     while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
-    Assert.IsFalse(LCh.IsOpen,
-      'publish em exchange inexistente fecha o canal');
+    TAssert.AssertFalse('publish em exchange inexistente fecha o canal', LCh.IsOpen);
     LCodigo := 0;
     try
       LCh.BasicGet('qualquer', True); // canal morto: a lib levanta
@@ -837,7 +826,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := 1;
     end;
-    Assert.AreEqual(1, LCodigo, 'e o canal fica inutilizavel');
+    TAssert.AssertEquals('e o canal fica inutilizavel', 1, LCodigo);
   finally
     LConn.Free;
   end;
@@ -863,7 +852,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(406, LCodigo, 'redeclare divergente e 406');
+    TAssert.AssertEquals('redeclare divergente e 406', 406, LCodigo);
   finally
     LConn.Free;
   end;
@@ -888,7 +877,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(406, LCodigo, 'if-empty com mensagem e 406');
+    TAssert.AssertEquals('if-empty com mensagem e 406', 406, LCodigo);
   finally
     LConn.Free;
   end;
@@ -913,7 +902,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(406, LCodigo, 'if-unused com consumidor e 406');
+    TAssert.AssertEquals('if-unused com consumidor e 406', 406, LCodigo);
   finally
     LConn.Free;
   end;
@@ -938,7 +927,7 @@ begin
     end;
     // Desvio deliberado do RabbitMQ (que usa 503 e derruba a CONEXAO):
     // aqui e' erro de canal. Ver CLAUDE.md.
-    Assert.AreEqual(406, LCodigo, 'tipo de exchange invalido e 406 de canal');
+    TAssert.AssertEquals('tipo de exchange invalido e 406 de canal', 406, LCodigo);
   finally
     LConn.Free;
   end;
@@ -961,7 +950,7 @@ begin
       on E: EAMQPChannel do
         LCodigo := CodigoDoErro(E.Message);
     end;
-    Assert.AreEqual(403, LCodigo, 'nome reservado e 403');
+    TAssert.AssertEquals('nome reservado e 403', 403, LCodigo);
   finally
     LConn.Free;
   end;
@@ -987,8 +976,7 @@ begin
     LDeadline := PcTickMs + 3000;
     while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
-    Assert.IsFalse(LCh.IsOpen,
-      'user-id diferente do usuario autenticado fecha o canal (403)');
+    TAssert.AssertFalse('user-id diferente do usuario autenticado fecha o canal (403)', LCh.IsOpen);
   finally
     LConn.Free;
   end;
@@ -1020,8 +1008,7 @@ begin
         on E: EAMQPChannel do
           LCodigo := CodigoDoErro(E.Message);
       end;
-      Assert.AreEqual(405, LCodigo,
-        'fila exclusiva de outra conexao e 405 RESOURCE_LOCKED');
+      TAssert.AssertEquals('fila exclusiva de outra conexao e 405 RESOURCE_LOCKED', 405, LCodigo);
     finally
       LConn2.Free;
     end;
@@ -1045,15 +1032,14 @@ begin
       on E: EAMQPChannel do
         ; // esperado: 404
     end;
-    Assert.IsFalse(LCh1.IsOpen, 'o canal ofensor morreu');
-    Assert.IsTrue(LConn.IsOpen, 'mas a conexao continua viva');
+    TAssert.AssertFalse('o canal ofensor morreu', LCh1.IsOpen);
+    TAssert.AssertTrue('mas a conexao continua viva', LConn.IsOpen);
 
     // E outro canal na mesma conexao funciona normalmente.
     LCh2 := LConn.CreateChannel;
     LCh2.DeclareQueue(TAMQPQueueDeclare.Create('q.depois'));
     LCh2.PublishText('', 'q.depois', 'ok');
-    Assert.AreEqual('ok', LCh2.BasicGet('q.depois', True).BodyAsText,
-      'canal novo opera normalmente');
+    TAssert.AssertEquals('canal novo opera normalmente', 'ok', LCh2.BasicGet('q.depois', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -1075,7 +1061,7 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.acked'));
     LCh.Consume('q.acked', OnDelivery, False); // o callback confirma
     LCh.PublishText('', 'q.acked', 'x');
-    Assert.IsTrue(EsperaEntregas(1, 5000), 'entregou');
+    TAssert.AssertTrue('entregou', EsperaEntregas(1, 5000));
     Sleep(300); // o ack ate a fila e' assincrono
   finally
     LConn.Free; // conexao cai DEPOIS do ack
@@ -1086,8 +1072,8 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.acked'));
-    Assert.IsFalse(LCh.BasicGet('q.acked', True).Found,
-      'mensagem confirmada nao volta para a fila quando a conexao cai');
+    TAssert.AssertFalse('mensagem confirmada nao volta para a fila quando a conexao cai',
+      LCh.BasicGet('q.acked', True).Found);
   finally
     LConn.Free;
   end;
@@ -1095,7 +1081,7 @@ end;
 
 { --- TConfirmTests --- }
 
-procedure TConfirmTests.Setup;
+procedure TConfirmTests.SetUp;
 begin
   FBroker := NovoBroker;
   FLock := TCriticalSection.Create;
@@ -1157,8 +1143,8 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.conf'));
     LCh.ConfirmSelect;
     LCh.PublishText('', 'q.conf', 'confirmada');
-    Assert.IsTrue(LCh.WaitForConfirms(5000),
-      'o broker confirmou o publish -- ate a WS5 isto expirava');
+    TAssert.AssertTrue('o broker confirmou o publish -- ate a WS5 isto expirava',
+      LCh.WaitForConfirms(5000));
   finally
     LConn.Free;
   end;
@@ -1177,11 +1163,11 @@ begin
     LCh.ConfirmSelect;
     // O seq-no e do CLIENTE; o teste garante que o broker confirma cada um
     // deles individualmente (a sequencia do broker tem de bater com a dele).
-    Assert.AreEqual(1, Integer(LCh.PublishText('', 'q.seq', 'a')), 'primeiro');
-    Assert.AreEqual(2, Integer(LCh.PublishText('', 'q.seq', 'b')), 'segundo');
-    Assert.AreEqual(3, Integer(LCh.PublishText('', 'q.seq', 'c')), 'terceiro');
-    Assert.IsTrue(LCh.WaitForConfirm(2, 5000), 'o seq-no 2 foi confirmado');
-    Assert.IsTrue(LCh.WaitForConfirms(5000), 'e o lote todo tambem');
+    TAssert.AssertEquals('primeiro', 1, Integer(LCh.PublishText('', 'q.seq', 'a')));
+    TAssert.AssertEquals('segundo', 2, Integer(LCh.PublishText('', 'q.seq', 'b')));
+    TAssert.AssertEquals('terceiro', 3, Integer(LCh.PublishText('', 'q.seq', 'c')));
+    TAssert.AssertTrue('o seq-no 2 foi confirmado', LCh.WaitForConfirm(2, 5000));
+    TAssert.AssertTrue('e o lote todo tambem', LCh.WaitForConfirms(5000));
   finally
     LConn.Free;
   end;
@@ -1202,8 +1188,8 @@ begin
     LCh.PublishText('ex.vazio', 'sem.bind', 'ninguem quer');
     // Sem rota NAO e falha: a mensagem foi tratada, entao leva ack (nack e
     // reservado a falha interna do broker).
-    Assert.IsTrue(LCh.WaitForConfirms(5000),
-      'publish sem rota tambem e confirmado');
+    TAssert.AssertTrue('publish sem rota tambem e confirmado',
+      LCh.WaitForConfirms(5000));
   finally
     LConn.Free;
   end;
@@ -1223,9 +1209,9 @@ begin
     LCh.ConfirmSelect;
     for I := 1 to 50 do
       LCh.PublishText('', 'q.lote', 'm' + IntToStr(I));
-    Assert.IsTrue(LCh.WaitForConfirms(10000), 'as 50 confirmadas');
-    Assert.AreEqual(50, Integer(LCh.DeleteQueue(NovoDelete('q.lote', False,
-      False))), 'e as 50 chegaram na fila');
+    TAssert.AssertTrue('as 50 confirmadas', LCh.WaitForConfirms(10000));
+    TAssert.AssertEquals('e as 50 chegaram na fila', 50,
+      Integer(LCh.DeleteQueue(NovoDelete('q.lote', False, False))));
   finally
     LConn.Free;
   end;
@@ -1246,11 +1232,11 @@ begin
     LCh.Publish('ex.mand', 'sem.bind', AmqpUtf8Encode('devolve'),
       TAMQPBasicProperties.Empty, True); // mandatory
 
-    Assert.IsTrue(EsperaDevolucoes(1, 5000), 'o broker devolveu a mensagem');
+    TAssert.AssertTrue('o broker devolveu a mensagem', EsperaDevolucoes(1, 5000));
     FLock.Enter;
     try
-      Assert.AreEqual('312:devolve', FDevolvidas[0],
-        'com NO_ROUTE e o corpo intacto');
+      TAssert.AssertEquals('com NO_ROUTE e o corpo intacto', '312:devolve',
+        FDevolvidas[0]);
     finally
       FLock.Leave;
     end;
@@ -1273,9 +1259,9 @@ begin
     LCh.Publish('', 'q.mand', AmqpUtf8Encode('tem rota'),
       TAMQPBasicProperties.Empty, True); // mandatory, mas COM rota
     Sleep(300);
-    Assert.AreEqual(0, QuantasDevolvidas, 'nada devolvido');
-    Assert.AreEqual('tem rota', LCh.BasicGet('q.mand', True).BodyAsText,
-      'a mensagem foi para a fila');
+    TAssert.AssertEquals('nada devolvido', 0, QuantasDevolvidas);
+    TAssert.AssertEquals('a mensagem foi para a fila', 'tem rota',
+      LCh.BasicGet('q.mand', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -1297,8 +1283,8 @@ begin
       AMQP_EXCHANGE_TYPE_DIRECT));
     LCh.Publish('ex.mand2', 'nada', AmqpUtf8Encode('x'),
       TAMQPBasicProperties.Empty, True);
-    Assert.IsTrue(EsperaDevolucoes(1, 5000),
-      'Basic.Return nao depende de confirm mode');
+    TAssert.AssertTrue('Basic.Return nao depende de confirm mode',
+      EsperaDevolucoes(1, 5000));
   finally
     LConn.Free;
   end;
@@ -1306,7 +1292,7 @@ end;
 
 { --- TLifecycleTests --- }
 
-procedure TLifecycleTests.Setup;
+procedure TLifecycleTests.SetUp;
 begin
   FBroker := NovoBroker;
 end;
@@ -1393,14 +1379,14 @@ begin
       LDecl := TAMQPQueueDeclare.Create('q.excl.vida');
       LDecl.Exclusive := True;
       LCh.DeclareQueue(LDecl);
-      Assert.IsTrue(FilaExiste(LDona, 'q.excl.vida'),
-        'a fila existe enquanto a dona vive');
+      TAssert.AssertTrue('a fila existe enquanto a dona vive',
+        FilaExiste(LDona, 'q.excl.vida'));
     finally
       LDona.Free; // a dona cai
     end;
 
-    Assert.IsTrue(EsperaFilaSumir(LOutra, 'q.excl.vida', 5000),
-      'fila exclusiva morre com a conexao dona');
+    TAssert.AssertTrue('fila exclusiva morre com a conexao dona',
+      EsperaFilaSumir(LOutra, 'q.excl.vida', 5000));
   finally
     LOutra.Free;
   end;
@@ -1428,8 +1414,8 @@ begin
         Free;
       end;
     Sleep(200);
-    Assert.IsTrue(FilaExiste(LConn, 'q.excl.viva'),
-      'so a conexao DONA leva a fila exclusiva embora');
+    TAssert.AssertTrue('so a conexao DONA leva a fila exclusiva embora',
+      FilaExiste(LConn, 'q.excl.viva'));
   finally
     LConn.Free;
   end;
@@ -1450,11 +1436,11 @@ begin
     LDecl.AutoDelete := True;
     LCh.DeclareQueue(LDecl);
     LTag := LCh.Consume('q.ad', OnDelivery, True);
-    Assert.IsTrue(FilaExiste(LConn, 'q.ad'), 'existe com consumidor');
+    TAssert.AssertTrue('existe com consumidor', FilaExiste(LConn, 'q.ad'));
 
     LCh.Cancel(LTag); // o Cancel-Ok volta so' depois do broker processar
-    Assert.IsFalse(FilaExiste(LConn, 'q.ad'),
-      'auto-delete some quando o ultimo consumidor sai');
+    TAssert.AssertFalse('auto-delete some quando o ultimo consumidor sai',
+      FilaExiste(LConn, 'q.ad'));
   finally
     LConn.Free;
   end;
@@ -1489,8 +1475,8 @@ begin
 
     // A fila nunca teve CONSUMIDOR, so' um Get: nao pode sumir, senao ela
     // desapareceria entre o declare e o primeiro consume.
-    Assert.IsTrue(FilaExiste(LConn, 'q.ad.virgem'),
-      'auto-delete que NUNCA teve consumidor nao some');
+    TAssert.AssertTrue('auto-delete que NUNCA teve consumidor nao some',
+      FilaExiste(LConn, 'q.ad.virgem'));
   finally
     LConn.Free;
   end;
@@ -1514,8 +1500,8 @@ begin
     LCh.Consume('q.ad2', OnDelivery, True); // segundo consumidor
 
     LCh.Cancel(LTag1);
-    Assert.IsTrue(FilaExiste(LConn, 'q.ad2'),
-      'ainda ha consumidor: a fila fica');
+    TAssert.AssertTrue('ainda ha consumidor: a fila fica',
+      FilaExiste(LConn, 'q.ad2'));
   finally
     LConn.Free;
   end;
@@ -1542,13 +1528,13 @@ begin
     try
       LDono.Open;
       LDono.CreateChannel.Consume('q.ad.queda', OnDelivery, True);
-      Assert.IsTrue(FilaExiste(LOutra, 'q.ad.queda'), 'existe com consumidor');
+      TAssert.AssertTrue('existe com consumidor', FilaExiste(LOutra, 'q.ad.queda'));
     finally
       LDono.Free; // o consumidor cai junto com a conexao
     end;
 
-    Assert.IsTrue(EsperaFilaSumir(LOutra, 'q.ad.queda', 5000),
-      'auto-delete some quando o ultimo consumidor CAI, nao so no cancel');
+    TAssert.AssertTrue('auto-delete some quando o ultimo consumidor CAI, nao so no cancel',
+      EsperaFilaSumir(LOutra, 'q.ad.queda', 5000));
   finally
     LOutra.Free;
   end;
@@ -1567,8 +1553,8 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.normal')); // sem auto-delete
     LTag := LCh.Consume('q.normal', OnDelivery, True);
     LCh.Cancel(LTag);
-    Assert.IsTrue(FilaExiste(LConn, 'q.normal'),
-      'fila comum nao some quando o consumidor sai');
+    TAssert.AssertTrue('fila comum nao some quando o consumidor sai',
+      FilaExiste(LConn, 'q.normal'));
   finally
     LConn.Free;
   end;
@@ -1590,7 +1576,7 @@ begin
     LCh.DeclareExchange(LDecl);
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ex.ad'));
     LCh.BindQueue(NovoBind('q.ex.ad', 'ex.ad', 'k'));
-    Assert.IsTrue(ExchangeExiste(LConn, 'ex.ad'), 'existe com binding');
+    TAssert.AssertTrue('existe com binding', ExchangeExiste(LConn, 'ex.ad'));
 
     LUnbind.QueueName := 'q.ex.ad';
     LUnbind.ExchangeName := 'ex.ad';
@@ -1598,8 +1584,8 @@ begin
     LUnbind.Arguments := nil;
     LCh.UnbindQueue(LUnbind);
 
-    Assert.IsFalse(ExchangeExiste(LConn, 'ex.ad'),
-      'exchange auto-delete some ao perder o ultimo binding');
+    TAssert.AssertFalse('exchange auto-delete some ao perder o ultimo binding',
+      ExchangeExiste(LConn, 'ex.ad'));
   finally
     LConn.Free;
   end;
@@ -1624,8 +1610,8 @@ begin
     // Apagar a FILA leva os bindings dela junto -- e o exchange fica orfao.
     LCh.DeleteQueue(NovoDelete('q.ex.ad2', False, False));
 
-    Assert.IsFalse(ExchangeExiste(LConn, 'ex.ad2'),
-      'o binding que sumiu com a fila tambem conta');
+    TAssert.AssertFalse('o binding que sumiu com a fila tambem conta',
+      ExchangeExiste(LConn, 'ex.ad2'));
   finally
     LConn.Free;
   end;
@@ -1656,13 +1642,12 @@ begin
     LUnbind.Arguments := nil;
     LCh.UnbindQueue(LUnbind);
 
-    Assert.IsTrue(ExchangeExiste(LConn, 'ex.ad3'),
-      'ainda ha um binding: o exchange fica');
+    TAssert.AssertTrue('ainda ha um binding: o exchange fica',
+      ExchangeExiste(LConn, 'ex.ad3'));
   finally
     LConn.Free;
   end;
 end;
-
 
 // WS2 da Fase 3: x-argument invalido no declare fecha o CANAL com 406, e a
 // conexao sobrevive -- mesma linha do tipo de exchange invalido.
@@ -1699,9 +1684,9 @@ begin
       // convencao do SetHeaders no publish).
       LArgs.Free;
     end;
-    Assert.AreEqual(406, LCodigo, 'x-max-priority fora da faixa e 406');
+    TAssert.AssertEquals('x-max-priority fora da faixa e 406', 406, LCodigo);
     // A conexao tem de continuar utilizavel: e' erro de canal, nao de conexao.
-    Assert.IsTrue(LConn.IsOpen, 'conexao sobrevive ao 406');
+    TAssert.AssertTrue('conexao sobrevive ao 406', LConn.IsOpen);
   finally
     LConn.Free;
   end;
@@ -1738,7 +1723,7 @@ begin
     finally
       LArgs.Free;
     end;
-    Assert.AreEqual(406, LCodigo, 'x-message-ttl como string e 406');
+    TAssert.AssertEquals('x-message-ttl como string e 406', 406, LCodigo);
   finally
     LConn.Free;
   end;
@@ -1773,7 +1758,7 @@ begin
     finally
       LArgs.Free;
     end;
-    Assert.AreEqual(406, LCodigo, 'x-overflow desconhecido e 406');
+    TAssert.AssertEquals('x-overflow desconhecido e 406', 406, LCodigo);
   finally
     LConn.Free;
   end;
@@ -1812,8 +1797,8 @@ begin
     finally
       LArgs.Free;
     end;
-    Assert.AreEqual('q.args.ok', LOk.QueueName, 'fila declarada');
-    Assert.IsTrue(LConn.IsOpen, 'conexao aberta');
+    TAssert.AssertEquals('fila declarada', 'q.args.ok', LOk.QueueName);
+    TAssert.AssertTrue('conexao aberta', LConn.IsOpen);
   finally
     LConn.Free;
   end;
@@ -1848,11 +1833,12 @@ begin
     finally
       LArgs.Free;
     end;
-    Assert.AreEqual(406, LCodigo, 'alternate-exchange com tipo errado e 406');
+    TAssert.AssertEquals('alternate-exchange com tipo errado e 406', 406, LCodigo);
   finally
     LConn.Free;
   end;
 end;
+
 
 // DELETE E' IDEMPOTENTE: apagar fila que nao existe devolve Delete-Ok com
 // contagem zero, e nao 404. A letra da spec manda levantar; o RabbitMQ deixou
@@ -1879,9 +1865,9 @@ begin
     LCh := LConn.CreateChannel;
     LDel := Default(TAMQPQueueDelete);
     LDel.QueueName := 'q.que.nunca.existiu';
-    Assert.AreEqual(Cardinal(0), LCh.DeleteQueue(LDel),
-      'delete de fila inexistente devolve 0, sem erro');
-    Assert.IsTrue(LConn.IsOpen, 'e o canal continua vivo');
+    TAssert.AssertEquals('delete de fila inexistente devolve 0, sem erro', 0,
+      Integer(LCh.DeleteQueue(LDel)));
+    TAssert.AssertTrue('e o canal continua vivo', LConn.IsOpen);
     LCh.Close;
     LCh.Free;
   finally
@@ -1928,7 +1914,7 @@ begin
   FPortao.WaitFor(60000); // rede: o teste sempre abre o portao no finally
 end;
 
-procedure TPoolIsolationTests.Setup;
+procedure TPoolIsolationTests.SetUp;
 begin
   FBroker := NovoBroker;
   FPortao := TEvent.Create(nil, True, False, '');
@@ -2000,8 +1986,8 @@ begin
   end;
   PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
   Inc(FEnfileirados);
-  Assert.IsTrue((PcAtomicGet(FPartiram) = PcPool.MaxWorkers) and (PcPool.QueueDepth > 0), Format('todo worker do PcPool roda um item nosso e sobra um na fila (partiram %d de %d, fila %d)',
-    [PcAtomicGet(FPartiram), PcPool.MaxWorkers, PcPool.QueueDepth]));
+  TAssert.AssertTrue(Format('todo worker do PcPool roda um item nosso e sobra um na fila (partiram %d de %d, fila %d)',
+    [PcAtomicGet(FPartiram), PcPool.MaxWorkers, PcPool.QueueDepth]), (PcAtomicGet(FPartiram) = PcPool.MaxWorkers) and (PcPool.QueueDepth > 0));
 end;
 
 procedure TPoolIsolationTests.SoltaPcPool;
@@ -2040,16 +2026,16 @@ begin
       LCh.PublishText('', 'q.pool', 'passou');
       LGet := LCh.BasicGet('q.pool', True);
       LGasto := PcTickMs - LInicio;
-      Assert.IsTrue(LGet.Found, 'o Get achou a mensagem');
-      Assert.AreEqual('passou', LGet.BodyAsText, 'corpo');
-      Assert.IsTrue(LGasto < 5000, 'sem esperar pelo PcPool (' + IntToStr(LGasto) + ' ms)');
+      TAssert.AssertTrue('o Get achou a mensagem', LGet.Found);
+      TAssert.AssertEquals('corpo', 'passou', LGet.BodyAsText);
+      TAssert.AssertTrue('sem esperar pelo PcPool (' + IntToStr(LGasto) + ' ms)', LGasto < 5000);
     finally
       LConn.Free;
     end;
   finally
     SoltaPcPool;
   end;
-  Assert.AreEqual(FEnfileirados, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
+  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnfileirados, PcAtomicGet(FSairam));
 end;
 
 procedure TPoolIsolationTests.PcPoolSaturado_FreeDoCanalEsperaOCallbackEnfileirado;
@@ -2082,8 +2068,8 @@ begin
         LDeadline := PcTickMs + 5000;
         while (PcPool.QueueDepth <= LFila) and (PcTickMs < LDeadline) do
           Sleep(5);
-        Assert.IsTrue(PcPool.QueueDepth > LFila, 'a entrega ficou na fila do PcPool');
-        Assert.AreEqual(0, PcAtomicGet(FEntregues), 'o callback ainda nao rodou (PcPool saturado)');
+        TAssert.AssertTrue('a entrega ficou na fila do PcPool', PcPool.QueueDepth > LFila);
+        TAssert.AssertEquals('o callback ainda nao rodou (PcPool saturado)', 0, PcAtomicGet(FEntregues));
         LAbridor := TAbrePortaoDepois.Create(FPortao, 1500);
         try
           LInicio := PcTickMs;
@@ -2093,8 +2079,8 @@ begin
           LAbridor.WaitFor;
           LAbridor.Free;
         end;
-        Assert.AreEqual(1, PcAtomicGet(FEntregues), 'o Free so voltou depois de o callback enfileirado rodar');
-        Assert.IsTrue(LGasto >= 1000, 'o Free esperou o PcPool andar (' + IntToStr(LGasto) + ' ms)');
+        TAssert.AssertEquals('o Free so voltou depois de o callback enfileirado rodar', 1, PcAtomicGet(FEntregues));
+        TAssert.AssertTrue('o Free esperou o PcPool andar (' + IntToStr(LGasto) + ' ms)', LGasto >= 1000);
       finally
         LCh.Free;
       end;
@@ -2104,7 +2090,7 @@ begin
   finally
     SoltaPcPool;
   end;
-  Assert.AreEqual(FEnfileirados, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
+  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnfileirados, PcAtomicGet(FSairam));
 end;
 
 procedure TPoolIsolationTests.PcPoolSaturado_CanalComThreadPropria_NaoDependeDoPcPool;
@@ -2131,11 +2117,11 @@ begin
         LDeadline := PcTickMs + 5000;
         while (PcAtomicGet(FEntregues) = 0) and (PcTickMs < LDeadline) do
           Sleep(5);
-        Assert.AreEqual(1, PcAtomicGet(FEntregues), 'a entrega rodou na thread do canal, com o PcPool saturado');
+        TAssert.AssertEquals('a entrega rodou na thread do canal, com o PcPool saturado', 1, PcAtomicGet(FEntregues));
         LInicio := PcTickMs;
         FreeAndNil(LCh);
         LGasto := PcTickMs - LInicio;
-        Assert.IsTrue(LGasto < 1000, 'e o Free nao esperou o PcPool (' + IntToStr(LGasto) + ' ms)');
+        TAssert.AssertTrue('e o Free nao esperou o PcPool (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
       finally
         LCh.Free;
       end;
@@ -2145,7 +2131,7 @@ begin
   finally
     SoltaPcPool;
   end;
-  Assert.AreEqual(FEnfileirados, PcAtomicGet(FSairam), 'todo item bloqueador saiu do PcPool');
+  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnfileirados, PcAtomicGet(FSairam));
 end;
 
 initialization
@@ -2154,6 +2140,5 @@ initialization
   TDUnitX.RegisterTestFixture(TConfirmTests);
   TDUnitX.RegisterTestFixture(TLifecycleTests);
   TDUnitX.RegisterTestFixture(TPoolIsolationTests);
-
 
 end.

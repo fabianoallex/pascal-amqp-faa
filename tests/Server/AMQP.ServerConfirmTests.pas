@@ -29,15 +29,16 @@
   As tres funcoes Checa* existem para os corpos dos testes serem IDENTICOS nos
   dois dialetos: so' a implementacao delas muda de lado. }
 
-{ Espelho FPCUnit de tests\Server\fpc\AMQP.ServerConfirmTests.pas -- mantenha
-  os dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+{ Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
+  AMQP.DUnitXCompat,
+  SysUtils, Classes,
   AMQP.Protocol,
   AMQP.Frame,
   AMQP.Wire,
@@ -67,46 +68,45 @@ type
     /// chame uma vez so', no fim do teste.
     function Confirms: TArray<TConfirmLido>;
   public
-    [Setup]    procedure SetUp;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-
-    [Test] procedure SemLsnESemPendente_NaoAdia;
-    [Test] procedure ComLsn_Adia_ESoSaiDepoisDaMarca;
-    [Test] procedure TransienteAtrasDePersistente_Espera;
-    [Test] procedure VariosPersistentes_SaemNumAckSoComMultiple;
-    [Test] procedure MarcaParcial_LiberaSoOPrefixo;
-    [Test] procedure Nack_SaiSozinho_ECortaOColapso;
-    [Test] procedure JournalFalho_TudoPendenteViraNack;
-    [Test] procedure CanalMorto_NaoEscreveNada;
-    [Test] procedure SaidaCheia_NaoBloqueiaQuemLibera;
+     [Test] procedure SemLsnESemPendente_NaoAdia;
+     [Test] procedure ComLsn_Adia_ESoSaiDepoisDaMarca;
+     [Test] procedure TransienteAtrasDePersistente_Espera;
+     [Test] procedure VariosPersistentes_SaemNumAckSoComMultiple;
+     [Test] procedure MarcaParcial_LiberaSoOPrefixo;
+     [Test] procedure Nack_SaiSozinho_ECortaOColapso;
+     [Test] procedure JournalFalho_TudoPendenteViraNack;
+     [Test] procedure CanalMorto_NaoEscreveNada;
+     [Test] procedure SaidaCheia_NaoBloqueiaQuemLibera;
   end;
 
   { O registro: a ponte entre a thread do journal e os canais. }
   [TestFixture]
   TConfirmRegistryTests = class
   public
-    [Test] procedure Durable_LiberaTodosOsRastreadores;
-    [Test] procedure Unregister_ParaDeAvisar;
-    [Test] procedure Watermark_AcompanhaOUltimoDurable;
+     [Test] procedure Durable_LiberaTodosOsRastreadores;
+     [Test] procedure Unregister_ParaDeAvisar;
+     [Test] procedure Watermark_AcompanhaOUltimoDurable;
   end;
 
 implementation
 
-// As tres pontes para as assercoes do dialeto. Existem para os corpos dos
-// testes serem IDENTICOS nos dois espelhos: so' estas tres mudam de lado.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaOk(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsTrue(ACond, AMsg);
+  TAssert.AssertTrue(AMsg, ACond);
 end;
 
 procedure ChecaNao(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsFalse(ACond, AMsg);
+  TAssert.AssertFalse(AMsg, ACond);
 end;
 
 function LeConfirms(const AFrames: TArray<TAMQPFrame>): TArray<TConfirmLido>;

@@ -24,6 +24,7 @@
             <Filename Value="AMQPServerTestsFpc"/>
           </Target>
           <SearchPaths>
+            <OtherUnitFiles Value="..\.."/>
             <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
           </SearchPaths>
           <Parsing>
@@ -98,7 +99,7 @@
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
-        <Filename Value="AMQP.ServerTestDoubles.pas"/>
+        <Filename Value="..\..\AMQP.ServerTestDoubles.pas"/>
         <IsPartOfProject Value="True"/>
       </Unit>
       <Unit>
@@ -122,6 +123,7 @@
       <Filename Value="AMQPServerTestsFpc"/>
     </Target>
     <SearchPaths>
+      <OtherUnitFiles Value="..\.."/>
       <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
     </SearchPaths>
     <Parsing>

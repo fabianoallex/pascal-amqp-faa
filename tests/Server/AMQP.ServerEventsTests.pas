@@ -40,17 +40,14 @@
   As quatro funcoes Checa* existem para os corpos dos testes serem IDENTICOS
   nos dois dialetos: so' a implementacao delas muda de lado. }
 
-{ Espelho DUnitX de tests\Server\fpc\AMQP.ServerEventsTests.pas -- mantenha
-  os dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.SyncObjs,
-  System.IOUtils,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes, SyncObjs,
   PascalCommon.Threading,
   PascalCommon.ThreadPool,
   AMQP.Wire,
@@ -107,7 +104,7 @@ type
     FBus: TAMQPEventBus;
     FCap: TCaptura;
   public
-    [Setup] procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
     [Test] procedure SemAssinante_NaoQuerNenhumTipo;
     [Test] procedure Assinatura_FiltraPorTipo;
@@ -130,7 +127,7 @@ type
     procedure ConsumidorDeTeste(AChannel: TAMQPChannel;
       const ADelivery: TAMQPDelivery);
   public
-    [Setup] procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
     [Test] procedure Conexao_EmiteEstabelecidaEAutenticada;
     [Test] procedure Canal_EmiteAberturaEFechamento;
@@ -150,34 +147,34 @@ type
 
 implementation
 
-// As quatro pontes para as assercoes do dialeto. Existem para os corpos dos
-// testes serem IDENTICOS nos dois espelhos: so' estas quatro mudam de lado.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaStr(const AMsg: string; const AEsperado, AObtido: string);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaOk(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsTrue(ACond, AMsg);
+  TAssert.AssertTrue(AMsg, ACond);
 end;
 
 procedure ChecaNao(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsFalse(ACond, AMsg);
+  TAssert.AssertFalse(AMsg, ACond);
 end;
 
 // RTL por dialeto (regra do CLAUDE.md): o corpo dos testes e' compartilhado,
 // mas tudo que chama a RTL tem de ser escrito de cada lado. Aqui e' o
-// TPath.GetTempPath do Delphi contra o GetTempDir do FPC.
+// GetTempDir do FPC contra o TPath.GetTempPath do Delphi.
 function DirTempDeTeste: string;
 begin
-  Result := IncludeTrailingPathDelimiter(TPath.GetTempPath) + 'amqpobs-'
+  Result := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpobs-'
     + FormatDateTime('yyyymmddhhnnsszzz', Now);
 end;
 

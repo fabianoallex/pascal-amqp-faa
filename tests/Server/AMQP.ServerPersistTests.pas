@@ -13,17 +13,17 @@
   ASCII sairia transcodificado e ninguem perceberia ate' a recuperacao entregar
   lixo. O teste varre os 256 valores de byte, inclusive o zero.
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerPersistTests.pas -- mantenha
-  os dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.Rtti,
-  System.IOUtils,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes, Rtti,
   AMQP.Wire,
   AMQP.Exchange.Methods,
   AMQP.Basic.Methods,
@@ -52,7 +52,10 @@ type
   { Sobe um broker com DataDir proprio, publica com o cliente de verdade e
     depois le' o WAL. E' o unico jeito honesto de testar a fiacao: os registros
     so' aparecem se o publish REAL atravessou a engine, a fila e o journal. }
-  TPersistFixture = class(TObject)
+
+  
+  [TestFixture]
+  TPersistWiringTests = class
   protected
     FBroker: TAMQPServer;
     FConn: TAMQPConnection;
@@ -80,21 +83,8 @@ type
     /// True se a fila existe (passive declare num canal descartavel).
     function FilaExiste(const AFila: string): Boolean;
   public
-    // PUBLIC, e nao protected: o DUnitX acha Setup/TearDown por RTTI, e o
-    // RTTI padrao do Delphi so publica metodos public e published. Numa
-    // secao protected os atributos existem no fonte, compilam, e simplesmente
-    // NUNCA SAO ENCONTRADOS -- a fixture roda com todos os campos nil. Foi o
-    // que aconteceu aqui: os [Test] (public) foram achados e executados, o
-    // [Setup] (protected) nao, e as 11 asserções morreram em access violation
-    // lendo nil+0x0C. Os helpers acima podem ficar protected: eles sao
-    // chamados por codigo Pascal comum, que nao passa por RTTI.
-    [Setup]    procedure SetUp;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-  end;
-
-  [TestFixture]
-  TPersistWiringTests = class(TPersistFixture)
-  public
     [Test] procedure Persistente_EmFilaDuravel_GravaConteudoEColocacao;
     [Test] procedure Transiente_EmFilaDuravel_NaoGravaNada;
     [Test] procedure Persistente_EmFilaTransiente_NaoGravaNada;
@@ -123,23 +113,24 @@ type
 
 implementation
 
-// Ponte para a assercao do dialeto (mesma ideia de AMQP.ServerConfirmTests).
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaOk(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsTrue(ACond, AMsg);
+  TAssert.AssertTrue(AMsg, ACond);
 end;
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 procedure ChecaStr(const AMsg, AEsperado, AObtido: string);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaNao(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsFalse(ACond, AMsg);
+  TAssert.AssertFalse(AMsg, ACond);
 end;
 
 function BytesIguais(const A, B: TBytes): Boolean;
@@ -178,10 +169,10 @@ begin
   R.UserId := 'guest';
   R.Body := LB;
   R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
-  Assert.AreEqual(Int64($0102030405060708), Int64(R2.ContentId),
-    'content-id de 64 bits');
-  Assert.AreEqual('guest', R2.UserId, 'user-id');
-  Assert.IsTrue(BytesIguais(LB, R2.Body), 'corpo igual');
+  TAssert.AssertEquals('content-id de 64 bits', Int64($0102030405060708),
+    Int64(R2.ContentId));
+  TAssert.AssertEquals('user-id', 'guest', R2.UserId);
+  TAssert.AssertTrue('corpo igual', BytesIguais(LB, R2.Body));
 end;
 
 procedure TDataRecordTests.Content_CorpoBinarioSobreviveIntacto;
@@ -197,9 +188,9 @@ begin
   R.UserId := '';
   R.Body := LB;
   R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
-  Assert.AreEqual(256, Integer(Length(R2.Body)), '256 bytes de volta');
-  Assert.IsTrue(BytesIguais(LB, R2.Body),
-    'todos os 256 valores de byte sobrevivem');
+  TAssert.AssertEquals('256 bytes de volta', 256, Length(R2.Body));
+  TAssert.AssertTrue('todos os 256 valores de byte sobrevivem',
+    BytesIguais(LB, R2.Body));
 end;
 
 procedure TDataRecordTests.Content_CorpoBinario_NaoDependeDoCodepageDaApp;
@@ -237,9 +228,9 @@ begin
     DefaultSystemCodePage := LCpAntes;
   end;
   {$ENDIF}
-  Assert.AreEqual(256, Integer(Length(R2.Body)), '256 bytes de volta');
-  Assert.IsTrue(BytesIguais(LB, R2.Body),
-    'o corpo nao depende do codepage da app');
+  TAssert.AssertEquals('256 bytes de volta', 256, Length(R2.Body));
+  TAssert.AssertTrue('o corpo nao depende do codepage da app',
+    BytesIguais(LB, R2.Body));
 end;
 
 procedure TDataRecordTests.Content_CorpoVazio;
@@ -251,8 +242,8 @@ begin
   R.UserId := 'u';
   R.Body := nil;
   R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
-  Assert.AreEqual(0, Integer(Length(R2.Body)), 'corpo vazio continua vazio');
-  Assert.AreEqual(Int64(7), Int64(R2.ContentId), 'e o resto sobrevive');
+  TAssert.AssertEquals('corpo vazio continua vazio', 0, Length(R2.Body));
+  TAssert.AssertEquals('e o resto sobrevive', Int64(7), Int64(R2.ContentId));
 end;
 
 procedure TDataRecordTests.Enqueue_RoundTrip;
@@ -274,17 +265,16 @@ begin
   R.TtlMs := 60000;
   R.HeaderPayload := LH;
   R2 := AmqpDecodeRecEnqueue(AmqpEncodeRecEnqueue(R));
-  Assert.AreEqual('/', R2.VHost, 'vhost');
-  Assert.AreEqual('q.pedidos', R2.Queue, 'fila');
-  Assert.AreEqual(Int64(42), Int64(R2.EntryId), 'entry-id');
-  Assert.AreEqual(Int64(99), Int64(R2.ContentId), 'content-id');
-  Assert.AreEqual('ex.topico', R2.Exchange, 'exchange');
-  Assert.AreEqual('a.b', R2.RoutingKey, 'routing-key');
-  Assert.AreEqual(5, Integer(R2.Priority), 'prioridade');
-  Assert.AreEqual(Int64(1788533217385), R2.EnqueuedAtWall,
-    'instante de parede');
-  Assert.AreEqual(Int64(60000), R2.TtlMs, 'ttl');
-  Assert.IsTrue(BytesIguais(LH, R2.HeaderPayload), 'header igual');
+  TAssert.AssertEquals('vhost', '/', R2.VHost);
+  TAssert.AssertEquals('fila', 'q.pedidos', R2.Queue);
+  TAssert.AssertEquals('entry-id', Int64(42), Int64(R2.EntryId));
+  TAssert.AssertEquals('content-id', Int64(99), Int64(R2.ContentId));
+  TAssert.AssertEquals('exchange', 'ex.topico', R2.Exchange);
+  TAssert.AssertEquals('routing-key', 'a.b', R2.RoutingKey);
+  TAssert.AssertEquals('prioridade', 5, Integer(R2.Priority));
+  TAssert.AssertEquals('instante de parede', Int64(1788533217385), R2.EnqueuedAtWall);
+  TAssert.AssertEquals('ttl', Int64(60000), R2.TtlMs);
+  TAssert.AssertTrue('header igual', BytesIguais(LH, R2.HeaderPayload));
 end;
 
 procedure TDataRecordTests.Enqueue_TtlAusenteSobreviveComoMenosUm;
@@ -305,7 +295,7 @@ begin
   R.TtlMs := -1;
   R.HeaderPayload := nil;
   R2 := AmqpDecodeRecEnqueue(AmqpEncodeRecEnqueue(R));
-  Assert.AreEqual(Int64(-1), R2.TtlMs, 'ttl -1 continua -1');
+  TAssert.AssertEquals('ttl -1 continua -1', Int64(-1), R2.TtlMs);
 end;
 
 procedure TDataRecordTests.Enqueue_HeaderBinarioSobreviveIntacto;
@@ -326,7 +316,7 @@ begin
   R.TtlMs := -1;
   R.HeaderPayload := LH;
   R2 := AmqpDecodeRecEnqueue(AmqpEncodeRecEnqueue(R));
-  Assert.IsTrue(BytesIguais(LH, R2.HeaderPayload), 'header binario intacto');
+  TAssert.AssertTrue('header binario intacto', BytesIguais(LH, R2.HeaderPayload));
 end;
 
 procedure TDataRecordTests.Dequeue_RoundTrip;
@@ -337,22 +327,21 @@ begin
   R.Queue := 'q.morta';
   R.EntryId := $FFFFFFFFFFFFFFF;
   R2 := AmqpDecodeRecDequeue(AmqpEncodeRecDequeue(R));
-  Assert.AreEqual('/vh', R2.VHost, 'vhost');
-  Assert.AreEqual('q.morta', R2.Queue, 'fila');
-  Assert.AreEqual(Int64($FFFFFFFFFFFFFFF), Int64(R2.EntryId),
-    'entry-id grande');
+  TAssert.AssertEquals('vhost', '/vh', R2.VHost);
+  TAssert.AssertEquals('fila', 'q.morta', R2.Queue);
+  TAssert.AssertEquals('entry-id grande', Int64($FFFFFFFFFFFFFFF),
+    Int64(R2.EntryId));
 end;
 
 procedure TDataRecordTests.KindsDeDados_SaoReconhecidos;
 begin
-  Assert.IsTrue(AmqpIsDataRecord(AMQP_REC_CONTENT), 'conteudo');
-  Assert.IsTrue(AmqpIsDataRecord(AMQP_REC_ENQUEUE), 'colocacao');
-  Assert.IsTrue(AmqpIsDataRecord(AMQP_REC_DEQUEUE), 'aposentadoria');
+  TAssert.AssertTrue('conteudo', AmqpIsDataRecord(AMQP_REC_CONTENT));
+  TAssert.AssertTrue('colocacao', AmqpIsDataRecord(AMQP_REC_ENQUEUE));
+  TAssert.AssertTrue('aposentadoria', AmqpIsDataRecord(AMQP_REC_DEQUEUE));
   // Os dois conjuntos nao podem se cruzar: e' o que separa os passes da
   // recuperacao (WS6).
-  Assert.IsFalse(AmqpIsDataRecord(AMQP_REC_QUEUE_DECLARE),
-    'topologia nao e dado');
-  Assert.IsFalse(AmqpIsTopoRecord(AMQP_REC_ENQUEUE), 'dado nao e topologia');
+  TAssert.AssertFalse('topologia nao e dado', AmqpIsDataRecord(AMQP_REC_QUEUE_DECLARE));
+  TAssert.AssertFalse('dado nao e topologia', AmqpIsTopoRecord(AMQP_REC_ENQUEUE));
 end;
 
 
@@ -368,10 +357,10 @@ begin
     try
       repeat
         if (LRec.Attr and faDirectory) = 0 then
-          System.SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+          DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
       until FindNext(LRec) <> 0;
     finally
-      System.SysUtils.FindClose(LRec);
+      FindClose(LRec);
     end;
   end;
 end;
@@ -433,13 +422,12 @@ begin
   end;
 end;
 
-{ TPersistFixture }
+{ TPersistWiringTests: ajudantes e SetUp/TearDown }
 
-procedure TPersistFixture.SetUp;
+procedure TPersistWiringTests.SetUp;
 begin
-  
   Inc(GSeq);
-  FDir := IncludeTrailingPathDelimiter(TPath.GetTempPath) + 'amqppersist-'
+  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqppersist-'
     + IntToStr(GSeq);
   ForceDirectories(FDir);
   LimpaDir(FDir);
@@ -448,7 +436,7 @@ begin
   AbreBroker;
 end;
 
-procedure TPersistFixture.TearDown;
+procedure TPersistWiringTests.TearDown;
 begin
   if FConn <> nil then
   begin
@@ -467,10 +455,9 @@ begin
     FreeAndNil(FBroker);
   end;
   LimpaDir(FDir);
-  
 end;
 
-function TPersistFixture.DeclaraFila(const ANome: string; ADurable: Boolean;
+function TPersistWiringTests.DeclaraFila(const ANome: string; ADurable: Boolean;
   AArgs: TAMQPFieldTable): string;
 var
   LDecl: TAMQPQueueDeclare;
@@ -480,7 +467,7 @@ begin
   Result := FChan.DeclareQueue(LDecl).QueueName;
 end;
 
-function TPersistFixture.FechaELeWal: TStringList;
+function TPersistWiringTests.FechaELeWal: TStringList;
 begin
   FConn.Close;
   FreeAndNil(FConn);
@@ -489,7 +476,7 @@ begin
   Result := LeWal(FDir);
 end;
 
-function TPersistFixture.Conta(L: TStringList;
+function TPersistWiringTests.Conta(L: TStringList;
   const APrefixo: string): Integer;
 var
   I: Integer;
@@ -500,7 +487,7 @@ begin
       Inc(Result);
 end;
 
-function TPersistFixture.Indice(L: TStringList;
+function TPersistWiringTests.Indice(L: TStringList;
   const APrefixo: string): Integer;
 var
   I: Integer;
@@ -522,9 +509,9 @@ begin
   FChan.PublishText('', 'q.dur', 'carga', True);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'content:'), 'um conteudo');
-    Assert.AreEqual(1, Conta(L, 'enqueue:q.dur:'), 'uma colocacao na fila');
-    Assert.AreEqual(0, Conta(L, 'dequeue:'), 'e nada foi aposentado');
+    TAssert.AssertEquals('um conteudo', 1, Conta(L, 'content:'));
+    TAssert.AssertEquals('uma colocacao na fila', 1, Conta(L, 'enqueue:q.dur:'));
+    TAssert.AssertEquals('e nada foi aposentado', 0, Conta(L, 'dequeue:'));
   finally
     L.Free;
   end;
@@ -539,8 +526,8 @@ begin
   FChan.PublishText('', 'q.dur', 'carga', False);
   L := FechaELeWal;
   try
-    Assert.AreEqual(0, Conta(L, 'content:'), 'nenhum conteudo');
-    Assert.AreEqual(0, Conta(L, 'enqueue:'), 'nenhuma colocacao');
+    TAssert.AssertEquals('nenhum conteudo', 0, Conta(L, 'content:'));
+    TAssert.AssertEquals('nenhuma colocacao', 0, Conta(L, 'enqueue:'));
   finally
     L.Free;
   end;
@@ -556,8 +543,8 @@ begin
   FChan.PublishText('', 'q.tra', 'carga', True);
   L := FechaELeWal;
   try
-    Assert.AreEqual(0, Conta(L, 'content:'), 'nenhum conteudo');
-    Assert.AreEqual(0, Conta(L, 'enqueue:'), 'nenhuma colocacao');
+    TAssert.AssertEquals('nenhum conteudo', 0, Conta(L, 'content:'));
+    TAssert.AssertEquals('nenhuma colocacao', 0, Conta(L, 'enqueue:'));
   finally
     L.Free;
   end;
@@ -585,9 +572,9 @@ begin
   FChan.PublishText('ex.fan', '', 'carga', True);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'content:'), 'UM conteudo para as duas filas');
-    Assert.AreEqual(1, Conta(L, 'enqueue:q.a:'), 'colocacao na q.a');
-    Assert.AreEqual(1, Conta(L, 'enqueue:q.b:'), 'colocacao na q.b');
+    TAssert.AssertEquals('UM conteudo para as duas filas', 1, Conta(L, 'content:'));
+    TAssert.AssertEquals('colocacao na q.a', 1, Conta(L, 'enqueue:q.a:'));
+    TAssert.AssertEquals('colocacao na q.b', 1, Conta(L, 'enqueue:q.b:'));
   finally
     L.Free;
   end;
@@ -601,14 +588,13 @@ begin
   DeclaraFila('q.dur', True);
   FChan.PublishText('', 'q.dur', 'carga', True);
   LGet := FChan.BasicGet('q.dur', False); // modo ack
-  Assert.IsTrue(LGet.Found,
-      'achou a mensagem');
+  TAssert.AssertTrue('achou a mensagem', LGet.Found);
   FChan.Ack(LGet.DeliveryTag);
   Sleep(300); // o ack viaja e o ator ainda tem de processa-lo
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'enqueue:q.dur:'), 'a colocacao existiu');
-    Assert.AreEqual(1, Conta(L, 'dequeue:q.dur:'), 'e foi aposentada no ack');
+    TAssert.AssertEquals('a colocacao existiu', 1, Conta(L, 'enqueue:q.dur:'));
+    TAssert.AssertEquals('e foi aposentada no ack', 1, Conta(L, 'dequeue:q.dur:'));
   finally
     L.Free;
   end;
@@ -623,11 +609,10 @@ begin
   DeclaraFila('q.dur', True);
   FChan.PublishText('', 'q.dur', 'carga', True);
   LGet := FChan.BasicGet('q.dur', True); // no-ack
-  Assert.IsTrue(LGet.Found,
-      'achou a mensagem');
+  TAssert.AssertTrue('achou a mensagem', LGet.Found);
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'dequeue:q.dur:'), 'aposentada sem precisar de ack');
+    TAssert.AssertEquals('aposentada sem precisar de ack', 1, Conta(L, 'dequeue:q.dur:'));
   finally
     L.Free;
   end;
@@ -659,16 +644,16 @@ begin
 
   L := FechaELeWal;
   try
-    Assert.AreEqual(1, Conta(L, 'enqueue:q.src:'), 'a colocacao original');
-    Assert.AreEqual(1, Conta(L, 'enqueue:q.dlq:'), 'a colocacao na fila morta');
-    Assert.AreEqual(1, Conta(L, 'content:'), 'o corpo NAO foi reescrito');
-    Assert.AreEqual(1, Conta(L, 'dequeue:q.src:'), 'a original foi aposentada');
+    TAssert.AssertEquals('a colocacao original', 1, Conta(L, 'enqueue:q.src:'));
+    TAssert.AssertEquals('a colocacao na fila morta', 1, Conta(L, 'enqueue:q.dlq:'));
+    TAssert.AssertEquals('o corpo NAO foi reescrito', 1, Conta(L, 'content:'));
+    TAssert.AssertEquals('a original foi aposentada', 1, Conta(L, 'dequeue:q.src:'));
 
     LIdxNova := Indice(L, 'enqueue:q.dlq:');
     LIdxVelha := Indice(L, 'dequeue:q.src:');
-    Assert.IsTrue((LIdxNova >= 0) and (LIdxVelha >= 0) and (LIdxNova < LIdxVelha),
-      'a colocacao nova aparece ANTES da aposentadoria da velha '
-      + '(D23: falhar no meio produz duplicata, nunca perda)');
+    TAssert.AssertTrue('a colocacao nova aparece ANTES da aposentadoria da velha '
+      + '(D23: falhar no meio produz duplicata, nunca perda)',
+      (LIdxNova >= 0) and (LIdxVelha >= 0) and (LIdxNova < LIdxVelha));
   finally
     L.Free;
   end;
@@ -763,7 +748,7 @@ begin
   ChecaOk('os 100 confirmaram', FChan.WaitForConfirms(20000));
 end;
 
-procedure TPersistFixture.AbreBroker;
+procedure TPersistWiringTests.AbreBroker;
 var
   LParams: TAMQPConnectionParams;
 begin
@@ -781,7 +766,7 @@ begin
   FChan := FConn.CreateChannel;
 end;
 
-procedure TPersistFixture.Reabre;
+procedure TPersistWiringTests.Reabre;
 begin
   FChan := nil; // o destrutor da conexao recolhe os canais registrados
   if FConn <> nil then
@@ -797,7 +782,7 @@ begin
   AbreBroker;
 end;
 
-function TPersistFixture.TamanhoDoWal: Int64;
+function TPersistWiringTests.TamanhoDoWal: Int64;
 var
   LSegs: TArray<Cardinal>;
   I: Integer;
@@ -818,7 +803,7 @@ begin
   end;
 end;
 
-procedure TPersistFixture.PublicaComPrioridade(const AFila, ACorpo: string;
+procedure TPersistWiringTests.PublicaComPrioridade(const AFila, ACorpo: string;
   APrio: Byte);
 var
   LProps: TAMQPBasicProperties;
@@ -829,7 +814,7 @@ begin
   FChan.Publish('', AFila, AmqpUtf8Encode(ACorpo), LProps);
 end;
 
-function TPersistFixture.FilaExiste(const AFila: string): Boolean;
+function TPersistWiringTests.FilaExiste(const AFila: string): Boolean;
 var
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;

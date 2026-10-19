@@ -16,18 +16,20 @@
   callback voltar, entao o teste espera pelo span (EsperaSpan), nunca pelo
   callback.
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerTracingTests.pas -- mantenha os
-  dois em sincronia (mesmos nomes de teste, mesmas assercoes). }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.Rtti,
-  System.SyncObjs,
-  System.Generics.Collections,
+  AMQP.DUnitXCompat,
+  SysUtils,
+  Classes,
+  Rtti,
+  SyncObjs,
+  Generics.Collections,
   AMQP.Wire,
   AMQP.Queue.Methods,
   AMQP.Basic.Methods,
@@ -78,7 +80,7 @@ type
     function SpanCom(const AName, AKey, AValue: string): TPcSpanData;
     function TraceParentVisto: string;
   public
-    [Setup]    procedure Setup;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
     [Test] procedure PublishEProcess_NaTraceDoSpanCorrente;
     [Test] procedure Consumidor_VeOTraceParentDoPublish;
@@ -205,7 +207,7 @@ end;
 
 { --- TTracingTests --- }
 
-procedure TTracingTests.Setup;
+procedure TTracingTests.SetUp;
 begin
   FBroker := NovoBroker;
   FLock := TCriticalSection.Create;
@@ -307,7 +309,7 @@ var
 begin
   LSpans := FColetor.ComNome(AName);
   if AIndex > High(LSpans) then
-    Assert.Fail('sem o span ' + AName + ' #' + IntToStr(AIndex));
+    TAssert.Fail('sem o span ' + AName + ' #' + IntToStr(AIndex));
   Result := LSpans[AIndex];
 end;
 
@@ -320,7 +322,7 @@ begin
   for I := 0 to High(LSpans) do
     if Attr(LSpans[I], AKey) = AValue then
       Exit(LSpans[I]);
-  Assert.Fail('sem o span ' + AName + ' com ' + AKey + '=' + AValue);
+  TAssert.Fail('sem o span ' + AName + ' com ' + AKey + '=' + AValue);
 end;
 
 procedure TTracingTests.PublishEProcess_NaTraceDoSpanCorrente;
@@ -348,26 +350,27 @@ begin
       LPai := nil;
     end;
 
-    Assert.IsTrue(EsperaSpans('process q.trace', 1, 5000), 'o process terminou');
+    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.trace', 1, 5000));
     LPub := Span('publish amq.default');
     LProc := Span('process q.trace');
 
-    Assert.AreEqual(LTraceId, LPub.TraceId, 'publish na trace do pai');
-    Assert.AreEqual(LPaiId, LPub.ParentSpanId, 'publish filho do pai');
-    Assert.IsTrue(LPub.Kind = skProducer, 'publish e producer');
-    Assert.AreEqual(LTraceId, LProc.TraceId, 'process na mesma trace');
-    Assert.AreEqual(LPub.SpanId, LProc.ParentSpanId, 'process filho do publish');
-    Assert.IsTrue(LProc.Kind = skConsumer, 'process e consumer');
+    TAssert.AssertEquals('publish na trace do pai', LTraceId, LPub.TraceId);
+    TAssert.AssertEquals('publish filho do pai', LPaiId, LPub.ParentSpanId);
+    TAssert.AssertTrue('publish e producer', LPub.Kind = skProducer);
+    TAssert.AssertEquals('process na mesma trace', LTraceId, LProc.TraceId);
+    TAssert.AssertEquals('process filho do publish', LPub.SpanId, LProc.ParentSpanId);
+    TAssert.AssertTrue('process e consumer', LProc.Kind = skConsumer);
 
-    Assert.AreEqual('rabbitmq', Attr(LPub, 'messaging.system'), 'sistema');
-    Assert.AreEqual('send', Attr(LPub, 'messaging.operation.type'), 'operacao do publish');
-    Assert.AreEqual('q.trace', Attr(LPub, 'messaging.rabbitmq.destination.routing_key'), 'routing key');
-    Assert.AreEqual('2', Attr(LPub, 'messaging.message.body.size'), 'tamanho');
-    Assert.AreEqual(IntToStr(FBroker.Port), Attr(LPub, 'server.port'), 'porta');
-    Assert.AreEqual('process', Attr(LProc, 'messaging.operation.type'), 'operacao do process');
-    Assert.AreEqual('q.trace', Attr(LProc, 'messaging.destination.name'), 'fila');
-    Assert.AreEqual('1', Attr(LProc, 'messaging.rabbitmq.message.delivery_tag'), 'delivery tag');
-    Assert.IsTrue(LProc.Status <> ssError, 'sem erro');
+    TAssert.AssertEquals('sistema', 'rabbitmq', Attr(LPub, 'messaging.system'));
+    TAssert.AssertEquals('operacao do publish', 'send', Attr(LPub, 'messaging.operation.type'));
+    TAssert.AssertEquals('routing key', 'q.trace',
+      Attr(LPub, 'messaging.rabbitmq.destination.routing_key'));
+    TAssert.AssertEquals('tamanho', '2', Attr(LPub, 'messaging.message.body.size'));
+    TAssert.AssertEquals('porta', IntToStr(FBroker.Port), Attr(LPub, 'server.port'));
+    TAssert.AssertEquals('operacao do process', 'process', Attr(LProc, 'messaging.operation.type'));
+    TAssert.AssertEquals('fila', 'q.trace', Attr(LProc, 'messaging.destination.name'));
+    TAssert.AssertEquals('delivery tag', '1', Attr(LProc, 'messaging.rabbitmq.message.delivery_tag'));
+    TAssert.AssertTrue('sem erro', LProc.Status <> ssError);
   finally
     LConn.Free;
   end;
@@ -386,8 +389,9 @@ begin
     LCh.Consume('q.visto', AoEntregar, True);
     LCh.PublishText('', 'q.visto', 'oi');
 
-    Assert.IsTrue(EsperaSpans('process q.visto', 1, 5000), 'o process terminou');
-    Assert.AreEqual(TraceParentDe(Span('publish amq.default')), TraceParentVisto, 'o header traz o contexto do publish');
+    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.visto', 1, 5000));
+    TAssert.AssertEquals('o header traz o contexto do publish',
+      TraceParentDe(Span('publish amq.default')), TraceParentVisto);
   finally
     LConn.Free;
   end;
@@ -416,16 +420,18 @@ begin
       LProps := TAMQPBasicProperties.Empty;
       LProps.SetHeaders(LTabela);
       LCh.Publish('', 'q.app', AmqpUtf8Encode('oi'), LProps);
-      Assert.AreEqual(1, Integer(LTabela.Count), 'a tabela do chamador nao mudou');
+      TAssert.AssertEquals('a tabela do chamador nao mudou', 1, Integer(LTabela.Count));
     finally
       LTabela.Free;
     end;
 
-    Assert.IsTrue(EsperaSpans('process q.app', 1, 5000), 'o process terminou');
+    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.app', 1, 5000));
     LProc := Span('process q.app');
-    Assert.AreEqual(TP_DA_APLICACAO, TraceParentVisto, 'chegou o da aplicacao');
-    Assert.AreEqual('4bf92f3577b34da6a3ce929d0e0e4736', LProc.TraceId, 'process na trace da aplicacao');
-    Assert.AreEqual('00f067aa0ba902b7', LProc.ParentSpanId, 'process filho do span da aplicacao');
+    TAssert.AssertEquals('chegou o da aplicacao', TP_DA_APLICACAO, TraceParentVisto);
+    TAssert.AssertEquals('process na trace da aplicacao',
+      '4bf92f3577b34da6a3ce929d0e0e4736', LProc.TraceId);
+    TAssert.AssertEquals('process filho do span da aplicacao', '00f067aa0ba902b7',
+      LProc.ParentSpanId);
   finally
     LConn.Free;
   end;
@@ -448,14 +454,14 @@ begin
     LCh.Consume('q.b', AoEntregar, True);
     LCh.PublishText('', 'q.a', 'oi');
 
-    Assert.IsTrue(EsperaSpans('process q.b', 1, 5000), 'o process do repasse terminou');
+    TAssert.AssertTrue('o process do repasse terminou', EsperaSpans('process q.b', 1, 5000));
     LProcA := Span('process q.a');
     LPub2 := SpanCom('publish amq.default',
       'messaging.rabbitmq.destination.routing_key', 'q.b');
     LProcB := Span('process q.b');
-    Assert.AreEqual(LProcA.SpanId, LPub2.ParentSpanId, 'publish filho do process');
-    Assert.AreEqual(LPub2.SpanId, LProcB.ParentSpanId, 'process do repasse filho dele');
-    Assert.AreEqual(LProcA.TraceId, LProcB.TraceId, 'uma trace so');
+    TAssert.AssertEquals('publish filho do process', LProcA.SpanId, LPub2.ParentSpanId);
+    TAssert.AssertEquals('process do repasse filho dele', LPub2.SpanId, LProcB.ParentSpanId);
+    TAssert.AssertEquals('uma trace so', LProcA.TraceId, LProcB.TraceId);
   finally
     FRepassarPara := '';
     LConn.Free;
@@ -476,11 +482,11 @@ begin
     LCh.Consume('q.erro', AoEntregar, True);
     LCh.PublishText('', 'q.erro', CORPO_QUE_LEVANTA);
 
-    Assert.IsTrue(EsperaSpans('process q.erro', 1, 5000), 'o process terminou');
+    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.erro', 1, 5000));
     LProc := Span('process q.erro');
-    Assert.IsTrue(LProc.Status = ssError, 'status de erro');
-    Assert.AreEqual('falhou de proposito', LProc.StatusMessage, 'mensagem');
-    Assert.AreEqual('Exception', Attr(LProc, 'error.type'), 'classe');
+    TAssert.AssertTrue('status de erro', LProc.Status = ssError);
+    TAssert.AssertEquals('mensagem', 'falhou de proposito', LProc.StatusMessage);
+    TAssert.AssertEquals('classe', 'Exception', Attr(LProc, 'error.type'));
   finally
     LConn.Free;
   end;
@@ -503,21 +509,21 @@ begin
     LCh.Consume('q.handler', AoEntregar, True);
     LCh.PublishText('', 'q.handler', CORPO_QUE_LEVANTA);
 
-    Assert.IsTrue(EsperaSpans('process q.handler', 1, 5000), 'o process terminou');
-    Assert.AreEqual(1, PcAtomicGet(FHandlerChamado), 'o handler rodou');
+    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.handler', 1, 5000));
+    TAssert.AssertEquals('o handler rodou', 1, PcAtomicGet(FHandlerChamado));
     LProc := Span('process q.handler');
     FLock.Enter;
     try
-      Assert.AreEqual(LProc.TraceId, FTraceNoHandler,
-        'no handler, a trace corrente e a da mensagem');
-      Assert.AreEqual(LProc.SpanId, FSpanNoHandler,
-        'no handler, o span corrente e o process');
+      TAssert.AssertEquals('no handler, a trace corrente e a da mensagem', LProc.TraceId,
+        FTraceNoHandler);
+      TAssert.AssertEquals('no handler, o span corrente e o process', LProc.SpanId,
+        FSpanNoHandler);
     finally
       FLock.Leave;
     end;
-    Assert.IsTrue(LProc.Status = ssError, 'status de erro');
-    Assert.AreEqual('falhou de proposito', LProc.StatusMessage, 'mensagem');
-    Assert.AreEqual('Exception', Attr(LProc, 'error.type'), 'classe');
+    TAssert.AssertTrue('status de erro', LProc.Status = ssError);
+    TAssert.AssertEquals('mensagem', 'falhou de proposito', LProc.StatusMessage);
+    TAssert.AssertEquals('classe', 'Exception', Attr(LProc, 'error.type'));
   finally
     LConn.Free;
   end;
@@ -544,24 +550,24 @@ begin
     try
       LGet := LCh.BasicGet('q.get', True);
       LiberaHeaders(LGet);
-      Assert.IsTrue(LGet.Found, 'achou');
+      TAssert.AssertTrue('achou', LGet.Found);
       LGet := LCh.BasicGet('q.get', True);
-      Assert.IsFalse(LGet.Found, 'vazia');
+      TAssert.AssertFalse('vazia', LGet.Found);
     finally
       LPai.Finish;
       LPai := nil;
     end;
 
-    Assert.IsTrue(EsperaSpans('receive q.get', 2, 5000), 'os dois receive');
+    TAssert.AssertTrue('os dois receive', EsperaSpans('receive q.get', 2, 5000));
     LCheio := Span('receive q.get', 0);
     LVazio := Span('receive q.get', 1);
-    Assert.IsTrue(LCheio.Kind = skClient, 'client');
-    Assert.AreEqual(LPaiId, LCheio.ParentSpanId, 'filho do corrente');
-    Assert.AreEqual('receive', Attr(LCheio, 'messaging.operation.type'), 'operacao');
-    Assert.AreEqual('3', Attr(LCheio, 'messaging.message.body.size'), 'tamanho');
-    Assert.AreEqual('', Attr(LCheio, 'pascalamqp.get.empty'), 'nao vazio');
-    Assert.AreEqual('true', Attr(LVazio, 'pascalamqp.get.empty'), 'vazio marcado');
-    Assert.AreEqual('', Attr(LVazio, 'messaging.message.body.size'), 'vazio sem tamanho');
+    TAssert.AssertTrue('client', LCheio.Kind = skClient);
+    TAssert.AssertEquals('filho do corrente', LPaiId, LCheio.ParentSpanId);
+    TAssert.AssertEquals('operacao', 'receive', Attr(LCheio, 'messaging.operation.type'));
+    TAssert.AssertEquals('tamanho', '3', Attr(LCheio, 'messaging.message.body.size'));
+    TAssert.AssertEquals('nao vazio', '', Attr(LCheio, 'pascalamqp.get.empty'));
+    TAssert.AssertEquals('vazio marcado', 'true', Attr(LVazio, 'pascalamqp.get.empty'));
+    TAssert.AssertEquals('vazio sem tamanho', '', Attr(LVazio, 'messaging.message.body.size'));
   finally
     LConn.Free;
   end;
@@ -599,7 +605,7 @@ begin
 
     LGet := LCh.BasicGet('q.origem', False);
     LiberaHeaders(LGet);
-    Assert.IsTrue(LGet.Found, 'achou na origem');
+    TAssert.AssertTrue('achou na origem', LGet.Found);
     LCh.Nack(LGet.DeliveryTag, False);
 
     // O dead-letter passa pelo ator da fila: assincrono.
@@ -611,14 +617,16 @@ begin
       Sleep(10);
     until False;
     try
-      Assert.IsTrue(LGet.Found, 'chegou na dlq');
-      Assert.IsTrue(AmqpTraceParentOf(LGet.Properties, LParent, LState), 'com traceparent');
-      Assert.IsTrue(LGet.Properties.Headers.ContainsKey('x-death'), 'e o x-death do dead-letter');
+      TAssert.AssertTrue('chegou na dlq', LGet.Found);
+      TAssert.AssertTrue('com traceparent', AmqpTraceParentOf(LGet.Properties, LParent, LState));
+      TAssert.AssertTrue('e o x-death do dead-letter',
+        LGet.Properties.Headers.ContainsKey('x-death'));
     finally
       LiberaHeaders(LGet);
     end;
-    Assert.IsTrue(EsperaSpans('publish amq.default', 1, 5000), 'o publish exportado');
-    Assert.AreEqual(TraceParentDe(Span('publish amq.default')), LParent, 'o mesmo do publish original');
+    TAssert.AssertTrue('o publish exportado', EsperaSpans('publish amq.default', 1, 5000));
+    TAssert.AssertEquals('o mesmo do publish original',
+      TraceParentDe(Span('publish amq.default')), LParent);
   finally
     LConn.Free;
   end;
@@ -642,10 +650,12 @@ begin
     LCh.Consume(LOk.QueueName, AoEntregar, True);
     LCh.PublishText('', LOk.QueueName, 'oi');
 
-    Assert.IsTrue(EsperaSpans('process (temporary)', 1, 5000), 'o process terminou');
+    TAssert.AssertTrue('o process terminou', EsperaSpans('process (temporary)', 1, 5000));
     LProc := Span('process (temporary)');
-    Assert.AreEqual(LOk.QueueName, Attr(LProc, 'messaging.destination.name'), 'o nome real no atributo');
-    Assert.AreEqual('true', Attr(LProc, 'messaging.destination.temporary'), 'marcada temporaria');
+    TAssert.AssertEquals('o nome real no atributo', LOk.QueueName,
+      Attr(LProc, 'messaging.destination.name'));
+    TAssert.AssertEquals('marcada temporaria', 'true',
+      Attr(LProc, 'messaging.destination.temporary'));
   finally
     LConn.Free;
   end;
@@ -666,12 +676,12 @@ begin
     LCh.PublishText('', 'q.off', 'oi');
     LGet := LCh.BasicGet('q.off', True);
     try
-      Assert.IsTrue(LGet.Found, 'achou');
-      Assert.IsFalse(bpHeaders in LGet.Properties.Flags, 'sem headers');
+      TAssert.AssertTrue('achou', LGet.Found);
+      TAssert.AssertFalse('sem headers', bpHeaders in LGet.Properties.Flags);
     finally
       LiberaHeaders(LGet);
     end;
-    Assert.AreEqual(0, FColetor.Count, 'nenhum span');
+    TAssert.AssertEquals('nenhum span', 0, FColetor.Count);
   finally
     LConn.Free;
   end;

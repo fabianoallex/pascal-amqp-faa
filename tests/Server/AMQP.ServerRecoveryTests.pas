@@ -35,15 +35,17 @@
   As tres funcoes Checa* existem para os corpos dos testes serem IDENTICOS nos
   dois dialetos: so' a implementacao delas muda de lado.
 
-  Espelho de tests\Server\fpc\AMQP.ServerRecoveryTests.pas -- mantenha os dois em sincronia. }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
+
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
-  System.IOUtils,
+  AMQP.DUnitXCompat,
+  AMQP.TestSupport,
+  SysUtils, Classes,
   AMQP.Wire,
   AMQP.Server.Wal,
   AMQP.Server.Journal,
@@ -74,22 +76,22 @@ type
     /// Fecha o journal (o log fica no disco) e replica.
     function Replica: TAMQPRecoveredState;
   public
-    [Setup]    procedure SetUp;
+    [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure LogVazio_EstadoVazio;
-    [Test] procedure TopologiaDuravel_Sobrevive;
-    [Test] procedure Redeclare_OUltimoVale;
-    [Test] procedure Unbind_TiraOBinding;
-    [Test] procedure ApagarFila_LevaBindingsEColocacoes;
-    [Test] procedure ApagarExchange_LevaBindingsDosDoisLados;
-    [Test] procedure EnqSemDeq_FicaVivo;
-    [Test] procedure EnqComDeq_Some;
-    [Test] procedure OrdemDasColocacoes_EAOrdemDoLog;
-    [Test] procedure UmConteudoDuasColocacoes;
-    [Test] procedure ConteudoSemColocacaoViva_ESoltado;
-    [Test] procedure MaxId_EOMaiorVisto;
-    [Test] procedure PrazoEPrioridade_ChegamIntactos;
-    [Test] procedure CaudaTorta_ReplicaOPrefixo;
+     [Test] procedure LogVazio_EstadoVazio;
+     [Test] procedure TopologiaDuravel_Sobrevive;
+     [Test] procedure Redeclare_OUltimoVale;
+     [Test] procedure Unbind_TiraOBinding;
+     [Test] procedure ApagarFila_LevaBindingsEColocacoes;
+     [Test] procedure ApagarExchange_LevaBindingsDosDoisLados;
+     [Test] procedure EnqSemDeq_FicaVivo;
+     [Test] procedure EnqComDeq_Some;
+     [Test] procedure OrdemDasColocacoes_EAOrdemDoLog;
+     [Test] procedure UmConteudoDuasColocacoes;
+     [Test] procedure ConteudoSemColocacaoViva_ESoltado;
+     [Test] procedure MaxId_EOMaiorVisto;
+     [Test] procedure PrazoEPrioridade_ChegamIntactos;
+     [Test] procedure CaudaTorta_ReplicaOPrefixo;
     // --- WS7: rotacao de segmento ---
     [Test] procedure Rotaciona_QuandoOSegmentoEnche;
     [Test] procedure Rotaciona_NaoParteOLoteEntreDoisArquivos;
@@ -125,33 +127,34 @@ begin
     try
       repeat
         if (LRec.Attr and faDirectory) = 0 then
-          System.SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+          DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
       until FindNext(LRec) <> 0;
     finally
-      System.SysUtils.FindClose(LRec);
+      FindClose(LRec);
     end;
   end;
 end;
 
-// As pontes para as assercoes do dialeto -- ver o cabecalho.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaStr(const AMsg, AEsperado, AObtido: string);
 begin
-  Assert.AreEqual(AEsperado, AObtido, AMsg);
+  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
 end;
 
 procedure ChecaOk(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsTrue(ACond, AMsg);
+  TAssert.AssertTrue(AMsg, ACond);
 end;
 
 procedure ChecaNao(const AMsg: string; ACond: Boolean);
 begin
-  Assert.IsFalse(ACond, AMsg);
+  TAssert.AssertFalse(AMsg, ACond);
 end;
 
 /// Monta um registro de conteudo (as duas suites de rotacao precisam do mesmo).
@@ -349,7 +352,7 @@ end;
 procedure TRecoveryReplayTests.SetUp;
 begin
   Inc(GRecSeq);
-  FDir := IncludeTrailingPathDelimiter(TPath.GetTempPath) + 'amqprec-'
+  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqprec-'
     + IntToStr(GRecSeq);
   ForceDirectories(FDir);
   LimpaDirRec(FDir);

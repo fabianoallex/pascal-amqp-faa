@@ -3,17 +3,15 @@
 { Testes do esqueleto do broker (WS6): virtual-hosts, TAMQPFrameWriter,
   TAMQPTcpListener e o ciclo accept/registro/reap do TAMQPServer. Os "clientes"
   aqui são sockets crus: só o protocol-header e frames soltos, sem handshake.
-  A FSM de handshake é exercitada em AMQP.ServerHandshakeTests (WS4).
+  A FSM de handshake é exercitada em AMQP.ServerHandshakeTests (WS4). }
 
-  Espelho DUnitX de tests\Server\fpc\AMQP.ServerSkeletonTests.pas — mantenha os
-  dois em sincronia (mesmos nomes de teste, mesmas asserções). }
 
 interface
 
 uses
   DUnitX.TestFramework,
-  System.SysUtils,
-  System.Classes,
+  AMQP.DUnitXCompat,
+  SysUtils, Classes,
   AMQP.Protocol,
   AMQP.Frame,
   PascalCommon.Threading,
@@ -82,7 +80,7 @@ begin
   begin
     if AServer.ConnectionCount = ACount then
       Exit(True);
-    TThread.Sleep(10);
+    Sleep(10);
   end;
   Result := AServer.ConnectionCount = ACount;
 end;
@@ -97,13 +95,13 @@ begin
   begin
     if AServer.TotalAccepted >= AN then
       Exit(True);
-    TThread.Sleep(10);
+    Sleep(10);
   end;
   Result := AServer.TotalAccepted >= AN;
 end;
 
+// Stream de teste que registra os bytes escritos.
 type
-  { Stream de teste que registra os bytes escritos. }
   TRecStream = class(TStream)
   public
     Log: TBytes;
@@ -112,7 +110,7 @@ type
     Calls: Integer;
     function Write(const Buffer; Count: Longint): Longint; override;
     function Read(var Buffer; Count: Longint): Longint; override;
-    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
+    function Seek(const AOffset: Int64; AOrigin: TSeekOrigin): Int64; override;
   end;
 
 function TRecStream.Read(var Buffer; Count: Longint): Longint;
@@ -120,7 +118,7 @@ begin
   Result := 0;
 end;
 
-function TRecStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
+function TRecStream.Seek(const AOffset: Int64; AOrigin: TSeekOrigin): Int64;
 begin
   Result := 0;
 end;
@@ -217,8 +215,8 @@ var
 begin
   R := TAMQPVirtualHostRegistry.Create;
   try
-    Assert.IsTrue(R.Contains('/'), 'raiz presente por default');
-    Assert.IsFalse(R.Contains('/inexistente'));
+    TAssert.AssertTrue('raiz presente por default', R.Contains('/'));
+    TAssert.AssertFalse(R.Contains('/inexistente'));
   finally
     R.Free;
   end;
@@ -231,12 +229,12 @@ begin
   R := TAMQPVirtualHostRegistry.Create;
   try
     R.Add('/app');
-    Assert.IsTrue(R.Contains('/app'));
+    TAssert.AssertTrue(R.Contains('/app'));
     R.Add('/app'); // idempotente
-    Assert.AreEqual(2, Integer(Length(R.ToArray)));
+    TAssert.AssertEquals(2, Length(R.ToArray));
     R.Remove('/app');
-    Assert.IsFalse(R.Contains('/app'));
-    Assert.IsTrue(R.Contains('/'), 'raiz intacta');
+    TAssert.AssertFalse(R.Contains('/app'));
+    TAssert.AssertTrue('raiz intacta', R.Contains('/'));
   finally
     R.Free;
   end;
@@ -248,7 +246,7 @@ procedure TFrameWriterTests.OrdemFIFO;
 var
   S: TRecStream;
   W: TAMQPFrameWriter;
-  I, LPos, Seen: Integer;
+  I, Pos, Seen: Integer;
   F: TAMQPFrame;
 begin
   S := TRecStream.Create;
@@ -263,15 +261,14 @@ begin
     W.Free;
     // cada frame: 7 header + 1 payload + 1 frame-end = 9 bytes; payload em +7
     Seen := 0;
-    LPos := 0;
-    while LPos + 9 <= S.LogLen do
+    Pos := 0;
+    while Pos + 9 <= S.LogLen do
     begin
       Inc(Seen);
-      Assert.AreEqual(Seen, Integer(S.Log[LPos + 7]),
-        'ordem no frame ' + IntToStr(Seen));
-      Inc(LPos, 9);
+      TAssert.AssertEquals('ordem no frame ' + IntToStr(Seen), Seen, Integer(S.Log[Pos + 7]));
+      Inc(Pos, 9);
     end;
-    Assert.AreEqual(20, Seen);
+    TAssert.AssertEquals(20, Seen);
   finally
     S.Free;
   end;
@@ -282,7 +279,7 @@ var
   S: TRecStream;
   W: TAMQPFrameWriter;
   pA, pB: TBatchProd;
-  LPos: Integer;
+  Pos: Integer;
 begin
   S := TRecStream.Create;
   try
@@ -296,16 +293,14 @@ begin
 
     // 80 trincas de 27 bytes; em cada trinca os 3 payloads (idx +7, +16, +25)
     // têm de ser do MESMO tag.
-    LPos := 0;
-    while LPos + 27 <= S.LogLen do
+    Pos := 0;
+    while Pos + 27 <= S.LogLen do
     begin
-      Assert.AreEqual(Integer(S.Log[LPos + 7]), Integer(S.Log[LPos + 16]),
-        'trinca coesa (h)');
-      Assert.AreEqual(Integer(S.Log[LPos + 7]), Integer(S.Log[LPos + 25]),
-        'trinca coesa (b)');
-      Inc(LPos, 27);
+      TAssert.AssertEquals('trinca coesa (h)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 16]));
+      TAssert.AssertEquals('trinca coesa (b)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 25]));
+      Inc(Pos, 27);
     end;
-    Assert.AreEqual(80 * 27, S.LogLen, 'todos os 80 lotes sairam');
+    TAssert.AssertEquals('todos os 80 lotes sairam', 80 * 27, S.LogLen);
   finally
     S.Free;
   end;
@@ -329,15 +324,15 @@ begin
       for I := 1 to 400 do
       begin
         W.PostFrame(F);
-        TThread.Sleep(1);
+        Sleep(1);
       end;
     except
       on EAMQPTransport do
         LRaised := True;
     end;
-    Assert.IsTrue(LRaised or W.Failed, 'Post* deve levantar apos a falha');
-    Assert.IsTrue(W.Failed, 'Failed=True');
-    Assert.IsTrue(W.LastError <> '', 'LastError preenchido');
+    TAssert.AssertTrue('Post* deve levantar apos a falha', LRaised or W.Failed);
+    TAssert.AssertTrue('Failed=True', W.Failed);
+    TAssert.AssertTrue('LastError preenchido', W.LastError <> '');
     W.Stop;
     W.Free;
   finally
@@ -354,7 +349,7 @@ begin
   L := TAMQPTcpListener.Create;
   try
     L.Listen('127.0.0.1', 0);
-    Assert.IsTrue(L.Port > 0, 'porta efetiva > 0');
+    TAssert.AssertTrue('porta efetiva > 0', L.Port > 0);
   finally
     L.Free;
   end;
@@ -374,19 +369,18 @@ begin
     L.Listen('127.0.0.1', 0);
     Probe := TAMQPAcceptProbe.Create(L);
     try
-      TThread.Sleep(100);
+      Sleep(100);
       Cli := TAMQPTcpSocket.Create;
       try
         Cli.Connect('127.0.0.1', L.Port);
         S := 'oi';
         Cli.Send(S[1], 2);
         Probe.WaitFor;
-        Assert.IsNotNull(Probe.Accepted, 'Accept devolveu um socket');
-        Assert.IsTrue(Pos('127.0.0.1:', Probe.Accepted.PeerAddress) = 1,
-          'peer preenchido');
+        TAssert.AssertTrue('Accept devolveu um socket', Assigned(Probe.Accepted));
+        TAssert.AssertTrue('peer preenchido', Pos('127.0.0.1:', Probe.Accepted.PeerAddress) = 1);
         SetLength(Buf, 16);
         N := Probe.Accepted.Receive(Buf[0], 16);
-        Assert.AreEqual(2, N);
+        TAssert.AssertEquals(2, N);
         Probe.Accepted.Free;
       finally
         Cli.Free;
@@ -412,14 +406,14 @@ begin
     L.Listen('127.0.0.1', 0);
     Probe := TAMQPAcceptProbe.Create(L);
     try
-      TThread.Sleep(100);
+      Sleep(100);
       Cli := TAMQPTcpSocket.Create;
       try
         Cli.Connect('127.0.0.1', L.Port);
         Probe.WaitFor;
-        Assert.IsNotNull(Probe.Accepted, 'Accept devolveu um socket');
-        Assert.IsTrue(Cli.NoDelay, 'socket do cliente com TCP_NODELAY');
-        Assert.IsTrue(Probe.Accepted.NoDelay, 'socket aceito com TCP_NODELAY');
+        TAssert.AssertTrue('Accept devolveu um socket', Assigned(Probe.Accepted));
+        TAssert.AssertTrue('socket do cliente com TCP_NODELAY', Cli.NoDelay);
+        TAssert.AssertTrue('socket aceito com TCP_NODELAY', Probe.Accepted.NoDelay);
         Probe.Accepted.Free;
       finally
         Cli.Free;
@@ -442,10 +436,10 @@ begin
     L.Listen('127.0.0.1', 0);
     Probe := TAMQPAcceptProbe.Create(L);
     try
-      TThread.Sleep(100);
+      Sleep(100);
       L.Close;
       Probe.WaitFor;
-      Assert.IsTrue(Probe.GotNil, 'Accept devolveu nil apos Close');
+      TAssert.AssertTrue('Accept devolveu nil apos Close', Probe.GotNil);
     finally
       Probe.Free;
     end;
@@ -465,11 +459,11 @@ begin
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    Assert.IsTrue(B.Running, 'rodando');
-    Assert.IsTrue(B.Port > 0, 'porta efetiva');
+    TAssert.AssertTrue('rodando', B.Running);
+    TAssert.AssertTrue('porta efetiva', B.Port > 0);
     B.Start; // no-op
     B.Stop;
-    Assert.IsFalse(B.Running);
+    TAssert.AssertFalse(B.Running);
     B.Stop; // no-op
   finally
     B.Free;
@@ -488,11 +482,11 @@ begin
     B.Start;
 
     C := RawConnect(B.Port, True);
-    Assert.IsTrue(WaitConnCount(B, 1, 2000), 'conexao registrada');
-    Assert.AreEqual(1, B.TotalAccepted);
+    TAssert.AssertTrue('conexao registrada', WaitConnCount(B, 1, 2000));
+    TAssert.AssertEquals(1, B.TotalAccepted);
 
     C.Free; // desconecta
-    Assert.IsTrue(WaitConnCount(B, 0, 2000), 'conexao reapada apos desconexao');
+    TAssert.AssertTrue('conexao reapada apos desconexao', WaitConnCount(B, 0, 2000));
 
     B.Stop;
   finally
@@ -513,9 +507,9 @@ begin
 
     C := RawConnect(B.Port, True, True); // header errado
     try
-      Assert.IsTrue(WaitAccepted(B, 1, 2000), 'conexao foi aceita');
+      TAssert.AssertTrue('conexao foi aceita', WaitAccepted(B, 1, 2000));
       // o servidor fecha sozinho -> a conexao some do registro
-      Assert.IsTrue(WaitConnCount(B, 0, 2000), 'conexao fechada pelo servidor');
+      TAssert.AssertTrue('conexao fechada pelo servidor', WaitConnCount(B, 0, 2000));
     finally
       C.Free;
     end;
@@ -540,12 +534,12 @@ begin
 
     for I := 0 to High(Conns) do
       Conns[I] := RawConnect(B.Port, True);
-    Assert.IsTrue(WaitConnCount(B, 10, 3000), '10 conexoes vivas');
+    TAssert.AssertTrue('10 conexoes vivas', WaitConnCount(B, 10, 3000));
 
     for I := 0 to High(Conns) do
       Conns[I].Free;
-    Assert.IsTrue(WaitConnCount(B, 0, 3000), 'todas reapadas');
-    Assert.AreEqual(10, B.TotalAccepted);
+    TAssert.AssertTrue('todas reapadas', WaitConnCount(B, 0, 3000));
+    TAssert.AssertEquals(10, B.TotalAccepted);
 
     B.Stop;
   finally
@@ -567,12 +561,12 @@ begin
     B.Start;
     for I := 0 to High(Conns) do
       Conns[I] := RawConnect(B.Port, True);
-    Assert.IsTrue(WaitConnCount(B, 5, 3000));
+    TAssert.AssertTrue(WaitConnCount(B, 5, 3000));
 
     LStart := PcTickMs;
     B.Stop; // deve derrubar as 5 e voltar rapido
-    Assert.IsTrue(PcTickMs - LStart < 5000, 'Stop nao travou');
-    Assert.IsFalse(B.Running);
+    TAssert.AssertTrue('Stop nao travou', PcTickMs - LStart < 5000);
+    TAssert.AssertFalse(B.Running);
 
     for I := 0 to High(Conns) do
       Conns[I].Free;
@@ -609,7 +603,7 @@ begin
         // Desde o WS4 o broker manda Connection.Start assim que o
         // protocol-header e' aceito: drena esse frame antes.
         Reply := TAMQPFrame.ReadFrom(Strm, 131072);
-        Assert.IsTrue(Reply.IsMethod, 'primeiro frame e Connection.Start');
+        TAssert.AssertTrue('primeiro frame e Connection.Start', Reply.IsMethod);
 
         HB := TAMQPFrame.Heartbeat;
         HB.WriteTo(Strm);
@@ -620,11 +614,11 @@ begin
         while (Length(Conns) = 1) and (Conns[0].FramesRead < 1) and
               (PcTickMs < Deadline) do
         begin
-          TThread.Sleep(10);
+          Sleep(10);
           Conns := B.Connections;
         end;
-        Assert.AreEqual(1, Integer(Length(Conns)), 'conexao viva');
-        Assert.IsTrue(Conns[0].FramesRead >= 1, 'heartbeat contabilizado');
+        TAssert.AssertEquals('conexao viva', 1, Length(Conns));
+        TAssert.AssertTrue('heartbeat contabilizado', Conns[0].FramesRead >= 1);
       finally
         Strm.Free;
       end;

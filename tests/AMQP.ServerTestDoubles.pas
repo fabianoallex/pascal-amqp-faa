@@ -8,16 +8,17 @@
   ficar onde está) e a da entrega (AMQP.ServerDeliveryTests, onde o alvo
   registra o que recebeu).
 
-  Espelho FPCUnit de tests\Server\fpc\AMQP.ServerTestDoubles.pas -- mantenha os
-  dois em sincronia. }
+  Uma cópia só, compilada pelos runners Delphi e FPC. }
+
+{$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
 interface
 
 uses
-  System.SysUtils,
-  System.Classes,
-  System.SyncObjs,
-  System.Generics.Collections,
+  SysUtils,
+  Classes,
+  SyncObjs,
+  Generics.Collections,
   AMQP.Wire,
   AMQP.Server.Message,
   AMQP.Server.Queue,

@@ -1,5 +1,11 @@
 ﻿unit AMQP.ServerRecoveryTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerRecoveryTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Replay do WAL -- WS6 da Fase 4 (durabilidade, ver CLAUDE.md, D19-D28).
 
   A pergunta que estes testes fazem e' uma so': DADO ESTE LOG, QUAL E' O
@@ -35,14 +41,16 @@
   As tres funcoes Checa* existem para os corpos dos testes serem IDENTICOS nos
   dois dialetos: so' a implementacao delas muda de lado.
 
-  Espelho de tests\Server\AMQP.ServerRecoveryTests.pas -- mantenha os dois em sincronia. }
+  Mestre DUnitX no dialeto do FPCUnit (TAssert.*); o espelho FPCUnit em
+  fpc\ e' gerado por tools/gen_fpc_mirror.py. }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes,
+  fpcunit, testregistry,
+  AMQP.TestSupport,
+  SysUtils, Classes,
   AMQP.Wire,
   AMQP.Server.Wal,
   AMQP.Server.Journal,
@@ -75,20 +83,20 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-     procedure LogVazio_EstadoVazio;
-     procedure TopologiaDuravel_Sobrevive;
-     procedure Redeclare_OUltimoVale;
-     procedure Unbind_TiraOBinding;
-     procedure ApagarFila_LevaBindingsEColocacoes;
-     procedure ApagarExchange_LevaBindingsDosDoisLados;
-     procedure EnqSemDeq_FicaVivo;
-     procedure EnqComDeq_Some;
-     procedure OrdemDasColocacoes_EAOrdemDoLog;
-     procedure UmConteudoDuasColocacoes;
-     procedure ConteudoSemColocacaoViva_ESoltado;
-     procedure MaxId_EOMaiorVisto;
-     procedure PrazoEPrioridade_ChegamIntactos;
-     procedure CaudaTorta_ReplicaOPrefixo;
+    procedure LogVazio_EstadoVazio;
+    procedure TopologiaDuravel_Sobrevive;
+    procedure Redeclare_OUltimoVale;
+    procedure Unbind_TiraOBinding;
+    procedure ApagarFila_LevaBindingsEColocacoes;
+    procedure ApagarExchange_LevaBindingsDosDoisLados;
+    procedure EnqSemDeq_FicaVivo;
+    procedure EnqComDeq_Some;
+    procedure OrdemDasColocacoes_EAOrdemDoLog;
+    procedure UmConteudoDuasColocacoes;
+    procedure ConteudoSemColocacaoViva_ESoltado;
+    procedure MaxId_EOMaiorVisto;
+    procedure PrazoEPrioridade_ChegamIntactos;
+    procedure CaudaTorta_ReplicaOPrefixo;
     // --- WS7: rotacao de segmento ---
     procedure Rotaciona_QuandoOSegmentoEnche;
     procedure Rotaciona_NaoParteOLoteEntreDoisArquivos;
@@ -124,15 +132,16 @@ begin
     try
       repeat
         if (LRec.Attr and faDirectory) = 0 then
-          SysUtils.DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
+          DeleteFile(IncludeTrailingPathDelimiter(ADir) + LRec.Name);
       until FindNext(LRec) <> 0;
     finally
-      SysUtils.FindClose(LRec);
+      FindClose(LRec);
     end;
   end;
 end;
 
-// As pontes para as assercoes do dialeto -- ver o cabecalho.
+// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
+// do TAssert e' a mesma nos dois compiladores.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
   TAssert.AssertEquals(AMsg, AEsperado, AObtido);
@@ -347,9 +356,8 @@ end;
 
 procedure TRecoveryReplayTests.SetUp;
 begin
-  inherited SetUp;
   Inc(GRecSeq);
-  FDir := IncludeTrailingPathDelimiter(GetTempDir) + 'amqprec-'
+  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqprec-'
     + IntToStr(GRecSeq);
   ForceDirectories(FDir);
   LimpaDirRec(FDir);
@@ -368,7 +376,6 @@ begin
     FreeAndNil(FJournal);
   end;
   LimpaDirRec(FDir);
-  inherited TearDown;
 end;
 
 procedure TRecoveryReplayTests.LogVazio_EstadoVazio;

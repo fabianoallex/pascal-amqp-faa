@@ -163,7 +163,9 @@
         <DCCReference Include="AMQP.ServerHandshakeTests.pas"/>
         <DCCReference Include="AMQP.ServerEngineTests.pas"/>
         <DCCReference Include="AMQP.ServerRoutingTests.pas"/>
-        <DCCReference Include="AMQP.ServerTestDoubles.pas"/>
+        <DCCReference Include="..\Unit\AMQP.DUnitXCompat.pas"/>
+        <DCCReference Include="..\AMQP.TestSupport.pas"/>
+        <DCCReference Include="..\AMQP.ServerTestDoubles.pas"/>
         <DCCReference Include="AMQP.ServerQueueTests.pas"/>
         <DCCReference Include="AMQP.ServerDeliveryTests.pas"/>
         <DCCReference Include="AMQP.ServerEngineDispatchTests.pas"/>

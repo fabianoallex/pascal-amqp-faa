@@ -1,5 +1,11 @@
 ﻿unit AMQP.ServerHandshakeTests;
 
+{$mode delphi}{$H+}
+
+{ GENERATED FILE — produced by tools/gen_fpc_mirror.py from
+  tests/Server/AMQP.ServerHandshakeTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
+  master and run the script again. }
+
 { Testes da FSM de handshake e do ciclo de vida de canais do broker (WS4).
 
   Duas frentes:
@@ -10,12 +16,12 @@
     caminhos de erro que um cliente correto nunca produz (método fora de ordem,
     Tune-Ok acima do proposto, segundo Channel.Open, conteúdo sem publish...). }
 
-{$mode delphi}{$H+}
 
 interface
 
 uses
-  fpcunit, testregistry, SysUtils, Classes, Rtti, SyncObjs,
+  fpcunit, testregistry,
+  SysUtils, Classes, Rtti, SyncObjs,
   AMQP.Protocol,
   AMQP.Wire,
   AMQP.Method,
@@ -35,23 +41,13 @@ uses
 
 type
   { Sobe um broker em 127.0.0.1 numa porta efêmera para cada teste. }
-  TServerFixture = class(TTestCase)
-  protected
+
+  TClientHandshakeTests = class(TTestCase)
+  private
     FBroker: TAMQPServer;
+  protected
     procedure SetUp; override;
     procedure TearDown; override;
-    /// Parâmetros do cliente apontando para este broker.
-    function Params: TAMQPConnectionParams;
-    /// Primeira conexão viva do lado servidor (espera até ATimeoutMs).
-    function ServerConn(ATimeoutMs: Integer = 3000): TAMQPServerConnection;
-    /// Espera a conexão do lado servidor chegar a AState.
-    function WaitState(AConn: TAMQPServerConnection;
-      AState: TAMQPServerConnState; ATimeoutMs: Integer = 3000): Boolean;
-    function WaitChannels(AConn: TAMQPServerConnection; ACount: Integer;
-      ATimeoutMs: Integer = 3000): Boolean;
-  end;
-
-  TClientHandshakeTests = class(TServerFixture)
   published
     procedure ClienteRealConecta;
     procedure SenhaErrada_403;
@@ -62,7 +58,12 @@ type
     procedure ClienteFechaLimpo;
   end;
 
-  TRawHandshakeTests = class(TServerFixture)
+  TRawHandshakeTests = class(TTestCase)
+  private
+    FBroker: TAMQPServer;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
   published
     procedure StartAnunciaPlainEServerProperties;
     procedure MetodoForaDeOrdem_503;
@@ -84,11 +85,15 @@ type
     a regra de interleave da spec 2.3.5 e o despacho "nulo" das classes de
     recurso -- todo metodo cliente->servidor e' decodificado e respondido com o
     *-Ok correto, sem engine por tras. }
-  TContentTests = class(TServerFixture)
+  TContentTests = class(TTestCase)
   private
+    FBroker: TAMQPServer;
     /// Consumer nunca chamado (o broker nulo nao entrega); a lib exige um
     /// metodo de objeto, nao aceita closure.
     procedure OnDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
   published
     procedure ClientePublicaMensagemSimples;
     procedure CorpoGrandeEmVariosFrames;
@@ -109,11 +114,14 @@ type
     Default o broker nao aceita TLS e nao ha o que testar. Usa os certs de dev
     de docker\certs (self-signed), por isso o cliente conecta com
     TlsVerifyPeer=False. }
-  TServerTlsTests = class(TServerFixture)
+  TServerTlsTests = class(TTestCase)
+  private
+    FBroker: TAMQPServer;
   protected
-    /// Troca o broker plain da fixture por um com TLS ligado.
-    procedure SetUp; override;
     function TlsParams: TAMQPConnectionParams;
+    /// Sobe um broker com TLS ligado, no lugar do plain das outras fixtures.
+    procedure SetUp; override;
+    procedure TearDown; override;
   published
     procedure ClienteRealConectaSobreTls;
     procedure PublicaSobreTls;
@@ -124,7 +132,12 @@ type
 
   { Heartbeat (spec 4.2.7) e o prazo do Connection.Close-Ok. Os testes negociam
     intervalos de 1 s no Tune-Ok para caber num tempo de suíte razoável. }
-  THeartbeatTests = class(TServerFixture)
+  THeartbeatTests = class(TTestCase)
+  private
+    FBroker: TAMQPServer;
+  protected
+    procedure SetUp; override;
+    procedure TearDown; override;
   published
     procedure BrokerEmiteHeartbeat;
     procedure PeerMudo_EhDerrubado;
@@ -582,35 +595,36 @@ begin
   Result.Start;
 end;
 
-{ TServerFixture }
+{ O que as fixtures com broker dividem (o broker sobe em 127.0.0.1 numa
+  porta efemera para cada teste).
+  O gerador de espelhos (tools/gen_fpc_mirror.py) nao aceita heranca entre
+  fixtures: cada uma guarda os proprios campos e chama as rotinas abaixo. }
 
-procedure TServerFixture.SetUp;
+procedure ServidorSetUp(var FBroker: TAMQPServer);
 begin
-  inherited SetUp;
   FBroker := TAMQPServer.Create;
   FBroker.BindAddress := '127.0.0.1';
   FBroker.Port := 0;
   FBroker.Start;
 end;
 
-procedure TServerFixture.TearDown;
+procedure ServidorTearDown(var FBroker: TAMQPServer);
 begin
   if FBroker <> nil then
   begin
     FBroker.Stop;
     FreeAndNil(FBroker);
   end;
-  inherited TearDown;
 end;
 
-function TServerFixture.Params: TAMQPConnectionParams;
+function Params(FBroker: TAMQPServer): TAMQPConnectionParams;
 begin
   Result := TAMQPConnectionParams.Localhost;
   Result.Host := '127.0.0.1';
   Result.Port := FBroker.Port;
 end;
 
-function TServerFixture.ServerConn(ATimeoutMs: Integer): TAMQPServerConnection;
+function ServerConn(FBroker: TAMQPServer; ATimeoutMs: Integer = 3000): TAMQPServerConnection;
 var
   LDeadline: UInt64;
   LAll: TArray<TAMQPServerConnection>;
@@ -625,8 +639,7 @@ begin
   until PcTickMs > LDeadline;
 end;
 
-function TServerFixture.WaitState(AConn: TAMQPServerConnection;
-  AState: TAMQPServerConnState; ATimeoutMs: Integer): Boolean;
+function WaitState(AConn: TAMQPServerConnection; AState: TAMQPServerConnState; ATimeoutMs: Integer = 3000): Boolean;
 var
   LDeadline: UInt64;
 begin
@@ -639,8 +652,7 @@ begin
   Result := AConn.State = AState;
 end;
 
-function TServerFixture.WaitChannels(AConn: TAMQPServerConnection;
-  ACount: Integer; ATimeoutMs: Integer): Boolean;
+function WaitChannels(AConn: TAMQPServerConnection; ACount: Integer; ATimeoutMs: Integer = 3000): Boolean;
 var
   LDeadline: UInt64;
 begin
@@ -653,6 +665,50 @@ begin
   Result := AConn.ChannelCount = ACount;
 end;
 
+{ SetUp/TearDown das fixtures com broker: cada uma guarda o proprio FBroker e
+  chama ServidorSetUp/ServidorTearDown. O gerador de espelhos nao aceita
+  heranca entre fixtures, por isso nao ha uma classe-base. }
+
+procedure TClientHandshakeTests.SetUp;
+begin
+  ServidorSetUp(FBroker);
+end;
+
+procedure TClientHandshakeTests.TearDown;
+begin
+  ServidorTearDown(FBroker);
+end;
+
+procedure TRawHandshakeTests.SetUp;
+begin
+  ServidorSetUp(FBroker);
+end;
+
+procedure TRawHandshakeTests.TearDown;
+begin
+  ServidorTearDown(FBroker);
+end;
+
+procedure TContentTests.SetUp;
+begin
+  ServidorSetUp(FBroker);
+end;
+
+procedure TContentTests.TearDown;
+begin
+  ServidorTearDown(FBroker);
+end;
+
+procedure THeartbeatTests.SetUp;
+begin
+  ServidorSetUp(FBroker);
+end;
+
+procedure THeartbeatTests.TearDown;
+begin
+  ServidorTearDown(FBroker);
+end;
+
 { TClientHandshakeTests }
 
 procedure TClientHandshakeTests.ClienteRealConecta;
@@ -660,19 +716,19 @@ var
   LCli: TAMQPConnection;
   LConn: TAMQPServerConnection;
 begin
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
-    AssertTrue('cliente aberto', LCli.IsOpen);
+    TAssert.AssertTrue('cliente aberto', LCli.IsOpen);
 
-    LConn := ServerConn;
-    AssertNotNull('conexao registrada no broker', LConn);
-    AssertTrue('FSM chegou a amqssOpen', WaitState(LConn, amqssOpen));
-    AssertEquals('usuario autenticado', 'guest', LConn.UserId);
-    AssertEquals('vhost', '/', LConn.VirtualHost);
-    AssertEquals('channel-max negociado',
+    LConn := ServerConn(FBroker);
+    TAssert.AssertTrue('conexao registrada no broker', Assigned(LConn));
+    TAssert.AssertTrue('FSM chegou a amqssOpen', WaitState(LConn, amqssOpen));
+    TAssert.AssertEquals('usuario autenticado', 'guest', LConn.UserId);
+    TAssert.AssertEquals('vhost', '/', LConn.VirtualHost);
+    TAssert.AssertEquals('channel-max negociado',
       AMQP_SERVER_DEFAULT_CHANNEL_MAX, Integer(LConn.Negotiated.ChannelMax));
-    AssertEquals('frame-max negociado',
+    TAssert.AssertEquals('frame-max negociado',
       Integer(AMQP_SERVER_DEFAULT_FRAME_MAX), Integer(LConn.Negotiated.FrameMax));
   finally
     LCli.Free;
@@ -685,7 +741,7 @@ var
   LP: TAMQPConnectionParams;
   LMsg: string;
 begin
-  LP := Params;
+  LP := Params(FBroker);
   LP.Password := 'senha-errada';
   LCli := TAMQPConnection.Create(LP);
   try
@@ -696,8 +752,8 @@ begin
       on E: Exception do
         LMsg := E.Message;
     end;
-    AssertFalse('nao deve abrir', LCli.IsOpen);
-    AssertTrue('mensagem cita 403 (veio: ' + LMsg + ')', Pos('403', LMsg) > 0);
+    TAssert.AssertFalse('nao deve abrir', LCli.IsOpen);
+    TAssert.AssertTrue('mensagem cita 403 (veio: ' + LMsg + ')', Pos('403', LMsg) > 0);
   finally
     LCli.Free;
   end;
@@ -709,7 +765,7 @@ var
   LP: TAMQPConnectionParams;
   LMsg: string;
 begin
-  LP := Params;
+  LP := Params(FBroker);
   LP.VirtualHost := '/nao-existe';
   LCli := TAMQPConnection.Create(LP);
   try
@@ -720,8 +776,8 @@ begin
       on E: Exception do
         LMsg := E.Message;
     end;
-    AssertFalse('nao deve abrir', LCli.IsOpen);
-    AssertTrue('mensagem cita 530 (veio: ' + LMsg + ')', Pos('530', LMsg) > 0);
+    TAssert.AssertFalse('nao deve abrir', LCli.IsOpen);
+    TAssert.AssertTrue('mensagem cita 530 (veio: ' + LMsg + ')', Pos('530', LMsg) > 0);
   finally
     LCli.Free;
   end;
@@ -733,13 +789,13 @@ var
   LP: TAMQPConnectionParams;
 begin
   FBroker.VirtualHosts.Add('/app');
-  LP := Params;
+  LP := Params(FBroker);
   LP.VirtualHost := '/app';
   LCli := TAMQPConnection.Create(LP);
   try
     LCli.Open;
-    AssertTrue('cliente aberto no /app', LCli.IsOpen);
-    AssertEquals('/app', ServerConn.VirtualHost);
+    TAssert.AssertTrue('cliente aberto no /app', LCli.IsOpen);
+    TAssert.AssertEquals('/app', ServerConn(FBroker).VirtualHost);
   finally
     LCli.Free;
   end;
@@ -751,29 +807,29 @@ var
   LConn: TAMQPServerConnection;
   LCh1, LCh2: TAMQPChannel;
 begin
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
-    LConn := ServerConn;
-    AssertNotNull(LConn);
+    LConn := ServerConn(FBroker);
+    TAssert.AssertTrue(Assigned(LConn));
 
     LCh1 := LCli.CreateChannel;
     try
-      AssertTrue('1 canal no servidor', WaitChannels(LConn, 1));
+      TAssert.AssertTrue('1 canal no servidor', WaitChannels(LConn, 1));
       LCh2 := LCli.CreateChannel;
       try
-        AssertTrue('2 canais no servidor', WaitChannels(LConn, 2));
+        TAssert.AssertTrue('2 canais no servidor', WaitChannels(LConn, 2));
         LCh2.Close;
       finally
         LCh2.Free;
       end;
-      AssertTrue('volta a 1 canal apos Channel.Close', WaitChannels(LConn, 1));
+      TAssert.AssertTrue('volta a 1 canal apos Channel.Close', WaitChannels(LConn, 1));
       LCh1.Close;
     finally
       LCh1.Free;
     end;
-    AssertTrue('nenhum canal aberto', WaitChannels(LConn, 0));
-    AssertTrue('conexao segue aberta', LCli.IsOpen);
+    TAssert.AssertTrue('nenhum canal aberto', WaitChannels(LConn, 0));
+    TAssert.AssertTrue('conexao segue aberta', LCli.IsOpen);
   finally
     LCli.Free;
   end;
@@ -783,16 +839,16 @@ procedure TClientHandshakeTests.DuasConexoesSimultaneas;
 var
   LA, LB: TAMQPConnection;
 begin
-  LA := TAMQPConnection.Create(Params);
+  LA := TAMQPConnection.Create(Params(FBroker));
   try
-    LB := TAMQPConnection.Create(Params);
+    LB := TAMQPConnection.Create(Params(FBroker));
     try
       LA.Open;
       LB.Open;
-      AssertTrue(LA.IsOpen);
-      AssertTrue(LB.IsOpen);
-      AssertEquals('duas conexoes vivas', 2, FBroker.ConnectionCount);
-      AssertEquals(2, FBroker.TotalAccepted);
+      TAssert.AssertTrue(LA.IsOpen);
+      TAssert.AssertTrue(LB.IsOpen);
+      TAssert.AssertEquals('duas conexoes vivas', 2, FBroker.ConnectionCount);
+      TAssert.AssertEquals(2, FBroker.TotalAccepted);
     finally
       LB.Free;
     end;
@@ -806,17 +862,17 @@ var
   LCli: TAMQPConnection;
   LDeadline: UInt64;
 begin
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
-    AssertNotNull(ServerConn);
+    TAssert.AssertTrue(Assigned(ServerConn(FBroker)));
     LCli.Close; // Connection.Close + espera o Close-Ok do broker
-    AssertFalse('cliente fechado', LCli.IsOpen);
+    TAssert.AssertFalse('cliente fechado', LCli.IsOpen);
 
     LDeadline := PcTickMs + 3000;
     while (FBroker.ConnectionCount > 0) and (PcTickMs < LDeadline) do
       Sleep(10);
-    AssertEquals('broker reapou a conexao', 0, FBroker.ConnectionCount);
+    TAssert.AssertEquals('broker reapou a conexao', 0, FBroker.ConnectionCount);
   finally
     LCli.Free;
   end;
@@ -835,12 +891,12 @@ begin
   try
     LStart := RawStart(LStrm);
     try
-      AssertEquals('version-major', 0, LStart.VersionMajor);
-      AssertEquals('version-minor', 9, LStart.VersionMinor);
-      AssertTrue('oferece PLAIN', LStart.SupportsMechanism('PLAIN'));
-      AssertTrue('server-properties tem product',
+      TAssert.AssertEquals('version-major', 0, LStart.VersionMajor);
+      TAssert.AssertEquals('version-minor', 9, LStart.VersionMinor);
+      TAssert.AssertTrue('oferece PLAIN', LStart.SupportsMechanism('PLAIN'));
+      TAssert.AssertTrue('server-properties tem product',
         LStart.ServerProperties.TryGetValue('product', LProd));
-      AssertEquals(AMQP_SERVER_PRODUCT, LProd.AsString);
+      TAssert.AssertEquals(AMQP_SERVER_PRODUCT, LProd.AsString);
     finally
       LStart.ServerProperties.Free;
     end;
@@ -864,7 +920,7 @@ begin
     // Channel.Open antes de autenticar.
     SendMethod(LStrm, 1, BuildChannelOpen);
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('COMMAND_INVALID', AMQP_COMMAND_INVALID, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('COMMAND_INVALID', AMQP_COMMAND_INVALID, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -887,7 +943,7 @@ begin
     LCloseArgs.MethodId := 0;
     SendMethod(LStrm, 3, BuildClose(LCloseArgs)); // Connection.* fora do canal 0
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('COMMAND_INVALID', AMQP_COMMAND_INVALID, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('COMMAND_INVALID', AMQP_COMMAND_INVALID, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -911,7 +967,7 @@ begin
     LTune.FrameMax := LTune.FrameMax * 2; // pede mais do que o broker propôs
     SendMethod(LStrm, AMQP_CHANNEL_CONNECTION, BuildTuneOk(LTune));
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('NOT_ALLOWED', AMQP_NOT_ALLOWED, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('NOT_ALLOWED', AMQP_NOT_ALLOWED, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -935,7 +991,7 @@ begin
     LTune.FrameMax := 1024; // abaixo dos 4096 da spec
     SendMethod(LStrm, AMQP_CHANNEL_CONNECTION, BuildTuneOk(LTune));
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('NOT_ALLOWED', AMQP_NOT_ALLOWED, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('NOT_ALLOWED', AMQP_NOT_ALLOWED, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -954,11 +1010,11 @@ begin
     RawHandshake(LStrm);
     SendMethod(LStrm, 1, BuildChannelOpen);
     ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
-    AssertEquals('Open-Ok no canal 1', 1, Integer(LCh));
+    TAssert.AssertEquals('Open-Ok no canal 1', 1, Integer(LCh));
 
     SendMethod(LStrm, 1, BuildChannelOpen); // de novo no mesmo canal
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('CHANNEL_ERROR', AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('CHANNEL_ERROR', AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -978,7 +1034,7 @@ begin
     LDeclare := TAMQPQueueDeclare.Create('q.sem.canal');
     SendMethod(LStrm, 7, BuildQueueDeclare(LDeclare)); // canal 7 nunca aberto
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('CHANNEL_ERROR', AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('CHANNEL_ERROR', AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -1001,7 +1057,7 @@ begin
     LF := TAMQPFrame.Create(42, 0, LPayload); // tipo inexistente
     LF.WriteTo(LStrm);
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('FRAME_ERROR', AMQP_FRAME_ERROR, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('FRAME_ERROR', AMQP_FRAME_ERROR, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
     LSock.Free;
@@ -1028,7 +1084,7 @@ begin
     LF := TAMQPFrame.Create(AMQP_FRAME_HEADER, 1, LPayload); // sem Basic.Publish
     LF.WriteTo(LStrm);
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
+    TAssert.AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
       Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
@@ -1052,7 +1108,7 @@ begin
     LArgs.MethodId := 0;
     SendMethod(LStrm, AMQP_CHANNEL_CONNECTION, BuildClose(LArgs));
     ExpectMethodId(LStrm, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_CLOSE_OK, LCh);
-    AssertEquals('Close-Ok no canal 0', 0, Integer(LCh));
+    TAssert.AssertEquals('Close-Ok no canal 0', 0, Integer(LCh));
   finally
     LStrm.Free;
     LSock.Free;
@@ -1082,7 +1138,7 @@ begin
       if LF.IsHeartbeat then
         LGot := True;
     end;
-    AssertTrue('broker emitiu heartbeat sozinho', LGot);
+    TAssert.AssertTrue('broker emitiu heartbeat sozinho', LGot);
   finally
     LStrm.Free;
     LSock.Free;
@@ -1110,7 +1166,7 @@ begin
         on EAMQPFrame do
           LDropped := True;
       end;
-    AssertTrue('peer mudo derrubado pelo heartbeat', LDropped);
+    TAssert.AssertTrue('peer mudo derrubado pelo heartbeat', LDropped);
   finally
     LStrm.Free;
     LSock.Free;
@@ -1130,7 +1186,7 @@ begin
     // Continua viva: um Channel.Open ainda é respondido.
     SendMethod(LStrm, 1, BuildChannelOpen);
     ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
-    AssertEquals('canal aberto apos silencio', 1, Integer(LCh));
+    TAssert.AssertEquals('canal aberto apos silencio', 1, Integer(LCh));
   finally
     LStrm.Free;
     LSock.Free;
@@ -1155,7 +1211,7 @@ begin
     ExpectMethodId(LStrm, AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK, LCh);
     SendMethod(LStrm, 1, BuildChannelOpen); // segundo Open => 504
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('CHANNEL_ERROR', AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('CHANNEL_ERROR', AMQP_CHANNEL_ERROR, Integer(LClose.ReplyCode));
 
     // Nunca respondemos o Close-Ok: o broker tem de derrubar no prazo.
     LDropped := False;
@@ -1167,7 +1223,7 @@ begin
         on EAMQPFrame do
           LDropped := True;
       end;
-    AssertTrue('derrubado por nao responder o Close-Ok', LDropped);
+    TAssert.AssertTrue('derrubado por nao responder o Close-Ok', LDropped);
   finally
     LStrm.Free;
     LSock.Free;
@@ -1184,21 +1240,21 @@ begin
   // emitir heartbeat a cada ~500 ms — se algum dos dois estiver errado, um
   // derruba o outro dentro de 2 s.
   FBroker.Heartbeat := 1;
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
-    LConn := ServerConn;
-    AssertNotNull(LConn);
-    AssertEquals('heartbeat negociado', 1, Integer(LConn.Negotiated.Heartbeat));
+    LConn := ServerConn(FBroker);
+    TAssert.AssertTrue(Assigned(LConn));
+    TAssert.AssertEquals('heartbeat negociado', 1, Integer(LConn.Negotiated.Heartbeat));
 
     Sleep(3000); // 3x o intervalo, ocioso dos dois lados
 
-    AssertTrue('cliente segue aberto', LCli.IsOpen);
-    AssertEquals('broker nao derrubou', 1, FBroker.ConnectionCount);
+    TAssert.AssertTrue('cliente segue aberto', LCli.IsOpen);
+    TAssert.AssertEquals('broker nao derrubou', 1, FBroker.ConnectionCount);
     // E ainda funciona de verdade.
     LCh := LCli.CreateChannel;
     try
-      AssertTrue('canal abre apos o silencio', WaitChannels(LConn, 1));
+      TAssert.AssertTrue('canal abre apos o silencio', WaitChannels(LConn, 1));
     finally
       LCh.Free;
     end;
@@ -1231,8 +1287,8 @@ begin
     end;
 
     LClose := ExpectChannelClose(LStrm, LCh);
-    AssertEquals('erro no canal 1', 1, Integer(LCh));
-    AssertEquals('NOT_IMPLEMENTED', AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
+    TAssert.AssertEquals('erro no canal 1', 1, Integer(LCh));
+    TAssert.AssertEquals('NOT_IMPLEMENTED', AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
 
     // A conexao sobrevive: respondemos o Close-Ok e reabrimos o canal.
     SendMethod(LStrm, 1, BuildChannelCloseOk);
@@ -1259,17 +1315,17 @@ var
 begin
   LSink := TRecordingSink.Create;
   FBroker.MessageSink := LSink; // o broker segura a referencia
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
     LCh := LCli.CreateChannel;
     try
       LCh.PublishText('', 'fila.teste', 'ola do WS5');
-      AssertTrue('mensagem chegou ao sink', LSink.WaitCount(1, 3000));
-      AssertEquals('routing key', 'fila.teste', LSink.RoutingKey);
-      AssertEquals('exchange default', '', LSink.Exchange);
-      AssertEquals('corpo remontado', 'ola do WS5', AmqpUtf8Decode(LSink.Body));
-      AssertTrue('conexao segue aberta', LCli.IsOpen);
+      TAssert.AssertTrue('mensagem chegou ao sink', LSink.WaitCount(1, 3000));
+      TAssert.AssertEquals('routing key', 'fila.teste', LSink.RoutingKey);
+      TAssert.AssertEquals('exchange default', '', LSink.Exchange);
+      TAssert.AssertEquals('corpo remontado', 'ola do WS5', AmqpUtf8Decode(LSink.Body));
+      TAssert.AssertTrue('conexao segue aberta', LCli.IsOpen);
     finally
       LCh.Free;
     end;
@@ -1294,18 +1350,18 @@ begin
   for I := 0 to High(LBody) do
     LBody[I] := Byte(I and $FF);
 
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
     LCh := LCli.CreateChannel;
     try
       LCh.Publish('', 'grande', LBody, TAMQPBasicProperties.Empty);
-      AssertTrue('mensagem chegou', LSink.WaitCount(1, 5000));
+      TAssert.AssertTrue('mensagem chegou', LSink.WaitCount(1, 5000));
       LGot := LSink.Body;
-      AssertEquals('tamanho remontado', Length(LBody), Length(LGot));
+      TAssert.AssertEquals('tamanho remontado', Length(LBody), Length(LGot));
       for I := 0 to High(LBody) do
         if LGot[I] <> LBody[I] then
-          Fail(Format('corpo diverge no octeto %d', [I]));
+          TAssert.Fail(Format('corpo diverge no octeto %d', [I]));
     finally
       LCh.Free;
     end;
@@ -1324,7 +1380,7 @@ var
 begin
   LSink := TRecordingSink.Create;
   FBroker.MessageSink := LSink;
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
     LCh := LCli.CreateChannel;
@@ -1343,10 +1399,10 @@ begin
         LHeaders.Free;
       end;
 
-      AssertTrue('mensagem chegou', LSink.WaitCount(1, 3000));
-      AssertEquals('content-type', 'application/json', LSink.ContentType);
-      AssertEquals('correlation-id', 'req-42', LSink.CorrelationId);
-      AssertEquals('header foo', 'bar', LSink.HeaderFoo);
+      TAssert.AssertTrue('mensagem chegou', LSink.WaitCount(1, 3000));
+      TAssert.AssertEquals('content-type', 'application/json', LSink.ContentType);
+      TAssert.AssertEquals('correlation-id', 'req-42', LSink.CorrelationId);
+      TAssert.AssertEquals('header foo', 'bar', LSink.HeaderFoo);
     finally
       LCh.Free;
     end;
@@ -1371,8 +1427,8 @@ begin
     SendMethod(LStrm, 1, BuildBasicPublish('', 'vazia'));
     // body-size 0: a mensagem fecha no proprio content-header.
     SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(0));
-    AssertTrue('mensagem sem corpo aceita', LSink.WaitCount(1, 3000));
-    AssertEquals('corpo vazio', 0, Length(LSink.Body));
+    TAssert.AssertTrue('mensagem sem corpo aceita', LSink.WaitCount(1, 3000));
+    TAssert.AssertEquals('corpo vazio', 0, Length(LSink.Body));
 
     // Canal voltou ao ocioso: um metodo normal e' respondido.
     SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));
@@ -1408,11 +1464,11 @@ begin
     SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 2, BuildRawContentHeader(4));
     SendFrameRaw(LStrm, AMQP_FRAME_BODY, 2, BytesOf('dois'));
 
-    AssertTrue('canal 2 completou', LSink.WaitCount(1, 3000));
+    TAssert.AssertTrue('canal 2 completou', LSink.WaitCount(1, 3000));
 
     // Agora o canal 1 termina o dele.
     SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, BytesOf('umumu'));
-    AssertTrue('canal 1 completou', LSink.WaitCount(2, 3000));
+    TAssert.AssertTrue('canal 1 completou', LSink.WaitCount(2, 3000));
 
     // Conexao intacta.
     SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));
@@ -1438,7 +1494,7 @@ begin
     // Em vez do body, um metodo NO MESMO canal: viola a regra de interleave.
     SendMethod(LStrm, 1, BuildQueueDeclare(TAMQPQueueDeclare.Create('q1')));
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
+    TAssert.AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
       Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
@@ -1460,7 +1516,7 @@ begin
     // Body direto, sem o content-header no meio.
     SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, BytesOf('xxx'));
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
+    TAssert.AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
       Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
@@ -1482,7 +1538,7 @@ begin
     SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1, BuildRawContentHeader(5));
     SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, BytesOf('dez octetos'));
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
+    TAssert.AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
       Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
@@ -1505,7 +1561,7 @@ begin
     SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1,
       BuildRawContentHeader(3, AMQP_CLASS_QUEUE));
     LClose := ExpectConnectionClose(LStrm);
-    AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
+    TAssert.AssertEquals('UNEXPECTED_FRAME', AMQP_UNEXPECTED_FRAME,
       Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
@@ -1523,18 +1579,18 @@ var
   LDelete: TAMQPQueueDelete;
   LTag: string;
 begin
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
     LCh := LCli.CreateChannel;
     try
       // Fila anonima: o nome vem do servidor.
       LDeclareOk := LCh.DeclareQueue(TAMQPQueueDeclare.Create(''));
-      AssertTrue('nome gerado pelo servidor (veio: ' + LDeclareOk.QueueName + ')',
+      TAssert.AssertTrue('nome gerado pelo servidor (veio: ' + LDeclareOk.QueueName + ')',
         Pos('amq.gen-', LDeclareOk.QueueName) = 1);
 
       LDeclareOk := LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ws5'));
-      AssertEquals('nome ecoado', 'q.ws5', LDeclareOk.QueueName);
+      TAssert.AssertEquals('nome ecoado', 'q.ws5', LDeclareOk.QueueName);
 
       LCh.DeclareExchange(TAMQPExchangeDeclare.Create('x.ws5'));
 
@@ -1550,18 +1606,18 @@ begin
 
       // Broker nulo: Basic.Get sempre devolve Get-Empty.
       LGet := LCh.BasicGet('q.ws5');
-      AssertFalse('fila vazia no broker nulo', LGet.Found);
+      TAssert.AssertFalse('fila vazia no broker nulo', LGet.Found);
 
       LTag := LCh.Consume('q.ws5', OnDelivery, True);
-      AssertTrue('consumer-tag devolvido', LTag <> '');
+      TAssert.AssertTrue('consumer-tag devolvido', LTag <> '');
       LCh.Cancel(LTag);
 
       LDelete.QueueName := 'q.ws5';
       LDelete.IfUnused := False;
       LDelete.IfEmpty := False;
       LDelete.NoWait := False;
-      AssertEquals('nenhuma mensagem apagada', 0, Integer(LCh.DeleteQueue(LDelete)));
-      AssertTrue('conexao intacta', LCli.IsOpen);
+      TAssert.AssertEquals('nenhuma mensagem apagada', 0, Integer(LCh.DeleteQueue(LDelete)));
+      TAssert.AssertTrue('conexao intacta', LCli.IsOpen);
     finally
       LCh.Free;
     end;
@@ -1588,7 +1644,7 @@ var
 begin
   LSink := TRecordingSink.Create;
   FBroker.MessageSink := LSink;
-  LCli := TAMQPConnection.Create(Params);
+  LCli := TAMQPConnection.Create(Params(FBroker));
   try
     LCli.Open;
     LCh := LCli.CreateChannel;
@@ -1604,18 +1660,18 @@ begin
         LHeaders.Free;
       end;
 
-      AssertTrue('mensagem chegou', LSink.WaitCount(1, 3000));
-      AssertTrue('header payload cru nao vazio', Length(LSink.HeaderPayload) > 0);
+      TAssert.AssertTrue('mensagem chegou', LSink.WaitCount(1, 3000));
+      TAssert.AssertTrue('header payload cru nao vazio', Length(LSink.HeaderPayload) > 0);
 
       LReader := TAMQPReader.Create(LSink.HeaderPayload);
       try
         LDecoded := DecodeContentHeader(LReader);
         try
-          AssertEquals('content-type decodificado do payload cru',
+          TAssert.AssertEquals('content-type decodificado do payload cru',
             'application/json', LDecoded.Properties.ContentType);
-          AssertTrue('header foo presente no payload cru',
+          TAssert.AssertTrue('header foo presente no payload cru',
             LDecoded.Properties.Headers.TryGetValue('foo', LFooVal));
-          AssertEquals('valor do header foo', 'bar', LFooVal.AsString);
+          TAssert.AssertEquals('valor do header foo', 'bar', LFooVal.AsString);
         finally
           if LDecoded.Properties.Has(bpHeaders) and
              Assigned(LDecoded.Properties.Headers) then
@@ -1637,9 +1693,14 @@ end;
 
 procedure TServerTlsTests.SetUp;
 begin
-  // De proposito NAO chama inherited: o SetUp da TServerFixture sobe um broker
-  // plain, e aqui queremos um com TLS. O TearDown herdado para e libera este.
+  // De proposito NAO chama ServidorSetUp: ele sobe um broker plain, e aqui
+  // queremos um com TLS. O ServidorTearDown para e libera este.
   FBroker := NewTlsBroker;
+end;
+
+procedure TServerTlsTests.TearDown;
+begin
+  ServidorTearDown(FBroker);
 end;
 
 function TServerTlsTests.TlsParams: TAMQPConnectionParams;
@@ -1660,15 +1721,15 @@ begin
   LCli := TAMQPConnection.Create(TlsParams);
   try
     LCli.Open;
-    AssertTrue('cliente aberto sobre TLS', LCli.IsOpen);
-    LConn := ServerConn;
-    AssertNotNull('conexao registrada', LConn);
-    AssertTrue('FSM chegou a amqssOpen', WaitState(LConn, amqssOpen));
-    AssertEquals('usuario autenticado', 'guest', LConn.UserId);
+    TAssert.AssertTrue('cliente aberto sobre TLS', LCli.IsOpen);
+    LConn := ServerConn(FBroker);
+    TAssert.AssertTrue('conexao registrada', Assigned(LConn));
+    TAssert.AssertTrue('FSM chegou a amqssOpen', WaitState(LConn, amqssOpen));
+    TAssert.AssertEquals('usuario autenticado', 'guest', LConn.UserId);
     // E' uma conexao AMQP de verdade, nao so um socket cifrado.
     LCh := LCli.CreateChannel;
     try
-      AssertTrue('canal abre sobre TLS', WaitChannels(LConn, 1));
+      TAssert.AssertTrue('canal abre sobre TLS', WaitChannels(LConn, 1));
     finally
       LCh.Free;
     end;
@@ -1699,12 +1760,12 @@ begin
     LCh := LCli.CreateChannel;
     try
       LCh.Publish('', 'sobre.tls', LBody, TAMQPBasicProperties.Empty);
-      AssertTrue('mensagem chegou', LSink.WaitCount(1, 8000));
+      TAssert.AssertTrue('mensagem chegou', LSink.WaitCount(1, 8000));
       LGot := LSink.Body;
-      AssertEquals('tamanho remontado', Length(LBody), Length(LGot));
+      TAssert.AssertEquals('tamanho remontado', Length(LBody), Length(LGot));
       for I := 0 to High(LBody) do
         if LGot[I] <> LBody[I] then
-          Fail(Format('corpo diverge no octeto %d', [I]));
+          TAssert.Fail(Format('corpo diverge no octeto %d', [I]));
     finally
       LCh.Free;
     end;
@@ -1730,7 +1791,7 @@ begin
       on Exception do
         LFalhou := True;
     end;
-    AssertTrue('cliente plain nao pode abrir numa porta TLS',
+    TAssert.AssertTrue('cliente plain nao pode abrir numa porta TLS',
       LFalhou or (not LCli.IsOpen));
   finally
     LCli.Free;
@@ -1753,7 +1814,7 @@ begin
       on Exception do
         LFalhou := True;
     end;
-    AssertTrue('sem certificado valido a conexao nao abre',
+    TAssert.AssertTrue('sem certificado valido a conexao nao abre',
       LFalhou or (not LCli.IsOpen));
   finally
     LCli.Free;
@@ -1784,9 +1845,9 @@ begin
     SendMethod(LStrm, 1, BuildBasicConsume(LCons));
 
     LClose := ExpectChannelClose(LStrm, LCh);
-    AssertEquals('no-local fecha o canal com NOT_IMPLEMENTED',
+    TAssert.AssertEquals('no-local fecha o canal com NOT_IMPLEMENTED',
       AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
-    AssertEquals('no canal ofensor', 1, Integer(LCh));
+    TAssert.AssertEquals('no canal ofensor', 1, Integer(LCh));
   finally
     LStrm.Free;
     LSock.Free;
@@ -1811,7 +1872,7 @@ begin
     SendMethod(LStrm, 1, BuildBasicQos(10, False, 4096));
 
     LClose := ExpectChannelClose(LStrm, LCh);
-    AssertEquals('prefetch-size fecha o canal com NOT_IMPLEMENTED',
+    TAssert.AssertEquals('prefetch-size fecha o canal com NOT_IMPLEMENTED',
       AMQP_NOT_IMPLEMENTED, Integer(LClose.ReplyCode));
   finally
     LStrm.Free;
@@ -1858,47 +1919,47 @@ begin
 
     // 1o: o Basic.Return, com o conteudo logo atras.
     LFrame := TAMQPFrame.ReadFrom(LStrm);
-    AssertEquals('1o frame e metodo', Integer(AMQP_FRAME_METHOD),
+    TAssert.AssertEquals('1o frame e metodo', Integer(AMQP_FRAME_METHOD),
       Integer(LFrame.FrameType));
     LR := TAMQPReader.Create(LFrame.Payload);
     try
       LId.ClassId := LR.ReadShortUInt;
       LId.MethodId := LR.ReadShortUInt;
-      AssertTrue('o 1o metodo e Basic.Return, nao o Ack',
+      TAssert.AssertTrue('o 1o metodo e Basic.Return, nao o Ack',
         LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN));
       LReturn := DecodeBasicReturn(LR);
     finally
       LR.Free;
     end;
-    AssertEquals('NO_ROUTE', Integer(AMQP_NO_ROUTE), Integer(LReturn.ReplyCode));
-    AssertEquals('exchange devolvido', 'ex.ord', LReturn.Exchange);
-    AssertEquals('routing key devolvida', 'nada', LReturn.RoutingKey);
+    TAssert.AssertEquals('NO_ROUTE', Integer(AMQP_NO_ROUTE), Integer(LReturn.ReplyCode));
+    TAssert.AssertEquals('exchange devolvido', 'ex.ord', LReturn.Exchange);
+    TAssert.AssertEquals('routing key devolvida', 'nada', LReturn.RoutingKey);
 
     LFrame := TAMQPFrame.ReadFrom(LStrm);
-    AssertEquals('2o frame e o content-header', Integer(AMQP_FRAME_HEADER),
+    TAssert.AssertEquals('2o frame e o content-header', Integer(AMQP_FRAME_HEADER),
       Integer(LFrame.FrameType));
     LFrame := TAMQPFrame.ReadFrom(LStrm);
-    AssertEquals('3o frame e o body', Integer(AMQP_FRAME_BODY),
+    TAssert.AssertEquals('3o frame e o body', Integer(AMQP_FRAME_BODY),
       Integer(LFrame.FrameType));
-    AssertEquals('com o corpo original', 'sem rota',
+    TAssert.AssertEquals('com o corpo original', 'sem rota',
       AmqpUtf8Decode(LFrame.Payload));
 
     // SO' ENTAO o Basic.Ack do confirm: mensagem sem rota tambem e confirmada.
     LFrame := TAMQPFrame.ReadFrom(LStrm);
-    AssertEquals('4o frame e metodo', Integer(AMQP_FRAME_METHOD),
+    TAssert.AssertEquals('4o frame e metodo', Integer(AMQP_FRAME_METHOD),
       Integer(LFrame.FrameType));
     LR := TAMQPReader.Create(LFrame.Payload);
     try
       LId.ClassId := LR.ReadShortUInt;
       LId.MethodId := LR.ReadShortUInt;
-      AssertTrue('e o Basic.Ack, depois do Return',
+      TAssert.AssertTrue('e o Basic.Ack, depois do Return',
         LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK));
       LAck := DecodeBasicAck(LR);
     finally
       LR.Free;
     end;
-    AssertEquals('confirmando o seq-no 1', 1, Integer(LAck.DeliveryTag));
-    AssertFalse('sem multiple', LAck.Multiple);
+    TAssert.AssertEquals('confirmando o seq-no 1', 1, Integer(LAck.DeliveryTag));
+    TAssert.AssertFalse('sem multiple', LAck.Multiple);
   finally
     LStrm.Free;
     LSock.Free;
