@@ -999,7 +999,7 @@ Até aqui os dois lados de cada suíte eram escritos à mão: o mestre DUnitX co
 
 **Linux**: não havia script; as validações anteriores foram à mão. Entrou `tools\test_fpc_docker.sh`, que confere os espelhos e roda as nove configurações (unitária; server e integração em Default e `openssl`; aceitação nas duas passagens, nos dois modes) num container, com o heaptrc em arquivo.
 
-**Validação FPC.** Windows: unitária 131, integração 43 (contra o RabbitMQ), server 472 e 476 (`openssl`), aceitação 43 nas duas passagens, 0 vazamento. Linux (`tools	est_fpc_docker.sh`, Debian/FPC 3.2.2, heaptrc com `log=`): as nove configurações verdes — unitária 131, server 472/476, integração 43 nos dois modes, aceitação 43 nas quatro passagens —, 0 vazamento em todas. Os mesmos números de antes do kit.
+**Validação FPC.** Windows: unitária 131, integração 43 (contra o RabbitMQ), server 472 e 476 (`openssl`), aceitação 43 nas duas passagens, 0 vazamento. Linux (`tools	est_fpc_docker.sh`, Debian/FPC 3.2.2, heaptrc com `log=`): as nove configurações verdes — unitária 131, server 472/476, integração 43 nos dois modes, aceitação 43 nas quatro passagens —, 0 vazamento em todas. Os mesmos números de antes do kit. **Delphi 12 CE** (compilado no IDE, `.exe` rodados daqui), Win32 e Win64, Debug e OpenSSL: unitária 131, server 472 / 476, integração 43, aceitação 43 nas duas passagens, `Tests Leaked: 0` em todas, sem nenhuma correção depois da conversão. Os 5 testes TLS da integração saíram pelo `IGNORADO` nas quatro builds (e no FPC): o container do RabbitMQ estava sem o listener 5671 (subiu sem o `docker-compose.tls.yml`). Os mesmos corpos rodaram TLS de verdade na aceitação `OpenSSL`, contra o broker embutido, no Delphi e no FPC Linux.
 
 ## Verificador de espelhos
 
