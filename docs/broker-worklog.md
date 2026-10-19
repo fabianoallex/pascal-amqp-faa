@@ -975,7 +975,35 @@ no IDE), Win32 e Win64, Debug e OpenSSL: unitária 131, integração 43, server 
 43 nas duas passagens, `Tests Leaked: 0` em todas. Não rodado: FPC/Linux e o build mode
 `openssl` do FPC.
 
+## Kit de testes da skill (2026-10-19)
+
+Até aqui os dois lados de cada suíte eram escritos à mão: o mestre DUnitX com a API nativa (`Assert.AreEqual(esperado, atual, msg)`), o espelho FPCUnit no dialeto dele, e o `verifica_espelhos.py` vigiando a distância entre os dois. Oito repositórios da família tinham cópias próprias de um adaptador e de um gerador; agora há uma cópia canônica na skill `dual-compiler-delphi-lazarus`, e este repositório a adotou (`tools\gen_fpc_mirror.py` sem alteração, `tests\Unit\AMQP.DUnitXCompat.pas` do template). Um commit por suíte.
+
+**Como foi feito.** O mestre novo saiu do **espelho FPC**, que já estava no dialeto certo: `published` virou `[Test]`, `SetUp`/`TearDown override` viraram `[Setup]`/`[TearDown]`, as asserções ganharam o `TAssert.`. Antes, as duas pontas foram comparadas teste a teste e asserção a asserção (tipo, mensagem, esperado e atual, sem os casts): **os mesmos 650 testes** nas três suítes, e só oito métodos com asserções diferentes.
+
+**Divergências antigas encontradas**, resolvidas no mestre a favor do que o espelho FPC dizia (que é o que rodava nos dois CIs de fato):
+- `TVHostTests.DeclareExchange_TipoInvalido` e `BindQueue_HeadersXMatchInvalido`: a mensagem do DUnitX dizia `amqtrTipoInvalido` e comparava com `amqtrCommandInvalid`; a do FPC já dizia `amqtrCommandInvalid`.
+- `TServerSkeletonTests.ConexaoRegistraEReap`: só o FPC tinha um `AssertTrue('protocol-header aceito', True)`, que não testa nada. Removido.
+- `TAMQPReviewRegressionTests.CreateChannelConcorrente_IdsDistintos`: o DUnitX usava `TParallel.For` (não existe no FPC); o FPC usa o `PcPool` e tem uma asserção a mais (os N itens terminaram). Ficou a do FPC.
+- `CredenciaisInvalidas_Levanta` (integração): DUnitX `Assert.WillRaise` sem classe; FPC `try/except` com flag. Mesma semântica, ficou a do FPC.
+- `DeliveryTag` em três testes de `TServerCodecTests`: DUnitX `IsTrue(UInt64(12) = X)`, FPC `AssertEquals(QWord, QWord)`. O template não tem `QWord`: virou `AssertEquals(Int64(12), Int64(X))`, e as outras ~20 asserções `QWord` da unitária, idem.
+- Diferenças só de texto ou de forma, sem efeito: `'tamanho'` × `'tamanho da resposta'`, `'delphi-amqp-faa'` × `'pascal-amqp-faa'` no próprio dado do teste, `TInterlocked.CompareExchange` × `PcAtomicGet`, e os locais que o FPC usa para fugir do *internal error* do `TValue` encadeado.
+
+**O que o template não cobre** foi para `tests\AMQP.TestSupport.pas` (não gerada, compilada pelos dois runners): `ChecaLevanta` (o `AssertException` do FPCUnit, 9 usos, classe exata), `IgnoraTeste` (o `Ignore`, nos testes TLS; no DUnitX sai pelo `Assert.Pass('IGNORADO: ...')`, como antes) e `DirTemporario` (o Delphi não tem `GetTempDir`). `AssertNotNull` (8 usos) virou `AssertTrue(msg, Assigned(X))`. Duas faltas que se repetem e que valem proposta para o template da skill: **`AssertException`** e **`AssertNotNull`**.
+
+**O gerador não aceita herança entre fixtures** — e o espelho FPC tinha seis bases (`TServerFixture` com cinco descendentes, `TJournalFixture` com cinco, `TWalFixture` com três, `TTopoFixture` e `TPersistFixture` com um). As de um descendente só foram dobradas nele; nas outras, cada fixture guarda os próprios campos e chama rotinas da unit com os campos como parâmetro de mesmo nome (`ServidorSetUp(FBroker)`, `Params(FBroker)`, `JournalSetUp(FDir)`) — é a forma que o mestre DUnitX antigo já tinha. O primeiro passe do conversor deixou os descendentes no dialeto do FPCUnit; o build FPC passou (no espelho gerado eles continuavam válidos) e **quem pegou foi uma compilação dos mestres pelo FPC contra o `TAssert` do template**, com o DUnitX trocado por um esboço e os atributos removidos — uma aproximação barata do que o dcc32 vê, que vale repetir antes de mandar uma mudança grande para a IDE.
+
+**`AMQP.IntegrationConfig` e `AMQP.ServerTestDoubles`** tinham duas cópias cada, que só diferiam nos nomes com namespace do `uses`: viraram uma só, em `tests\`. **`SysUtils.DeleteFile`/`SysUtils.FindClose`** qualificados nos corpos (necessário só com `Windows` no `uses`, que nenhuma destas units tem) foram desqualificados: no mestre, o dcc32 recusaria.
+
+**O verificador** perdeu as checagens que o gerador e o build FPC cobrem (paridade, código depois do `initialization`, `Assert.*` no lado FPC) e ficou com cinco, todas sobre o mestre: fixture registrada, units de `src\server\` nos projetos, asserção qualificada, atributo em seção pública, RTL só do FPC. As cinco foram conferidas com uma mutação cada.
+
+**Linux**: não havia script; as validações anteriores foram à mão. Entrou `tools\test_fpc_docker.sh`, que confere os espelhos e roda as nove configurações (unitária; server e integração em Default e `openssl`; aceitação nas duas passagens, nos dois modes) num container, com o heaptrc em arquivo.
+
+**Validação FPC.** Windows: unitária 131, integração 43 (contra o RabbitMQ), server 472 e 476 (`openssl`), aceitação 43 nas duas passagens, 0 vazamento. Linux (`tools	est_fpc_docker.sh`, Debian/FPC 3.2.2, heaptrc com `log=`): as nove configurações verdes — unitária 131, server 472/476, integração 43 nos dois modes, aceitação 43 nas quatro passagens —, 0 vazamento em todas. Os mesmos números de antes do kit.
+
 ## Verificador de espelhos
+
+*Histórico abaixo; o estado atual (cinco checagens sobre o mestre, depois do kit de testes) está na seção acima e no `CLAUDE.md`.*
 
 `tests\tools\verifica_espelhos.py` — roda **sem compilador** e checa as duas coisas que só aparecem no espelho Delphi, onde cada erro custa um round-trip pela IDE: (1) código declarado **depois do `initialization`** (em Pascal `procedure` ali vira diretiva, `E2070` no dcc32); (2) **paridade dos espelhos** — todo teste declarado de um lado existe do outro, e toda fixture **com testes** está registrada. O segundo pega o defeito silencioso: fixture nova não registrada no DUnitX **não dá erro de compilação**, dá suíte verde com N testes a menos. Sai com código 1 em divergência, então dá para amarrar num hook. **Rode antes de mandar a suíte para a IDE.**
 

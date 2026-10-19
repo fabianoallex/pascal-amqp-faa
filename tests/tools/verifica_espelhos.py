@@ -1,66 +1,53 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Verificador estrutural das suites espelhadas DUnitX <-> FPCUnit.
+"""O que o gerador de espelhos NAO confere, nos mestres DUnitX.
 
-POR QUE ISTO EXISTE
--------------------
-Metade da validacao deste projeto depende do IDE Delphi (a Community Edition
-nao compila por linha de comando), entao um defeito que so aparece no espelho
-Delphi custa um round-trip inteiro -- ou pior, passa despercebido. Os dois
-defeitos que motivaram este script apareceram na WS2 da Fase 3:
+DE ONDE VEIO
+------------
+Ate' 2026-10-19 os dois lados das suites eram escritos a mao, e este script
+nasceu para pegar, sem compilador, divergencias entre eles que custavam um
+round-trip pela IDE Delphi (a Community Edition nao compila por linha de
+comando). Tinha seis checagens; o historico de cada uma esta' em
+docs/broker-worklog.md.
 
-1. Implementacoes de teste inseridas DEPOIS do `initialization`. Em Pascal,
-   `procedure` ali e parseado como diretiva (E2070 no dcc32). O FPC pegou; o
-   arquivo Delphi, gerado pelo mesmo caminho, tinha o mesmo defeito e nao foi
-   reconferido. Verde num compilador nao e evidencia sobre o outro.
+Desde entao os testes seguem o kit da skill dual-compiler-delphi-lazarus: o
+mestre DUnitX (tests/<Suite>/X.pas) e' escrito no dialeto do FPCUnit
+(TAssert.*, via AMQP.DUnitXCompat) e o espelho tests/<Suite>/fpc/X.pas e'
+GERADO por tools/gen_fpc_mirror.py, que no --check acusa espelho
+desatualizado e recusa API do DUnitX no corpo. Com um corpo so', o build FPC
+compila o mesmo texto que o Delphi. Isso aposentou tres checagens:
+  - codigo depois do `initialization` (o FPC recusa o mesmo texto);
+  - paridade de testes entre os lados (o espelho e' derivado do mestre);
+  - Assert.* do DUnitX no lado FPC (o gerador recusa).
 
-2. Fixture nova NAO registrada no `initialization` do DUnitX. Este e o pior:
-   nao da erro de compilacao nenhum -- da uma suite verde com 13 testes a
-   menos, que e exatamente o verde falso que o CLAUDE.md ja documenta da WS9
-   da Fase 2.
+FICARAM as que o gerador e o FPC nao enxergam, porque o defeito so' aparece
+no Delphi, ou em lugar nenhum:
 
-Depois entrou uma terceira, da mesma familia (WS5 da Fase 3): unit nova de
-src/server listada num projeto Delphi e esquecida no outro. O FPC nao pega
-porque la as units vem do PACOTE; no Delphi cada .dpr/.dproj lista uma a uma,
-e esquecer custa "F2613 Unit not found" -- outro round-trip pela IDE.
-
-E uma quarta, na WS5 da Fase 4: uma assercao NO DIALETO ERRADO. Um script que
-gera os dois espelhos deixou `AssertTrue(msg, cond)` -- forma do FPCUnit -- no
-arquivo DUnitX. O FPC compilava, a suite FPC estava verde, e o defeito so
-apareceu no dcc32 como "E2003 Undeclared identifier: 'ASSERTTRUE'". Custou
-exatamente o round-trip que este script existe para evitar, e a deteccao e
-trivial: os dois conjuntos de nomes de assercao sao disjuntos e conhecidos.
-
-E uma quinta, na mesma rodada: atributo do DUnitX ([Setup], [Test]...) numa
-secao `private`/`protected`. O RTTI padrao do Delphi so publica metodos
-`public` e `published` -- numa secao protegida o atributo compila e NUNCA E
-ENCONTRADO. Quando e um [Setup], a fixture roda com todos os campos nil; quando
-e um [Test], ele some da suite em silencio, que e o verde falso de sempre. O
-FPCUnit nao tem como avisar: la a visibilidade que importa e `published`, e a
-fixture-base nem precisa dela.
-
-E uma sexta, na mesma rodada: chamada de RTL que so existe em UM dos
-compiladores, escrita no espelho do outro (`GetTempDir` num arquivo DUnitX;
-`SysUtils.DeleteFile` qualificado sem o `System.` que o Delphi exige). A causa
-foi sempre a mesma: um gerador que escreve OS DOIS espelhos a partir de um
-bloco de texto so'. Isso funciona para o corpo do teste -- e' bom que funcione,
-e' o que mantem os espelhos iguais --, mas NAO para o que toca a RTL, que nao
-e' neutra de dialeto. A lista abaixo e' curta de proposito: so' o que ja'
-custou um round-trip de verdade.
-
-Nenhum dos seis precisa de compilador para ser detectado. Rode isto antes de
-mandar a suite para o IDE.
+[1] Fixture com [Test] e sem TDUnitX.RegisterTestFixture. O gerador copia o
+    registro, entao a fixture some DOS DOIS lados sem erro nenhum -- a suite
+    fica verde com menos testes.
+[2] Toda unit de src/server listada em todo .dpr/.dproj que compila o
+    submodulo, e no pascal_amqp_faa_server.lpk (ver o docstring da funcao:
+    unit fora do .lpk compila e morre em runtime).
+[3] Assercao do FPCUnit SEM o `TAssert.` na frente. No espelho gerado ela e'
+    metodo herdado de TTestCase e compila; no mestre, que e' uma classe
+    simples, so' o dcc32 recusa (E2003). Vale tambem para Fail e Ignore.
+[4] Atributo do DUnitX ([Setup], [Test]...) fora de `public`: o RTTI padrao
+    do Delphi nao o enxerga e ele nunca roda. O gerador nao olha a secao, e
+    no FPCUnit a fixture funciona.
+[5] RTL que so' existe no FPC (GetTempDir, GetLastOSError, o qualificador
+    `SysUtils.`): compila no FPC, falha so' no dcc32. O lugar dessas
+    diferencas e' tests/AMQP.TestSupport.pas.
 
 USO
 ---
     python tests/tools/verifica_espelhos.py
 
-Sai com codigo 1 se achar divergencia real, 0 se estiver limpo -- da para
-amarrar num hook ou num passo de CI.
+Sai com codigo 1 se achar problema. Rode junto com
+`python tools/gen_fpc_mirror.py --check --suite tests/Unit --suite
+tests/Integration --suite tests/Server`, antes de mandar a suite para a IDE.
 
-NAO E um parser de Pascal: e casamento de padroes deliberadamente simples
-sobre a secao de tipos e o bloco de registro. Serve para as duas classes de
-erro acima e nao pretende mais que isso.
+NAO E um parser de Pascal: e casamento de padroes deliberadamente simples.
 """
 
 import io
@@ -69,32 +56,28 @@ import re
 import sys
 
 RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
-# Diretorios varridos pelo lint de "codigo depois do initialization".
-DIRS_LINT = ['tests', 'samples']
-
-# Pastas de artefato de build que nao interessam.
+SUITES = ['tests/Unit', 'tests/Integration', 'tests/Server']
 IGNORAR = ('/lib/', '\\lib\\', '/backup/', '\\backup\\', '__recovery')
-
-# NAO ha lista de excecoes, e isso e proposital. A primeira versao deste
-# script comparava TODA `procedure` da secao de tipos e exigia registro de TODA
-# classe -- e acusou 7 divergencias, das quais 7 eram falso-positivo: metodos
-# `Do*` que so existem do lado FPC (o AssertException do FPCUnit exige um
-# METODO onde o Assert.WillRaise do DUnitX aceita closure), o `Execute` de um
-# TAMQPWorkItem, e classes auxiliares como TAlvoFalso, que nao sao fixtures.
-#
-# Uma lista de excecoes teria escondido os falso-positivos sem consertar a
-# heuristica -- e cada teste novo com nome parecido voltaria a acusar. Os
-# discriminadores EXATOS existem nos dois dialetos e sao usados abaixo:
-#   DUnitX  : fixture = classe com [TestFixture]; teste = metodo com [Test].
-#   FPCUnit : fixture = class(TTestCase); teste = metodo na secao `published`.
-# Com eles, helper em private/protected e classe auxiliar simplesmente nao
-# entram na conta.
 
 
 def le(caminho):
     with io.open(caminho, encoding='utf-8-sig', errors='replace') as f:
         return f.read()
+
+
+def rel(p):
+    return os.path.relpath(p, RAIZ).replace('\\', '/')
+
+
+def mestres():
+    """Os mestres DUnitX: tests/<Suite>/*Tests.pas (o que o gerador le')."""
+    for s in SUITES:
+        base = os.path.join(RAIZ, s)
+        if not os.path.isdir(base):
+            continue
+        for n in sorted(os.listdir(base)):
+            if n.endswith('Tests.pas'):
+                yield os.path.join(base, n)
 
 
 def arquivos_pascal(dirs):
@@ -112,255 +95,18 @@ def arquivos_pascal(dirs):
                 yield p
 
 
-def rel(p):
-    return os.path.relpath(p, RAIZ).replace('\\', '/')
-
-
-def lint_apos_initialization():
-    """Codigo executavel declarado depois do `initialization`."""
-    achados = []
-    for p in arquivos_pascal(DIRS_LINT):
-        s = le(p)
-        m = re.search(r'^initialization\s*$', s, re.M)
-        if not m:
-            continue
-        depois = s[m.end():]
-        for d in re.finditer(r'^(procedure|function)\s+(\w+)', depois, re.M):
-            achados.append((rel(p), d.group(2)))
-            break  # um por arquivo basta para acusar
-    return achados
-
-
-def pares_espelhados():
-    """Casa tests/X/fpc/Nome.pas com tests/X/Nome.pas."""
-    for p in arquivos_pascal(['tests']):
-        pasta, nome = os.path.split(p)
-        if os.path.basename(pasta).lower() != 'fpc':
-            continue
-        if not nome.lower().endswith('.pas'):
-            continue
-        delphi = os.path.join(os.path.dirname(pasta), nome)
-        if os.path.exists(delphi):
-            yield delphi, p
-
-
-def blocos_de_classe(decl):
-    """Gera (nome, pai, texto_antes, corpo) de cada `TXxx = class...end;`.
-
-    O corpo vai ate' a primeira linha que seja so' `end;` -- basta para o
-    formato consistente desta codebase e evita ter de parsear Pascal de
-    verdade. `texto_antes` carrega os atributos que precedem a classe, que e'
-    onde o [TestFixture] do DUnitX aparece. `pai` e' vazio em `= class` sem
-    ancestral explicito.
-    """
-    for m in re.finditer(r'^[ \t]*(T\w+)\s*=\s*class\b[ \t]*(?:\(\s*(\w+))?',
-                         decl, re.M):
-        nome = m.group(1)
-        pai = m.group(2) or ''
-        antes = decl[max(0, m.start() - 120):m.start()]
-        resto = decl[m.end():]
-        fim = re.search(r'^[ \t]*end;\s*$', resto, re.M)
-        corpo = resto[:fim.start()] if fim else resto
-        yield nome, pai, antes, corpo
-
-
-def testes_publicados(corpo):
-    """Metodos da secao `published` (idioma de fixture do FPCUnit)."""
-    nomes = set()
-    # divide o corpo por palavras de visibilidade, mantendo qual abriu cada
-    # trecho
-    partes = re.split(r'^[ \t]*(private|protected|public|published)\b',
-                      corpo, flags=re.M)
-    atual = None
-    for i, parte in enumerate(partes):
-        if parte in ('private', 'protected', 'public', 'published'):
-            atual = parte
-            continue
-        if atual == 'published':
-            nomes.update(re.findall(r'procedure\s+(\w+)\s*;', parte))
-    return nomes
-
-
-def analisa(caminho):
-    """(testes declarados, fixtures COM testes, fixtures registradas).
-
-    Usa os discriminadores exatos de cada dialeto -- ver o comentario no topo:
-    helper em private/protected e classe auxiliar nao entram na conta.
-
-    "Fixture com testes" e' a unidade certa para exigir registro: uma classe
-    BASE compartilhada (o TServerFixture das suites do server) e fixture, mas
-    nao declara teste nenhum e nao precisa estar registrada. Exigir registro
-    dela seria falso-positivo; nao exigir de quem tem teste deixaria passar o
-    defeito silencioso que motivou este script.
-    """
-    s = le(caminho)
-    i = s.find('implementation')
-    decl = s[:i] if i > 0 else s
-
-    dunitx = '[TestFixture]' in decl or 'DUnitX.TestFramework' in s
-    classes = list(blocos_de_classe(decl))
-
-    # Uma fixture do FPCUnit pode descender de outra fixture, nao so de
-    # TTestCase direto -- as suites do server usam uma base comum. Fecho
-    # transitivo por ponto fixo; sem isso, toda fixture derivada some da
-    # analise e o arquivo inteiro parece nao ter teste algum.
-    ehfixture = {}
-    for nome, pai, antes, _c in classes:
-        if dunitx:
-            ehfixture[nome] = '[TestFixture]' in antes
-        else:
-            ehfixture[nome] = (pai == 'TTestCase')
-    if not dunitx:
-        mudou = True
-        while mudou:
-            mudou = False
-            for nome, pai, _a, _c in classes:
-                if not ehfixture.get(nome) and ehfixture.get(pai):
-                    ehfixture[nome] = True
-                    mudou = True
-
-    testes = set()
-    com_testes = set()
-    for nome, _pai, _antes, corpo in classes:
-        if not ehfixture.get(nome):
-            continue
-        if dunitx:
-            meus = set(re.findall(r'\[Test\]\s*procedure\s+(\w+)\s*;', corpo))
-        else:
-            meus = testes_publicados(corpo)
-        testes.update(meus)
-        if meus:
-            com_testes.add(nome)
-
-    # A FORMA da chamada importa, nao so' o nome da fixture: no DUnitX o
-    # registro e' um metodo de classe e precisa do `TDUnitX.` na frente --
-    # `RegisterTestFixture(X)` solto nao compila (E2003, identificador nao
-    # declarado). A primeira versao deste script casava os dois jeitos e por
-    # isso deu a fixture como registrada num arquivo que nao compilava; foi
-    # falso-negativo dele, achado quando o dcc32 recusou o arquivo.
-    if dunitx:
-        padrao = r'TDUnitX\s*\.\s*RegisterTestFixture\s*\(\s*(\w+)\s*\)'
-    else:
-        padrao = r'\bRegisterTest\s*\(\s*(\w+)\s*\)'
-    registradas = set(re.findall(padrao, s))
-    return testes, com_testes, registradas
-
-
-def verifica_paridade():
-    problemas = []
-    for delphi, fpc in pares_espelhados():
-        td, fd, rd = analisa(delphi)
-        tf, ff, rf = analisa(fpc)
-
-        so_delphi = td - tf
-        so_fpc = tf - td
-        if so_delphi:
-            problemas.append((rel(delphi),
-                              'teste so existe no DELPHI: ' + ', '.join(sorted(so_delphi))))
-        if so_fpc:
-            problemas.append((rel(fpc),
-                              'teste so existe no FPC: ' + ', '.join(sorted(so_fpc))))
-
-        # Fixture declarada e nao registrada = testes que nunca rodam, sem
-        # nenhum erro de compilacao. E o defeito silencioso.
-        for caminho, fx, reg in ((delphi, fd, rd), (fpc, ff, rf)):
-            faltando = fx - reg
-            if faltando:
-                problemas.append((rel(caminho),
-                                  'fixture NAO REGISTRADA: ' + ', '.join(sorted(faltando))))
-    return problemas
-
-
-def projetos_delphi_com_server():
-    """.dpr que compilam src/server (listam as units uma a uma)."""
-    for p in arquivos_pascal(['tests', 'samples']):
-        if not p.lower().endswith('.dpr'):
-            continue
-        s = le(p)
-        if ('src' + os.sep + 'server') in s or 'src/server/' in s:
-            yield p, s
-
-
-def verifica_units_do_server():
-    r"""Toda unit de src/server tem de estar em TODO .dpr que usa o sub-modulo
-    E no pacote pascal_amqp_faa_server.lpk.
-
-    No Delphi cada projeto lista as units uma a uma, e a que faltar aparece
-    como "F2613 Unit not found" na IDE.
-
-    NO FPC O SINTOMA E' MUITO PIOR, e por isso o .lpk entrou nesta checagem.
-    Uma unit de src/server que NAO esta' no .lpk ainda compila -- o
-    OtherUnitFiles do pacote aponta para ..\src\server, entao o compilador a
-    acha. So' que ela e' compilada DUAS VEZES, uma dentro do pacote e outra
-    dentro de cada projeto, com .ppu distintos. Enquanto a unit so' tem tipos,
-    passa despercebido. No dia em que ela declara uma INTERFACE usada por
-    units do pacote, os dois lados passam a discordar do layout dela e o
-    programa morre de access violation em tempo de execucao, com tudo
-    compilando limpo. Foi exatamente o que aconteceu com AMQP.Server.Events no
-    Inc. 2 da Fase 4.1: 142 erros e nenhuma mensagem do compilador.
-    """
-    problemas = []
-    srv = os.path.join(RAIZ, 'src', 'server')
-    if not os.path.isdir(srv):
-        return problemas
-    units = sorted(n[:-4] for n in os.listdir(srv) if n.lower().endswith('.pas'))
-    projs = list(projetos_delphi_com_server())
-    for caminho, texto in projs:
-        faltando = [u for u in units if u not in texto]
-        if faltando:
-            problemas.append((rel(caminho),
-                              'unit de src/server nao listada: ' + ', '.join(faltando)))
-        # o .dproj irmao tem de listar as mesmas
-        dproj = caminho[:-4] + '.dproj'
-        if os.path.exists(dproj):
-            td = le(dproj)
-            faltam2 = [u for u in units if u in texto and u not in td]
-            if faltam2:
-                problemas.append((rel(dproj),
-                                  'unit no .dpr mas nao no .dproj: ' + ', '.join(faltam2)))
-
-    # O pacote do FPC. Ver o docstring: unit fora dele compila e quebra em
-    # runtime, que e' o pior dos dois mundos.
-    lpk = os.path.join(RAIZ, 'packages', 'pascal_amqp_faa_server.lpk')
-    if os.path.exists(lpk):
-        tl = le(lpk)
-        faltam3 = [u for u in units if ('<UnitName Value="%s"/>' % u) not in tl]
-        if faltam3:
-            problemas.append((rel(lpk),
-                              'unit de src/server nao listada no pacote: '
-                              + ', '.join(faltam3)))
-    return problemas
-
-
-# Nomes de assercao de cada dialeto. Sao disjuntos: o FPCUnit expoe metodos
-# soltos herdados de TAssert, o DUnitX so o objeto `Assert`. Uma chamada do
-# conjunto errado nao compila -- mas so no compilador do OUTRO lado, que e
-# justamente o que passa despercebido quando um gerador escreve os dois.
-ASSERCOES_FPCUNIT = (
-    'AssertEquals', 'AssertTrue', 'AssertFalse', 'AssertNull', 'AssertNotNull',
-    'AssertSame', 'AssertNotSame', 'AssertException', 'AssertEqualsString',
-)
-
-# `Assert.` casa o DUnitX inteiro (AreEqual, IsTrue, WillRaise, Pass, Fail...)
-# sem precisar listar metodo por metodo.
-RE_ASSERT_DUNITX = re.compile(r'(?<![\w.])Assert\s*\.\s*[A-Za-z]')
-
-
 def sem_comentarios(texto):
     """Troca comentarios e literais por espacos, preservando os \\n.
 
-    Sem isto a checagem [4] acusa a PROSA: o comentario de
-    AMQP.HandshakeIntegrationTests explica a diferenca entre o AssertException
-    do FPCUnit e o Assert.WillRaise do DUnitX, e citar o nome do outro dialeto
-    ao documentar por que ele nao serve e' exatamente o que se quer que um
-    arquivo de teste faca. Preservar as quebras de linha mantem os numeros de
-    linha do relatorio apontando para o arquivo de verdade.
+    Sem isto as checagens acusam a PROSA (um comentario que explica por que
+    um nome do outro dialeto nao serve). Preservar as quebras de linha mantem
+    os numeros de linha do relatorio apontando para o arquivo de verdade.
     """
     saida = []
     i, n = 0, len(texto)
     while i < n:
         c = texto[i]
-        if c == "'":                      # literal de string
+        if c == "'":
             j = i + 1
             while j < n and texto[j] != "'":
                 j += 1
@@ -372,7 +118,7 @@ def sem_comentarios(texto):
                 j = n
             saida.append(' ' * (j - i))
             i = j
-        elif c == '{':                    # comentario de bloco (e diretivas)
+        elif c == '{':
             j = texto.find('}', i)
             if j < 0:
                 j = n - 1
@@ -391,59 +137,124 @@ def sem_comentarios(texto):
     return ''.join(saida)
 
 
-def _chamadas(corpo, nomes):
-    """Nomes de `nomes` chamados como funcao, ignorando `TAssert.Xxx(...)`."""
-    achados = []
-    for nome in nomes:
-        for m in re.finditer(r'(?<![\w.])' + nome + r'\s*\(', corpo,
-                             re.IGNORECASE):
-            achados.append((nome, corpo.count('\n', 0, m.start()) + 1))
-    return achados
+def linha_de(texto, pos):
+    return texto.count('\n', 0, pos) + 1
 
 
-def verifica_dialeto_das_assercoes():
-    """Assercao do dialeto errado -- o defeito que so o OUTRO compilador pega.
+# [1] -------------------------------------------------------------------------
 
-    Nao tenta entender o codigo: procura os nomes de assercao de um dialeto
-    dentro de um arquivo do outro. `TAssert.AssertTrue(...)` qualificado e
-    legitimo nos dois lados e por isso e' excluido do casamento.
+def verifica_registro():
+    """Fixture com [Test] e sem registro.
+
+    "Fixture com testes" e' a unidade certa: classe auxiliar sem [Test] nao
+    precisa de registro. A FORMA da chamada importa: `RegisterTestFixture(X)`
+    sem o `TDUnitX.` nao compila no Delphi.
     """
     problemas = []
-    for dunitx, fpcunit in pares_espelhados():
-        corpo = sem_comentarios(le(dunitx))
-        for nome, linha in _chamadas(corpo, ASSERCOES_FPCUNIT):
-            problemas.append((rel(dunitx),
-                              'linha %d: assercao do FPCUnit (%s) num arquivo '
-                              'DUnitX -- use Assert.*' % (linha, nome)))
-        corpo = sem_comentarios(le(fpcunit))
-        for m in RE_ASSERT_DUNITX.finditer(corpo):
-            linha = corpo.count('\n', 0, m.start()) + 1
-            problemas.append((rel(fpcunit),
-                              'linha %d: assercao do DUnitX (Assert.*) num '
-                              'arquivo FPCUnit' % linha))
+    for p in mestres():
+        s = le(p)
+        decl = s[:s.find('implementation')]
+        com_testes = set()
+        for m in re.finditer(r'\[TestFixture\]\s*(T\w+)\s*=\s*class\b(.*?)^\s*end;',
+                             decl, re.S | re.M):
+            if re.search(r'\[Test\]', m.group(2)):
+                com_testes.add(m.group(1))
+        reg = set(re.findall(r'TDUnitX\s*\.\s*RegisterTestFixture\s*\(\s*(\w+)\s*\)', s))
+        faltando = com_testes - reg
+        if faltando:
+            problemas.append((rel(p), 'fixture NAO REGISTRADA: ' + ', '.join(sorted(faltando))))
     return problemas
 
 
-# Secoes onde um atributo do DUnitX fica invisivel ao RTTI padrao.
-VIS_SEM_RTTI = ('private', 'protected', 'strict private', 'strict protected')
+# [2] -------------------------------------------------------------------------
 
+def projetos_delphi_com_server():
+    """.dpr que compilam src/server (listam as units uma a uma)."""
+    for p in arquivos_pascal(['tests', 'samples']):
+        if not p.lower().endswith('.dpr'):
+            continue
+        s = le(p)
+        if ('src' + os.sep + 'server') in s or 'src/server/' in s:
+            yield p, s
+
+
+def verifica_units_do_server():
+    r"""Toda unit de src/server tem de estar em TODO .dpr que usa o submodulo
+    E no pacote pascal_amqp_faa_server.lpk.
+
+    No Delphi cada projeto lista as units uma a uma, e a que faltar aparece
+    como "F2613 Unit not found" na IDE.
+
+    No FPC o sintoma e' pior: uma unit de src/server fora do .lpk ainda
+    compila (o OtherUnitFiles do pacote aponta para ..\src\server), mas e'
+    compilada DUAS VEZES, com .ppu distintos. No dia em que ela declara uma
+    interface usada pelo pacote, os dois lados discordam do layout e o
+    programa morre de access violation em runtime, com tudo compilando limpo
+    (AMQP.Server.Events, Inc. 2 da Fase 4.1).
+    """
+    problemas = []
+    srv = os.path.join(RAIZ, 'src', 'server')
+    if not os.path.isdir(srv):
+        return problemas
+    units = sorted(n[:-4] for n in os.listdir(srv) if n.lower().endswith('.pas'))
+    for caminho, texto in projetos_delphi_com_server():
+        faltando = [u for u in units if u not in texto]
+        if faltando:
+            problemas.append((rel(caminho),
+                              'unit de src/server nao listada: ' + ', '.join(faltando)))
+        dproj = caminho[:-4] + '.dproj'
+        if os.path.exists(dproj):
+            td = le(dproj)
+            faltam2 = [u for u in units if u in texto and u not in td]
+            if faltam2:
+                problemas.append((rel(dproj),
+                                  'unit no .dpr mas nao no .dproj: ' + ', '.join(faltam2)))
+    lpk = os.path.join(RAIZ, 'packages', 'pascal_amqp_faa_server.lpk')
+    if os.path.exists(lpk):
+        tl = le(lpk)
+        faltam3 = [u for u in units if ('<UnitName Value="%s"/>' % u) not in tl]
+        if faltam3:
+            problemas.append((rel(lpk),
+                              'unit de src/server nao listada no pacote: ' + ', '.join(faltam3)))
+    return problemas
+
+
+# [3] -------------------------------------------------------------------------
+
+# Metodos de TAssert/TTestCase do FPCUnit. No mestre so' valem qualificados
+# (`TAssert.AssertTrue(...)`); soltos, compilam so' no espelho gerado.
+SO_NO_TTESTCASE = (
+    'AssertEquals', 'AssertTrue', 'AssertFalse', 'AssertNull', 'AssertNotNull',
+    'AssertSame', 'AssertNotSame', 'AssertException', 'Fail', 'Ignore',
+)
+
+
+def verifica_assercoes_qualificadas():
+    problemas = []
+    for p in mestres():
+        corpo = sem_comentarios(le(p))
+        for nome in SO_NO_TTESTCASE:
+            for m in re.finditer(r'(?<![\w.])' + nome + r'\s*\(', corpo, re.IGNORECASE):
+                problemas.append((rel(p), 'linha %d: %s sem o TAssert. na frente -- '
+                                  'no mestre so o dcc32 recusa' % (linha_de(corpo, m.start()), nome)))
+    return problemas
+
+
+# [4] -------------------------------------------------------------------------
+
+VIS_SEM_RTTI = ('private', 'protected', 'strict private', 'strict protected')
 RE_SECAO = re.compile(r'^\s*(strict\s+private|strict\s+protected|private|'
                       r'protected|public|published)\s*$', re.IGNORECASE)
 RE_ATRIBUTO_DUNITX = re.compile(
-    r'\[\s*(Setup|TearDown|SetupFixture|TearDownFixture|Test|TestCase)\b',
-    re.IGNORECASE)
+    r'\[\s*(Setup|TearDown|SetupFixture|TearDownFixture|Test|TestCase)\b', re.IGNORECASE)
 
 
 def verifica_visibilidade_dos_atributos():
-    """Atributo do DUnitX numa secao que o RTTI padrao nao publica.
-
-    Heuristica deliberadamente simples, e suficiente: varre linha a linha
-    guardando a ultima secao de visibilidade vista. Comeca em `public` porque
-    e' o default de uma classe Delphi sem especificador.
-    """
+    """Varre linha a linha guardando a ultima secao vista; comeca em `public`,
+    o default de uma classe Delphi sem especificador."""
     problemas = []
-    for dunitx, _fpcunit in pares_espelhados():
-        corpo = sem_comentarios(le(dunitx))
+    for p in mestres():
+        corpo = sem_comentarios(le(p))
         vis = 'public'
         for n, linha in enumerate(corpo.splitlines(), 1):
             m = RE_SECAO.match(linha)
@@ -451,135 +262,61 @@ def verifica_visibilidade_dos_atributos():
                 vis = ' '.join(m.group(1).lower().split())
                 continue
             if RE_ATRIBUTO_DUNITX.search(linha) and vis in VIS_SEM_RTTI:
-                problemas.append((rel(dunitx),
-                                  'linha %d: atributo do DUnitX em secao %s -- '
-                                  'o RTTI padrao nao o enxerga, e ele nunca '
-                                  'sera executado' % (n, vis)))
+                problemas.append((rel(p), 'linha %d: atributo do DUnitX em secao %s -- o RTTI '
+                                  'padrao nao o enxerga, e ele nunca sera executado' % (n, vis)))
     return problemas
 
 
-# Identificadores de RTL que so' existem de um lado. Lista deliberadamente
-# CURTA: cada entrada custou um round-trip pela IDE, e uma lista especulativa
-# so' produziria falso-positivo. Ver a tabela "Proibido / Usar" do CLAUDE.md
-# para o conjunto completo, que nao cabe numa heuristica.
+# [5] -------------------------------------------------------------------------
+
+# Lista deliberadamente CURTA: cada entrada custou um round-trip pela IDE.
 SO_NO_FPC = (
-    'GetTempDir',        # no Delphi: TPath.GetTempPath (System.IOUtils)
-    'GetLastOSError',    # no Delphi: AmqpLastOsError (RaiseLastOSError LEVANTA)
+    'GetTempDir',        # use DirTemporario (AMQP.TestSupport)
+    'GetLastOSError',    # use AmqpLastOsError (o RaiseLastOSError do Delphi LEVANTA)
 )
-SO_NO_DELPHI = (
-    'TPath',                          # System.IOUtils nao serve ao FPC 3.2
-    'ReportMemoryLeaksOnShutdown',    # nao existe no FPC
-    'RaiseLastOSError',
-)
-
 # No Delphi a unit e' System.SysUtils: qualificar como `SysUtils.Xxx` nao
-# compila (E2003). No FPC e' o contrario -- `System.SysUtils.` nao existe.
-RE_QUALIF_CURTO = re.compile(r'(?<![\w.])SysUtils\s*\.\s*[A-Za-z]')
-RE_QUALIF_LONGO = re.compile(r'(?<![\w.])System\s*\.\s*SysUtils\s*\.')
+# compila (E2003); `System.SysUtils.Xxx` nao compila no FPC.
+RE_QUALIF = re.compile(r'(?<![\w.])(?:System\s*\.\s*)?SysUtils\s*\.\s*[A-Za-z]')
 
 
-def _identificadores(corpo, nomes):
-    """Nomes de `nomes` usados como identificador, com ou sem parenteses.
-
-    Diferente de _chamadas de proposito: `GetTempDir` e `TPath` aparecem SEM
-    parenteses logo apos (`IncludeTrailingPathDelimiter(GetTempDir)`,
-    `TPath.GetTempPath`), e exigir o `(` deixaria os dois passarem -- foi
-    exatamente o que aconteceu na primeira versao desta checagem, e a mutacao
-    que a provou foi a que pegou.
-    """
-    achados = []
-    for nome in nomes:
-        padrao = r'(?<![\w.])' + nome + r'(?![\w])'
-        for m in re.finditer(padrao, corpo, re.IGNORECASE):
-            achados.append((nome, corpo.count(chr(10), 0, m.start()) + 1))
-    return achados
-
-
-def verifica_rtl_do_dialeto():
-    """RTL de um compilador escrita no espelho do outro."""
+def verifica_rtl():
     problemas = []
-    for dunitx, fpcunit in pares_espelhados():
-        corpo = sem_comentarios(le(dunitx))
-        for nome, linha in _identificadores(corpo, SO_NO_FPC):
-            problemas.append((rel(dunitx),
-                              'linha %d: %s so existe no FPC' % (linha, nome)))
-        for m in RE_QUALIF_CURTO.finditer(corpo):
-            problemas.append((rel(dunitx),
-                              'linha %d: qualificador SysUtils. -- no Delphi a '
-                              'unit e System.SysUtils'
-                              % (corpo.count('\n', 0, m.start()) + 1)))
-        corpo = sem_comentarios(le(fpcunit))
-        for nome, linha in _identificadores(corpo, SO_NO_DELPHI):
-            problemas.append((rel(fpcunit),
-                              'linha %d: %s so existe no Delphi'
-                              % (linha, nome)))
-        for m in RE_QUALIF_LONGO.finditer(corpo):
-            problemas.append((rel(fpcunit),
-                              'linha %d: qualificador System.SysUtils. -- no '
-                              'FPC a unit e SysUtils'
-                              % (corpo.count('\n', 0, m.start()) + 1)))
+    for p in mestres():
+        corpo = sem_comentarios(le(p))
+        impl = corpo.find('implementation')
+        for nome in SO_NO_FPC:
+            for m in re.finditer(r'(?<![\w.])' + nome + r'(?![\w])', corpo, re.IGNORECASE):
+                problemas.append((rel(p), 'linha %d: %s so existe no FPC'
+                                  % (linha_de(corpo, m.start()), nome)))
+        for m in RE_QUALIF.finditer(corpo, impl if impl > 0 else 0):
+            problemas.append((rel(p), 'linha %d: unit qualificada (SysUtils.) -- o nome '
+                              'difere entre os compiladores; mova para AMQP.TestSupport'
+                              % linha_de(corpo, m.start())))
     return problemas
+
+
+CHECAGENS = [
+    ('[1] fixture com testes registrada no DUnitX', verifica_registro),
+    ('[2] units de src/server listadas em todo projeto Delphi e no .lpk', verifica_units_do_server),
+    ('[3] assercoes qualificadas com TAssert. nos mestres', verifica_assercoes_qualificadas),
+    ('[4] atributos do DUnitX em secao visivel ao RTTI', verifica_visibilidade_dos_atributos),
+    ('[5] RTL que so existe no FPC fora dos mestres', verifica_rtl),
+]
 
 
 def main():
     falhou = False
-
-    apos = lint_apos_initialization()
-    print('[1] codigo depois do initialization')
-    if apos:
-        falhou = True
-        for arq, nome in apos:
-            print('    FALHA  %s: %s declarado apos o initialization' % (arq, nome))
-    else:
-        print('    ok')
-
-    print('[2] paridade dos espelhos DUnitX <-> FPCUnit')
-    probs = verifica_paridade()
-    if probs:
-        falhou = True
-        for arq, msg in probs:
-            print('    FALHA  %s: %s' % (arq, msg))
-    else:
-        print('    ok')
-
-    print('[3] units de src/server listadas em todo projeto Delphi e no .lpk')
-    su = verifica_units_do_server()
-    if su:
-        falhou = True
-        for arq, msg in su:
-            print('    FALHA  %s: %s' % (arq, msg))
-    else:
-        print('    ok')
-
-    print('[4] assercoes no dialeto certo de cada espelho')
-    dial = verifica_dialeto_das_assercoes()
-    if dial:
-        falhou = True
-        for arq, msg in dial:
-            print('    FALHA  %s: %s' % (arq, msg))
-    else:
-        print('    ok')
-
-    print('[5] atributos do DUnitX em secao visivel ao RTTI')
-    vis = verifica_visibilidade_dos_atributos()
-    if vis:
-        falhou = True
-        for arq, msg in vis:
-            print('    FALHA  %s: %s' % (arq, msg))
-    else:
-        print('    ok')
-
-    print('[6] RTL do dialeto certo em cada espelho')
-    rtl = verifica_rtl_do_dialeto()
-    if rtl:
-        falhou = True
-        for arq, msg in rtl:
-            print('    FALHA  %s: %s' % (arq, msg))
-    else:
-        print('    ok')
-
+    for titulo, fn in CHECAGENS:
+        print(titulo)
+        probs = fn()
+        if probs:
+            falhou = True
+            for arq, msg in probs:
+                print('    FALHA  %s: %s' % (arq, msg))
+        else:
+            print('    ok')
     if falhou:
-        print('\nDIVERGENCIAS ENCONTRADAS')
+        print('\nPROBLEMAS ENCONTRADOS')
         return 1
     print('\nlimpo')
     return 0
