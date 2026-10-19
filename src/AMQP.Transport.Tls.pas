@@ -240,6 +240,20 @@ begin
   Result := AStatus < 0; // HRESULT-like: negativo = falha
 end;
 
+{ Codigo SSPI seguido do texto do Windows (localizado), ex.:
+  '0x80090322: The target principal name is incorrect'. So o codigo nao dizia
+  nada a quem le o log (nome fora do certificado, CA nao confiavel...). }
+function StatusText(AStatus: SECURITY_STATUS): string;
+var
+  LMsg: string;
+begin
+  LMsg := Trim(SysErrorMessage(Cardinal(AStatus)));
+  if LMsg <> '' then
+    Result := Format('0x%.8x: %s', [Cardinal(AStatus), LMsg])
+  else
+    Result := Format('0x%.8x', [Cardinal(AStatus)]);
+end;
+
 { TAMQPSchannelStream }
 
 constructor TAMQPSchannelStream.Create(AUnderlying: TStream;
@@ -291,7 +305,7 @@ begin
   LStatus := AcquireCredentialsHandleW(nil, UNISP_NAME, SECPKG_CRED_OUTBOUND,
     nil, @LCred, nil, nil, @FCred, nil);
   if StatusFailed(LStatus) then
-    raise EAMQPTls.CreateFmt('AcquireCredentialsHandle failed (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('AcquireCredentialsHandle failed (%s)', [StatusText(LStatus)]);
   FCredValid := True;
 end;
 
@@ -356,7 +370,7 @@ begin
     // para não vazar o buffer do SSPI no caminho de falha.
     if LOutBuf[0].pvBuffer <> nil then
       FreeContextBuffer(LOutBuf[0].pvBuffer);
-    raise EAMQPTls.CreateFmt('Initial InitializeSecurityContext failed (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('Initial InitializeSecurityContext failed (%s)', [StatusText(LStatus)]);
   end;
   FCtxtValid := True; // contexto criado
   if (LOutBuf[0].cbBuffer > 0) and (LOutBuf[0].pvBuffer <> nil) then
@@ -429,13 +443,13 @@ begin
       Continue;
     end;
 
-    raise EAMQPTls.CreateFmt('TLS handshake failed (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('TLS handshake failed (%s)', [StatusText(LStatus)]);
   end;
 
   // Tamanhos para cifrar/decifrar (header/trailer/máx por record).
   LStatus := QueryContextAttributesW(@FCtxt, SECPKG_ATTR_STREAM_SIZES, @FStreamSizes);
   if StatusFailed(LStatus) then
-    raise EAMQPTls.CreateFmt('QueryContextAttributes(STREAM_SIZES) failed (0x%.8x)', [Cardinal(LStatus)]);
+    raise EAMQPTls.CreateFmt('QueryContextAttributes(STREAM_SIZES) failed (%s)', [StatusText(LStatus)]);
 end;
 
 // Decifra do FCipher até haver plaintext em FPlain (ou sinaliza EOF via exceção
@@ -487,7 +501,7 @@ begin
       raise EAMQPTls.Create('TLS renegotiation requested by server is not supported');
 
     if not StatusIs(LStatus, SEC_E_OK) then
-      raise EAMQPTls.CreateFmt('DecryptMessage failed (0x%.8x)', [Cardinal(LStatus)]);
+      raise EAMQPTls.CreateFmt('DecryptMessage failed (%s)', [StatusText(LStatus)]);
 
     // Encontra o buffer de dados decifrados e eventual sobra (próximo record).
     LData := nil;
@@ -592,7 +606,7 @@ begin
 
     LStatus := EncryptMessage(@FCtxt, 0, @LDesc, 0);
     if StatusFailed(LStatus) then
-      raise EAMQPTls.CreateFmt('EncryptMessage failed (0x%.8x)', [Cardinal(LStatus)]);
+      raise EAMQPTls.CreateFmt('EncryptMessage failed (%s)', [StatusText(LStatus)]);
 
     // EncryptMessage ajusta os cbBuffer; envia os três contíguos.
     LTotal := Integer(LBuf[0].cbBuffer) + Integer(LBuf[1].cbBuffer) +
