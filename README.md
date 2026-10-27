@@ -267,6 +267,20 @@ Chan.Consume('pedidos', Consumidor.OnMsg);
 
 **A espera conta desde o enfileiramento, e o pool é do processo.** Os callbacks de um canal comum rodam no `PcPool`, que é dividido com as outras libs `*-faa` do processo; o `Close`/`Free` do canal espera também as entregas que **ainda estão na fila** do pool, não só as que estão rodando. Se outra parte do processo ocupar todos os workers do `PcPool` (callbacks presos em I/O, por exemplo), parar um consumidor espera a fila compartilhada andar até os itens dele. Medido com o `PcPool` saturado por itens bloqueados: o `Free` de um canal com uma entrega enfileirada esperou os 1,5 s em que o pool ficou ocupado; o mesmo cenário com `CreateChannel(True)` levou 29 ms, porque as entregas desse canal rodam numa thread só dele. Se o seu consumidor precisa parar no prazo dele, independente do resto do processo, use `CreateChannel(True)`. Não há prazo nessa espera de propósito: desistir liberaria o canal com itens ainda na fila apontando para ele.
 
+### Fechar um canal com consumers ativos
+
+`Close` (e o `Free`, que fecha antes de liberar) para o consumo na ordem que mantém a conexão de pé e não reentrega o que já foi processado:
+
+1. cancela cada consumer do canal (`Basic.Cancel` + `Cancel-Ok`), e o broker para de entregar;
+2. espera os callbacks já despachados terminarem **com o canal ainda aberto**, e o `Ack`/`Nack` deles vale;
+3. manda o `Channel.Close` e espera o `Close-Ok`.
+
+Um `Ack`/`Nack` num canal fechado ou fechando não sai para o fio e não levanta exceção. Isso vale para um callback atrasado, para outra thread e para o caso em que **o broker** fechou o canal (um 404, um 406). O broker já devolveu à fila, marcado como `redelivered`, o que ficou sem ack quando o canal fechou. Mandar o `Ack` mesmo assim seria erro de **conexão** pela spec (`504 CHANNEL_ERROR`), e cairiam todos os canais. Depois de uma **queda de conexão** é diferente: `Ack`/`Nack` levantam `EAMQPConnection`, como qualquer escrita.
+
+Não chame `Close` de dentro de um callback do próprio canal, porque ele espera os callbacks, inclusive o que o chamou.
+
+*(Até a 0.4.1, `Close` mandava o `Channel.Close` antes de esperar os callbacks. Um callback que terminava depois do `Close-Ok` e dava `Ack` derrubava a conexão inteira com 504, contra o RabbitMQ e contra o broker embutido. Achado pelo pascal-agenda-faa.)*
+
 ### Tracing (OpenTelemetry)
 
 Com o tracer da pascal-common-faa ligado, o canal abre os spans sozinho. Sem ele, nada muda: nenhum span, nenhum header, os mesmos bytes de sempre.

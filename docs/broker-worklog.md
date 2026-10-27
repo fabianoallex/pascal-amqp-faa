@@ -1001,6 +1001,39 @@ Até aqui os dois lados de cada suíte eram escritos à mão: o mestre DUnitX co
 
 **Validação FPC.** Windows: unitária 131, integração 43 (contra o RabbitMQ), server 472 e 476 (`openssl`), aceitação 43 nas duas passagens, 0 vazamento. Linux (`tools	est_fpc_docker.sh`, Debian/FPC 3.2.2, heaptrc com `log=`): as nove configurações verdes — unitária 131, server 472/476, integração 43 nos dois modes, aceitação 43 nas quatro passagens —, 0 vazamento em todas. Os mesmos números de antes do kit. **Delphi 12 CE** (compilado no IDE, `.exe` rodados daqui), Win32 e Win64, Debug e OpenSSL: unitária 131, server 472 / 476, integração 43, aceitação 43 nas duas passagens, `Tests Leaked: 0` em todas, sem nenhuma correção depois da conversão. Os 5 testes TLS da integração saíram pelo `IGNORADO` nas quatro builds (e no FPC): o container do RabbitMQ estava sem o listener 5671 (subiu sem o `docker-compose.tls.yml`). Os mesmos corpos rodaram TLS de verdade na aceitação `OpenSSL`, contra o broker embutido, no Delphi e no FPC Linux.
 
+## v0.4.2 — `Close` de canal com callback de consumer em voo (2026-10-27)
+
+Achado pelo pascal-agenda-faa (`docs/design.md` de lá, "M4: the broker, the compose file, the
+trace"): o consumidor parava logo depois de o handler começar, e a conexão inteira caía.
+`TAMQPChannel.Close` mandava `Channel.Close`, esperava o Close-Ok e só depois o
+`DrainInFlight`; o `Ack` do callback saía num canal já fechado. Medido antes de mudar, com
+`AMQP.ChannelCloseIntegrationTests` (5 testes, dois canais na mesma conexão): contra o
+RabbitMQ 3, 4 de 5 caíram com `504 CHANNEL_ERROR - expected 'channel.open'` (o 5º falhou por
+uma corrida do próprio teste, corrigida). Achado de passagem: o mesmo 504 quando é o **broker**
+que fecha o canal (passive declare de fila inexistente, 404) com um callback em voo — caminho
+que a opção "cancela antes de fechar" sozinha não cobria.
+
+Decisão (do usuário): as duas partes. (1) `Close` cancela os consumers (para no primeiro
+`Cancel` que falhar), drena com o canal aberto e só então manda `Channel.Close`. (2) `FClosing`
+sob `FAckLock`, que `Ack`/`Nack` seguram do teste até o frame sair; ligado antes do
+`Channel.Close` e, no fechamento pelo broker, antes do Close-Ok (na thread de leitura) — no-op
+silencioso, não exceção. Queda de conexão não liga a flag: `Ack` depois dela segue levantando
+`EAMQPConnection`. `BeginRecover` desliga.
+
+Mutações: sem o passo cancela+drena, caem os 3 testes de `Close`/`Free` (a entrega volta para
+a fila: o `Ack` dela foi descartado pela parte 2). Com `Ack`/`Nack` ignorando `FClosing`, cai
+`FechadoPeloBroker_AckAtrasadoNaoDerrubaAConexao` nos dois brokers, e
+`AckDepoisDoClose_NaoDerrubaAConexao` **só no embutido** (`504 method 60/80 on channel 1, which
+is not open`): o RabbitMQ tolera o `Ack` manual mesmo 300 ms depois do Close-Ok, num canal sem
+consumer. Não investigado além disso; a aceitação cobre.
+
+**Validação.** FPC/Windows: unitária 131, integração 48 (RabbitMQ pelo IP da LAN; a
+127.0.0.1:5672 estava com o `DFeBrokerServico`), aceitação 48 nas duas passagens, server 472,
+0 vazamentos. FPC/Linux (`pamqp-fpc:f8`), Default e `openssl`: unitária 131, server 472/476,
+integração 48, aceitação 48 nas quatro passagens, 0 vazamentos. Delphi 12 (compilado no IDE),
+Win32 e Win64, Debug e OpenSSL: unitária 131, integração 48 (RabbitMQ pela LAN), server
+472/476, aceitação 48 nas duas passagens, `Tests Leaked: 0` em todas.
+
 ## Verificador de espelhos
 
 *Histórico abaixo; o estado atual (cinco checagens sobre o mestre, depois do kit de testes) está na seção acima e no `CLAUDE.md`.*

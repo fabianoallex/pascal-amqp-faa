@@ -6,6 +6,32 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-27
+
+Defeito achado pelo pascal-agenda-faa (`docs/design.md` de lá, seção "M4: the broker, the compose
+file, the trace"), no teste em que o consumidor parava logo depois de o handler começar.
+
+### Corrigido
+
+- **Fechar um canal com callback de consumer em voo derrubava a conexão inteira.** O `Close`
+  mandava o `Channel.Close`, esperava o `Close-Ok` e só então esperava os callbacks. Um callback
+  que terminava nessa janela e dava `Ack` mandava `Basic.Ack` num canal já fechado, e pela spec
+  isso é erro de conexão: `504 CHANNEL_ERROR`, todos os canais caem. O `Free` do canal passava
+  pelo mesmo caminho. Medido antes de mudar, contra o RabbitMQ 3
+  (`504 CHANNEL_ERROR - expected 'channel.open'`) e contra o broker embutido. Agora o `Close`
+  cancela os consumers do canal, espera os callbacks com o canal ainda aberto (o `Ack` deles
+  vale, e nada do que já foi processado é reentregue) e só então manda o `Channel.Close`.
+- **O mesmo 504 quando era o broker que fechava o canal** (um 404 ou 406 com um callback em voo).
+  `Ack`/`Nack` num canal fechado ou fechando não saem mais para o fio e não levantam exceção: o
+  broker já devolveu à fila, como `redelivered`, o que ficou sem ack. Depois de uma queda de
+  conexão nada muda: `Ack`/`Nack` levantam `EAMQPConnection`, como antes.
+
+### Para quem usa
+
+- O contorno que o consumidor fazia antes de fechar o canal (cancelar o consumer e esperar os
+  callbacks em voo) deixa de ser necessário. Uma flag própria de "não tratar depois do Stop"
+  continua útil se o callback não deve começar trabalho novo durante o encerramento.
+
 ## [0.4.1] - 2026-10-15
 
 ### Corrigido
@@ -215,7 +241,8 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.2.0...v0.3.0

@@ -81,6 +81,7 @@ uses
   AMQP.ChannelIntegrationTests in '..\Integration\AMQP.ChannelIntegrationTests.pas',
   AMQP.ConsumeIntegrationTests in '..\Integration\AMQP.ConsumeIntegrationTests.pas',
   AMQP.ConsumerErrorIntegrationTests in '..\Integration\AMQP.ConsumerErrorIntegrationTests.pas',
+  AMQP.ChannelCloseIntegrationTests in '..\Integration\AMQP.ChannelCloseIntegrationTests.pas',
   AMQP.ReconnectIntegrationTests in '..\Integration\AMQP.ReconnectIntegrationTests.pas',
   AMQP.TlsIntegrationTests in '..\Integration\AMQP.TlsIntegrationTests.pas',
   AMQP.ReviewRegressionTests in '..\Integration\AMQP.ReviewRegressionTests.pas';

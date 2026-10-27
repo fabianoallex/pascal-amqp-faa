@@ -54,6 +54,7 @@ uses
   AMQP.ChannelIntegrationTests,
   AMQP.ConsumeIntegrationTests,
   AMQP.ConsumerErrorIntegrationTests,
+  AMQP.ChannelCloseIntegrationTests,
   AMQP.ReconnectIntegrationTests,
   AMQP.TlsIntegrationTests,
   AMQP.ReviewRegressionTests;

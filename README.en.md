@@ -267,6 +267,20 @@ The channel's `Close`/`Destroy` wait (without timeout, on purpose) for in-flight
 
 **The wait counts from enqueueing, and the pool belongs to the process.** A regular channel's callbacks run on `PcPool`, which is shared with the other `*-faa` libraries in the process; the channel's `Close`/`Free` also waits for deliveries that are **still queued** in the pool, not only the ones running. If another part of the process occupies every `PcPool` worker (callbacks stuck on I/O, for example), stopping a consumer waits for the shared queue to reach its items. Measured with `PcPool` saturated by blocked items: freeing a channel with one queued delivery waited the 1.5 s the pool stayed busy; the same scenario with `CreateChannel(True)` took 29 ms, because that channel's deliveries run on a thread of its own. If your consumer has to stop on its own schedule, regardless of the rest of the process, use `CreateChannel(True)`. There is no deadline on this wait on purpose: giving up would free the channel while queued items still point at it.
 
+### Closing a channel with active consumers
+
+`Close` (and `Free`, which closes before releasing) stops consuming in the order that keeps the connection up and does not redeliver what was already processed:
+
+1. it cancels each consumer on the channel (`Basic.Cancel` + `Cancel-Ok`), and the broker stops delivering;
+2. it waits for the callbacks already dispatched to finish **while the channel is still open**, and their `Ack`/`Nack` counts;
+3. it sends `Channel.Close` and waits for `Close-Ok`.
+
+An `Ack`/`Nack` on a closed or closing channel does not go on the wire and does not raise. This holds for a late callback, for another thread and for the case where **the broker** closed the channel (a 404, a 406). The broker has already put back on the queue, marked `redelivered`, whatever was left unacked when the channel closed. Sending the `Ack` anyway would be a **connection** error by the spec (`504 CHANNEL_ERROR`), and every channel would go down. After a **connection drop** it is different: `Ack`/`Nack` raise `EAMQPConnection`, like any write.
+
+Do not call `Close` from inside a callback of the same channel, because it waits for the callbacks, including the one that called it.
+
+*(Up to 0.4.1, `Close` sent `Channel.Close` before waiting for the callbacks. A callback that finished after the `Close-Ok` and called `Ack` brought the whole connection down with a 504, against RabbitMQ and against the embedded broker. Found by pascal-agenda-faa.)*
+
 ### Tracing (OpenTelemetry)
 
 With pascal-common-faa's tracer started, the channel opens the spans on its own. Without it nothing changes: no span, no header, the same bytes as always.

@@ -252,6 +252,15 @@ type
     FChannelId: Word;
     FIsOpen: Boolean;
     FClosed: Boolean;
+    // Canal fechando ou fechado (v0.4.2): ligado pelo Close antes do
+    // Channel.Close e pela thread de leitura antes do Close-Ok de um
+    // fechamento do broker. Sob FAckLock, que Ack/Nack seguram do teste até o
+    // frame sair: todo Ack aceito vai para o fio ANTES do Channel.Close(-Ok),
+    // e nenhum sai depois — um Basic.Ack num canal fechado é erro de CONEXÃO
+    // (504) e derrubaria todos os canais. Ordem: FAckLock por fora de
+    // FSettleLock e de FWriteLock; nada os adquire na ordem inversa.
+    FClosing: Boolean;
+    FAckLock: TCriticalSection;
     // --- RPC (uma chamada por vez neste canal) ---
     FRpcLock: TCriticalSection;
     FRpcEvent: TEvent;
@@ -376,6 +385,8 @@ type
     /// Retira do conjunto de pendentes o tag (ou, com AMultiple, todo tag até
     /// ele). Chamado por Ack/Nack, antes de enviar.
     procedure SettleDeliveries(ADeliveryTag: UInt64; AMultiple: Boolean);
+    /// Liga FClosing sob FAckLock: Ack/Nack deixam de sair para o fio.
+    procedure MarkClosing;
     /// Retira o tag do conjunto; True se ele estava lá (a entrega continua
     /// sem confirmação). Atômico: é o que impede a lib de confirmar uma
     /// entrega que o aplicativo já confirmou.
@@ -458,6 +469,15 @@ type
     procedure Cancel(const AConsumerTag: string);
 
     /// Fecha o canal (Channel.Close + espera o Close-Ok).
+    ///
+    /// Com consumers ativos (v0.4.2): primeiro cancela cada um (Basic.Cancel
+    /// + Cancel-Ok — o broker para de entregar), depois espera os callbacks
+    /// já despachados terminarem com o canal ainda aberto (o Ack/Nack deles
+    /// vale), e só então manda o Channel.Close. Ack/Nack depois disso — de um
+    /// callback atrasado ou de outra thread — são ignorados: o broker já
+    /// devolveu à fila o que ficou sem ack. O mesmo vale quando é o BROKER
+    /// quem fecha o canal. Não chame Close de dentro de um callback do
+    /// próprio canal: ele espera os callbacks, inclusive o que o chamou.
     ///
     /// ATENÇÃO à posse: o canal continua sendo SEU depois do Close — libere-o.
     /// Fechar DESREGISTRA o canal da conexão (é o que faz um frame atrasado do
@@ -1859,6 +1879,7 @@ begin
   FConsumersLock := TCriticalSection.Create;
   FUnsettled := TDictionary<UInt64, Boolean>.Create;
   FSettleLock := TCriticalSection.Create;
+  FAckLock := TCriticalSection.Create;
   FConfirmMon := TPcMonitor.Create;
   FUnconfirmed := TDictionary<UInt64, Boolean>.Create;
   FNacked := TDictionary<UInt64, Boolean>.Create;
@@ -1894,6 +1915,7 @@ begin
   FConsumersLock.Free;
   FUnsettled.Free;
   FSettleLock.Free;
+  FAckLock.Free;
   FRpcEvent.Free;
   FRpcLock.Free;
   inherited;
@@ -2026,6 +2048,12 @@ begin
   FRpcLock.Enter;
   try
     FClosed := False;
+    FAckLock.Enter;
+    try
+      FClosing := False; // canal reaberto na sessão nova
+    finally
+      FAckLock.Leave;
+    end;
     FAsmState := asIdle;
     // Sessão nova: o broker reinicia a numeração do WIRE em 1. Mantemos o seq-no
     // do USUÁRIO (FPublishSeqNo) monotônico e guardamos o offset da sessão para
@@ -2520,14 +2548,39 @@ end;
 
 procedure TAMQPChannel.Ack(ADeliveryTag: UInt64; AMultiple: Boolean);
 begin
-  SettleDeliveries(ADeliveryTag, AMultiple);
-  FConnection.SendMethod(FChannelId, BuildBasicAck(ADeliveryTag, AMultiple));
+  // Canal fechando ou fechado: não sai para o fio (ver FClosing). O broker
+  // já devolveu à fila o que ficou sem ack quando o canal fechou.
+  FAckLock.Enter;
+  try
+    SettleDeliveries(ADeliveryTag, AMultiple);
+    if not FClosing then
+      FConnection.SendMethod(FChannelId, BuildBasicAck(ADeliveryTag, AMultiple));
+  finally
+    FAckLock.Leave;
+  end;
 end;
 
 procedure TAMQPChannel.Nack(ADeliveryTag: UInt64; ARequeue, AMultiple: Boolean);
 begin
-  SettleDeliveries(ADeliveryTag, AMultiple);
-  FConnection.SendMethod(FChannelId, BuildBasicNack(ADeliveryTag, AMultiple, ARequeue));
+  FAckLock.Enter;
+  try
+    SettleDeliveries(ADeliveryTag, AMultiple);
+    if not FClosing then
+      FConnection.SendMethod(FChannelId,
+        BuildBasicNack(ADeliveryTag, AMultiple, ARequeue));
+  finally
+    FAckLock.Leave;
+  end;
+end;
+
+procedure TAMQPChannel.MarkClosing;
+begin
+  FAckLock.Enter;
+  try
+    FClosing := True;
+  finally
+    FAckLock.Leave;
+  end;
 end;
 
 procedure TAMQPChannel.SettleDeliveries(ADeliveryTag: UInt64; AMultiple: Boolean);
@@ -2936,9 +2989,32 @@ end;
 procedure TAMQPChannel.Close(AReplyCode: Word; const AReplyText: string);
 var
   LClose: TAMQPCloseInfo;
+  LTags: TArray<string>;
+  LTag: string;
 begin
   if FClosed or (not FIsOpen) then
     Exit;
+
+  // (1) Cancela os consumers: depois do Cancel-Ok o broker não entrega mais
+  // nada para estes tags. Falhou um (conexão caída, timeout), não insiste:
+  // os outros dariam o mesmo erro, cada um com o seu prazo.
+  FConsumersLock.Enter;
+  try
+    LTags := FConsumers.Keys.ToArray;
+  finally
+    FConsumersLock.Leave;
+  end;
+  for LTag in LTags do
+    try
+      Cancel(LTag);
+    except
+      Break; // segue fechando; o Channel.Close abaixo tem a mesma sorte
+    end;
+  // (2) Com o canal ainda aberto, os callbacks já despachados terminam e o
+  // Ack deles vale: fechar não reentrega o que já foi processado.
+  DrainInFlight;
+  // (3) Daqui em diante Ack/Nack não saem (ver FClosing).
+  MarkClosing;
 
   LClose.ReplyCode := AReplyCode;
   LClose.ReplyText := AReplyText;
@@ -2951,8 +3027,8 @@ begin
   end;
   FClosed := True;
   FIsOpen := False;
-  // Após o Close-Ok o servidor não entrega mais; espera callbacks em voo
-  // terminarem antes de o objeto poder ser liberado.
+  // O que chegou entre o passo (2) e o Close-Ok (um Return, um confirm):
+  // espera terminar antes de o objeto poder ser liberado.
   DrainInFlight;
   FConnection.UnregisterChannel(FChannelId);
 end;
@@ -3103,7 +3179,16 @@ begin
     else if LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE) then
     begin
       LClose := DecodeChannelClose(LReader);
-      FConnection.SendMethod(FChannelId, BuildChannelCloseOk);
+      // Liga FClosing ANTES do Close-Ok, sob o mesmo lock do Ack: um Ack de
+      // callback em voo sai antes do Close-Ok (o broker o descarta, como a
+      // spec manda) ou não sai — nunca depois, que seria 504 de conexão.
+      FAckLock.Enter;
+      try
+        FClosing := True;
+        FConnection.SendMethod(FChannelId, BuildChannelCloseOk);
+      finally
+        FAckLock.Leave;
+      end;
       SignalError(Format('channel %d closed by server: %d %s',
         [FChannelId, LClose.ReplyCode, LClose.ReplyText]));
     end
