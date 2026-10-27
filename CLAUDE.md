@@ -250,7 +250,9 @@ Regras: **o mestre é sempre o arquivo DUnitX**; **nunca editar `tests\*\fpc\*Te
 
 ## Convenções gerais
 
-Mesmo padrão dos projetos irmãos (`delphi-amqp-faa`, `delphi-api-infra-faa`): licença MIT com copyright de Fabiano Arndt, commits em português, sem pushes/commits automáticos sem confirmação explícita do usuário.
+Mesmo padrão dos projetos irmãos (`delphi-amqp-faa`, `delphi-api-infra-faa`): licença MIT com copyright de Fabiano Arndt, sem pushes/commits automáticos sem confirmação explícita do usuário.
+
+**Idioma (desde 2026-10-27, decisão do usuário): mensagens de commit e comentários de código novos em INGLÊS.** O que já está em português (comentários, docs, este arquivo, o histórico) fica como está até uma sessão própria de tradução — não traduzir de passagem. Docs e READMEs seguem a regra de sempre (o `README.md` em português é o canônico).
 
 O README tem duas versões: `README.md` (português, **canônico**) e `README.en.md` (inglês, com identificadores/comentários dos exemplos traduzidos). **Toda mudança no README.md deve ser replicada no README.en.md** na mesma sessão.
 
