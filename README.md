@@ -24,6 +24,7 @@ Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delph
 - **TLS (amqps)** com dois backends, mesma API: **SChannel** nativo no Windows (automático, sem dependências) e **OpenSSL** em qualquer plataforma (opt-in via `-dAMQP_OPENSSL`) — ver a seção [TLS (amqps)](#tls-amqps).
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (extensão RabbitMQ), `Basic.Get`, `Qos`.
 - **Tracing OpenTelemetry** (opt-in, pela pascal-common-faa): span por publish e por mensagem consumida, com o `traceparent` W3C nos headers. Produtor e consumidor saem na mesma trace — ver [Tracing (OpenTelemetry)](#tracing-opentelemetry).
+- **Outbox transacional por broker** (ponte opcional em `src/outbox`, fora dos pacotes): o sink do outbox da pascal-db-faa publica com confirm, e o consumidor tem fila de retry com TTL, fila de mortos e deduplicação no banco antes do ack — ver [Outbox transacional](#outbox-transacional-srcoutbox).
 
 ### Broker embutido
 
@@ -307,6 +308,31 @@ TPcTracing.Shutdown; // exporta os últimos spans antes de o programa terminar
 
 Atributos, decisões e testes em [`docs/tracing.md`](docs/tracing.md).
 
+### Outbox transacional (`src/outbox`)
+
+`AMQP.Outbox` é a ponte entre o outbox transacional da [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa) (`PascalDb.Outbox`, 0.18.0 ou mais nova) e um broker AMQP. Fica **fora dos pacotes**, porque precisa da pascal-db-faa: some `src/outbox` ao search path (e, no Lazarus, `src` aos include files) só se for usar.
+
+```pascal
+uses PascalDb.Outbox, AMQP.Outbox;
+
+// produtor: o relay do outbox publica cada evento e espera o confirm
+Relay := TOutboxRelay.Create(Factory, TOutboxAmqpSink.Create(CanalDoRelay, 'loja.eventos'),
+  PdbOutboxNewOwner('relay'), TOutboxOptions.Default);
+
+// consumidor: fila de trabalho + .retry (TTL) + .dead
+Fila := TOutboxAmqpQueue.Create('loja.email', 'loja.eventos', 'pedido.#');
+OutboxAmqpDeclareQueues(Canal, Fila);
+Consumidor := TOutboxAmqpConsumer.Create(Factory, CanalDoConsumidor, Fila, 'email', HandlerDeEmail);
+Consumidor.Start;
+```
+
+- O sink publica o evento persistente (corpo = payload JSON, `message-id` = id do evento, `type` e routing key = tipo, header `tenant-id`) num exchange `topic` e espera o ack do broker; sem ack, levanta, e o relay tenta de novo depois.
+- O consumidor roda o handler, grava o evento em `PROCESSED_EVENTS` e só então dá ack (at-least-once). Reentrega de evento já gravado leva ack sem rodar o handler.
+- Handler que falha leva `Nack` sem requeue: o dead-letter da fila de trabalho põe a mensagem na fila `.retry`, que a devolve depois do TTL. As tentativas são contadas pelo `x-death`; na última, a mensagem vai para a fila `.dead`.
+- O SQL (`PROCESSED.EXISTS`, `.INSERT`, `.PURGE`) é da aplicação, lido pelo nome no loader da factory, como o do próprio outbox.
+
+Topologia, SQL de referência, métricas e testes em [`docs/outbox.md`](docs/outbox.md).
+
 ## Broker embutido
 
 Um broker AMQP 0-9-1 **dentro do seu processo**. O cliente desta lib — ou qualquer
@@ -570,6 +596,8 @@ fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src seu_prog
 
 **Para usar o broker embutido**, some o pacote/diretório do servidor: `packages\pascal_amqp_faa_server.lpk` no Lazarus, `-Fusrc\server` no FPC puro, `src\server\` no search path do Delphi. Quem só usa o cliente não precisa de nada disso — os dois pacotes são separados de propósito.
 
+**Para usar a ponte do outbox** (`AMQP.Outbox`), some `src\outbox` ao search path (no Lazarus, também `src` aos include files) e a [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa) 0.18.0 ou mais nova, que a aplicação fornece como fornece a pascal-common-faa (e que exige a pascal-common-faa 1.17 ou mais nova). Ela não está em pacote nenhum: quem não a usa não depende da pascal-db-faa. Ver [`docs/outbox.md`](docs/outbox.md).
+
 ## TLS (amqps)
 
 Dois backends atrás da **mesma API** — o código da aplicação não muda, só o build:
@@ -697,6 +725,7 @@ Em ambos:
 | `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 43 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` apontam para outro endereço |
 | `AMQP.ServerTests` / `AMQPServerTestsFpc` | 472 (476 com `-dAMQP_OPENSSL`) | nada — sobe o **broker embutido** in-process em porta efêmera (inclui os spans do cliente ponta a ponta) |
 | `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 43 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
+| `AMQP.OutboxTests` / `AMQPOutboxTestsFpc` | 8 | a pascal-db-faa (`external/pascal-db-faa`) e o SQLite: no FPC, a `sqlite3.dll` do sqlite.org ao lado do runner (Windows) ou `libsqlite3.so.0` (Linux); o FireDAC do Delphi linka o SQLite — ver [`docs/outbox.md`](docs/outbox.md) |
 
 A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. **Os 34 passam, sem nenhum ignorado por recurso faltante** — o último que faltava (`x-max-length` + `x-overflow: reject-publish`) entrou junto com o resto do ciclo de vida de mensagem. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar — e, fora do Windows, se o runner não tiver sido compilado com `-dAMQP_OPENSSL`. No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
 

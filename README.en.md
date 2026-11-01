@@ -24,6 +24,7 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 - **TLS (amqps)** with two backends behind the same API: native **SChannel** on Windows (automatic, zero dependencies) and **OpenSSL** on any platform (opt-in via `-dAMQP_OPENSSL`) — see the [TLS (amqps)](#tls-amqps) section.
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (RabbitMQ extension), `Basic.Get`, `Qos`.
 - **OpenTelemetry tracing** (opt-in, through pascal-common-faa): a span per publish and per consumed message, with the W3C `traceparent` in the message headers. Producer and consumer end up in the same trace — see [Tracing (OpenTelemetry)](#tracing-opentelemetry).
+- **Transactional outbox through the broker** (an optional bridge in `src/outbox`, outside the packages): pascal-db-faa's outbox sink publishes with confirms, and the consumer has a retry queue with a TTL, a dead queue and deduplication in the database before the ack — see [Transactional outbox](#transactional-outbox-srcoutbox).
 
 ### Embedded broker
 
@@ -307,6 +308,31 @@ TPcTracing.Shutdown; // exports the last spans before the program ends
 
 Attributes, decisions and tests in [`docs/tracing.md`](docs/tracing.md) (Portuguese).
 
+### Transactional outbox (`src/outbox`)
+
+`AMQP.Outbox` is the bridge between [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa)'s transactional outbox (`PascalDb.Outbox`, 0.18.0 or later) and an AMQP broker. It sits **outside the packages**, because it needs pascal-db-faa: add `src/outbox` to the search path (and, in Lazarus, `src` to the include files) only if you use it.
+
+```pascal
+uses PascalDb.Outbox, AMQP.Outbox;
+
+// producer: the outbox relay publishes each event and waits for the confirm
+Relay := TOutboxRelay.Create(Factory, TOutboxAmqpSink.Create(RelayChannel, 'shop.events'),
+  PdbOutboxNewOwner('relay'), TOutboxOptions.Default);
+
+// consumer: work queue + .retry (TTL) + .dead
+Queue := TOutboxAmqpQueue.Create('shop.email', 'shop.events', 'order.#');
+OutboxAmqpDeclareQueues(Channel, Queue);
+Consumer := TOutboxAmqpConsumer.Create(Factory, ConsumerChannel, Queue, 'email', EmailHandler);
+Consumer.Start;
+```
+
+- The sink publishes the event as persistent (body = the JSON payload, `message-id` = the event id, `type` and routing key = the kind, a `tenant-id` header) on a `topic` exchange and waits for the broker's ack; without one it raises, and the relay tries again later.
+- The consumer runs the handler, records the event in `PROCESSED_EVENTS` and only then acks (at least once). A redelivered event already recorded is acked without running the handler.
+- A failing handler gets a `Nack` without requeue: the work queue's dead-letter moves the message to the `.retry` queue, which sends it back after the TTL. Tries are counted from `x-death`; after the last one, the message goes to the `.dead` queue.
+- The SQL (`PROCESSED.EXISTS`, `.INSERT`, `.PURGE`) is the application's, read by name through the factory's loader, as the outbox's own.
+
+Topology, reference SQL, metrics and tests in [`docs/outbox.md`](docs/outbox.md) (Portuguese).
+
 ## Embedded broker
 
 An AMQP 0-9-1 broker **inside your process**. This library's client — or any AMQP 0-9-1
@@ -572,6 +598,8 @@ fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src your_pro
 
 **To use the embedded broker**, add the server package/directory as well: `packages\pascal_amqp_faa_server.lpk` in Lazarus, `-Fusrc\server` in plain FPC, `src\server\` in Delphi's search path. Client-only users need none of this — the two packages are separate on purpose.
 
+**To use the outbox bridge** (`AMQP.Outbox`), add `src\outbox` to the search path (in Lazarus, also `src` to the include files) and [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa) 0.18.0 or later, which the application provides as it provides pascal-common-faa (and which requires pascal-common-faa 1.17 or later). It is in no package: whoever doesn't use it doesn't depend on pascal-db-faa. See [`docs/outbox.md`](docs/outbox.md) (Portuguese).
+
 ## TLS (amqps)
 
 Two backends behind the **same API** — the application code doesn't change, only the build:
@@ -700,6 +728,7 @@ In both:
 | `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 43 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
 | `AMQP.ServerTests` / `AMQPServerTestsFpc` | 472 (476 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
 | `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 43 | nothing — runs the **client's integration suite against the embedded broker** |
+| `AMQP.OutboxTests` / `AMQPOutboxTestsFpc` | 8 | pascal-db-faa (`external/pascal-db-faa`) and SQLite: on FPC, sqlite.org's `sqlite3.dll` next to the runner (Windows) or `libsqlite3.so.0` (Linux); Delphi's FireDAC links SQLite in — see [`docs/outbox.md`](docs/outbox.md) |
 
 The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 34 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
 

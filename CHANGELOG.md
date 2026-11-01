@@ -6,6 +6,51 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-31
+
+O outbox transacional da pascal-db-faa por um broker AMQP: a ponte que o pascal-agenda-faa usava
+(`Agenda.Outbox.Amqp`, decisão 11 da M7 de lá) veio para cá. Manual em `docs/outbox.md`.
+
+### Adicionado
+
+- **`AMQP.Outbox`** (`src/outbox`), **fora dos pacotes**: precisa da pascal-db-faa 0.18.0 ou mais
+  nova (`PascalDb.Outbox`), que o cliente e o broker não precisam. A API é a do pascal-agenda-faa:
+  - `TOutboxAmqpSink`, o `IOutboxSink` que publica cada evento (persistente, num exchange `topic`,
+    routing key = tipo, header `tenant-id`) num canal em confirm mode e espera o ack; sem ack,
+    levanta, e o relay tenta de novo.
+  - `TOutboxAmqpConsumer`, que roda um `IOutboxHandler` numa fila própria: grava o evento em
+    `PROCESSED_EVENTS` antes do ack e não roda de novo um evento já gravado; falha vira `Nack`
+    sem requeue, que o dead-letter leva para a fila `.retry` (TTL) e de volta; as tentativas vêm
+    do `x-death`, e a última estaciona a mensagem na fila `.dead`.
+  - `TOutboxAmqpQueue`, `OutboxAmqpDeclareExchange`, `OutboxAmqpDeclareQueues`,
+    `OutboxAmqpPending`, `OutboxAmqpEvent`, `OutboxAmqpPurgeProcessed`, e a métrica
+    `outbox.consumer.messages`.
+  - O SQL (`PROCESSED.EXISTS`, `PROCESSED.INSERT`, `PROCESSED.PURGE`) é da aplicação, lido pelo nome
+    no loader da factory; tabela e comandos de referência em `docs/outbox.md`.
+- Suíte `tests/Outbox` (8 testes, DUnitX e FPCUnit espelhados): o sink e o consumidor contra o
+  broker embutido, com um arquivo SQLite (SQLdb no FPC, FireDAC no Delphi). Nenhum RabbitMQ.
+  `tools/test_fpc_docker.sh` ganhou a suíte `outbox`.
+
+### Mudado
+
+- O `PROCESSED_AT` gravado pelo consumidor vem do `TClock` da pascal-common-faa (era o
+  `TJwt.UnixNow` da pascal-api-infra-faa, usado só como relógio): a ponte não puxa uma terceira lib,
+  e os testes trocam o relógio com `TClock.SetClock`.
+- Submódulos de teste: pascal-common-faa 1.12.0 → **1.26.0**, e **pascal-db-faa 0.18.0** (novo,
+  só para a suíte do outbox). O mínimo que o cliente e o broker exigem continua 1.8.0; quem usa a
+  ponte precisa do que a pascal-db-faa exige (1.17).
+
+### Corrigido
+
+- **Broker: o tick de entrega da thread monitora podia postar numa fila já liberada.**
+  `TAMQPEngine.DeliverTick` copiava as filas sob o lock da engine, soltava o lock e só então
+  postava em cada uma; um `Queue.Delete` nessa janela liberava a fila (o `DeleteQueue` libera sob o
+  mesmo lock), e o comando caía num objeto morto. Achado pelo heaptrc nesta rodada: um comando
+  vazado (200 bytes), uma vez em 16 execuções da passada durável da aceitação. Agora os posts saem
+  com o lock seguro (o `Post` nunca espera). O mesmo padrão — ponteiro de fila usado depois de
+  soltar o lock — existe em quem usa `TAMQPEngine.FindQueue`; fica registrado no worklog para uma
+  sessão própria do broker.
+
 ## [0.4.2] - 2026-10-27
 
 Defeito achado pelo pascal-agenda-faa (`docs/design.md` de lá, seção "M4: the broker, the compose
@@ -241,7 +286,8 @@ aplicação (pacote separado).
 - Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
   sob carga).
 
-[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.3.0...v0.4.0

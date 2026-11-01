@@ -45,7 +45,7 @@ USO
 
 Sai com codigo 1 se achar problema. Rode junto com
 `python tools/gen_fpc_mirror.py --check --suite tests/Unit --suite
-tests/Integration --suite tests/Server`, antes de mandar a suite para a IDE.
+tests/Integration --suite tests/Server --suite tests/Outbox`, antes de mandar a suite para a IDE.
 
 NAO E um parser de Pascal: e casamento de padroes deliberadamente simples.
 """
@@ -56,7 +56,7 @@ import re
 import sys
 
 RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-SUITES = ['tests/Unit', 'tests/Integration', 'tests/Server']
+SUITES = ['tests/Unit', 'tests/Integration', 'tests/Server', 'tests/Outbox']
 IGNORAR = ('/lib/', '\\lib\\', '/backup/', '\\backup\\', '__recovery')
 
 

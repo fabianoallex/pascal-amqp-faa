@@ -1486,19 +1486,23 @@ begin
     end;
 end;
 
+// Posts under FLock (v0.5.0): DeleteQueue frees the queue under FLock, so a
+// queue taken from FQueues is only alive while FLock is held. Posting after
+// leaving it put a tick into a queue freed in between (found by heaptrc: one
+// leaked command, once in 16 runs of the durable acceptance pass). Post never
+// waits (the queue's monitor, briefly), and FLock -> queue monitor is the
+// order DeleteQueue already takes.
 procedure TAMQPEngine.DeliverTick;
 var
-  LAll: TArray<TAMQPServerQueue>;
-  I: Integer;
+  LQueue: TAMQPServerQueue;
 begin
   FLock.Enter;
   try
-    LAll := FQueues.Values.ToArray;
+    for LQueue in FQueues.Values do
+      LQueue.PostDeliverTick;
   finally
     FLock.Leave;
   end;
-  for I := 0 to High(LAll) do
-    LAll[I].PostDeliverTick;
 end;
 
 function TAMQPEngine.RoutedCount: Integer;

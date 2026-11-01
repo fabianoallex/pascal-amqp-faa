@@ -30,6 +30,10 @@ samples/SmokeTest/SmokeTest
 tests/Unit/fpc/AMQPUnitTestsFpc
 tests/Integration/fpc/AMQPIntegrationTestsFpc
 tests/Server/fpc/AMQPServerTestsFpc
+tests/Outbox/fpc/AMQPOutboxTestsFpc
+
+# sqlite.org sqlite3.dll copied next to the outbox runner (FPC on Windows)
+tests/Outbox/fpc/sqlite3.dll
 
 # cache de package-links do lazbuild (especifico da maquina)
 /packagefiles.xml

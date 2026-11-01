@@ -1034,6 +1034,57 @@ integração 48, aceitação 48 nas quatro passagens, 0 vazamentos. Delphi 12 (c
 Win32 e Win64, Debug e OpenSSL: unitária 131, integração 48 (RabbitMQ pela LAN), server
 472/476, aceitação 48 nas duas passagens, `Tests Leaked: 0` em todas.
 
+## v0.5.0 — a ponte do outbox (`src/outbox`) e a corrida do `DeliverTick` (2026-10-31)
+
+Decisão 11 da M7 do pascal-agenda-faa (`docs/design.md` de lá, "M7: design" e "M4: the broker,
+the compose file, the trace"): o `Agenda.Outbox.Amqp` veio para cá como `AMQP.Outbox`, em
+`src/outbox`, fora dos dois `.lpk` (precisa da pascal-db-faa 0.18.0, que trouxe o
+`PascalDb.Outbox` na decisão 10). Manual em `docs/outbox.md`.
+
+- **O que mudou na unit**: só o cabeçalho, o `{$I amqp.inc}` e o relógio. O `TJwt.UnixNow` da
+  pascal-api-infra-faa (usado só como relógio) virou `DateTimeToUnix(TClock.Now, False)`, o
+  `TClock` da pascal-common-faa. A API ficou idêntica, para o agenda adotar trocando o nome da unit.
+- **Testes**: suíte própria `tests/Outbox` (os 7 do agenda + 1 do relógio), broker embutido em
+  porta efêmera e um arquivo SQLite (`AMQP.OutboxTestDb`: SQLdb no FPC, FireDAC no Delphi). Ficou
+  fora das suítes existentes para elas não ganharem dependência de banco. O mock da pascal-db-faa
+  foi descartado: ele dá uma resposta fixa por chave SQL, e o teste do "reentregue, não roda de
+  novo" precisa de um `PROCESSED.EXISTS` que mude depois do `INSERT`. **Mutação**: a ponte lendo
+  `SysUtils.Now` em vez do `TClock` derruba `Consumer_RecordsTheTimeOfTClock`
+  (`expected 1700000500 but was 1793486810`).
+- **Submódulos**: pascal-common-faa 1.12.0 → 1.26.0 (a pascal-db-faa 0.18.0 exige ≥ 1.17) e
+  pascal-db-faa 0.18.0, sem `--recursive`. O mínimo do cliente e do broker continua 1.8.0.
+- **Build**: o pacote não exporta o include path, então quem compila `src/outbox` pelo Lazarus põe
+  `src` em *Include files* (`Cannot open include file "amqp.inc"` na primeira tentativa).
+  `verifica_espelhos.py` e `test_fpc_docker.sh` ganharam a suíte; o script acrescenta
+  `libsqlite3-0` numa camada se a imagem não tiver.
+
+**Corrida do `DeliverTick` (pré-existente, achada pelo heaptrc nesta rodada).** Na primeira
+regressão completa, a passada durável da aceitação no Windows deu `1 unfreed memory blocks : 200`,
+com a pilha `TAMQPQueueCommand.Create` ← `PostDeliverTick` ← `TAMQPEngine.DeliverTick` ←
+`MonitorLoop`. Causa, lida no código: o `DeliverTick` copiava as filas sob o `FLock`, soltava o
+lock e só então postava; o `DeleteQueue` libera a fila **sob** o `FLock`, então um delete nessa
+janela deixava o tick postar num objeto liberado (o comando caía numa caixa morta). Não reproduziu
+sob demanda: **0 em 15** execuções seguidas da passada durável antes da correção (1 em 16 contando
+a original). Correção: os posts saem com o `FLock` seguro — o `Post` nunca espera (só o monitor da
+fila, rápido), e `FLock` → monitor da fila é a ordem que o `DeleteQueue` já usa. Depois: server
+472, outbox 8 e aceitação 5 × as duas passadas, todas com 0 vazamento. Sem teste determinístico: a
+janela não existe mais depois da correção, e um gancho dentro do lock não a reabre.
+
+**Pendente, para uma sessão própria do broker**: o mesmo padrão existe em todo chamador de
+`TAMQPEngine.FindQueue` (publish/roteamento, dead-letter, `AddConsumer`, `RemoveConsumer`, ack...):
+o ponteiro da fila é usado depois de o `FLock` ser solto, e um `Queue.Delete` concorrente pode
+liberá-la. Não visto em teste; lido no código.
+
+**Suítes (FPC)**: Windows — unitária 131, server 472 (476 no openssl), integração 48 contra o
+RabbitMQ (pelo IP da LAN: a 127.0.0.1:5672 é do `DFeBrokerServico`), aceitação 48 nas duas
+passadas e nos dois modos, outbox 8, 0 vazamento; SmokeTest PASS contra o RabbitMQ. Linux
+(Debian, `pamqp-fpc:f8` + SQLite) — os mesmos números, todas com 0 vazamento (heaptrc com `log=`).
+
+**Delphi 12 (Win32 e Win64, confirmado pelo usuário em 2026-11-01)**: outbox 8, server 472/476 e
+aceitação 48 nas duas passadas, 0 vazamento. A primeira tentativa não compilou: `F2092 Program or
+unit 'AMQP.OutboxTests' recursively uses itself` — a unit de teste tinha o nome do programa, o que o
+FPC aceita e o dcc32 não. A unit virou `AMQP.OutboxAmqpTests` (o nome de origem no agenda).
+
 ## Verificador de espelhos
 
 *Histórico abaixo; o estado atual (cinco checagens sobre o mestre, depois do kit de testes) está na seção acima e no `CLAUDE.md`.*

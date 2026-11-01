@@ -5,7 +5,9 @@
 #
 # Configurações (as mesmas das validações Linux registradas no worklog):
 #   unit | server, server-openssl | integration, integration-openssl |
-#   acceptance e acceptance-durable (as duas passagens), em Default e openssl.
+#   acceptance e acceptance-durable (as duas passagens), em Default e openssl |
+#   outbox (src/outbox, the bridge to pascal-db-faa: SQLite through SQLdb,
+#   libsqlite3.so.0 in the image).
 #
 # Antes de compilar, confere os espelhos gerados (tools/gen_fpc_mirror.py
 # --check) e o verificador do que o gerador não cobre
@@ -27,12 +29,12 @@ set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${FPC_IMAGE:-pamqp-fpc322}"
 RABBIT="${RABBIT_CONTAINER:-delphi-amqp-faa-rabbitmq}"
-SUITES="${SUITES:-unit server integration acceptance}"
+SUITES="${SUITES:-unit server integration acceptance outbox}"
 MOUNT="$ROOT"
 command -v cygpath >/dev/null 2>&1 && MOUNT="$(cygpath -w "$ROOT")"
 
 cd "$ROOT"
-python tools/gen_fpc_mirror.py --check --suite tests/Unit --suite tests/Integration --suite tests/Server
+python tools/gen_fpc_mirror.py --check --suite tests/Unit --suite tests/Integration --suite tests/Server --suite tests/Outbox
 python tests/tools/verifica_espelhos.py > /dev/null || { python tests/tools/verifica_espelhos.py; exit 1; }
 [ -f external/pascal-common-faa/src/PascalCommon.Threading.pas ] \
   || { echo "external/pascal-common-faa vazio: git submodule update --init"; exit 1; }
@@ -40,9 +42,24 @@ python tests/tools/verifica_espelhos.py > /dev/null || { python tests/tools/veri
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -q -t "$IMAGE" - <<'EOF' >/dev/null
 FROM debian:bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends fpc libssl3 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends fpc libssl3 libsqlite3-0 ca-certificates && rm -rf /var/lib/apt/lists/*
 EOF
 fi
+
+# The outbox suite opens SQLite: an image without libsqlite3.so.0 gets a layer
+# with it (FPC_IMAGE may be an older image).
+case " $SUITES " in
+  *" outbox "*)
+    [ -f external/pascal-db-faa/src/PascalDb.Outbox.pas ] \
+      || { echo "external/pascal-db-faa empty: git submodule update --init external/pascal-db-faa"; exit 1; }
+    if ! docker run --rm "$IMAGE" sh -c "ldconfig -p | grep -q libsqlite3.so.0"; then
+      docker build -q -t "$IMAGE-sqlite" - <<EOF >/dev/null
+FROM $IMAGE
+RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-0 && rm -rf /var/lib/apt/lists/*
+EOF
+      IMAGE="$IMAGE-sqlite"
+    fi ;;
+esac
 
 NET=""
 case " $SUITES " in
@@ -54,6 +71,7 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
   mkdir -p /t/external /t/bin /t/log
   cp -r /src/src /src/tests /src/docker /t/
   cp -r /src/external/pascal-common-faa /t/external/
+  if [ -d /src/external/pascal-db-faa/src ]; then cp -r /src/external/pascal-db-faa /t/external/; fi
   C=/t/external/pascal-common-faa/src
   # build <nome> <lpr> [defines]
   build() {
@@ -102,6 +120,11 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
         run acceptance-durable acceptance AMQP_ACEITACAO_DURAVEL=1
         run acceptance-openssl acceptance-openssl
         run acceptance-openssl-durable acceptance-openssl AMQP_ACEITACAO_DURAVEL=1 ;;
+      outbox)
+        D=/t/external/pascal-db-faa
+        build outbox /t/tests/Outbox/fpc/AMQPOutboxTestsFpc.lpr \
+          "-Fu/t/src/outbox -Fu/t/tests/Outbox -Fu$D/src -Fu$D/adapters/sqldb -Fi$D/src"
+        run outbox outbox ;;
     esac
   done
   exit $FALHOU'
