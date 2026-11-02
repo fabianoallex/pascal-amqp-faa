@@ -1139,7 +1139,7 @@ modos (509 menos as três fixtures TLS só-Windows), integração 48 nos dois mo
 (na rede dele), aceitação 48 nas quatro passadas, outbox 8, 0 vazamento (heaptrc com `log=`);
 bullseye (FPC 3.2.0, OpenSSL 1.1.1, `fpc-bullseye-ssl`) — os mesmos números, menos o outbox, que
 não compila lá: a `PascalDb.Adapter.SQLdb` da pascal-db-faa usa `mysql80conn`, que o FPC 3.2.0 não
-tem (não é desta migração). **Delphi 12**: "build all" do `AMQP.groupproj` OK (usuário, 2026-11-02); o resultado das suítes DUnitX não foi registrado nesta versão.
+tem (não é desta migração). **Delphi 12 Win32 e Win64, Debug e OpenSSL (2026-11-02, exes do usuário rodados pelo console): unitária 145, server 509 (as fixtures OpenSSL rodaram de verdade nas duas plataformas, sem aviso de pulo), integração 48 (contra o RabbitMQ pela LAN e os 5 de TLS contra o RabbitMQ temporário da 5671), aceitação 48 nas duas passadas, outbox 8 (Debug), Tests Leaked 0 em todas.**
 
 ## Verificador de espelhos
 
