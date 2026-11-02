@@ -40,6 +40,7 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.Loggers.Xml.NUnit,
   DUnitX.TestFramework,
+  PascalCommon.Transport,
   AMQP.TestTimeLogger in '..\AMQP.TestTimeLogger.pas',
   AMQP.Protocol in '..\..\src\AMQP.Protocol.pas',
   AMQP.Wire in '..\..\src\AMQP.Wire.pas',
@@ -51,7 +52,7 @@ uses
   AMQP.Queue.Methods in '..\..\src\AMQP.Queue.Methods.pas',
   AMQP.Basic.Methods in '..\..\src\AMQP.Basic.Methods.pas',
   AMQP.Tracing in '..\..\src\AMQP.Tracing.pas',
-  AMQP.Transport.Tls in '..\..\src\AMQP.Transport.Tls.pas',
+  AMQP.Transport in '..\..\src\AMQP.Transport.pas',
   AMQP.Connection in '..\..\src\AMQP.Connection.pas',
   AMQP.Server.Auth in '..\..\src\server\AMQP.Server.Auth.pas',
   AMQP.Server.Types in '..\..\src\server\AMQP.Server.Types.pas',
@@ -86,26 +87,22 @@ uses
   AMQP.TlsIntegrationTests in '..\Integration\AMQP.TlsIntegrationTests.pas',
   AMQP.ReviewRegressionTests in '..\Integration\AMQP.ReviewRegressionTests.pas';
 
-{$IFDEF AMQP_OPENSSL}
-// Procura docker\certs subindo a partir da pasta do executavel (o exe roda de
-// Win32\Debug ou Win32\OpenSSL, profundidades diferentes).
-function AchaCerts(out ACert, AKey: string): Boolean;
-var
-  LDir: string;
-  I: Integer;
+// The embedded TLS broker's certificate: the test PKI of pascal-common-faa
+// (AMQP.TestSupport.Pki), PEM pair on OpenSSL, PFX on SChannel. Since 0.6.0
+// every build has a TLS broker (SChannel serves the server side too).
+procedure ConfiguraCertificado(ABroker: TAMQPServer);
 begin
-  LDir := ExtractFilePath(ParamStr(0));
-  for I := 0 to 6 do
+  if AmqpResolveTlsBackend(tbDefault) = tbOpenSsl then
   begin
-    ACert := LDir + 'docker\certs\server.crt';
-    AKey := LDir + 'docker\certs\server.key';
-    if FileExists(ACert) and FileExists(AKey) then
-      Exit(True);
-    LDir := LDir + '..\';
+    ABroker.TlsCertFile := Pki('srv_cert.pem');
+    ABroker.TlsKeyFile := Pki('srv_key.pem');
+  end
+  else
+  begin
+    ABroker.TlsCertFile := Pki('srv.pfx');
+    ABroker.TlsCertPassword := PKI_PFX_PASSWORD;
   end;
-  Result := False;
 end;
-{$ENDIF}
 
 // True quando a variavel de ambiente pede a passada duravel.
 function PediuDuravel: Boolean;
@@ -154,17 +151,12 @@ var
   broker: TAMQPServer;
   portaTls: Word;
   dataDir: string;
-  {$IFDEF AMQP_OPENSSL}
   brokerTls: TAMQPServer;
-  cert, key: string;
-  {$ENDIF}
 begin
   ReportMemoryLeaksOnShutdown := True;
   broker := TAMQPServer.Create;
   portaTls := 0;
-  {$IFDEF AMQP_OPENSSL}
   brokerTls := nil;
-  {$ENDIF}
   try
     broker.BindAddress := '127.0.0.1';
     broker.Port := 0; // porta efemera
@@ -185,29 +177,21 @@ begin
     // servidor: os 5 testes de TLS se auto-ignoravam em 0.000s e o resumo
     // dizia "28 Passed", escondendo que 5 nem tocaram no broker. O XML
     // (dunitx-results.xml) foi o que expos isso -- tempo zero.
-    {$IFDEF AMQP_OPENSSL}
-    if AchaCerts(cert, key) then
-    begin
-      brokerTls := TAMQPServer.Create;
-      brokerTls.BindAddress := '127.0.0.1';
-      brokerTls.Port := 0;
-      brokerTls.UseTls := True;
-      brokerTls.TlsCertFile := cert;
-      brokerTls.TlsKeyFile := key;
-      try
-        brokerTls.Start;
-        portaTls := brokerTls.Port;
-      except
-        on E: Exception do
-        begin
-          System.Writeln('AVISO: broker TLS nao subiu (', E.Message, ')');
-          FreeAndNil(brokerTls);
-        end;
+    brokerTls := TAMQPServer.Create;
+    brokerTls.BindAddress := '127.0.0.1';
+    brokerTls.Port := 0;
+    brokerTls.UseTls := True;
+    try
+      ConfiguraCertificado(brokerTls);
+      brokerTls.Start;
+      portaTls := brokerTls.Port;
+    except
+      on E: Exception do
+      begin
+        System.Writeln('AVISO: broker TLS nao subiu (', E.Message, ')');
+        FreeAndNil(brokerTls);
       end;
-    end
-    else
-      System.Writeln('AVISO: docker\certs nao encontrado -- sem porta TLS');
-    {$ENDIF}
+    end;
 
     AmqpUseEmbeddedBroker(broker.Port, portaTls);
     System.Writeln('broker embutido em 127.0.0.1:', broker.Port,
@@ -254,9 +238,7 @@ begin
         System.Writeln(E.ClassName, ': ', E.Message);
     end;
   finally
-    {$IFDEF AMQP_OPENSSL}
     brokerTls.Free;
-    {$ENDIF}
     broker.Free;
   end;
 end.

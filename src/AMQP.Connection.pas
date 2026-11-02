@@ -41,6 +41,7 @@ uses
   PascalCommon.Threading,
   PascalCommon.ThreadPool,
   AMQP.Threading,
+  PascalCommon.Transport,
   AMQP.Transport,
   AMQP.Protocol,
   AMQP.Wire,
@@ -63,9 +64,6 @@ type
   /// mode). Ver também EAMQPConnection (erros da conexão como um todo).
   EAMQPChannel = class(Exception);
 
-  { TAMQPSocketStream foi promovido para AMQP.Transport (compartilhado com o
-    broker); segue visível aqui via `uses AMQP.Transport`. }
-
   TAMQPConnectionParams = record
     Host: string;
     Port: Word;
@@ -85,10 +83,27 @@ type
     // confirmação por uma queda são re-publicados na reconexão (novos seq-nos).
     // At-least-once — pode duplicar. Custo: guarda o corpo até confirmar.
     RepublishUnconfirmedOnReconnect: Boolean;
-    // TLS (amqps://) via SChannel nativo. Opt-in.
+    /// Budget for the TCP connect (every address of the name included), in
+    /// ms. 0 = pascal-common-faa's default, 10 s. Before 0.6.0 there was no
+    /// budget of our own (the OS's: ~21 s on Windows, minutes on Linux).
+    ConnectTimeoutMs: Cardinal;
+    // TLS (amqps://). Opt-in.
     UseTls: Boolean;               // True => faz handshake TLS antes do AMQP
     TlsVerifyPeer: Boolean;        // True (padrão): valida cadeia + hostname
     TlsServerName: string;         // '' => usa Host (SNI / nome para validação)
+    /// Private CA (PEM, both backends): trust THIS CA for the server instead
+    /// of the system store. '' = the system store.
+    TlsCaFile: string;
+    /// Client certificate for mTLS. OpenSSL: a PEM pair (TlsCertFile +
+    /// TlsKeyFile). SChannel: a PFX in TlsCertFile with TlsCertPassword.
+    /// '' = no client certificate.
+    TlsCertFile: string;
+    TlsKeyFile: string;
+    TlsCertPassword: string;
+    /// Which TLS implementation, chosen at run time. tbDefault = SChannel on
+    /// Windows (OpenSSL with -dAMQP_OPENSSL), OpenSSL elsewhere; see
+    /// AmqpDefaultTlsBackend. tbSChannel off Windows fails with EAMQPTls.
+    TlsBackend: TPcTlsBackend;
     /// Parâmetros padrão: localhost:5672, vhost '/', guest/guest (sem TLS).
     class function Localhost: TAMQPConnectionParams; static;
     /// Como Localhost, mas TLS na porta 5671 com validação DESLIGADA
@@ -536,8 +551,8 @@ type
   TAMQPConnection = class
   private
     FParams: TAMQPConnectionParams;
-    FSocket: TAMQPTcpSocket;
-    FStream: TStream; // TAMQPSocketStream (plain) ou TAMQPSchannelStream/TAMQPOpenSslStream (TLS)
+    FEndpoint: TPcEndpoint; // TCP or TLS (pascal-common-faa); owned
+    FStream: TStream;       // TAMQPEndpointStream over FEndpoint
     FIsOpen: Boolean;
     FNegotiated: TAMQPConnectionTune;
     FNextChannel: Word;
@@ -670,22 +685,20 @@ type
 /// conexão. É o que prova que Close/Destroy esperam a reconexão sair de fato.
 function AmqpReconnectThreadsAlive: Integer;
 
+/// The TLS options the client uses for AParams: CA, client certificate,
+/// verification and backend (tbDefault resolved by AmqpDefaultTlsBackend).
+/// The handshake deadline is the common's default (15 s). Public for the
+/// unit tests of the mapping.
+function AmqpClientTlsOptions(const AParams: TAMQPConnectionParams): TPcTlsOptions;
+
 implementation
 
 uses
   AMQP.Channel.Methods,
   PascalCommon.Tracing,
-  AMQP.Tracing
-  // TLS: OpenSSL (opt-in via AMQP_OPENSSL, qualquer plataforma) tem precedência
-  // sobre SChannel (automático no Windows). Ver EstablishConnection.
-  {$IFDEF AMQP_OPENSSL}
-  , AMQP.Transport.OpenSSL
-  {$ELSE}
-    {$IFDEF AMQP_WINDOWS}
-  , AMQP.Transport.Tls
-    {$ENDIF}
-  {$ENDIF}
-  ;
+  AMQP.Tracing,
+  PascalCommon.Transport.Tcp,
+  PascalCommon.Transport.Tls;
 
 const
   AMQP_RPC_TIMEOUT_MS = 30000; // tempo máximo aguardando resposta de RPC
@@ -775,6 +788,17 @@ var
 function AmqpReconnectThreadsAlive: Integer;
 begin
   Result := PcAtomicGet(GReconnectThreadsAlive);
+end;
+
+function AmqpClientTlsOptions(const AParams: TAMQPConnectionParams): TPcTlsOptions;
+begin
+  Result := Default(TPcTlsOptions);
+  Result.CaFile := AParams.TlsCaFile;
+  Result.CertFile := AParams.TlsCertFile;
+  Result.KeyFile := AParams.TlsKeyFile;
+  Result.CertPassword := AParams.TlsCertPassword;
+  Result.SkipServerVerification := not AParams.TlsVerifyPeer;
+  Result.Backend := AmqpResolveTlsBackend(AParams.TlsBackend);
 end;
 
 constructor TAMQPReconnectThread.Create(AConnection: TAMQPConnection);
@@ -972,9 +996,15 @@ begin
   Result.MaxReconnectAttempts := 0; // infinitas
   Result.ConnectionName := '';
   Result.RepublishUnconfirmedOnReconnect := False;
+  Result.ConnectTimeoutMs := 0;
   Result.UseTls := False;
   Result.TlsVerifyPeer := True;
   Result.TlsServerName := '';
+  Result.TlsCaFile := '';
+  Result.TlsCertFile := '';
+  Result.TlsKeyFile := '';
+  Result.TlsCertPassword := '';
+  Result.TlsBackend := tbDefault;
 end;
 
 class function TAMQPConnectionParams.LocalhostTls: TAMQPConnectionParams;
@@ -1300,43 +1330,34 @@ end;
 
 procedure TAMQPConnection.EstablishConnection;
 var
-  LPlain: TAMQPSocketStream;
   LTarget: string;
 begin
   // Cria socket, faz o handshake (síncrono, inline) e sobe as threads.
   // Usado tanto no Open inicial quanto na reconexão.
-  FSocket := TAMQPTcpSocket.Create;
-  FSocket.Connect(FParams.Host, FParams.Port);
-
-  LPlain := TAMQPSocketStream.Create(FSocket);
-  FStream := LPlain;
-  if FParams.UseTls then
-  begin
-    {$IF Defined(AMQP_OPENSSL) or Defined(AMQP_WINDOWS)}
-    // O stream TLS envolve o plain e faz o handshake TLS no construtor. Ele passa
-    // a ser dono do plain: se o Create falhar, seu destrutor (auto-chamado)
-    // libera o plain — por isso zeramos FStream antes, para o
-    // CloseSocketStream não liberar de novo (double-free). O socket é liberado à
-    // parte (o plain não é dono dele).
-    LTarget := FParams.TlsServerName;
-    if LTarget = '' then
-      LTarget := FParams.Host;
-    FStream := nil;
-    {$IFDEF AMQP_OPENSSL}
-    // OpenSSL (opt-in): mesmo contrato do SChannel; vence quando definido,
-    // inclusive no Windows.
-    FStream := TAMQPOpenSslStream.Create(LPlain, LTarget, FParams.TlsVerifyPeer);
-    {$ELSE}
-    FStream := TAMQPSchannelStream.Create(LPlain, LTarget, FParams.TlsVerifyPeer);
-    {$ENDIF}
-    {$ELSE}
-    // Sem AMQP_OPENSSL e fora do Windows não há backend TLS neste build.
-    LTarget := ''; // evita warning de variável não usada
-    CloseSocketStream;
-    raise EAMQPConnection.Create(
-      'TLS not supported in this build/platform (Windows uses SChannel; elsewhere, compile with AMQP_OPENSSL)');
-    {$ENDIF}
+  try
+    if FParams.UseTls then
+    begin
+      LTarget := FParams.TlsServerName;
+      if LTarget = '' then
+        LTarget := FParams.Host;
+      // The TLS handshake runs here, on this thread, with the common's
+      // default deadline (15 s); the deadline is removed once it's done.
+      // SNI and the hostname check use LTarget, the TCP connect uses Host.
+      FEndpoint := PcTlsWrap(
+        PcTcpConnect(FParams.Host, FParams.Port,
+          AmqpTcpOptions(FParams.ConnectTimeoutMs)),
+        LTarget, AmqpClientTlsOptions(FParams));
+    end
+    else
+      FEndpoint := PcTcpConnect(FParams.Host, FParams.Port,
+        AmqpTcpOptions(FParams.ConnectTimeoutMs));
+  except
+    // T6: no EPcTransport* leaves the library. PcTlsWrap owns (and frees)
+    // the TCP endpoint also when the handshake fails.
+    on E: EPcTransport do
+      AmqpRaiseTransportError(E);
   end;
+  FStream := TAMQPEndpointStream.Create(FEndpoint);
 
   Handshake; // antes de qualquer thread (agora sobre TLS, se habilitado)
 
@@ -1352,13 +1373,13 @@ end;
 procedure TAMQPConnection.CloseSocketStream;
 begin
   PcAtomicSet(FWritable, 0);
-  if Assigned(FSocket) then
+  if Assigned(FEndpoint) then
     try
-      FSocket.Close;
+      FEndpoint.CloseAbort;
     except
     end;
   FreeAndNil(FStream);
-  FreeAndNil(FSocket);
+  FreeAndNil(FEndpoint);
 end;
 
 procedure TAMQPConnection.Open;
@@ -1378,9 +1399,9 @@ end;
 
 procedure TAMQPConnection.DropConnectionForTest;
 begin
-  if Assigned(FSocket) then
+  if Assigned(FEndpoint) then
     try
-      FSocket.Close; // a thread de leitura vai perceber e disparar a reconexão
+      FEndpoint.CloseAbort; // a thread de leitura vai perceber e disparar a reconexão
     except
     end;
 end;
@@ -1397,9 +1418,9 @@ begin
   if Assigned(FReadThread) then
   begin
     FReadThread.Terminate;
-    if Assigned(FSocket) then
+    if Assigned(FEndpoint) then
       try
-        FSocket.Close; // desbloqueia o ReadFrom da thread
+        FEndpoint.CloseAbort; // desbloqueia o ReadFrom da thread
       except
       end;
     FReadThread.WaitFor;
@@ -1446,9 +1467,9 @@ begin
   // manda heartbeats). Fecha o socket para desbloquear a thread de leitura.
   if (LNow - LLastRead) > (2 * LIntervalMs) then
   begin
-    if Assigned(FSocket) then
+    if Assigned(FEndpoint) then
       try
-        FSocket.Close;
+        FEndpoint.CloseAbort;
       except
       end;
     Exit;

@@ -1085,6 +1085,62 @@ aceitação 48 nas duas passadas, 0 vazamento. A primeira tentativa não compilo
 unit 'AMQP.OutboxTests' recursively uses itself` — a unit de teste tinha o nome do programa, o que o
 FPC aceita e o dcc32 não. A unit virou `AMQP.OutboxAmqpTests` (o nome de origem no agenda).
 
+## v0.6.0 — TCP e TLS pela pascal-common-faa 1.27.0 (2026-11-02)
+
+Passo 5 da "Migration order" do `docs/transport-design.md` da pascal-common-faa (decisões T1–T8
+de lá). O cliente conecta com `PcTcpConnect` + `PcTlsWrap`, o broker escuta com `PcTcpListen`/
+`PcTlsListen`, e os dois leem e escrevem por um `TAMQPEndpointStream`, subclasse do
+`TPcEndpointStream` que é a fronteira das exceções (T6). Saíram ~2 100 linhas de transporte
+próprio: `TAMQPTcpSocket`, `TAMQPTcpListener`, `TAMQPSocketStream` e os streams SChannel/OpenSSL.
+O modelo foi a migração do pascal-redis-faa (seção 53 do `docs/DECISOES.md` de lá).
+
+- **EOF**: o `TPcEndpointStream` nunca devolve 0 (levanta `EPcTransportClosed`); o
+  `TAMQPFrame.ReadFrom` trata leitura `<= 0` como fim de stream. O `TAMQPEndpointStream` traduz
+  `Closed` na leitura para **0 bytes**, e o loop de leitura do broker e do cliente continuam
+  vendo o `EAMQPFrameEOF` de sempre. Sem isso, toda desconexão normal virava
+  `FError = 'EPcTransportClosed: ...'` e saía no `Reason` do `seConnectionClosed`. Reset de
+  conexão é `Closed` na common nos dois sistemas (lido no código: `WSAECONNRESET`/`ECONNRESET`).
+- **Prazos**: nenhum de socket (`SetIoDeadline` nunca é chamado). O connect ganhou orçamento (10 s
+  por padrão, `ConnectTimeoutMs`) e o handshake TLS o prazo de 15 s da common, que o
+  `TPcTlsEndpoint.Negotiate` tira no `finally`.
+- **Broker**: o certificado é carregado no `Start` (o `PcTlsListen` monta as credenciais uma vez);
+  antes, cada conexão abria o arquivo no handshake. Por isso o `Start` passou a desfazer o que
+  subiu quando não consegue escutar (journal, notificadora) — antes uma porta ocupada deixava o
+  journal e a notificadora rodando com `Running = False`. Teste
+  `PortaOcupada_StartLevantaEAMQPTransport` (levanta `EAMQPTransport`, fica parado, e um `Start`
+  seguinte numa porta livre funciona).
+- **TLS do broker no SChannel**: veio de graça com a common (PFX + senha). A fixture TLS do broker
+  saiu de trás do `{$IFDEF AMQP_OPENSSL}` e cresceu de 4 para 9 testes (CA privada, nome errado,
+  certificado que não carrega, mTLS aceito/sem certificado/de outra CA), rodando com `tbDefault` e,
+  no Windows, com OpenSSL dos dois lados e cruzado — três subclasses **sem** `[TestFixture]`, o
+  jeito que a skill documenta de herdar testes com o gerador de espelhos. A PKI é a `tests/pki`
+  da common pelo submódulo (`Pki()` em `AMQP.TestSupport`). A aceitação e o `BrokerHostFpc`
+  sobem a porta TLS em todo build com ela (antes, só no build `openssl` e com `docker/certs`).
+- **TCP_NODELAY**: o teste antigo lia a opção do socket, e o endpoint da common não tem como.
+  Ficaram dois: `TcpOptions_NagleDesligado` (as opções que a lib passa) e
+  `PedidoResposta_SemAtrasoDeNagle` (20 idas e voltas escrita-escrita-leitura em < 400 ms).
+  Medido no Linux (bookworm): 9 ms. **Mutação** (`Nagle := True` em `AmqpTcpOptions`, num
+  container): o teste de latência cai com **1634 ms** (~80 ms por rodada, o ACK atrasado nas duas
+  pontas), além do das opções. No Windows o loopback esconde o Nagle, e ele passa nos dois casos.
+- **Achado para a common** (`.ci/transport-findings-for-pascal-common-faa.md`): cliente em claro
+  contra servidor **SChannel** só cai no prazo do handshake, 15 s (o OpenSSL recusa na hora):
+  `ClientePlainNaPortaTls_Falha` levou 15,08 s nas duas fixtures com servidor SChannel.
+- **A integração "contra o RabbitMQ" no Windows**: a `127.0.0.1:5672` desta máquina é do
+  `DFeBrokerServico` (já registrado na v0.5.0). Com o transporte novo, `localhost` resolve pelo
+  `getaddrinfo` e pode cair em `::1` (o docker); para não depender disso, a rodada usou
+  `AMQP_TEST_HOST` com o IP da LAN. Os 5 de TLS rodaram contra um RabbitMQ **temporário** só com a
+  5671 (`docker run --rm` com `docker/certs` e `docker/rabbitmq.conf`), sem tocar no compartilhado.
+
+**Suítes (FPC)**: Windows, Default e `openssl` — unitária 145 (131 + 14 de `AMQP.TransportTests`),
+server 509 nos dois modos (antes 472/476), integração 48 contra o RabbitMQ (os 5 de TLS contra o
+temporário, nos dois backends), aceitação 48 nas duas passadas (com a porta TLS, SChannel no
+Default), outbox 8, 0 vazamento; SmokeTest plain e `--tls` (SChannel e OpenSSL 3.2.4) PASS. Linux: bookworm (FPC 3.2.2, OpenSSL 3, `pamqp-fpc:f8`) — unitária 145, server 482 nos dois
+modos (509 menos as três fixtures TLS só-Windows), integração 48 nos dois modos contra o RabbitMQ
+(na rede dele), aceitação 48 nas quatro passadas, outbox 8, 0 vazamento (heaptrc com `log=`);
+bullseye (FPC 3.2.0, OpenSSL 1.1.1, `fpc-bullseye-ssl`) — os mesmos números, menos o outbox, que
+não compila lá: a `PascalDb.Adapter.SQLdb` da pascal-db-faa usa `mysql80conn`, que o FPC 3.2.0 não
+tem (não é desta migração). **Delphi 12**: "build all" do `AMQP.groupproj` OK (usuário, 2026-11-02); o resultado das suítes DUnitX não foi registrado nesta versão.
+
 ## Verificador de espelhos
 
 *Histórico abaixo; o estado atual (cinco checagens sobre o mestre, depois do kit de testes) está na seção acima e no `CLAUDE.md`.*

@@ -22,7 +22,12 @@ uses
   AMQP.Method,
   AMQP.Frame,
   PascalCommon.Threading,
+  PascalCommon.Transport,
+  PascalCommon.Transport.Tcp,
+  PascalCommon.Transport.Tls,
+  PascalCommon.Transport.OpenSSL,
   AMQP.Transport,
+  AMQP.TestSupport,
   AMQP.Connection.Methods,
   AMQP.Channel.Methods,
   AMQP.Exchange.Methods,
@@ -103,26 +108,70 @@ type
     [Test] procedure HeaderPayloadCru_DecodificaIgual;
   end;
 
-  {$IFDEF AMQP_OPENSSL}
-  { TLS do lado servidor (WS3). So existe em builds com -dAMQP_OPENSSL: o
-    backend SChannel desta lib implementa apenas o lado cliente, entao no build
-    Default o broker nao aceita TLS e nao ha o que testar. Usa os certs de dev
-    de docker\certs (self-signed), por isso o cliente conecta com
-    TlsVerifyPeer=False. }
+  { Server-side TLS (WS3; pascal-common-faa's transport since 0.6.0). Every
+    build has it: SChannel (PFX) on Windows, OpenSSL (PEM) everywhere. Uses
+    the test PKI of pascal-common-faa (AMQP.TestSupport.Pki): the client
+    VALIDATES the broker against the private CA, as an application should.
+
+    This fixture runs with tbDefault on both sides; on Windows the classes
+    below run the same tests with OpenSSL on both sides and crossed. They
+    have no [TestFixture] on purpose: they inherit the tests, and the
+    explicit registration is what DUnitX needs (tools/gen_fpc_mirror.py
+    doesn't take a fixture that inherits from another fixture). }
   [TestFixture]
   TServerTlsTests = class
   private
     FBroker: TAMQPServer;
+    FReady: Boolean;
+    procedure OpenWithWrongCa;
+    procedure OpenWithWrongName;
+    procedure OpenWithoutClientCert;
+    procedure OpenWithRogueClientCert;
+    procedure StartWithMissingCert;
   protected
-    function TlsParams: TAMQPConnectionParams;
+    function ClientBackend: TPcTlsBackend; virtual;
+    function ServerBackend: TPcTlsBackend; virtual;
+    /// False (and a notice) when a backend asked for is OpenSSL and it isn't
+    /// loadable on Windows, where it is optional.
+    function Ready: Boolean;
+    /// A TLS broker with the PKI's server certificate; ACaFile <> '' turns
+    /// mTLS on (client certificates from that CA).
+    function NewBroker(const ACaFile: string): TAMQPServer;
+    /// Client parameters validating the broker against the test CA, with
+    /// an optional client certificate ('cli', 'rogue'...).
+    function TlsParams(const AClientCert: string): TAMQPConnectionParams;
+    procedure RestartWithMtls;
   public
-    /// Sobe um broker com TLS ligado, no lugar do plain das outras fixtures.
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
     [Test] procedure ClienteRealConectaSobreTls;
     [Test] procedure PublicaSobreTls;
     [Test] procedure ClientePlainNaPortaTls_Falha;
-    [Test] procedure CertInexistente_ConexaoFalha;
+    [Test] procedure CertInexistente_StartLevantaEAMQPTls;
+    [Test] procedure CaPrivadaErrada_ClienteRecusaComEAMQPTls;
+    [Test] procedure NomeErrado_ClienteRecusaComEAMQPTls;
+    [Test] procedure Mtls_ClienteComCertificadoDaCa_Conecta;
+    [Test] procedure Mtls_ClienteSemCertificado_Recusado;
+    [Test] procedure Mtls_ClienteDeOutraCa_Recusado;
+  end;
+
+  {$IFDEF MSWINDOWS}
+  TServerTlsOpenSslTests = class(TServerTlsTests)
+  protected
+    function ClientBackend: TPcTlsBackend; override;
+    function ServerBackend: TPcTlsBackend; override;
+  end;
+
+  TServerTlsOpenSslClientSChannelServerTests = class(TServerTlsTests)
+  protected
+    function ClientBackend: TPcTlsBackend; override;
+    function ServerBackend: TPcTlsBackend; override;
+  end;
+
+  TServerTlsSChannelClientOpenSslServerTests = class(TServerTlsTests)
+  protected
+    function ClientBackend: TPcTlsBackend; override;
+    function ServerBackend: TPcTlsBackend; override;
   end;
   {$ENDIF}
 
@@ -333,11 +382,10 @@ end;
 
 // Abre um socket cru contra o broker; devolve o stream (dono do socket via
 // AOutSock, que o chamador libera DEPOIS do stream).
-function RawConnect(APort: Word; out ASock: TAMQPTcpSocket): TAMQPSocketStream;
+function RawConnect(APort: Word; out ASock: TPcEndpoint): TAMQPEndpointStream;
 begin
-  ASock := TAMQPTcpSocket.Create;
-  ASock.Connect('127.0.0.1', APort);
-  Result := TAMQPSocketStream.Create(ASock);
+  ASock := PcTcpConnect('127.0.0.1', APort, AmqpTcpOptions);
+  Result := TAMQPEndpointStream.Create(ASock);
 end;
 
 { Sink que grava o que passou, para os testes conferirem a remontagem. As
@@ -551,44 +599,6 @@ begin
   if LGot <> ACh then
     raise Exception.CreateFmt('Open-Ok veio no canal %d, esperava %d',
       [LGot, ACh]);
-end;
-
-// Sobe da pasta do executavel procurando docker\certs\server.crt: as duas
-// suites rodam de profundidades diferentes (tests\Server\fpc no FPC,
-// tests\Server\Win32\<config> no Delphi).
-function CertsDir: string;
-var
-  LDir: string;
-  I: Integer;
-begin
-  LDir := ExtractFilePath(ParamStr(0));
-  for I := 0 to 6 do
-  begin
-    if FileExists(LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.crt') then
-      Exit(LDir + 'docker' + PathDelim + 'certs' + PathDelim);
-    LDir := ExtractFilePath(ExcludeTrailingPathDelimiter(LDir));
-    if LDir = '' then
-      Break;
-  end;
-  Result := '';
-end;
-
-// Broker com TLS ligado apontando para os certs de dev do repo.
-function NewTlsBroker: TAMQPServer;
-var
-  LCerts: string;
-begin
-  LCerts := CertsDir;
-  if LCerts = '' then
-    raise Exception.Create('docker/certs/server.crt nao encontrado a partir de ' +
-      ExtractFilePath(ParamStr(0)));
-  Result := TAMQPServer.Create;
-  Result.BindAddress := '127.0.0.1';
-  Result.Port := 0;
-  Result.UseTls := True;
-  Result.TlsCertFile := LCerts + 'server.crt';
-  Result.TlsKeyFile := LCerts + 'server.key';
-  Result.Start;
 end;
 
 { O que as fixtures com broker dividem (o broker sobe em 127.0.0.1 numa
@@ -878,8 +888,8 @@ end;
 
 procedure TRawHandshakeTests.StartAnunciaPlainEServerProperties;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LStart: TAMQPConnectionStart;
   LProd: TValue;
 begin
@@ -904,8 +914,8 @@ end;
 
 procedure TRawHandshakeTests.MetodoForaDeOrdem_503;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LStart: TAMQPConnectionStart;
   LClose: TAMQPConnectionClose;
 begin
@@ -925,8 +935,8 @@ end;
 
 procedure TRawHandshakeTests.ConnectionEmCanalNaoZero_503;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
   LCloseArgs: TAMQPConnectionClose;
 begin
@@ -948,8 +958,8 @@ end;
 
 procedure TRawHandshakeTests.TuneOkAcimaDoProposto_530;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LStart: TAMQPConnectionStart;
   LTune: TAMQPConnectionTune;
   LClose: TAMQPConnectionClose;
@@ -972,8 +982,8 @@ end;
 
 procedure TRawHandshakeTests.FrameMaxAbaixoDoMinimo_530;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LStart: TAMQPConnectionStart;
   LTune: TAMQPConnectionTune;
   LClose: TAMQPConnectionClose;
@@ -996,8 +1006,8 @@ end;
 
 procedure TRawHandshakeTests.SegundoChannelOpen_504;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
   LCh: Word;
 begin
@@ -1019,8 +1029,8 @@ end;
 
 procedure TRawHandshakeTests.CanalNaoAberto_504;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
   LDeclare: TAMQPQueueDeclare;
 begin
@@ -1039,8 +1049,8 @@ end;
 
 procedure TRawHandshakeTests.TipoDeFrameDesconhecido_501;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LF: TAMQPFrame;
   LPayload: TBytes;
   LClose: TAMQPConnectionClose;
@@ -1062,8 +1072,8 @@ end;
 
 procedure TRawHandshakeTests.ConteudoSemPublish_505;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LF: TAMQPFrame;
   LPayload: TBytes;
   LClose: TAMQPConnectionClose;
@@ -1090,8 +1100,8 @@ end;
 
 procedure TRawHandshakeTests.ClienteFechaConexao_RecebeCloseOk;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LArgs: TAMQPConnectionClose;
   LCh: Word;
 begin
@@ -1115,8 +1125,8 @@ end;
 
 procedure THeartbeatTests.BrokerEmiteHeartbeat;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LF: TAMQPFrame;
   LDeadline: UInt64;
   LGot: Boolean;
@@ -1143,8 +1153,8 @@ end;
 
 procedure THeartbeatTests.PeerMudo_EhDerrubado;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LDeadline: UInt64;
   LDropped: Boolean;
 begin
@@ -1171,8 +1181,8 @@ end;
 
 procedure THeartbeatTests.HeartbeatZero_NaoDerruba;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LCh: Word;
 begin
   LStrm := RawConnect(FBroker.Port, LSock);
@@ -1191,8 +1201,8 @@ end;
 
 procedure THeartbeatTests.SemCloseOk_DerrubadoNoPrazo;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
   LCh: Word;
   LDeadline: UInt64;
@@ -1263,8 +1273,8 @@ end;
 
 procedure TRawHandshakeTests.ClasseNaoImplementada_FechaSoOCanal;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPCloseInfo;
   LCh: Word;
   W: TAMQPWriter;
@@ -1409,8 +1419,8 @@ end;
 
 procedure TContentTests.MensagemSemCorpo_Aceita;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LSink: TRecordingSink;
   LCh: Word;
 begin
@@ -1437,8 +1447,8 @@ end;
 
 procedure TContentTests.DoisCanaisIntercalados;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LSink: TRecordingSink;
   LCh: Word;
 begin
@@ -1477,8 +1487,8 @@ end;
 
 procedure TContentTests.MetodoNoMeioDoConteudo_505;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
 begin
   LStrm := RawConnect(FBroker.Port, LSock);
@@ -1500,8 +1510,8 @@ end;
 
 procedure TContentTests.BodySemHeader_505;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
 begin
   LStrm := RawConnect(FBroker.Port, LSock);
@@ -1522,8 +1532,8 @@ end;
 
 procedure TContentTests.CorpoMaiorQueOBodySize_505;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
 begin
   LStrm := RawConnect(FBroker.Port, LSock);
@@ -1544,8 +1554,8 @@ end;
 
 procedure TContentTests.ContentHeaderDeOutraClasse_505;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPConnectionClose;
 begin
   LStrm := RawConnect(FBroker.Port, LSock);
@@ -1684,14 +1694,108 @@ begin
   end;
 end;
 
-{$IFDEF AMQP_OPENSSL}
 { TServerTlsTests }
+
+var
+  GOpenSslNoticePrinted: Boolean;
+
+function TServerTlsTests.ClientBackend: TPcTlsBackend;
+begin
+  Result := tbDefault;
+end;
+
+function TServerTlsTests.ServerBackend: TPcTlsBackend;
+begin
+  Result := tbDefault;
+end;
+
+function TServerTlsTests.Ready: Boolean;
+var
+  LError: string;
+begin
+  Result := True;
+  if (AmqpResolveTlsBackend(ClientBackend) <> tbOpenSsl)
+    and (AmqpResolveTlsBackend(ServerBackend) <> tbOpenSsl) then
+    Exit;
+  if PcOpenSslAvailable(LError) then
+    Exit;
+  {$IFDEF MSWINDOWS}
+  // SChannel is the default here and OpenSSL optional: its fixtures pass
+  // with a notice instead of failing a machine without it.
+  if not GOpenSslNoticePrinted then
+  begin
+    GOpenSslNoticePrinted := True;
+    // One argument: on Delphi, inside a fixture, WriteLn resolves to a
+    // one-parameter routine, not to the intrinsic.
+    WriteLn('NOTICE: OpenSSL broker TLS tests skipped: ' + LError);
+  end;
+  Result := False;
+  {$ELSE}
+  TAssert.Fail('OpenSSL is the only TLS backend here and it is missing: ' +
+    LError);
+  Result := False;
+  {$ENDIF}
+end;
+
+function TServerTlsTests.NewBroker(const ACaFile: string): TAMQPServer;
+begin
+  Result := TAMQPServer.Create;
+  try
+    Result.BindAddress := '127.0.0.1';
+    Result.Port := 0;
+    Result.UseTls := True;
+    Result.TlsBackend := ServerBackend;
+    if AmqpResolveTlsBackend(ServerBackend) = tbOpenSsl then
+    begin
+      Result.TlsCertFile := Pki('srv_cert.pem');
+      Result.TlsKeyFile := Pki('srv_key.pem');
+    end
+    else
+    begin
+      Result.TlsCertFile := Pki('srv.pfx');
+      Result.TlsCertPassword := PKI_PFX_PASSWORD;
+    end;
+    if ACaFile <> '' then
+      Result.TlsCaFile := Pki(ACaFile);
+    Result.Start;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+function TServerTlsTests.TlsParams(const AClientCert: string): TAMQPConnectionParams;
+begin
+  Result := TAMQPConnectionParams.Localhost;
+  Result.Host := '127.0.0.1';
+  Result.Port := FBroker.Port;
+  Result.UseTls := True;
+  Result.TlsVerifyPeer := True;
+  Result.TlsCaFile := Pki('ca_cert.pem'); // the broker's CA, not the system's
+  Result.TlsBackend := ClientBackend;
+  if AClientCert <> '' then
+  begin
+    if AmqpResolveTlsBackend(ClientBackend) = tbOpenSsl then
+    begin
+      Result.TlsCertFile := Pki(AClientCert + '_cert.pem');
+      Result.TlsKeyFile := Pki(AClientCert + '_key.pem');
+    end
+    else
+    begin
+      Result.TlsCertFile := Pki(AClientCert + '.pfx');
+      Result.TlsCertPassword := PKI_PFX_PASSWORD;
+    end;
+  end;
+end;
 
 procedure TServerTlsTests.SetUp;
 begin
   // De proposito NAO chama ServidorSetUp: ele sobe um broker plain, e aqui
   // queremos um com TLS. O ServidorTearDown para e libera este.
-  FBroker := NewTlsBroker;
+  FBroker := nil;
+  FReady := Ready;
+  if FReady then
+    FBroker := NewBroker('');
 end;
 
 procedure TServerTlsTests.TearDown;
@@ -1699,13 +1803,10 @@ begin
   ServidorTearDown(FBroker);
 end;
 
-function TServerTlsTests.TlsParams: TAMQPConnectionParams;
+procedure TServerTlsTests.RestartWithMtls;
 begin
-  Result := TAMQPConnectionParams.Localhost;
-  Result.Host := '127.0.0.1';
-  Result.Port := FBroker.Port;
-  Result.UseTls := True;
-  Result.TlsVerifyPeer := False; // cert self-signed de dev
+  ServidorTearDown(FBroker);
+  FBroker := NewBroker('ca_cert.pem');
 end;
 
 procedure TServerTlsTests.ClienteRealConectaSobreTls;
@@ -1714,7 +1815,9 @@ var
   LConn: TAMQPServerConnection;
   LCh: TAMQPChannel;
 begin
-  LCli := TAMQPConnection.Create(TlsParams);
+  if not FReady then
+    Exit;
+  LCli := TAMQPConnection.Create(TlsParams(''));
   try
     LCli.Open;
     TAssert.AssertTrue('cliente aberto sobre TLS', LCli.IsOpen);
@@ -1743,6 +1846,8 @@ var
   LGot: TBytes;
   I: Integer;
 begin
+  if not FReady then
+    Exit;
   LSink := TRecordingSink.Create;
   FBroker.MessageSink := LSink;
   // 300 KB: forca varios body frames E varios registros TLS.
@@ -1750,7 +1855,7 @@ begin
   for I := 0 to High(LBody) do
     LBody[I] := Byte((I * 7) and $FF);
 
-  LCli := TAMQPConnection.Create(TlsParams);
+  LCli := TAMQPConnection.Create(TlsParams(''));
   try
     LCli.Open;
     LCh := LCli.CreateChannel;
@@ -1776,7 +1881,9 @@ var
   LCli: TAMQPConnection;
   LFalhou: Boolean;
 begin
-  LP := TlsParams;
+  if not FReady then
+    Exit;
+  LP := TlsParams('');
   LP.UseTls := False; // cliente em claro contra uma porta que espera TLS
   LCli := TAMQPConnection.Create(LP);
   try
@@ -1792,36 +1899,211 @@ begin
   finally
     LCli.Free;
   end;
-end;
-
-procedure TServerTlsTests.CertInexistente_ConexaoFalha;
-var
-  LCli: TAMQPConnection;
-  LFalhou: Boolean;
-begin
-  // Reconfigura o broker: a config e' lida a cada conexao aceita.
-  FBroker.TlsCertFile := CertsDir + 'nao-existe.crt';
-  LCli := TAMQPConnection.Create(TlsParams);
+  // The broker survives: the next TLS client gets in.
+  LCli := TAMQPConnection.Create(TlsParams(''));
   try
-    LFalhou := False;
-    try
-      LCli.Open;
-    except
-      on Exception do
-        LFalhou := True;
-    end;
-    TAssert.AssertTrue('sem certificado valido a conexao nao abre',
-      LFalhou or (not LCli.IsOpen));
+    LCli.Open;
+    TAssert.AssertTrue('broker segue aceitando TLS', LCli.IsOpen);
   finally
     LCli.Free;
   end;
+end;
+
+procedure TServerTlsTests.StartWithMissingCert;
+var
+  B: TAMQPServer;
+begin
+  B := TAMQPServer.Create;
+  try
+    B.BindAddress := '127.0.0.1';
+    B.Port := 0;
+    B.UseTls := True;
+    B.TlsBackend := ServerBackend;
+    B.TlsCertFile := Pki('nao-existe.pem');
+    B.TlsKeyFile := Pki('nao-existe.pem');
+    B.TlsCertPassword := PKI_PFX_PASSWORD;
+    try
+      B.Start;
+    finally
+      TAssert.AssertFalse('broker sem certificado nao fica rodando', B.Running);
+    end;
+  finally
+    B.Free;
+  end;
+end;
+
+procedure TServerTlsTests.CertInexistente_StartLevantaEAMQPTls;
+begin
+  if not FReady then
+    Exit;
+  // Since 0.6.0 the certificate is loaded once, at Start (the common's
+  // PcTlsListen): a wrong file fails there, before any client, instead of
+  // failing every handshake.
+  ChecaLevanta('certificado inexistente', EAMQPTls, StartWithMissingCert);
+end;
+
+procedure TServerTlsTests.OpenWithWrongCa;
+var
+  LP: TAMQPConnectionParams;
+  LCli: TAMQPConnection;
+begin
+  LP := TlsParams('');
+  LP.TlsCaFile := Pki('rogue_ca_cert.pem');
+  LCli := TAMQPConnection.Create(LP);
+  try
+    LCli.Open;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.CaPrivadaErrada_ClienteRecusaComEAMQPTls;
+begin
+  if not FReady then
+    Exit;
+  ChecaLevanta('servidor de outra CA', EAMQPTls, OpenWithWrongCa);
+end;
+
+procedure TServerTlsTests.OpenWithWrongName;
+var
+  LP: TAMQPConnectionParams;
+  LCli: TAMQPConnection;
+begin
+  LP := TlsParams('');
+  // The certificate is for localhost and 127.0.0.1.
+  LP.TlsServerName := 'outro.exemplo';
+  LCli := TAMQPConnection.Create(LP);
+  try
+    LCli.Open;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.NomeErrado_ClienteRecusaComEAMQPTls;
+begin
+  if not FReady then
+    Exit;
+  ChecaLevanta('nome que o certificado nao tem', EAMQPTls, OpenWithWrongName);
+end;
+
+procedure TServerTlsTests.Mtls_ClienteComCertificadoDaCa_Conecta;
+var
+  LCli: TAMQPConnection;
+  LConn: TAMQPServerConnection;
+begin
+  if not FReady then
+    Exit;
+  RestartWithMtls;
+  LCli := TAMQPConnection.Create(TlsParams('cli'));
+  try
+    LCli.Open;
+    TAssert.AssertTrue('cliente com certificado da CA abre', LCli.IsOpen);
+    LConn := ServerConn(FBroker);
+    TAssert.AssertTrue('FSM chegou a amqssOpen', WaitState(LConn, amqssOpen));
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.OpenWithoutClientCert;
+var
+  LCli: TAMQPConnection;
+begin
+  LCli := TAMQPConnection.Create(TlsParams(''));
+  try
+    LCli.Open;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.Mtls_ClienteSemCertificado_Recusado;
+var
+  LFalhou: Boolean;
+begin
+  if not FReady then
+    Exit;
+  RestartWithMtls;
+  // TLS 1.3 may let the client finish its side of the handshake before the
+  // server refuses, so the failure can surface as EAMQPTls or as the
+  // connection dropping during the AMQP handshake: either way it must not
+  // open.
+  LFalhou := False;
+  try
+    OpenWithoutClientCert;
+  except
+    on Exception do
+      LFalhou := True;
+  end;
+  TAssert.AssertTrue('sem certificado de cliente, mTLS recusa', LFalhou);
+end;
+
+procedure TServerTlsTests.OpenWithRogueClientCert;
+var
+  LCli: TAMQPConnection;
+begin
+  LCli := TAMQPConnection.Create(TlsParams('rogue'));
+  try
+    LCli.Open;
+  finally
+    LCli.Free;
+  end;
+end;
+
+procedure TServerTlsTests.Mtls_ClienteDeOutraCa_Recusado;
+var
+  LFalhou: Boolean;
+begin
+  if not FReady then
+    Exit;
+  RestartWithMtls;
+  LFalhou := False;
+  try
+    OpenWithRogueClientCert;
+  except
+    on Exception do
+      LFalhou := True;
+  end;
+  TAssert.AssertTrue('certificado de outra CA, mTLS recusa', LFalhou);
+end;
+
+{$IFDEF MSWINDOWS}
+function TServerTlsOpenSslTests.ClientBackend: TPcTlsBackend;
+begin
+  Result := tbOpenSsl;
+end;
+
+function TServerTlsOpenSslTests.ServerBackend: TPcTlsBackend;
+begin
+  Result := tbOpenSsl;
+end;
+
+function TServerTlsOpenSslClientSChannelServerTests.ClientBackend: TPcTlsBackend;
+begin
+  Result := tbOpenSsl;
+end;
+
+function TServerTlsOpenSslClientSChannelServerTests.ServerBackend: TPcTlsBackend;
+begin
+  Result := tbSChannel;
+end;
+
+function TServerTlsSChannelClientOpenSslServerTests.ClientBackend: TPcTlsBackend;
+begin
+  Result := tbSChannel;
+end;
+
+function TServerTlsSChannelClientOpenSslServerTests.ServerBackend: TPcTlsBackend;
+begin
+  Result := tbOpenSsl;
 end;
 {$ENDIF}
 
 procedure TRawHandshakeTests.NoLocalNoConsume_540;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPCloseInfo;
   LCh: Word;
   LCons: TAMQPBasicConsume;
@@ -1852,8 +2134,8 @@ end;
 
 procedure TRawHandshakeTests.PrefetchSizeNaoZero_540;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LClose: TAMQPCloseInfo;
   LCh: Word;
 begin
@@ -1878,8 +2160,8 @@ end;
 
 procedure TRawHandshakeTests.MandatorySemRota_ReturnAntesDoAck_312;
 var
-  LSock: TAMQPTcpSocket;
-  LStrm: TAMQPSocketStream;
+  LSock: TPcEndpoint;
+  LStrm: TAMQPEndpointStream;
   LCh: Word;
   LDecl: TAMQPExchangeDeclare;
   LCorpo: TBytes;
@@ -1967,8 +2249,11 @@ initialization
   TDUnitX.RegisterTestFixture(TRawHandshakeTests);
   TDUnitX.RegisterTestFixture(THeartbeatTests);
   TDUnitX.RegisterTestFixture(TContentTests);
-  {$IFDEF AMQP_OPENSSL}
   TDUnitX.RegisterTestFixture(TServerTlsTests);
+  {$IFDEF MSWINDOWS}
+  TDUnitX.RegisterTestFixture(TServerTlsOpenSslTests);
+  TDUnitX.RegisterTestFixture(TServerTlsOpenSslClientSChannelServerTests);
+  TDUnitX.RegisterTestFixture(TServerTlsSChannelClientOpenSslServerTests);
   {$ENDIF}
 
 end.

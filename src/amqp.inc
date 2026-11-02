@@ -5,8 +5,12 @@
   generics estilo Delphi, type helpers).
 
   AMQP_WINDOWS: definido quando o alvo e' Windows, em qualquer compilador
-  (Delphi define MSWINDOWS; FPC define WINDOWS). Usado para o transporte TLS
-  via SChannel, que e' exclusivo de Windows. }
+  (Delphi define MSWINDOWS; FPC define WINDOWS).
+
+  AMQP_OPENSSL: opt-in (-dAMQP_OPENSSL). Since 0.6.0 it only makes OpenSSL
+  the DEFAULT TLS backend (tbDefault); both backends come from
+  pascal-common-faa and are chosen at run time. See AmqpDefaultTlsBackend
+  in AMQP.Transport. }
 
 {$IFDEF FPC}
   {$MODE DELPHI}

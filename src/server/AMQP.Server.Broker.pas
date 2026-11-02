@@ -31,6 +31,7 @@ uses
   Generics.Collections,
   PascalCommon.Threading,
   PascalCommon.ThreadPool,
+  PascalCommon.Transport,
   AMQP.Transport,
   AMQP.Server.Auth,
   AMQP.Server.Types,
@@ -74,7 +75,7 @@ type
 
   TAMQPServer = class
   private
-    FListener: TAMQPTcpListener;
+    FListener: TPcListener; // TCP or TLS (pascal-common-faa)
     FAccept: TAMQPAcceptThread;
     FMonitor: TAMQPMonitorThread;
     FMonitorStop: TEvent;
@@ -117,11 +118,15 @@ type
     FUseTls: Boolean;
     FTlsCertFile: string;
     FTlsKeyFile: string;
+    FTlsCertPassword: string;
+    FTlsCaFile: string;
+    FTlsBackend: TPcTlsBackend;
     FRunning: Boolean;
     FStopping: Boolean;
     FTotalAccepted: Integer; // atômico
     FEventBus: TAMQPEventBus; // dono; vive do constructor ao destructor
     function ConnConfig: TAMQPServerConnConfig;
+    function OpenListener: TPcListener;
     procedure AcceptLoop;
     procedure MonitorLoop;
     procedure StopMonitor;
@@ -221,9 +226,13 @@ type
     property MaxQueueLength: Integer read FMaxQueueLength
       write SetMaxQueueLength;
 
+    /// '' or '0.0.0.0' (default) = every IPv4 interface; '::' = every IPv6
+    /// one; or an address of this machine.
     property BindAddress: string read FBindAddress write FBindAddress;
     /// Porta a ligar; 0 = o SO escolhe. Depois do Start, reflete a efetiva.
     property Port: Word read FPort write FPort;
+    /// IGNORED since 0.6.0: the listener comes from pascal-common-faa, which
+    /// uses its own backlog. Kept so that existing code compiles.
     property Backlog: Integer read FBacklog write FBacklog;
     property Running: Boolean read FRunning;
 
@@ -237,16 +246,30 @@ type
     /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
     property CloseTimeoutMs: Cardinal read FCloseTimeoutMs write FCloseTimeoutMs;
 
-    // --- TLS (WS3). Exige um build com -dAMQP_OPENSSL: o backend SChannel
-    //     desta lib só implementa o lado cliente. Com UseTls=True cada conexão
-    //     aceita faz o handshake TLS na PRÓPRIA thread, antes do
-    //     protocol-header do AMQP -- é a porta 5671 "AMQPS", não STARTTLS.
-    /// Liga o TLS. Sem CertFile/KeyFile válidos a conexão morre no handshake.
+    // --- TLS (WS3; pascal-common-faa's transport since 0.6.0). Each accepted
+    //     connection runs the TLS handshake on ITS OWN thread, before the
+    //     AMQP protocol-header -- it's port 5671 "AMQPS", not STARTTLS. The
+    //     handshake has the common's default deadline (15 s): a peer that
+    //     opens TCP and never talks holds only its own thread, for that long.
+    //     All of these are read at Start: the credentials are loaded there,
+    //     so a wrong file or password makes Start raise EAMQPTls.
+    /// Turns TLS on.
     property UseTls: Boolean read FUseTls write FUseTls;
-    /// Cadeia de certificados em PEM (o do servidor primeiro).
+    /// The server's certificate. OpenSSL: a PEM chain (the server's first),
+    /// with TlsKeyFile. SChannel: a PFX, with TlsCertPassword.
     property TlsCertFile: string read FTlsCertFile write FTlsCertFile;
-    /// Chave privada em PEM, sem senha.
+    /// OpenSSL: the private key in PEM, without a password.
     property TlsKeyFile: string read FTlsKeyFile write FTlsKeyFile;
+    /// SChannel: the PFX's password.
+    property TlsCertPassword: string read FTlsCertPassword
+      write FTlsCertPassword;
+    /// mTLS: require a client certificate issued by this CA (PEM, both
+    /// backends). '' (default) = no client certificate asked for.
+    property TlsCaFile: string read FTlsCaFile write FTlsCaFile;
+    /// Which TLS implementation, chosen at run time. tbDefault = SChannel on
+    /// Windows (OpenSSL with -dAMQP_OPENSSL), OpenSSL elsewhere; see
+    /// AmqpDefaultTlsBackend in AMQP.Transport.
+    property TlsBackend: TPcTlsBackend read FTlsBackend write FTlsBackend;
 
     /// Default: TAMQPStaticAuthenticator com guest/guest. Só antes do Start.
     property Authenticator: IAMQPAuthenticator read FAuth write FAuth;
@@ -259,6 +282,10 @@ type
   end;
 
 implementation
+
+uses
+  PascalCommon.Transport.Tcp,
+  PascalCommon.Transport.Tls;
 
 { TAMQPAcceptThread }
 
@@ -321,6 +348,21 @@ begin
   FCloseTimeoutMs := AMQP_SERVER_CLOSE_TIMEOUT_MS;
 end;
 
+function TAMQPServer.OpenListener: TPcListener;
+var
+  LTls: TPcTlsOptions;
+begin
+  if not FUseTls then
+    Exit(PcTcpListen(FBindAddress, FPort, AmqpTcpOptions));
+  LTls := Default(TPcTlsOptions);
+  LTls.CertFile := FTlsCertFile;
+  LTls.KeyFile := FTlsKeyFile;
+  LTls.CertPassword := FTlsCertPassword;
+  LTls.CaFile := FTlsCaFile;
+  LTls.Backend := AmqpResolveTlsBackend(FTlsBackend);
+  Result := PcTlsListen(FBindAddress, FPort, AmqpTcpOptions, LTls);
+end;
+
 function TAMQPServer.ConnConfig: TAMQPServerConnConfig;
 begin
   Result := TAMQPServerConnConfig.Defaults;
@@ -334,8 +376,6 @@ begin
   Result.Sink := FSink;
   Result.Confirms := FConfirms;
   Result.Tls := FUseTls;
-  Result.TlsCertFile := FTlsCertFile;
-  Result.TlsKeyFile := FTlsKeyFile;
   Result.Events := FEventBus;
 end;
 
@@ -435,8 +475,30 @@ begin
   // seConnectionEstablished ja' encontra quem o entregue.
   FEventBus.Start;
 
-  FListener := TAMQPTcpListener.Create;
-  FListener.Listen(FBindAddress, FPort, FBacklog);
+  try
+    FListener := OpenListener;
+  except
+    // Nothing listens: undo what this Start brought up (the same tail as
+    // Stop's), so the broker is stopped and a later Start begins clean. A
+    // wrong TLS certificate lands here since 0.6.0 (loaded at listen).
+    on E: Exception do
+    begin
+      FEventBus.Stop;
+      if FJournal <> nil then
+      begin
+        FEngine.Journal := nil;
+        try
+          FJournal.Stop;
+        except
+        end;
+        FreeAndNil(FJournal);
+      end;
+      FConfirms := nil;
+      if E is EPcTransport then
+        AmqpRaiseTransportError(EPcTransport(E));
+      raise;
+    end;
+  end;
   FPort := FListener.Port; // efetiva (relevante se veio 0)
   FRunning := True;
   FAccept := TAMQPAcceptThread.Create(Self);
@@ -527,7 +589,7 @@ end;
 
 procedure TAMQPServer.AcceptLoop;
 var
-  LSock: TAMQPTcpSocket;
+  LSock: TPcEndpoint;
   LConn: TAMQPServerConnection;
 begin
   while not FStopping do
@@ -543,7 +605,9 @@ begin
 
     // (o reap fica com a thread monitora — ver MonitorLoop)
 
-    // A conexão vira dona do socket e recebe uma cópia da config do broker.
+    // A conexão vira dona do endpoint e recebe uma cópia da config do broker.
+    // Under TLS it isn't negotiated yet: the handshake runs on the
+    // connection's thread (TAMQPServerConnection.SetupTransport).
     LConn := TAMQPServerConnection.Create(LSock, ConnConfig);
     LConn.OnClosed := HandleConnClosed;
     // Antes do Start: a FSM consulta a engine desde o Connection.Open.

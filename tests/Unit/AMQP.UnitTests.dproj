@@ -140,6 +140,9 @@
         <DCCReference Include="AMQP.ConnectionMethodsTests.pas"/>
         <DCCReference Include="AMQP.Item2MethodsTests.pas"/>
         <DCCReference Include="AMQP.TracingTests.pas"/>
+        <DCCReference Include="..\..\src\AMQP.Transport.pas"/>
+        <DCCReference Include="..\..\src\AMQP.Connection.pas"/>
+        <DCCReference Include="AMQP.TransportTests.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

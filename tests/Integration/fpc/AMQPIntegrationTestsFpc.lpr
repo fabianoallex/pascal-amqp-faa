@@ -11,11 +11,10 @@
   GUI (janela com arvore de testes + barra verde/vermelha), sem parametros:
     .\AMQPIntegrationTestsFpc.exe
   Fora do Windows roda sempre em modo console (sem LCL/widgetset), com ou
-  sem parametros. AMQP.TlsIntegrationTests entra em toda plataforma: no
-  Windows usa SChannel; nas demais so conecta de fato se o runner for
-  compilado com -dAMQP_OPENSSL (AMQP.Transport.OpenSSL) - sem a diretiva o
-  Open falha e os testes TLS se auto-ignoram, como quando o broker TLS esta
-  fora do ar.
+  sem parametros. AMQP.TlsIntegrationTests entra em toda plataforma: the
+  default backend is SChannel on Windows and OpenSSL elsewhere (the openssl
+  build mode makes it OpenSSL on Windows too). Without a TLS broker on 5671
+  the TLS tests ignore themselves.
 
   Ver CLAUDE.md para os workarounds de erros internos do FPC 3.2.2 e o
   TInterlocked que nao existe no FPC (usar PcAtomic* de PascalCommon.Threading). }

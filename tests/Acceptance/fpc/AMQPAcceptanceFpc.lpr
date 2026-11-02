@@ -12,11 +12,10 @@ program AMQPAcceptanceFpc;
 
     .\AMQPAcceptanceFpc.exe --all --format=plain
 
-  TLS: no build Default o broker nao tem TLS (o backend SChannel desta lib so'
-  implementa o lado cliente), entao os testes de TLS nao acham porta e se
-  auto-ignoram -- mesmo caminho de quando o broker TLS esta fora do ar. No
-  build `openssl` o broker sobe uma segunda porta cifrada com os certs de
-  docker\certs e eles rodam de verdade.
+  TLS: the broker brings up a second, encrypted port with the test PKI of
+  pascal-common-faa, in every build since 0.6.0 (SChannel serves the server
+  side on Windows; the `openssl` build mode makes OpenSSL the default). If
+  it doesn't come up, the TLS tests find no port and ignore themselves.
 
   DUAS PASSADAS: TRANSIENTE E DURAVEL (WS10 da Fase 4)
   ----------------------------------------------------
@@ -47,6 +46,9 @@ uses
   cthreads,
   {$ENDIF}
   SysUtils, Classes, consoletestrunner, testregistry,
+  PascalCommon.Transport,
+  AMQP.Transport,
+  AMQP.TestSupport,
   AMQP.Server.Types,
   AMQP.Server.Broker,
   AMQP.IntegrationConfig,
@@ -112,44 +114,32 @@ begin
   Result := ABroker.Port;
 end;
 
-{$IFDEF AMQP_OPENSSL}
-// Procura docker\certs subindo a partir da pasta do executavel (o runner roda
-// de profundidades diferentes conforme o build).
-function AchaCerts(out ACert, AKey: string): Boolean;
-var
-  LDir: string;
-  I: Integer;
+// The embedded TLS broker's certificate: the test PKI of pascal-common-faa
+// (AMQP.TestSupport.Pki), PEM pair on OpenSSL, PFX on SChannel. Since 0.6.0
+// every build has a TLS broker (SChannel serves the server side too).
+procedure ConfiguraCertificado(ABroker: TAMQPServer);
 begin
-  LDir := ExtractFilePath(ParamStr(0));
-  for I := 0 to 6 do
+  if AmqpResolveTlsBackend(tbDefault) = tbOpenSsl then
   begin
-    ACert := LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.crt';
-    AKey := LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.key';
-    if FileExists(ACert) and FileExists(AKey) then
-      Exit(True);
-    LDir := LDir + '..' + PathDelim;
+    ABroker.TlsCertFile := Pki('srv_cert.pem');
+    ABroker.TlsKeyFile := Pki('srv_key.pem');
+  end
+  else
+  begin
+    ABroker.TlsCertFile := Pki('srv.pfx');
+    ABroker.TlsCertPassword := PKI_PFX_PASSWORD;
   end;
-  Result := False;
 end;
 
 function IniciaBrokerTls(out ABroker: TAMQPServer): Word;
-var
-  LCert, LKey: string;
 begin
   Result := 0;
-  ABroker := nil;
-  if not AchaCerts(LCert, LKey) then
-  begin
-    WriteLn('AVISO: docker\certs nao encontrado -- testes TLS vao se auto-ignorar');
-    Exit;
-  end;
   ABroker := TAMQPServer.Create;
   ABroker.BindAddress := '127.0.0.1';
   ABroker.Port := 0;
   ABroker.UseTls := True;
-  ABroker.TlsCertFile := LCert;
-  ABroker.TlsKeyFile := LKey;
   try
+    ConfiguraCertificado(ABroker);
     ABroker.Start;
     Result := ABroker.Port;
   except
@@ -162,16 +152,13 @@ begin
     end;
   end;
 end;
-{$ENDIF}
 
 var
   ConsoleApp: TTestRunner;
   LBroker: TAMQPServer;
   LPorta, LPortaTls: Word;
   LDataDir: string;
-  {$IFDEF AMQP_OPENSSL}
   LBrokerTls: TAMQPServer;
-  {$ENDIF}
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
 
@@ -182,11 +169,7 @@ begin
     LimpaDir(LDataDir);
   end;
   LPorta := IniciaBroker(LBroker, LDataDir);
-  LPortaTls := 0;
-  {$IFDEF AMQP_OPENSSL}
-  LBrokerTls := nil;
   LPortaTls := IniciaBrokerTls(LBrokerTls);
-  {$ENDIF}
   try
     AmqpUseEmbeddedBroker(LPorta, LPortaTls);
     WriteLn('broker embutido em 127.0.0.1:', LPorta,
@@ -207,9 +190,7 @@ begin
       ConsoleApp.Free;
     end;
   finally
-    {$IFDEF AMQP_OPENSSL}
     LBrokerTls.Free;
-    {$ENDIF}
     LBroker.Free;
     if LDataDir <> '' then
       LimpaDir(LDataDir);

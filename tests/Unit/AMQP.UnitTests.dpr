@@ -25,7 +25,10 @@ uses
   AMQP.FrameTests in 'AMQP.FrameTests.pas',
   AMQP.ConnectionMethodsTests in 'AMQP.ConnectionMethodsTests.pas',
   AMQP.Item2MethodsTests in 'AMQP.Item2MethodsTests.pas',
-  AMQP.TracingTests in 'AMQP.TracingTests.pas';
+  AMQP.TracingTests in 'AMQP.TracingTests.pas',
+  AMQP.Transport in '..\..\src\AMQP.Transport.pas',
+  AMQP.Connection in '..\..\src\AMQP.Connection.pas',
+  AMQP.TransportTests in 'AMQP.TransportTests.pas';
 
 var
   runner: ITestRunner;

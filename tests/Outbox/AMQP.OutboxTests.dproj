@@ -120,7 +120,6 @@
         <DCCReference Include="..\..\src\AMQP.Method.pas"/>
         <DCCReference Include="..\..\src\AMQP.Threading.pas"/>
         <DCCReference Include="..\..\src\AMQP.Transport.pas"/>
-        <DCCReference Include="..\..\src\AMQP.Transport.Tls.pas"/>
         <DCCReference Include="..\..\src\AMQP.Connection.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Channel.Methods.pas"/>
         <DCCReference Include="..\..\src\AMQP.Exchange.Methods.pas"/>

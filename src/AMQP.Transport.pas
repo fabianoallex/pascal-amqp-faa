@@ -2,644 +2,185 @@
 
 {$I amqp.inc}
 
-{ Socket TCP cliente com a mesma superficie nos dois compiladores.
+{ The library's transport: what is left here since TCP and TLS come from
+  pascal-common-faa 1.27.0 (0.6.0; step 5 of its docs/transport-design.md).
 
-  TAMQPTcpSocket esconde a diferenca de RTL:
-  - Delphi: System.Net.Socket (TSocket), como na lib delphi-amqp-faa original.
-  - FPC: ssockets (TInetSocket), que resolve DNS e conecta no construtor.
+  Up to 0.5.x this unit had the library's own sockets (TAMQPTcpSocket and
+  TAMQPTcpListener over ssockets on FPC and System.Net.Socket on Delphi) and
+  the two TLS units had their own SChannel and OpenSSL streams. Today:
 
-  Contrato usado por AMQP.Connection:
-  - Receive/Send bloqueantes; Receive devolve <= 0 em fim de stream/erro (o
-    framing trata como conexao encerrada).
-  - Close e' thread-safe no sentido que importa aqui: chamado por OUTRA thread
-    (heartbeat/teardown) para desbloquear um Receive pendente da thread de
-    leitura. No FPC usamos shutdown() — o handle so e' fechado no destrutor,
-    evitando corrida de reuso de FD; no Delphi TSocket.Close ja tem esse papel
-    (comportamento identico ao da lib original). Close pode ser chamado mais
-    de uma vez. }
+  - The client connects with PcTcpConnect/PcTlsConnect and the broker listens
+    with PcTcpListen/PcTlsListen. Both read and write through a
+    TAMQPEndpointStream, declared below.
+  - TAMQPEndpointStream is the EXCEPTION BOUNDARY (decision T6 there): no
+    EPcTransport* leaves the library. A transport failure becomes
+    EAMQPTransport and a TLS failure EAMQPTls, with the common library's
+    message (in English). The peer closing the connection is not an error
+    for a frame reader: Read returns 0, which AMQP.Frame turns into
+    EAMQPFrameEOF, as the old socket stream did.
+  - The TLS backend is chosen at RUN TIME (decision T3): both backends are in
+    every Windows build, OpenSSL is the only one elsewhere. AMQP_OPENSSL only
+    changes the DEFAULT to OpenSSL (see AmqpDefaultTlsBackend).
+  - No socket deadline: AMQP has heartbeats, so reads and writes wait with no
+    timeout (SetIoDeadline and SetRead/WriteDeadline are never called and
+    start at 0). The only deadlines are the connect's (ConnectTimeoutMs) and
+    the TLS handshake's (the common's default, 15 s), both over before the
+    first AMQP byte.
+  - TCP_NODELAY on every socket, client and accepted: a zeroed TPcTcpOptions
+    already asks for it (see AmqpTcpOptions). }
 
 interface
 
 uses
   SysUtils,
-  Classes
-  {$IFDEF FPC}
-  , ssockets
-  {$ELSE}
-  , System.Net.Socket
-  {$ENDIF}
-  ;
+  Classes,
+  PascalCommon.Transport;
 
 type
-  /// Erro de socket plain (conectar, enviar, receber) fora do TLS —
-  /// tipicamente host/porta inalcançável ou conexão derrubada pelo peer.
+  /// Plain socket failure (connect, send, receive) outside TLS: typically an
+  /// unreachable host or port, or a connection dropped by the peer.
   EAMQPTransport = class(Exception);
 
-  { Erros da camada TLS (handshake, cifra, validação de cert). Declarada aqui —
-    e não nas units de transporte TLS — para existir em TODA plataforma/build:
-    AMQP.Transport.Tls só compila sob AMQP_WINDOWS e AMQP.Transport.OpenSSL só
-    sob AMQP_OPENSSL, mas testes e chamadores precisam capturar EAMQPTls sem
-    depender dessas diretivas. Também é a exceção levantada por UseTls quando
-    nenhum backend TLS foi compilado (fora do Windows, sem -dAMQP_OPENSSL) —
-    a mensagem explica como habilitar. Nos backends reais: falha de
-    handshake, cert rejeitado (TlsVerifyPeer=True) ou libssl/libcrypto não
-    encontrada em runtime. }
+  { TLS failure: handshake, certificate refused (TlsVerifyPeer, TlsCaFile,
+    mTLS), libssl/libcrypto not found at run time, SChannel asked for off
+    Windows, a server certificate that doesn't load. Deliberately NOT a
+    subclass of EAMQPTransport: an "except on EAMQPTransport" written before
+    0.6.0 must not start catching TLS errors. }
   EAMQPTls = class(Exception);
 
-  TAMQPTcpSocket = class
-  private
-    FPeerAddress: string;
-    {$IFDEF FPC}
-    FSock: TInetSocket;    // caminho cliente (Connect)
-    FRawFd: LongInt;       // caminho aceito (>= 0); -1 quando usa FSock
-    FShutdown: Boolean;
-    {$ELSE}
-    FSock: TSocket;
-    FAccepted: Boolean;    // veio de TAMQPTcpListener.Accept (ver Close)
-    {$ENDIF}
+  { TPcEndpointStream that translates the common's exceptions into the
+    library's (see the header). Doesn't own the endpoint. Shared by the
+    client (AMQP.Connection) and the broker (AMQP.Server.*). }
+  TAMQPEndpointStream = class(TPcEndpointStream)
   public
-    constructor Create;
-    {$IFDEF FPC}
-    /// Envolve um descritor JÁ conectado (vindo de TAMQPTcpListener.Accept).
-    constructor CreateFromAccepted(AHandle: LongInt; const APeerAddr: string = '');
-    {$ELSE}
-    constructor CreateFromAccepted(ASock: TSocket; const APeerAddr: string = '');
-    {$ENDIF}
-    destructor Destroy; override;
-    /// 'ip:porta' do outro lado quando o socket veio de um Accept; '' senão.
-    property PeerAddress: string read FPeerAddress;
-    /// Resolve o host e conecta (bloqueante). Levanta excecao em falha.
-    procedure Connect(const AHost: string; APort: Word);
-    /// Devolve os bytes lidos; 0 (ou negativo) = conexao encerrada.
-    function Receive(var Buffer; ACount: Integer): Integer;
-    function Send(const Buffer; ACount: Integer): Integer;
-    /// Encerra a conexao, desbloqueando um Receive pendente em outra thread.
-    procedure Close;
-    /// True se o algoritmo de Nagle esta DESLIGADO neste socket (TCP_NODELAY).
-    /// Todo socket criado por esta unit (Connect e Accept) sai com ele ligado;
-    /// ver AmqpSetNoDelay.
-    function NoDelay: Boolean;
-  end;
-
-  { Socket de escuta TCP (lado servidor do sub-módulo broker). Mesma superfície
-    nos dois compiladores:
-    - FPC: sockets crus (fpsocket/fpbind/fplisten/fpaccept) — evita o modelo de
-      callback do ssockets.TInetServer.
-    - Delphi: System.Net.Socket (TSocket.Listen/Accept).
-
-    Contrato:
-    - Listen liga e começa a escutar; levanta EAMQPTransport em falha.
-    - Accept bloqueia até uma conexão chegar e devolve um TAMQPTcpSocket novo
-      (dono do descritor aceito), ou nil se o listener foi fechado por outra
-      thread (shutdown do broker).
-    - Close pode ser chamado de OUTRA thread para desbloquear um Accept
-      pendente; pode ser chamado mais de uma vez.
-    - Port devolve a porta efetiva (útil ao ligar na porta 0 nos testes). }
-  TAMQPTcpListener = class
-  private
-    FClosing: Boolean;
-    FPort: Word;
-    {$IFDEF FPC}
-    FListenFd: LongInt;
-    {$ELSE}
-    FListen: TSocket;
-    {$ENDIF}
-  public
-    constructor Create;
-    destructor Destroy; override;
-    /// ABindAddr: '' ou '0.0.0.0' => todas as interfaces. APort 0 => o SO
-    /// escolhe (ver Port depois de Listen).
-    procedure Listen(const ABindAddr: string; APort: Word; ABacklog: Integer = 64);
-    function Accept: TAMQPTcpSocket;
-    procedure Close;
-    property Port: Word read FPort;
-  end;
-
-  { Adapta um TAMQPTcpSocket como TStream, para os frames trafegarem por
-    TAMQPFrame.ReadFrom/WriteTo. Nao e' dono do socket. Compartilhado pelo
-    cliente (AMQP.Connection) e pelo broker (AMQP.Server.*); os backends TLS
-    (AMQP.Transport.Tls/.OpenSSL) envolvem uma instancia destas. }
-  TAMQPSocketStream = class(TStream)
-  private
-    FSocket: TAMQPTcpSocket;
-  public
-    constructor Create(ASocket: TAMQPTcpSocket);
+    /// Returns 0 when the peer closed the connection or the endpoint was
+    /// closed by CloseAbort; raises EAMQPTransport/EAMQPTls otherwise.
     function Read(var Buffer; Count: Longint): Longint; override;
+    /// Writes everything or raises EAMQPTransport/EAMQPTls.
     function Write(const Buffer; Count: Longint): Longint; override;
-    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
   end;
 
-/// Backend TLS deste build (decidido em compilacao): 'OpenSSL', 'SChannel'
-/// ou 'none'. Util para exibir em UI/log qual motor um build usa.
-function AmqpTlsBackendName: string;
+/// Raises the library's exception for a common transport exception: EPcTls
+/// becomes EAMQPTls, every other EPcTransport becomes EAMQPTransport, with
+/// the same message.
+procedure AmqpRaiseTransportError(E: EPcTransport);
 
-/// Como AmqpTlsBackendName, mas com o detalhe de runtime quando o backend ja
-/// carregou — o OpenSSL publica versao e biblioteca na 1ª conexao TLS (ex.:
-/// 'OpenSSL 3.5.2 ... (libssl-3.dll)'). Antes disso, devolve so o nome.
-function AmqpTlsBackendInfo: string;
+/// The TCP options the client and the broker use: TCP_NODELAY (the zeroed
+/// record's default; AMQP is request-reply with small frames, and Nagle's
+/// delay costs ~40 ms per round trip on Linux), no keep-alive (AMQP has
+/// heartbeats), and the connect budget (0 = the common's default, 10 s).
+function AmqpTcpOptions(AConnectTimeoutMs: Cardinal = 0): TPcTcpOptions;
 
-/// Uso interno dos backends TLS: publica o detalhe de AmqpTlsBackendInfo.
-procedure AmqpSetTlsBackendDetail(const ADetail: string);
+/// What tbDefault means in THIS build: tbOpenSsl with -dAMQP_OPENSSL,
+/// otherwise the platform's default (SChannel on Windows, OpenSSL elsewhere).
+function AmqpDefaultTlsBackend: TPcTlsBackend;
+
+/// tbDefault resolved as AmqpDefaultTlsBackend; any other value as is.
+function AmqpResolveTlsBackend(ABackend: TPcTlsBackend): TPcTlsBackend;
+
+/// Name of this build's default TLS backend: 'SChannel' or 'OpenSSL'. Useful
+/// to show in a UI or a log which engine a build uses.
+function AmqpTlsBackendName: string; overload;
+/// Name of a given backend (tbDefault resolved as above).
+function AmqpTlsBackendName(ABackend: TPcTlsBackend): string; overload;
+
+/// Like AmqpTlsBackendName, with the run-time detail: on OpenSSL the
+/// version and library loaded (after the first TLS connection), on SChannel
+/// its fixed description. Before OpenSSL loads, just the name.
+function AmqpTlsBackendInfo: string; overload;
+function AmqpTlsBackendInfo(ABackend: TPcTlsBackend): string; overload;
 
 implementation
 
-{$IFDEF FPC}
 uses
-  sockets;
+  PascalCommon.Transport.Tls;
 
-const
-  AMQP_SHUT_RDWR = 2;
-{$ENDIF}
-
-const
-  // Mesmos valores em Windows, Linux, BSD e macOS.
-  AMQP_IPPROTO_TCP = 6;
-  AMQP_TCP_NODELAY = 1;
-
-{$IFNDEF FPC}
-  {$IFDEF AMQP_WINDOWS}
-// Direto do winsock: 'Winapi.WinSock2' no uses tornaria 'TSocket' ambiguo com o
-// TSocket de System.Net.Socket (a classe usada pelo resto desta unit).
-function amqp_setsockopt(S: NativeUInt; ALevel, AOptName: Integer;
-  AOptVal: Pointer; AOptLen: Integer): Integer; stdcall;
-  external 'ws2_32.dll' name 'setsockopt';
-function amqp_getsockopt(S: NativeUInt; ALevel, AOptName: Integer;
-  AOptVal: Pointer; var AOptLen: Integer): Integer; stdcall;
-  external 'ws2_32.dll' name 'getsockopt';
-  {$ENDIF}
-{$ENDIF}
-
-{ Desliga o algoritmo de Nagle (TCP_NODELAY). O AMQP e' um protocolo de
-  pedido/resposta com frames pequenos: com Nagle ligado, uma escrita pequena
-  espera o ACK da anterior, e o ACK do outro lado e' ATRASADO (~40 ms no Linux,
-  ate' 200 ms no Windows fora do loopback) -- cada ida e volta (declare, publish
-  com confirm, ack) ganha essa latencia. Medido no Linux em loopback: abrir
-  conexao 180 ms -> 6 ms, CreateChannel 88 ms -> 4 ms. Best effort: falhar em
-  ligar a opcao nao pode impedir a conexao. }
-{$IFDEF FPC}
-procedure AmqpSetNoDelay(AHandle: LongInt);
-var
-  LOpt: LongInt;
+procedure AmqpRaiseTransportError(E: EPcTransport);
 begin
-  LOpt := 1;
-  fpSetSockOpt(AHandle, AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, SizeOf(LOpt));
+  if E is EPcTls then
+    raise EAMQPTls.Create(E.Message);
+  raise EAMQPTransport.Create(E.Message);
 end;
 
-function AmqpGetNoDelay(AHandle: LongInt): Boolean;
-var
-  LOpt: LongInt;
-  LLen: {$IF Declared(TSockLen)}TSockLen{$ELSE}LongInt{$ENDIF};
+{ TAMQPEndpointStream }
+
+function TAMQPEndpointStream.Read(var Buffer; Count: Longint): Longint;
 begin
-  LOpt := 0;
-  LLen := SizeOf(LOpt);
-  Result := (fpGetSockOpt(AHandle, AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, @LLen) = 0)
-    and (LOpt <> 0);
+  try
+    Result := inherited Read(Buffer, Count);
+  except
+    on E: EPcTransportClosed do
+      Result := 0; // end of stream: the frame reader raises EAMQPFrameEOF
+    on E: EPcTransport do
+    begin
+      AmqpRaiseTransportError(E);
+      Result := 0; // not reached
+    end;
+  end;
 end;
-{$ELSE}
-procedure AmqpSetNoDelay(ASock: TSocket);
-  {$IFDEF AMQP_WINDOWS}
-var
-  LOpt: Integer;
+
+function TAMQPEndpointStream.Write(const Buffer; Count: Longint): Longint;
 begin
-  LOpt := 1;
-  amqp_setsockopt(NativeUInt(ASock.Handle), AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, SizeOf(LOpt));
+  try
+    Result := inherited Write(Buffer, Count);
+  except
+    on E: EPcTransport do
+    begin
+      AmqpRaiseTransportError(E);
+      Result := 0; // not reached
+    end;
+  end;
 end;
+
+function AmqpTcpOptions(AConnectTimeoutMs: Cardinal): TPcTcpOptions;
+begin
+  // A zeroed record is the common's recommended one: TCP_NODELAY (Nagle =
+  // False), no keep-alive. Only the connect budget comes from the caller.
+  FillChar(Result, SizeOf(Result), 0);
+  Result.ConnectTimeoutMs := AConnectTimeoutMs;
+end;
+
+function AmqpDefaultTlsBackend: TPcTlsBackend;
+begin
+  {$IFDEF AMQP_OPENSSL}
+  Result := tbOpenSsl;
   {$ELSE}
-begin
-  // Delphi fora do Windows nao e' alvo desta lib (ver CLAUDE.md).
-end;
+    {$IFDEF AMQP_WINDOWS}
+  Result := tbSChannel;
+    {$ELSE}
+  Result := tbOpenSsl;
+    {$ENDIF}
   {$ENDIF}
-
-function AmqpGetNoDelay(ASock: TSocket): Boolean;
-  {$IFDEF AMQP_WINDOWS}
-var
-  LOpt, LLen: Integer;
-begin
-  LOpt := 0;
-  LLen := SizeOf(LOpt);
-  Result := (amqp_getsockopt(NativeUInt(ASock.Handle), AMQP_IPPROTO_TCP, AMQP_TCP_NODELAY, @LOpt, LLen) = 0)
-    and (LOpt <> 0);
 end;
-  {$ELSE}
-begin
-  Result := False;
-end;
-  {$ENDIF}
-{$ENDIF}
 
-var
-  // Escrito uma vez pelo backend ao carregar (antes de qualquer leitura util:
-  // so ha detalhe DEPOIS de uma conexao TLS abrir).
-  GTlsBackendDetail: string = '';
+function AmqpResolveTlsBackend(ABackend: TPcTlsBackend): TPcTlsBackend;
+begin
+  if ABackend = tbDefault then
+    Result := AmqpDefaultTlsBackend
+  else
+    Result := ABackend;
+end;
 
 function AmqpTlsBackendName: string;
 begin
-  {$IFDEF AMQP_OPENSSL}
-  Result := 'OpenSSL';
-  {$ELSE}
-    {$IFDEF AMQP_WINDOWS}
-  Result := 'SChannel';
-    {$ELSE}
-  Result := 'none';
-    {$ENDIF}
-  {$ENDIF}
+  Result := AmqpTlsBackendName(tbDefault);
+end;
+
+function AmqpTlsBackendName(ABackend: TPcTlsBackend): string;
+begin
+  Result := PcTlsBackendName(AmqpResolveTlsBackend(ABackend));
 end;
 
 function AmqpTlsBackendInfo: string;
 begin
-  Result := GTlsBackendDetail;
+  Result := AmqpTlsBackendInfo(tbDefault);
+end;
+
+function AmqpTlsBackendInfo(ABackend: TPcTlsBackend): string;
+begin
+  Result := PcTlsBackendInfo(AmqpResolveTlsBackend(ABackend));
   if Result = '' then
-    Result := AmqpTlsBackendName;
-end;
-
-procedure AmqpSetTlsBackendDetail(const ADetail: string);
-begin
-  GTlsBackendDetail := ADetail;
-end;
-
-constructor TAMQPTcpSocket.Create;
-begin
-  inherited Create;
-  {$IFDEF FPC}
-  FRawFd := -1;
-  {$ELSE}
-  FSock := TSocket.Create(TSocketType.TCP);
-  {$ENDIF}
-end;
-
-{$IFDEF FPC}
-constructor TAMQPTcpSocket.CreateFromAccepted(AHandle: LongInt; const APeerAddr: string);
-begin
-  inherited Create;
-  FPeerAddress := APeerAddr;
-  // Descritor cru: controlamos recv/send/close diretamente. (TInetSocket.Create
-  // sobre um handle não roteia o Read por onde o shutdown/close desbloqueia.)
-  FRawFd := AHandle;
-  AmqpSetNoDelay(AHandle);
-end;
-{$ELSE}
-constructor TAMQPTcpSocket.CreateFromAccepted(ASock: TSocket; const APeerAddr: string);
-begin
-  inherited Create;
-  FPeerAddress := APeerAddr;
-  FSock := ASock;
-  FAccepted := True;
-  AmqpSetNoDelay(FSock);
-end;
-{$ENDIF}
-
-destructor TAMQPTcpSocket.Destroy;
-begin
-  try
-    Close;
-  except
-  end;
-  {$IFDEF FPC}
-  if FRawFd >= 0 then
-  begin
-    CloseSocket(FRawFd); // no-op se Close já fechou no Windows
-    FRawFd := -1;
-  end;
-  {$ENDIF}
-  // Guardado: no Delphi o TSocket.Destroy refaz o shutdown se o socket ainda
-  // se diz "Connected", e um destrutor não pode levantar.
-  try
-    FSock.Free;
-  except
-  end;
-  inherited;
-end;
-
-procedure TAMQPTcpSocket.Connect(const AHost: string; APort: Word);
-begin
-  {$IFDEF FPC}
-  FSock := TInetSocket.Create(AHost, APort); // conecta no construtor
-  AmqpSetNoDelay(FSock.Handle);
-  {$ELSE}
-  FSock.Connect(AHost, '', '', APort);
-  AmqpSetNoDelay(FSock);
-  {$ENDIF}
-end;
-
-function TAMQPTcpSocket.NoDelay: Boolean;
-begin
-  {$IFDEF FPC}
-  if FRawFd >= 0 then
-    Result := AmqpGetNoDelay(FRawFd)
-  else if FSock <> nil then
-    Result := AmqpGetNoDelay(FSock.Handle)
-  else
-    Result := False;
-  {$ELSE}
-  Result := (FSock <> nil) and AmqpGetNoDelay(FSock);
-  {$ENDIF}
-end;
-
-function TAMQPTcpSocket.Receive(var Buffer; ACount: Integer): Integer;
-begin
-  {$IFDEF FPC}
-  if FRawFd >= 0 then
-    Exit(fprecv(FRawFd, @Buffer, ACount, 0));
-  if FSock = nil then
-    Exit(0);
-  Result := FSock.Read(Buffer, ACount);
-  {$ELSE}
-  if FSock = nil then
-    Exit(0);
-  try
-    Result := FSock.Receive(Buffer, ACount);
-  except
-    // Contrato desta classe (e comportamento do fprecv no FPC): erro de
-    // recepção devolve <= 0 e quem chama trata como conexão encerrada. O
-    // TSocket do Delphi, em vez disso, levanta ESocketError -- notoriamente com
-    // WSAECONNRESET (10054) quando o peer fecha com RST em vez de FIN, que é o
-    // que acontece quando o outro lado derruba a conexão sem close gracioso.
-    // Num socket bloqueante todo erro de recv é fatal, então -1 é a resposta
-    // certa para qualquer um deles.
-    Result := -1;
-  end;
-  {$ENDIF}
-end;
-
-function TAMQPTcpSocket.Send(const Buffer; ACount: Integer): Integer;
-{$IFDEF FPC}
-var
-  LFd: LongInt;
-begin
-  if FRawFd >= 0 then
-    LFd := FRawFd
-  else if FSock <> nil then
-    LFd := FSock.Handle
-  else
-    raise EAMQPTransport.Create('socket is not connected');
-  {$IF Defined(UNIX) and Declared(MSG_NOSIGNAL)}
-  // MSG_NOSIGNAL: send() num socket ja encerrado devolve erro (EPIPE) em vez
-  // de matar o processo com SIGPIPE (ver smoke test --tls no Linux).
-  Result := fpsend(LFd, @Buffer, ACount, MSG_NOSIGNAL);
-  {$ELSE}
-  Result := fpsend(LFd, @Buffer, ACount, 0);
-  {$ENDIF}
-end;
-{$ELSE}
-begin
-  if FSock = nil then
-    raise EAMQPTransport.Create('socket is not connected');
-  Result := FSock.Send(Buffer, ACount);
-end;
-{$ENDIF}
-
-procedure TAMQPTcpSocket.Close;
-begin
-  {$IFDEF FPC}
-  if FRawFd >= 0 then
-  begin
-    // Socket aceito: no Windows só o closesocket() desbloqueia um recv()
-    // pendente (shutdown num socket destes NÃO desbloqueia — medido). No Unix
-    // shutdown() basta e evita a corrida de reuso de FD; o handle fecha no
-    // destrutor.
-    {$IFDEF UNIX}
-    if not FShutdown then
-    begin
-      FShutdown := True;
-      fpshutdown(FRawFd, AMQP_SHUT_RDWR);
-    end;
-    {$ELSE}
-    if not FShutdown then
-    begin
-      FShutdown := True;
-      CloseSocket(FRawFd);
-      FRawFd := -1; // destrutor não re-fecha
-    end;
-    {$ENDIF}
-    Exit;
-  end;
-  if FSock = nil then
-    Exit;
-  if not FShutdown then
-  begin
-    FShutdown := True;
-    fpshutdown(FSock.Handle, AMQP_SHUT_RDWR);
-  end;
-  {$ELSE}
-  if FSock = nil then
-    Exit;
-  if not (TSocketState.Connected in FSock.State) then
-    Exit;
-  try
-    // Socket ACEITO: Close(True) — o Close(False) padrão da RTL faz
-    // shutdown(SD_BOTH) e depois DRENA o socket num "while recv(...) > 0" na
-    // thread que fechou. Isso (a) roda o recv na thread errada, concorrendo com
-    // a thread de leitura da conexão, e (b) no Windows o shutdown num socket
-    // aceito não desbloqueia um recv pendente — só o closesocket desbloqueia
-    // (medido no WS2, e é por isso que o caminho FPC usa fd cru + CloseSocket).
-    // Close(True) pula shutdown/drain e vai direto ao closesocket.
-    // O caminho CLIENTE mantém o Close padrão (shutdown gracioso), que é o
-    // validado contra brokers reais desde a lib original.
-    if FAccepted then
-      FSock.Close(True)
-    else
-      FSock.Close;
-  except
-    // O shutdown do Close padrão levanta ESocketError se o peer JÁ derrubou a
-    // conexão (WSAENOTCONN/10057 no Windows) — cenário normal quando o outro
-    // lado fecha o TCP logo após o Connection.Close-Ok. Pior: a RTL levanta
-    // ANTES de limpar o FState, então o TSocket.Destroy tentaria o shutdown de
-    // novo e a exceção escaparia de dentro do Free. Forçamos o closesocket
-    // para o socket sair do estado "Connected".
-    try
-      if TSocketState.Connected in FSock.State then
-        FSock.Close(True);
-    except
-      // desistimos: o handle vaza para o TSocket.Destroy resolver
-    end;
-  end;
-  {$ENDIF}
-end;
-
-{ TAMQPTcpListener }
-
-constructor TAMQPTcpListener.Create;
-begin
-  inherited Create;
-  {$IFDEF FPC}
-  FListenFd := -1;
-  {$ENDIF}
-end;
-
-destructor TAMQPTcpListener.Destroy;
-begin
-  try
-    Close;
-  except
-  end;
-  {$IFDEF FPC}
-  if FListenFd >= 0 then
-  begin
-    CloseSocket(FListenFd);
-    FListenFd := -1;
-  end;
-  {$ELSE}
-  // Guardado: o TSocket.Destroy refaz o Close se o socket ainda se disser
-  // "Connected", e um destrutor não pode levantar.
-  try
-    FListen.Free;
-  except
-  end;
-  {$ENDIF}
-  inherited;
-end;
-
-procedure TAMQPTcpListener.Listen(const ABindAddr: string; APort: Word;
-  ABacklog: Integer);
-{$IFDEF FPC}
-var
-  LAddr: TInetSockAddr;
-  LLen: {$IF Declared(TSockLen)}TSockLen{$ELSE}LongInt{$ENDIF};
-  LOpt: LongInt;
-begin
-  FListenFd := fpSocket(AF_INET, SOCK_STREAM, 0);
-  if FListenFd < 0 then
-    raise EAMQPTransport.CreateFmt('fpSocket failed (%d)', [SocketError]);
-
-  LOpt := 1;
-  fpSetSockOpt(FListenFd, SOL_SOCKET, SO_REUSEADDR, @LOpt, SizeOf(LOpt));
-
-  FillChar(LAddr, SizeOf(LAddr), 0);
-  LAddr.sin_family := AF_INET;
-  LAddr.sin_port := htons(APort);
-  if (ABindAddr = '') or (ABindAddr = '0.0.0.0') then
-    LAddr.sin_addr.s_addr := 0 // INADDR_ANY
-  else
-    LAddr.sin_addr := StrToNetAddr(ABindAddr); // já em ordem de rede
-
-  if fpBind(FListenFd, @LAddr, SizeOf(LAddr)) <> 0 then
-    raise EAMQPTransport.CreateFmt('bind on %s:%d failed (%d)',
-      [ABindAddr, APort, SocketError]);
-
-  if fpListen(FListenFd, ABacklog) <> 0 then
-    raise EAMQPTransport.CreateFmt('listen failed (%d)', [SocketError]);
-
-  // Porta efetiva (relevante quando APort = 0).
-  LLen := SizeOf(LAddr);
-  if fpGetSockName(FListenFd, @LAddr, @LLen) = 0 then
-    FPort := ntohs(LAddr.sin_port)
-  else
-    FPort := APort;
-end;
-{$ELSE}
-begin
-  if FListen = nil then
-    FListen := TSocket.Create(TSocketType.TCP);
-  // System.Net.Socket: Listen(Address, Service, Port, QueueSize).
-  FListen.Listen(ABindAddr, '', APort, ABacklog);
-  FPort := APort;
-  try
-    if APort = 0 then
-      FPort := Word(FListen.LocalPort);
-  except
-  end;
-end;
-{$ENDIF}
-
-function TAMQPTcpListener.Accept: TAMQPTcpSocket;
-{$IFDEF FPC}
-var
-  LClient: TInetSockAddr;
-  LLen: {$IF Declared(TSockLen)}TSockLen{$ELSE}LongInt{$ENDIF};
-  LFd: LongInt;
-begin
-  Result := nil;
-  if FClosing or (FListenFd < 0) then
-    Exit;
-  LLen := SizeOf(LClient);
-  LFd := fpAccept(FListenFd, @LClient, @LLen);
-  if LFd < 0 then
-    Exit; // listener fechado / interrompido
-  Result := TAMQPTcpSocket.CreateFromAccepted(LFd,
-    NetAddrToStr(LClient.sin_addr) + ':' + IntToStr(ntohs(LClient.sin_port)));
-end;
-{$ELSE}
-var
-  LSock: TSocket;
-  LPeer: string;
-begin
-  Result := nil;
-  if FClosing or (FListen = nil) then
-    Exit;
-  try
-    LSock := FListen.Accept;
-  except
-    Exit; // listener fechado por outra thread
-  end;
-  if LSock = nil then
-    Exit;
-  LPeer := '';
-  try
-    LPeer := LSock.RemoteEndpoint.Address.Address + ':' +
-      IntToStr(LSock.RemoteEndpoint.Port);
-  except
-  end;
-  Result := TAMQPTcpSocket.CreateFromAccepted(LSock, LPeer);
-end;
-{$ENDIF}
-
-procedure TAMQPTcpListener.Close;
-begin
-  if FClosing then
-    Exit;
-  FClosing := True;
-  {$IFDEF FPC}
-    {$IFDEF UNIX}
-  // No Linux/BSD, shutdown() num socket de escuta desbloqueia o accept()
-  // pendente; o descritor só é fechado no destrutor (evita corrida de FD).
-  if FListenFd >= 0 then
-    fpShutdown(FListenFd, AMQP_SHUT_RDWR);
-    {$ELSE}
-  // No Windows, é o closesocket() que desbloqueia um accept() pendente
-  // (shutdown num listen socket devolve WSAEINVAL).
-  if FListenFd >= 0 then
-  begin
-    CloseSocket(FListenFd);
-    FListenFd := -1;
-  end;
-    {$ENDIF}
-  {$ELSE}
-  // Mesma regra do caminho FPC/Windows acima: é o closesocket que desbloqueia
-  // um Accept pendente. Close(True) vai direto ao closesocket; o Close padrão
-  // (ForceClosed=False) tentaria shutdown(SD_BOTH) ANTES — e um socket de
-  // escuta nunca esteve "connected", então o shutdown falha com WSAENOTCONN
-  // (10057) e levanta antes de fechar o handle: o Accept ficaria pendurado
-  // para sempre e o TSocket.Destroy repetiria o shutdown de dentro do Free.
-  if FListen <> nil then
-    try
-      if TSocketState.Connected in FListen.State then
-        FListen.Close(True);
-    except
-    end;
-  {$ENDIF}
-end;
-
-{ TAMQPSocketStream }
-
-constructor TAMQPSocketStream.Create(ASocket: TAMQPTcpSocket);
-begin
-  inherited Create;
-  FSocket := ASocket;
-end;
-
-function TAMQPSocketStream.Read(var Buffer; Count: Longint): Longint;
-begin
-  Result := FSocket.Receive(Buffer, Count);
-end;
-
-function TAMQPSocketStream.Write(const Buffer; Count: Longint): Longint;
-begin
-  Result := FSocket.Send(Buffer, Count);
-end;
-
-function TAMQPSocketStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
-begin
-  raise EAMQPTransport.Create('TAMQPSocketStream does not support Seek');
+    Result := AmqpTlsBackendName(ABackend);
 end;
 
 end.

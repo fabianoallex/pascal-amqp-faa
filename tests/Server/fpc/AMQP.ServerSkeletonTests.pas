@@ -7,7 +7,7 @@
   master and run the script again. }
 
 { Testes do esqueleto do broker (WS6): virtual-hosts, TAMQPFrameWriter,
-  TAMQPTcpListener e o ciclo accept/registro/reap do TAMQPServer. Os "clientes"
+  o listener do broker e o ciclo accept/registro/reap do TAMQPServer. Os "clientes"
   aqui são sockets crus: só o protocol-header e frames soltos, sem handshake.
   A FSM de handshake é exercitada em AMQP.ServerHandshakeTests (WS4). }
 
@@ -20,6 +20,8 @@ uses
   AMQP.Protocol,
   AMQP.Frame,
   PascalCommon.Threading,
+  PascalCommon.Transport,
+  PascalCommon.Transport.Tcp,
   AMQP.Transport,
   AMQP.Server.FrameIO,
   AMQP.Server.Types,
@@ -40,12 +42,16 @@ type
     procedure FalhaDeEscrita_MarcaFailed;
   end;
 
+  { The broker's listener, which comes from pascal-common-faa since 0.6.0.
+    The listener itself (accept, Close unblocking Accept, port 0) is tested
+    there; these check what this library asks of it. }
   TListenerTests = class(TTestCase)
   published
-    procedure PortaZero_DevolveEfetiva;
-    procedure Accept_RecebeConexaoEDados;
-    procedure Sockets_ClienteEAceito_TemNoDelayLigado;
-    procedure Close_DesbloqueiaAccept;
+    procedure PortaZero_BrokerInformaAEfetiva;
+    procedure Accept_PeerPreenchido;
+    procedure PortaOcupada_StartLevantaEAMQPTransport;
+    procedure TcpOptions_NagleDesligado;
+    procedure PedidoResposta_SemAtrasoDeNagle;
   end;
 
   TServerSkeletonTests = class(TTestCase)
@@ -167,44 +173,74 @@ begin
 end;
 
 type
-  { Sonda: chama Accept uma vez numa thread e guarda o resultado. }
-  TAMQPAcceptProbe = class(TThread)
+  { Peer of the Nagle test: accepts one connection and, ACount times, reads
+    two bytes and answers with two separate one-byte writes. }
+  TNagleEcho = class(TThread)
   public
-    Listener: TAMQPTcpListener;
-    Accepted: TAMQPTcpSocket;
-    GotNil: Boolean;
-    constructor Create(AListener: TAMQPTcpListener);
+    Listener: TPcListener;
+    Count: Integer;
+    Error: string;
+    constructor Create(AListener: TPcListener; ACount: Integer);
     procedure Execute; override;
   end;
 
-constructor TAMQPAcceptProbe.Create(AListener: TAMQPTcpListener);
+constructor TNagleEcho.Create(AListener: TPcListener; ACount: Integer);
 begin
   Listener := AListener;
+  Count := ACount;
   inherited Create(False);
 end;
 
-procedure TAMQPAcceptProbe.Execute;
+procedure ReadExactly(AEndpoint: TPcEndpoint; var ABuffer; ACount: Integer);
+var
+  LDone: Integer;
+  P: PByte;
 begin
-  Accepted := Listener.Accept;
-  GotNil := Accepted = nil;
+  P := @ABuffer;
+  LDone := 0;
+  while LDone < ACount do
+    Inc(LDone, AEndpoint.Read(P[LDone], ACount - LDone));
+end;
+
+procedure TNagleEcho.Execute;
+var
+  E: TPcEndpoint;
+  I: Integer;
+  B: array[0..1] of Byte;
+begin
+  try
+    E := Listener.Accept;
+    try
+      for I := 1 to Count do
+      begin
+        ReadExactly(E, B[0], 2);
+        E.WriteExactly(B[0], 1);
+        E.WriteExactly(B[1], 1);
+      end;
+    finally
+      E.Free;
+    end;
+  except
+    on X: Exception do
+      Error := X.ClassName + ': ' + X.Message;
+  end;
 end;
 
 // Cliente cru: abre socket, manda o protocol-header (opcionalmente errado).
 function RawConnect(APort: Word; ASendHeader: Boolean;
-  ABadHeader: Boolean = False): TAMQPTcpSocket;
+  ABadHeader: Boolean = False): TPcEndpoint;
 var
   LHdr: array[0..7] of Byte;
   I: Integer;
 begin
-  Result := TAMQPTcpSocket.Create;
-  Result.Connect('127.0.0.1', APort);
+  Result := PcTcpConnect('127.0.0.1', APort, AmqpTcpOptions);
   if ASendHeader then
   begin
     for I := 0 to 7 do
       LHdr[I] := AMQP_PROTOCOL_HEADER[I];
     if ABadHeader then
       LHdr[5] := 99;
-    Result.Send(LHdr[0], 8);
+    Result.WriteExactly(LHdr[0], 8);
   end;
 end;
 
@@ -343,110 +379,160 @@ end;
 
 { TListenerTests }
 
-procedure TListenerTests.PortaZero_DevolveEfetiva;
+procedure TListenerTests.PortaZero_BrokerInformaAEfetiva;
 var
-  L: TAMQPTcpListener;
+  B: TAMQPServer;
+  C: TPcEndpoint;
 begin
-  L := TAMQPTcpListener.Create;
+  // T1 of the common's transport-design: a listener on port 0 reports the
+  // port it got, and the suites start every broker that way.
+  B := TAMQPServer.Create;
   try
-    L.Listen('127.0.0.1', 0);
-    TAssert.AssertTrue('porta efetiva > 0', L.Port > 0);
+    B.BindAddress := '127.0.0.1';
+    B.Port := 0;
+    B.Start;
+    TAssert.AssertTrue('porta efetiva > 0', B.Port > 0);
+    C := RawConnect(B.Port, True);
+    try
+      TAssert.AssertTrue('cliente chegou pela porta informada',
+        WaitConnCount(B, 1, 2000));
+    finally
+      C.Free;
+    end;
+    B.Stop;
   finally
-    L.Free;
+    B.Free;
   end;
 end;
 
-procedure TListenerTests.Accept_RecebeConexaoEDados;
+procedure TListenerTests.Accept_PeerPreenchido;
 var
-  L: TAMQPTcpListener;
-  Probe: TAMQPAcceptProbe;
-  Cli: TAMQPTcpSocket;
-  Buf: TBytes;
-  N: Integer;
-  S: string;
+  B: TAMQPServer;
+  C: TPcEndpoint;
+  Conns: TArray<TAMQPServerConnection>;
 begin
-  L := TAMQPTcpListener.Create;
+  B := TAMQPServer.Create;
   try
-    L.Listen('127.0.0.1', 0);
-    Probe := TAMQPAcceptProbe.Create(L);
+    B.BindAddress := '127.0.0.1';
+    B.Port := 0;
+    B.Start;
+    C := RawConnect(B.Port, True);
     try
-      Sleep(100);
-      Cli := TAMQPTcpSocket.Create;
+      TAssert.AssertTrue(WaitConnCount(B, 1, 2000));
+      Conns := B.Connections;
+      TAssert.AssertEquals(1, Length(Conns));
+      // The authenticator receives it (APeerAddress), so it can't go empty.
+      TAssert.AssertTrue('peer preenchido: ' + Conns[0].Peer,
+        Pos('127.0.0.1:', Conns[0].Peer) = 1);
+    finally
+      C.Free;
+    end;
+    B.Stop;
+  finally
+    B.Free;
+  end;
+end;
+
+procedure TListenerTests.PortaOcupada_StartLevantaEAMQPTransport;
+var
+  A, B: TAMQPServer;
+  LRaised: string;
+begin
+  A := TAMQPServer.Create;
+  B := TAMQPServer.Create;
+  try
+    A.BindAddress := '127.0.0.1';
+    A.Port := 0;
+    A.Start;
+    B.BindAddress := '127.0.0.1';
+    B.Port := A.Port;
+    LRaised := '';
+    try
+      B.Start;
+    except
+      on E: Exception do
+        LRaised := E.ClassName;
+    end;
+    // T6: the library's class, never the common's EPcTransport.
+    TAssert.AssertEquals('classe da excecao', 'EAMQPTransport', LRaised);
+    TAssert.AssertFalse('broker que nao escutou fica parado', B.Running);
+    // ...and a later Start on a free port works (the failed one undid itself).
+    B.Port := 0;
+    B.Start;
+    TAssert.AssertTrue(B.Running);
+    B.Stop;
+    A.Stop;
+  finally
+    B.Free;
+    A.Free;
+  end;
+end;
+
+procedure TListenerTests.TcpOptions_NagleDesligado;
+var
+  O: TPcTcpOptions;
+begin
+  // Every socket the library opens (client and accepted) gets these
+  // options. Nagle on costs ~40 ms per round trip on Linux: the server suite
+  // went from 50 s to 13 min without TCP_NODELAY (CLAUDE.md, gotchas).
+  O := AmqpTcpOptions;
+  TAssert.AssertFalse('TCP_NODELAY (Nagle desligado)', O.Nagle);
+  TAssert.AssertEquals('sem keep-alive: o AMQP tem heartbeat', 0,
+    Integer(O.KeepAliveSeconds));
+  TAssert.AssertEquals('connect: o padrao da common', 0,
+    Integer(O.ConnectTimeoutMs));
+  TAssert.AssertEquals('connect: o valor pedido', 1234,
+    Integer(AmqpTcpOptions(1234).ConnectTimeoutMs));
+end;
+
+procedure TListenerTests.PedidoResposta_SemAtrasoDeNagle;
+const
+  ROUNDS = 20;
+var
+  L: TPcListener;
+  Echo: TNagleEcho;
+  C: TPcEndpoint;
+  I: Integer;
+  B: array[0..1] of Byte;
+  LStart, LElapsed: UInt64;
+begin
+  // Measures what TcpOptions_NagleDesligado only states. Each side writes
+  // two small pieces and then waits for the other's two: with Nagle on, the
+  // second piece waits for the ACK of the first, and the peer delays that
+  // ACK (it has nothing to send yet) -- ~40 ms per round on Linux, so 20
+  // rounds take ~1 s or more. With TCP_NODELAY on both sockets, a few ms.
+  // Windows' loopback hides Nagle, so there the test passes either way;
+  // Linux (tools/test_fpc_docker.sh) is where it guards.
+  LElapsed := 0;
+  L := PcTcpListen('127.0.0.1', 0, AmqpTcpOptions);
+  try
+    Echo := TNagleEcho.Create(L, ROUNDS);
+    try
+      C := PcTcpConnect('127.0.0.1', L.Port, AmqpTcpOptions);
       try
-        Cli.Connect('127.0.0.1', L.Port);
-        S := 'oi';
-        Cli.Send(S[1], 2);
-        Probe.WaitFor;
-        TAssert.AssertTrue('Accept devolveu um socket', Assigned(Probe.Accepted));
-        TAssert.AssertTrue('peer preenchido', Pos('127.0.0.1:', Probe.Accepted.PeerAddress) = 1);
-        SetLength(Buf, 16);
-        N := Probe.Accepted.Receive(Buf[0], 16);
-        TAssert.AssertEquals(2, N);
-        Probe.Accepted.Free;
+        B[0] := 1;
+        B[1] := 2;
+        LStart := PcTickMs;
+        for I := 1 to ROUNDS do
+        begin
+          C.WriteExactly(B[0], 1);
+          C.WriteExactly(B[1], 1);
+          ReadExactly(C, B[0], 2);
+        end;
+        LElapsed := PcTickMs - LStart;
       finally
-        Cli.Free;
+        C.Free;
       end;
+      Echo.WaitFor;
+      TAssert.AssertEquals('eco sem erro', '', Echo.Error);
     finally
-      Probe.Free;
+      Echo.Free;
     end;
   finally
     L.Free;
   end;
-end;
-
-procedure TListenerTests.Sockets_ClienteEAceito_TemNoDelayLigado;
-var
-  L: TAMQPTcpListener;
-  Probe: TAMQPAcceptProbe;
-  Cli: TAMQPTcpSocket;
-begin
-  // Sem TCP_NODELAY o Nagle + ACK atrasado somam dezenas de ms a CADA ida e volta
-  // (medido no Linux: CreateChannel 88 ms -> 4 ms). Ver AmqpSetNoDelay.
-  L := TAMQPTcpListener.Create;
-  try
-    L.Listen('127.0.0.1', 0);
-    Probe := TAMQPAcceptProbe.Create(L);
-    try
-      Sleep(100);
-      Cli := TAMQPTcpSocket.Create;
-      try
-        Cli.Connect('127.0.0.1', L.Port);
-        Probe.WaitFor;
-        TAssert.AssertTrue('Accept devolveu um socket', Assigned(Probe.Accepted));
-        TAssert.AssertTrue('socket do cliente com TCP_NODELAY', Cli.NoDelay);
-        TAssert.AssertTrue('socket aceito com TCP_NODELAY', Probe.Accepted.NoDelay);
-        Probe.Accepted.Free;
-      finally
-        Cli.Free;
-      end;
-    finally
-      Probe.Free;
-    end;
-  finally
-    L.Free;
-  end;
-end;
-
-procedure TListenerTests.Close_DesbloqueiaAccept;
-var
-  L: TAMQPTcpListener;
-  Probe: TAMQPAcceptProbe;
-begin
-  L := TAMQPTcpListener.Create;
-  try
-    L.Listen('127.0.0.1', 0);
-    Probe := TAMQPAcceptProbe.Create(L);
-    try
-      Sleep(100);
-      L.Close;
-      Probe.WaitFor;
-      TAssert.AssertTrue('Accept devolveu nil apos Close', Probe.GotNil);
-    finally
-      Probe.Free;
-    end;
-  finally
-    L.Free;
-  end;
+  TAssert.AssertTrue(Format('%d rodadas em %d ms (Nagle ligado: ~40 ms cada)',
+    [ROUNDS, Integer(LElapsed)]), LElapsed < 400);
 end;
 
 { TServerSkeletonTests }
@@ -474,7 +560,7 @@ end;
 procedure TServerSkeletonTests.ConexaoRegistraEReap;
 var
   B: TAMQPServer;
-  C: TAMQPTcpSocket;
+  C: TPcEndpoint;
 begin
   B := TAMQPServer.Create;
   try
@@ -498,7 +584,7 @@ end;
 procedure TServerSkeletonTests.ProtocolHeaderInvalido_Fecha;
 var
   B: TAMQPServer;
-  C: TAMQPTcpSocket;
+  C: TPcEndpoint;
 begin
   B := TAMQPServer.Create;
   try
@@ -524,7 +610,7 @@ end;
 procedure TServerSkeletonTests.VariasConexoesConcorrentes;
 var
   B: TAMQPServer;
-  Conns: array[0..9] of TAMQPTcpSocket;
+  Conns: array[0..9] of TPcEndpoint;
   I: Integer;
 begin
   B := TAMQPServer.Create;
@@ -551,7 +637,7 @@ end;
 procedure TServerSkeletonTests.StopComConexoesAbertas_NaoTrava;
 var
   B: TAMQPServer;
-  Conns: array[0..4] of TAMQPTcpSocket;
+  Conns: array[0..4] of TPcEndpoint;
   I: Integer;
   LStart: UInt64;
 begin
@@ -579,8 +665,8 @@ end;
 procedure TServerSkeletonTests.HeartbeatRecebido_NaoDerrubaNemResponde;
 var
   B: TAMQPServer;
-  C: TAMQPTcpSocket;
-  Strm: TAMQPSocketStream;
+  C: TPcEndpoint;
+  Strm: TAMQPEndpointStream;
   HB: TAMQPFrame;
   Reply: TAMQPFrame;
   Conns: TArray<TAMQPServerConnection>;
@@ -599,7 +685,7 @@ begin
 
     C := RawConnect(B.Port, True);
     try
-      Strm := TAMQPSocketStream.Create(C);
+      Strm := TAMQPEndpointStream.Create(C);
       try
         // Desde o WS4 o broker manda Connection.Start assim que o
         // protocol-header e' aceito: drena esse frame antes.

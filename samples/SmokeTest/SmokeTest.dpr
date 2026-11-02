@@ -16,8 +16,8 @@
   passe a depender do sub-módulo server).
 
   Com o argumento --tls, roda os mesmos passos sobre TLS (localhost:5671 do
-  docker-compose.tls.yml, cert self-signed): SChannel no Windows, OpenSSL se
-  compilado com -dAMQP_OPENSSL. }
+  docker-compose.tls.yml, cert self-signed): SChannel no Windows, OpenSSL
+  fora dele ou se compilado com -dAMQP_OPENSSL (o backend padrao). }
 
 {$IFDEF FPC}
   {$MODE DELPHI}
@@ -126,8 +126,8 @@ end;
 
 // Parâmetros do teste. Argumentos aceitos, em qualquer ordem:
 //   --tls          roda TUDO sobre TLS (localhost:5671, cert self-signed do
-//                  docker-compose.tls.yml; SChannel no Windows ou OpenSSL com
-//                  -dAMQP_OPENSSL)
+//                  docker-compose.tls.yml; o backend padrao do build:
+//                  SChannel no Windows, OpenSSL fora dele ou com -dAMQP_OPENSSL)
 //   --host <nome>  aponta para outro host (default: o de Localhost)
 //   --port <n>     aponta para outra porta (default: 5672, ou 5671 com --tls)
 //

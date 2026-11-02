@@ -21,7 +21,7 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 - `Basic.Return` (unroutable `mandatory` publish), `Connection.Blocked/Unblocked` (broker resource alarm).
 - **Heartbeat** on a dedicated thread (dead-connection detection + sending when idle).
 - **Automatic reconnection** (opt-in) with topology recovery (exchanges, queues, bindings, qos, confirm mode and consumers) and, optionally, republishing of unconfirmed publishes (`RepublishUnconfirmedOnReconnect`).
-- **TLS (amqps)** with two backends behind the same API: native **SChannel** on Windows (automatic, zero dependencies) and **OpenSSL** on any platform (opt-in via `-dAMQP_OPENSSL`) — see the [TLS (amqps)](#tls-amqps) section.
+- **TLS (amqps)** through pascal-common-faa, with two backends chosen at run time: native **SChannel** on Windows (zero dependencies) and **OpenSSL** on any platform; a private CA and client certificates (mTLS) on both — see the [TLS (amqps)](#tls-amqps) section.
 - `Queue.Unbind`, `Exchange.Bind/Unbind` (RabbitMQ extension), `Basic.Get`, `Qos`.
 - **OpenTelemetry tracing** (opt-in, through pascal-common-faa): a span per publish and per consumed message, with the W3C `traceparent` in the message headers. Producer and consumer end up in the same trace — see [Tracing (OpenTelemetry)](#tracing-opentelemetry).
 - **Transactional outbox through the broker** (an optional bridge in `src/outbox`, outside the packages): pascal-db-faa's outbox sink publishes with confirms, and the consumer has a retry queue with a TTL, a dead queue and deduplication in the database before the ack — see [Transactional outbox](#transactional-outbox-srcoutbox).
@@ -40,14 +40,14 @@ Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-
 - **`alternate-exchange`**: whatever matches no binding goes down to the AE before becoming a `Basic.Return`.
 - **`x-expires`**: a queue unused for the period is collected (use = consumer, `Basic.Get` or redeclare; publishing does not count).
 - **Durability** (opt-in through `DataDir`): append-only WAL with batched fsync, durable topology and persistent messages surviving a restart, confirms held back by the durability watermark, and log compaction. See [Durability](#durability-opt-in).
-- **Server-side TLS** through OpenSSL (`-dAMQP_OPENSSL`), on a dedicated 5671-style port.
+- **Server-side TLS** on a dedicated 5671-style port, on both backends (PFX on SChannel, PEM on OpenSSL), with optional mTLS.
 - **Separate package** (`pascal_amqp_faa_server`): client-only users link nothing from the server.
 
 ## Compatibility
 
 | Compiler | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test, FPCUnit suites (121 unit + 31 integration + 462 broker, 466 with OpenSSL + 31 acceptance, without and with `DataDir`) and the samples pass against a real RabbitMQ |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test (plain and `--tls`, on both backends), FPCUnit suites (145 unit + 48 integration + 509 broker + 48 acceptance, without and with `DataDir` + 8 outbox, in the Default and `openssl` build modes) and the samples pass against a real RabbitMQ |
 | Delphi 12 (Athens), Win32 and Win64 | Same codebase; DUnitX suites (same numbers, on both platforms) and the samples validated through the IDE (Community Edition has no command-line compiler) |
 | FPC 3.2.2, Linux x86_64 (Debian, container) | Compiles; smoke test (plain and `--tls` with `-dAMQP_OPENSSL`), the four FPCUnit suites with the same numbers as Win64 (TLS via OpenSSL), also repeated in parallel containers at `--cpus=1`, and the 4 samples (console and GUI/LCL-GTK2) pass against a real RabbitMQ |
 | FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Same coverage as x86_64: smoke test plain and `--tls` (aarch64 OpenSSL) and FPCUnit suite 80 + 27 pass against a real RabbitMQ |
@@ -368,7 +368,7 @@ declare topology, publish and consume. Useful configuration:
 | `MaxQueueLength` | cap of ready messages **per queue** (0 = unlimited). On overflow it drops from the head — the broker runs inside your app, and a queue with no consumer must not take the host process down |
 | `DataDir` | WAL directory. **Empty (default) = no durability**; set = durable topology and persistent messages survive a restart. See [Durability](#durability-opt-in) |
 | `MaxJournalBytes` | WAL cap in bytes (0 = unlimited). On overflow the **persistent** publish gets a `Basic.Nack` — a memory cap discards, a disk cap **refuses** |
-| `UseTls` + `TlsCertFile` / `TlsKeyFile` | encrypted port (only with `-dAMQP_OPENSSL`; see below) |
+| `UseTls` + `TlsCertFile` / `TlsKeyFile` / `TlsCertPassword` / `TlsCaFile` / `TlsBackend` | encrypted port, on both backends; `TlsCaFile` turns mTLS on (see [Server-side TLS](#server-side-tls-embedded-broker)) |
 
 **Building with the broker.** It is a separate package that depends on the client package:
 
@@ -514,8 +514,6 @@ Documented on purpose — these are not bugs:
 - **The global `MaxQueueLength` and the queue's `x-max-length` compose by the SMALLER
   one.** The global cap is a safety net for the host process, and a client-supplied
   argument must not loosen it.
-- **No server-side TLS on the SChannel backend** — this library's SChannel implements the
-  client side only. For an encrypted broker port, build with `-dAMQP_OPENSSL`.
 
 ## Architecture (summary)
 
@@ -534,8 +532,8 @@ All descend directly from `Exception` (no common base class). `EAMQPConnection`/
 |---|---|
 | `EAMQPConnection` | Handshake/`Open` failure (broker refusal, response on an unexpected channel); `Publish`/`Ack`/`Nack`/`CreateChannel` called with the connection closed, dropped or mid-reconnect — the text carries the reason (`connection closed by server: 320 ...`, `connection write failed (...)`, `connection unavailable right now (reconnecting; ...)`). On both compilers, including when the write fails before the drop has been noticed (up to 0.2.0 this leaked the RTL's `EWriteError`). |
 | `EAMQPChannel` | A channel RPC (declare/bind/get/consume/close) got `Channel.Close` from the broker, timed out, or was called with the channel already closed; API misuse (e.g. `WaitForConfirm` outside confirm mode). |
-| `EAMQPTransport` | Plain socket error (unreachable host/port, dropped connection) outside the TLS handshake. |
-| `EAMQPTls` | TLS handshake failure, rejected certificate (`TlsVerifyPeer=True`), `UseTls=True` with no TLS backend compiled, or `libssl`/`libcrypto` not found at runtime. See [TLS (amqps)](#tls-amqps). |
+| `EAMQPTransport` | Plain socket error (unreachable host/port, a name that doesn't resolve, dropped connection) outside the TLS handshake; on the broker, a port already taken at `Start`. Since 0.6.0 also a failed connect, which used to leak the RTL's exception. |
+| `EAMQPTls` | TLS handshake failure, rejected certificate (`TlsVerifyPeer=True`, `TlsCaFile`, mTLS), `tbSChannel` off Windows, or `libssl`/`libcrypto` not found at runtime; on the broker, a certificate that doesn't load at `Start`. It does **not** descend from `EAMQPTransport`. See [TLS (amqps)](#tls-amqps). |
 | `EAMQPFrame` | Malformed frame, or the connection closed mid-frame — usually a symptom of a dropped connection, not an application bug. |
 | `EAMQPWire` | Encode/decode outside protocol limits (shortstr > 255 bytes, unsupported `TValue` kind in a `TAMQPFieldTable`) — generally points to an application error building `Arguments`/`Headers`. |
 
@@ -584,9 +582,9 @@ Why start from the parallel side instead of the serialized one: adding ordering 
 
 ## Building
 
-**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.8.0 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool, tracing). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova` ("needs pascal-common-faa 1.8.0 or newer"). 1.8.0 brings `PascalCommon.Tracing` (the spans), and it is the same version the other `*-faa` libraries require. Before 1.1.3 `PcPool` did not grow during a burst of items, and this client's callbacks run on it: deliveries whose callbacks block could run one at a time.
+**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.27.0 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool, tracing and, since this library's 0.6.0, the TCP/TLS transport). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.27.0 ou mais nova` ("needs pascal-common-faa 1.27.0 or newer"). 1.27.0 brings the transport (`PascalCommon.Transport*`) the client and the broker use; 1.8.0, `PascalCommon.Tracing` (the spans). Before 1.1.3 `PcPool` did not grow during a burst of items, and this client's callbacks run on it: deliveries whose callbacks block could run one at a time.
 
-**Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1.8 or newer.
+**Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1.27 or newer.
 
 **Plain FPC**:
 
@@ -602,14 +600,16 @@ fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src your_pro
 
 ## TLS (amqps)
 
-Two backends behind the **same API** — the application code doesn't change, only the build:
+Since 0.6.0 TCP and TLS come from [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (1.27.0 or newer): two backends behind the **same API**, chosen **at run time**:
 
-| Backend | Platforms | How to enable | Runtime dependency |
+| Backend | Platforms | Runtime dependency | Own certificate |
 |---|---|---|---|
-| **SChannel** (`AMQP.Transport.Tls`) | Windows (FPC and Delphi) | No step — automatic | None (Windows' own `secur32.dll`) |
-| **OpenSSL** (`AMQP.Transport.OpenSSL`) | Any (validated on Linux x86_64) | `AMQP_OPENSSL` define (opt-in) | `libssl`/`libcrypto` **3.x** or **1.1.1** installed |
+| **SChannel** | Windows (FPC and Delphi) | None (Windows' own `secur32.dll`) | PFX + password |
+| **OpenSSL** | Any (validated on Linux x86_64, OpenSSL 3 and 1.1.1, and on Windows) | `libssl`/`libcrypto` **3.x** or **1.1.1** | PEM pair (certificate + key) |
 
-### Using
+`TlsBackend` (on the client and on the broker) picks one: `tbDefault` (the default), `tbSChannel` or `tbOpenSsl`. On Windows both backends are in **every** build; elsewhere OpenSSL is the only one, and `tbSChannel` raises `EAMQPTls`. `tbDefault` is SChannel on Windows and OpenSSL elsewhere — or OpenSSL on any platform in a build with `-dAMQP_OPENSSL`, which since 0.6.0 **only changes the default** (`AmqpDefaultTlsBackend`). The CA (`TlsCaFile`) is PEM on both backends.
+
+### Using it
 
 ```pascal
 var
@@ -620,46 +620,65 @@ begin
   Params.UseTls := True;
   Params.TlsVerifyPeer := True; // default: validates chain + hostname
   Params.TlsServerName := '';   // '' => uses Host (SNI / validated name)
+  // Optional:
+  Params.TlsCaFile := 'ca.pem'; // private CA (PEM): trust IT instead of the system store
+  Params.TlsBackend := tbOpenSsl; // default tbDefault (unit PascalCommon.Transport)
   Conn := TAMQPConnection.Create(Params);
 ```
 
-For a dev broker with a self-signed certificate, `TAMQPConnectionParams.LocalhostTls` comes ready (port 5671, `TlsVerifyPeer=False`).
+For a dev broker with a self-signed certificate, `TAMQPConnectionParams.LocalhostTls` comes ready (port 5671, `TlsVerifyPeer=False`). For a broker with a private CA, prefer `TlsCaFile` over turning validation off: the encrypted traffic goes to whoever the CA vouches for, not to whoever answers.
 
-### Enabling the OpenSSL backend (`AMQP_OPENSSL`)
+**Client certificate (mTLS)**, for a broker that requires one (`ssl_options.verify = verify_peer` + `fail_if_no_peer_cert = true` on RabbitMQ):
 
-The define is **opt-in** on purpose: SChannel is guaranteed to exist on Windows, but OpenSSL depends on `libssl` being present on the machine — so it is never enabled automatically. With the define set, OpenSSL is used on **any** platform (including Windows, replacing SChannel). Without it, nothing changes from the current behavior: outside Windows, `UseTls` raises an exception explaining how to enable it.
+```pascal
+  // OpenSSL: PEM pair
+  Params.TlsCertFile := 'client.pem';
+  Params.TlsKeyFile := 'client.key';
+  // SChannel: PFX
+  Params.TlsCertFile := 'client.pfx';
+  Params.TlsCertPassword := 'password';
+```
 
-- **FPC command line**: add `-dAMQP_OPENSSL`:
+**Deadlines.** The connect has a budget (`ConnectTimeoutMs`, 0 = 10 s) and the TLS handshake has pascal-common-faa's default deadline (15 s), removed as soon as it's done. Reads and writes have **no** deadline: AMQP has heartbeats to find a dead connection. TCP_NODELAY stays on for every socket (client and accepted).
+
+### Choosing the default: `AMQP_OPENSSL`
+
+The define is **opt-in** and now only decides `tbDefault`: with it, OpenSSL is the default on any platform (Windows included, replacing SChannel). Without it, a connection can still ask for `tbOpenSsl` explicitly.
+
+- **FPC on the command line**: add `-dAMQP_OPENSSL`:
 
   ```
   fpc -dAMQP_OPENSSL -Fusrc -Fisrc your_program.pas
   ```
 
-- **Lazarus**: `SmokeTest.lpi` and the two FPCUnit runners ship with an **`openssl` build mode** — pick it in the IDE's build-mode dropdown, or on the command line: `lazbuild -B --build-mode=openssl samples\SmokeTest\SmokeTest.lpi`. For other projects, remember the library builds through the package and project defines do **not** recompile package units — the define has to reach it via `Project Options → Compiler Options → Additions and Overrides` (Custom Option `-dAMQP_OPENSSL`, which applies to the project's packages) or directly in `packages/pascal_amqp_faa.lpk` (`Options → Custom Options`, then applying to every project using the package).
-- **Delphi (IDE)**: `SmokeTest.dproj` and the two test projects ship with an **`OpenSSL`** *build configuration* (child of Debug) — just activate it in the Project Manager. For other projects: `Project → Options → Building → Delphi Compiler → Conditional defines` → add `AMQP_OPENSSL`. *(Pending validation on a Linux target: the Community Edition doesn't have it — the same source is the one validated by FPC/Linux.)*
+- **Lazarus**: `SmokeTest.lpi` and the FPCUnit runners ship with an **`openssl` build mode** — pick it in the IDE's build-mode dropdown, or on the command line: `lazbuild -B --build-mode=openssl samples\SmokeTest\SmokeTest.lpi`. For other projects, remember the library compiles through a package and project defines do **not** recompile the package's units — the define has to reach it through `Project Options → Compiler Options → Additions and Overrides` (Custom Option `-dAMQP_OPENSSL`, which applies to the project's packages) or directly in `packages/pascal_amqp_faa.lpk` (`Options → Custom Options`, then valid for every project using the package).
+- **Delphi (IDE)**: `SmokeTest.dproj` and the test projects ship with an **`OpenSSL`** *build configuration* (child of Debug) — just activate it in the Project Manager. For other projects: `Project → Options → Building → Delphi Compiler → Conditional defines` → add `AMQP_OPENSSL`. *(Pending validation on a Linux target: the Community Edition doesn't have it — the same source is the one validated by FPC/Linux.)*
 
-The libraries are loaded **dynamically on the first TLS connection** (`dlopen`/`LoadLibrary` + name list: `libssl.so.3` → `libssl.so.1.1` → `libssl.so` on Linux; `libssl-3-x64.dll` etc. on Windows). The executable gains no link-time dependency: if `libssl` is not installed, the error only happens when calling `Open` with `UseTls=True` — with a message listing which names were tried.
+The OpenSSL libraries are loaded **dynamically on first use** (`libssl.so.3` → `libssl.so.1.1` on Linux; `libssl-3-x64.dll` etc. on Windows). The executable gains no link-time dependency: if `libssl` is not installed, the error only happens when calling `Open` with `UseTls=True` (or at `Start` of a TLS broker), as `EAMQPTls`.
 
-To know **which engine an executable is using** (useful in UI/log — the VCL/LCL samples show it in the caption and status): `AmqpTlsBackendName` (unit `AMQP.Transport`) returns the build's backend (`OpenSSL`/`SChannel`/`nenhum` [none]); `AmqpTlsBackendInfo` adds, after the first TLS connection with OpenSSL, the version and library actually loaded (e.g. `OpenSSL 3.5.2 ... (libssl-3.dll)`). The SmokeTest `--tls` prints it in step 1.
+To know **which engine an executable is using** (useful in UI/log — the VCL/LCL samples show it in the caption and status): `AmqpTlsBackendName` (unit `AMQP.Transport`) returns the name of the build's default backend (`SChannel`/`OpenSSL`); `AmqpTlsBackendInfo` adds, after the first TLS connection with OpenSSL, the version and library actually loaded (e.g. `OpenSSL 3.5.2 ... (libssl-3-x64.dll)`). Both have an overload that takes the backend. The SmokeTest `--tls` prints it in step 1.
 
-Scope (same on both backends): server authentication with TLS 1.2+; validation via the system trust store; no mTLS/client-cert and no server-initiated renegotiation.
+Scope: TLS 1.2+, chain and hostname validation (IP literals included), private CA and mTLS on both backends; no server-initiated renegotiation and no manual version/cipher-suite selection.
 
 ### Server-side TLS (embedded broker)
 
-**OpenSSL only** (`-dAMQP_OPENSSL`) — this library's SChannel backend implements the
-client side only. It is a dedicated 5671-style port, not STARTTLS:
+On **both** backends since 0.6.0 (OpenSSL only before). It is a dedicated 5671-style port, not STARTTLS:
 
 ```pascal
 LBroker.UseTls := True;
-LBroker.TlsCertFile := 'docker\certs\server.crt';  // PEM chain
-LBroker.TlsKeyFile  := 'docker\certs\server.key';  // PEM key, no passphrase
+// OpenSSL: PEM chain and key (the key without a passphrase)
+LBroker.TlsCertFile := 'server.pem';
+LBroker.TlsKeyFile  := 'server.key';
+// SChannel (Windows): PFX
+// LBroker.TlsCertFile := 'server.pfx';
+// LBroker.TlsCertPassword := 'password';
+// mTLS (optional): require a client certificate issued by this CA
+// LBroker.TlsCaFile := 'ca.pem';
 LBroker.Port := 5671;
 LBroker.Start;
 ```
 
-A cert and key from different pairs fail **at `Start`**, not in an obscure handshake
-later. Without `-dAMQP_OPENSSL`, `UseTls := True` raises `EAMQPTls` with a message
-explaining why.
+The certificate is loaded **once, at `Start`**: a wrong file or password raises `EAMQPTls` there, with the broker stopped, not in an obscure handshake later. Each connection's handshake runs on **its own** thread, never on the accept thread, with the 15 s deadline: a client that opens TCP and never talks holds only its own thread, and only for that long.
 
 ### Dev broker with TLS
 
@@ -724,15 +743,15 @@ In both:
 
 | Suite | Tests | Requires |
 |---|---|---|
-| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 131 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 43 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
-| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 472 (476 with `-dAMQP_OPENSSL`) | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end) |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 43 | nothing — runs the **client's integration suite against the embedded broker** |
+| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 145 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection, the transport's exception boundary |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 48 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 509 | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end, and TLS with pascal-common-faa's test PKI: on Windows, both backends and the crossings; if OpenSSL doesn't load there, its fixtures pass with a notice) |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 48 | nothing — runs the **client's integration suite against the embedded broker** |
 | `AMQP.OutboxTests` / `AMQPOutboxTestsFpc` | 8 | pascal-db-faa (`external/pascal-db-faa`) and SQLite: on FPC, sqlite.org's `sqlite3.dll` next to the runner (Windows) or `libsqlite3.so.0` (Linux); Delphi's FireDAC links SQLite in — see [`docs/outbox.md`](docs/outbox.md) |
 
-The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All 34 pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
+The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All of them pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle.
 
-As for the TLS tests: The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down — and, outside Windows, if the runner was not built with `-dAMQP_OPENSSL`. On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as **Passed** — so an "N Passed / 0 Ignored" summary can hide tests that never touched the broker. Two signals resolve the ambiguity: the `IGNORADO: ...` message in the console log, and the **time** — a self-ignored test comes out at ~0.000s, which is why the DUnitX projects here register their own logger (`tests\AMQP.TestTimeLogger.pas`) that prints each test's duration and marks near-zero ones with `~`. The same data is in `dunitx-results.xml` (the `time` attribute); the `asserts` attribute is **not** usable for this — it reads 0 even for tests that really ran.
+As for the TLS tests: The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down (since 0.6.0 the embedded broker opens its TLS port in every build, with pascal-common-faa's test PKI). On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as **Passed** — so an "N Passed / 0 Ignored" summary can hide tests that never touched the broker. Two signals resolve the ambiguity: the `IGNORADO: ...` message in the console log, and the **time** — a self-ignored test comes out at ~0.000s, which is why the DUnitX projects here register their own logger (`tests\AMQP.TestTimeLogger.pas`) that prints each test's duration and marks near-zero ones with `~`. The same data is in `dunitx-results.xml` (the `time` attribute); the `asserts` attribute is **not** usable for this — it reads 0 even for tests that really ran.
 
 The FPCUnit runner decides by itself via `ParamCount`: with no arguments it opens the GUI (test tree + green/red bar); with arguments (`--all --format=plain`) it runs in console mode. Running from the Lazarus IDE, the switch is in `Run → Run Parameters → Command line parameters` — the `.lpi` files come with `--all --format=plain` saved (console mode); clear the field to make F9 open the GUI. In console mode via F9 the window closes when done: either check *Use launching application* with `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, or run the executable directly in a terminal.
 
@@ -741,8 +760,8 @@ The FPCUnit runner decides by itself via `ParamCount`: with no arguments it open
 - Transactions (`tx.*`) **not implemented — by design decision**, not technical difficulty (the `tx.*` protocol is trivial). An AMQP transaction is *stateful and per-channel* ("everything I published/acked since the last commit"), which fits poorly with this library's *concurrency-first* model: several threads publishing on the same channel would all fall into the same transaction, with no per-thread scope. Besides, `tx.*` is synchronous and slow, and RabbitMQ itself recommends **publisher confirms** instead — which are already implemented (`ConfirmSelect`). If a real need for atomic batches arises, the tractable subset is `Tx.Select/Commit/Rollback` for serial use on a dedicated channel.
 - Publisher confirms + reconnection: publishes unconfirmed before the drop are reported as **not confirmed**; republishing on reconnection is **opt-in** (`RepublishUnconfirmedOnReconnect`, at-least-once) — without it, resend at your layer if you need an end-to-end guarantee. See [Publisher confirms in detail](#publisher-confirms-in-detail).
 - **Topology recovery with server-named queues** — see the section below.
-- TLS: server authentication only — no mTLS/client-cert, no manual version/cipher-suite selection (see [TLS (amqps)](#tls-amqps)).
-- **Embedded broker**: durability is **opt-in** through `DataDir` and covers neither paging to disk nor `exclusive` queues; no server-side TLS on the SChannel backend — see [Durability](#durability-opt-in) and [What the broker does not do yet](#what-the-broker-does-not-do-yet).
+- TLS: no manual version/cipher-suite selection; one's own certificate is PEM on OpenSSL and PFX on SChannel (see [TLS (amqps)](#tls-amqps)).
+- **Embedded broker**: durability is **opt-in** through `DataDir` and covers neither paging to disk nor `exclusive` queues — see [Durability](#durability-opt-in) and [What the broker does not do yet](#what-the-broker-does-not-do-yet).
 
 ### Recovery of server-named queues
 
@@ -770,8 +789,7 @@ That way the queue is temporary with a **stable, known name**, and recovery work
 - ~~Broker — message lifecycle~~ — done: `x-message-ttl` and `expiration`, dead-lettering with the full `x-death`, `x-max-priority`, `x-max-length`/`x-max-length-bytes`/`x-overflow`, `alternate-exchange` and `x-expires`.
 - ~~Broker — durability~~ — done: append-only WAL with batched fsync and group commit, durable topology and persistent messages recovered on `Start` (before the listening socket opens), asynchronous confirms held back by the watermark (collapsed with `multiple=true`), segments with rewrite compaction on every `Start`, and a disk cap that refuses rather than discards. Opt-in through `DataDir`.
 - Validation of the OpenSSL backend compiled by Delphi on Linux (the Community Edition doesn't have the target; the same source is the one validated by FPC/Linux).
-- Server-side TLS on the SChannel backend (OpenSSL only today).
-- mTLS/client-cert.
+- ~~Server-side TLS on the SChannel backend~~ and ~~mTLS/client-cert~~ — done in 0.6.0, with pascal-common-faa's transport.
 
 ## License
 

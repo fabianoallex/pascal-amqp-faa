@@ -13,7 +13,11 @@
     não tem ignorado em tempo de execução: o teste sai pelo Assert.Pass com
     a mensagem 'IGNORADO: ...' e conta como Passed. O chamador sai com Exit
     logo depois, para o caso de nenhum dos dois interromper.
-  - DirTemporario: o Delphi não tem GetTempDir; o FPC não tem System.IOUtils. }
+  - DirTemporario: o Delphi não tem GetTempDir; o FPC não tem System.IOUtils.
+  - Pki: the TLS test PKI, pascal-common-faa's tests/pki through the
+    submodule (CA, server, legitimate and rogue clients; README there). Not
+    a compiler difference, but every runner needs it, server and acceptance
+    alike. }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -30,6 +34,12 @@ procedure ChecaLevanta(const AMensagem: string; AClasse: ExceptClass;
   AMetodo: TMetodoDeTeste); overload;
 procedure IgnoraTeste(const AMotivo: string);
 function DirTemporario: string;
+/// Full path of a file in the test PKI (external/pascal-common-faa/tests/pki,
+/// looked for upwards from the executable). Raises if it isn't there.
+function Pki(const AName: string): string;
+/// Password of every PFX in the test PKI.
+const
+  PKI_PFX_PASSWORD = 'pipestest';
 
 implementation
 
@@ -86,6 +96,35 @@ begin
 {$ELSE}
   Result := TPath.GetTempPath;
 {$ENDIF}
+end;
+
+var
+  GPkiDir: string;
+
+function Pki(const AName: string): string;
+var
+  LDir, LTry: string;
+  I: Integer;
+begin
+  if GPkiDir = '' then
+  begin
+    LDir := ExtractFileDir(ExpandFileName(ParamStr(0)));
+    for I := 0 to 8 do
+    begin
+      LTry := IncludeTrailingPathDelimiter(LDir) + 'external' + PathDelim +
+        'pascal-common-faa' + PathDelim + 'tests' + PathDelim + 'pki';
+      if FileExists(LTry + PathDelim + 'ca_cert.pem') then
+      begin
+        GPkiDir := LTry;
+        Break;
+      end;
+      LDir := ExtractFileDir(LDir);
+    end;
+    if GPkiDir = '' then
+      raise Exception.Create(
+        'external/pascal-common-faa/tests/pki not found above ' + ParamStr(0));
+  end;
+  Result := IncludeTrailingPathDelimiter(GPkiDir) + AName;
 end;
 
 end.

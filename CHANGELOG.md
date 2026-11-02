@@ -6,6 +6,75 @@ uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-02
+
+TCP e TLS pela **pascal-common-faa 1.27.0** (passo 5 da "Migration order" do
+`docs/transport-design.md` de lá): o cliente conecta com `PcTcpConnect`/`PcTlsWrap`, o broker escuta
+com `PcTcpListen`/`PcTlsListen`, e os dois leem e escrevem por um `TAMQPEndpointStream`. As três
+cópias do transporte (amqp, redis, pipes) viraram uma.
+
+### Adicionado
+
+- **CA privada e mTLS no cliente** (`TAMQPConnectionParams`): `TlsCaFile` (PEM, os dois backends:
+  confia NESTA CA para o servidor em vez do repositório do sistema), `TlsCertFile` + `TlsKeyFile`
+  (par PEM no OpenSSL) ou `TlsCertFile` + `TlsCertPassword` (PFX no SChannel) para o certificado do
+  cliente. Antes só havia o repositório do sistema e nenhum certificado de cliente.
+- **Backend TLS escolhido em tempo de execução**: `TAMQPConnectionParams.TlsBackend` e
+  `TAMQPServer.TlsBackend` (`tbDefault`, `tbSChannel`, `tbOpenSsl`). No Windows os dois backends
+  estão em todo build; fora dele, o OpenSSL é o único.
+- **Broker: TLS de servidor também no SChannel** (Windows, certificado em PFX com
+  `TlsCertPassword`) e **mTLS** (`TAMQPServer.TlsCaFile`: exige certificado de cliente emitido por
+  essa CA). Antes o TLS de servidor exigia `-dAMQP_OPENSSL`.
+- `TAMQPConnectionParams.ConnectTimeoutMs` (0 = o padrão da common, 10 s).
+- Em `AMQP.Transport`: `TAMQPEndpointStream`, `AmqpTcpOptions`, `AmqpDefaultTlsBackend`,
+  `AmqpResolveTlsBackend`, `AmqpRaiseTransportError` e sobrecargas de `AmqpTlsBackendName`/
+  `AmqpTlsBackendInfo` que recebem o backend. Em `AMQP.Connection`: `AmqpClientTlsOptions`.
+- Testes: `AMQP.TransportTests` (unitária, 14: a fronteira das exceções e o mapeamento dos
+  parâmetros); a fixture TLS do broker roda em todo build, com CA privada, nome errado e mTLS
+  aceito/recusado, e no Windows também com OpenSSL dos dois lados e cruzado (9 testes × 4); a PKI é
+  a `tests/pki` da pascal-common-faa, pelo submódulo.
+
+### Mudado
+
+- **Exige a pascal-common-faa 1.27.0** (checagem em `AMQP.Threading` e `MinVersion` dos dois
+  `.lpk`; era 1.8.0). Submódulo na tag v1.27.0.
+- **Mensagens de erro de transporte em inglês**, as da pascal-common-faa (texto de mensagem não é
+  contrato). As classes que saem da lib continuam `EAMQPTransport` e `EAMQPTls` (nenhuma
+  `EPcTransport*` sai), e `EAMQPTls` continua fora da hierarquia de `EAMQPTransport`, para um
+  `except on EAMQPTransport` antigo não passar a capturar erro de TLS.
+- **Falha ao conectar** levanta `EAMQPTransport`. Antes saía a exceção da RTL (`ESocketError` do
+  `ssockets` no FPC, do `System.Net.Socket` no Delphi).
+- `-dAMQP_OPENSSL` agora **só troca o backend padrão** para OpenSSL (`AmqpDefaultTlsBackend`). Os
+  build modes `openssl` continuam valendo.
+- **Prazos**: o connect tem orçamento (`ConnectTimeoutMs`, 10 s por padrão; antes era o do SO) e o
+  handshake TLS tem o prazo padrão da common, 15 s, nos dois lados; ele sai assim que o handshake
+  termina. Leitura e escrita continuam **sem prazo** (o AMQP tem heartbeat). TCP_NODELAY continua
+  ligado em todo socket.
+- **Broker: o certificado é carregado no `Start`** (uma vez, pelo listener), e um arquivo ou senha
+  errados levantam `EAMQPTls` ali, com o broker parado. Antes cada handshake falhava. Um `Start`
+  que não consegue escutar (porta ocupada, certificado) desfaz o que já tinha subido (journal,
+  notificadora de eventos).
+- Broker: o handshake TLS continua na thread da conexão (`TPcEndpoint.Handshake`), nunca na de
+  accept. `BindAddress` aceita `'::'` (todas as interfaces IPv6).
+- `TAMQPServerConnection.Create` recebe um `TPcEndpoint`; `TAMQPServerConnConfig` perdeu
+  `TlsCertFile`/`TlsKeyFile` (o certificado é do listener).
+- `TAMQPServer.Backlog` é **ignorado** (o listener da common usa o próprio); fica para não quebrar
+  quem o atribui.
+
+### Removido
+
+- `TAMQPTcpSocket`, `TAMQPTcpListener`, `TAMQPSocketStream` e `AmqpSetTlsBackendDetail`
+  (`AMQP.Transport`), `TAMQPSchannelStream` (`AMQP.Transport.Tls`) e `TAMQPOpenSslStream`
+  (`AMQP.Transport.OpenSSL`). As duas units de TLS ficam vazias, só puxando as da common, por uma
+  versão minor; saem na próxima.
+
+### Conhecido
+
+- Um cliente **sem TLS** contra a porta TLS de um broker **SChannel** só cai depois do prazo do
+  handshake (15 s): o SChannel espera um registro TLS completo, e o protocol-header do AMQP tem 8
+  bytes. Com OpenSSL a recusa é imediata. Registrado para a pascal-common-faa em
+  `.ci/transport-findings-for-pascal-common-faa.md`.
+
 ## [0.5.0] - 2026-10-31
 
 O outbox transacional da pascal-db-faa por um broker AMQP: a ponte que o pascal-agenda-faa usava

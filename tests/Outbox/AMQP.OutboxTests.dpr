@@ -19,7 +19,6 @@ uses
   AMQP.Method in '..\..\src\AMQP.Method.pas',
   AMQP.Threading in '..\..\src\AMQP.Threading.pas',
   AMQP.Transport in '..\..\src\AMQP.Transport.pas',
-  AMQP.Transport.Tls in '..\..\src\AMQP.Transport.Tls.pas',
   AMQP.Connection.Methods in '..\..\src\AMQP.Connection.Methods.pas',
   AMQP.Channel.Methods in '..\..\src\AMQP.Channel.Methods.pas',
   AMQP.Exchange.Methods in '..\..\src\AMQP.Exchange.Methods.pas',

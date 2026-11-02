@@ -29,6 +29,8 @@ uses
   {$ENDIF}
   SysUtils, Classes,
   PascalCommon.Threading,
+  PascalCommon.Transport,
+  AMQP.Transport,
   AMQP.Server.Types,
   AMQP.Server.Broker;
 
@@ -36,36 +38,34 @@ const
   PORTA_PADRAO = 5673;
   SEGUNDOS_PADRAO = 120;
 
-{$IFDEF AMQP_OPENSSL}
-function AchaCerts(out ACert, AKey: string): Boolean;
+// The test PKI of pascal-common-faa (external/pascal-common-faa/tests/pki),
+// looked for upwards from the executable. '' when not found.
+function AchaPki: string;
 var
   LDir: string;
   I: Integer;
 begin
-  LDir := ExtractFilePath(ParamStr(0));
-  for I := 0 to 6 do
+  LDir := ExtractFileDir(ExpandFileName(ParamStr(0)));
+  for I := 0 to 8 do
   begin
-    ACert := LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.crt';
-    AKey := LDir + 'docker' + PathDelim + 'certs' + PathDelim + 'server.key';
-    if FileExists(ACert) and FileExists(AKey) then
-      Exit(True);
-    LDir := LDir + '..' + PathDelim;
+    Result := IncludeTrailingPathDelimiter(LDir) + 'external' + PathDelim +
+      'pascal-common-faa' + PathDelim + 'tests' + PathDelim + 'pki' + PathDelim;
+    if FileExists(Result + 'ca_cert.pem') then
+      Exit;
+    LDir := ExtractFileDir(LDir);
   end;
-  Result := False;
+  Result := '';
 end;
-{$ENDIF}
 
 var
   LBroker: TAMQPServer;
   LPorta, LPortaTls: Word;
   LDataDir: string;
   LSegundos, I: Integer;
-  LArg, LCert, LKey: string;
+  LArg, LPki: string;
   LDeadline: UInt64;
   LLinha: string;
-  {$IFDEF AMQP_OPENSSL}
   LBrokerTls: TAMQPServer;
-  {$ENDIF}
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
   LPorta := PORTA_PADRAO;
@@ -98,9 +98,7 @@ begin
   end;
 
   LBroker := TAMQPServer.Create;
-  {$IFDEF AMQP_OPENSSL}
   LBrokerTls := nil;
-  {$ENDIF}
   try
     LBroker.BindAddress := '127.0.0.1';
     LBroker.Port := LPorta;
@@ -112,23 +110,31 @@ begin
 
     if LPortaTls <> 0 then
     begin
-      {$IFDEF AMQP_OPENSSL}
-      if AchaCerts(LCert, LKey) then
+      // Every build has TLS since 0.6.0: PEM pair on OpenSSL, PFX on
+      // SChannel (the default on Windows outside the `openssl` mode).
+      LPki := AchaPki;
+      if LPki <> '' then
       begin
         LBrokerTls := TAMQPServer.Create;
         LBrokerTls.BindAddress := '127.0.0.1';
         LBrokerTls.Port := LPortaTls;
         LBrokerTls.UseTls := True;
-        LBrokerTls.TlsCertFile := LCert;
-        LBrokerTls.TlsKeyFile := LKey;
+        if AmqpResolveTlsBackend(tbDefault) = tbOpenSsl then
+        begin
+          LBrokerTls.TlsCertFile := LPki + 'srv_cert.pem';
+          LBrokerTls.TlsKeyFile := LPki + 'srv_key.pem';
+        end
+        else
+        begin
+          LBrokerTls.TlsCertFile := LPki + 'srv.pfx';
+          LBrokerTls.TlsCertPassword := 'pipestest';
+        end;
         LBrokerTls.Start;
-        WriteLn('broker TLS ouvindo em 127.0.0.1:', LBrokerTls.Port);
+        WriteLn('broker TLS (', AmqpTlsBackendName, ') ouvindo em 127.0.0.1:',
+          LBrokerTls.Port);
       end
       else
-        WriteLn('AVISO: docker/certs nao encontrado -- sem porta TLS');
-      {$ELSE}
-      WriteLn('AVISO: build sem -dAMQP_OPENSSL -- o broker nao tem TLS');
-      {$ENDIF}
+        WriteLn('AVISO: external/pascal-common-faa/tests/pki nao encontrado -- sem porta TLS');
     end;
 
     WriteLn('no ar por ate ', LSegundos, 's (ou ate uma linha na entrada padrao)');
@@ -148,9 +154,7 @@ begin
       Sleep(100);
     end;
   finally
-    {$IFDEF AMQP_OPENSSL}
     LBrokerTls.Free;
-    {$ENDIF}
     LBroker.Free;
   end;
   WriteLn('broker encerrado');

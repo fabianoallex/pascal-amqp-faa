@@ -35,8 +35,10 @@ uses
 // 1.8.0: PascalCommon.Tracing (spans de publish e consumo, AMQP.Tracing). A 1.7
 // ja' tinha o que se usa aqui, mas e' a 1.8 que as libs irmas exigem -- uma
 // aplicacao nao fica com duas exigencias diferentes para o mesmo pacote.
-{$IF PASCALCOMMON_VERSION < 10800}
-  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova'}
+// 1.27.0: the TCP and TLS transport (PascalCommon.Transport*), which the
+// client and the broker use since 0.6.0.
+{$IF PASCALCOMMON_VERSION < 12700}
+  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.27.0 ou mais nova'}
 {$IFEND}
 
 /// Milissegundos de RELOGIO DE PAREDE desde a epoch Unix, em UTC.

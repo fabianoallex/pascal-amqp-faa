@@ -28,7 +28,8 @@ uses
   AMQP.FrameTests,
   AMQP.ConnectionMethodsTests,
   AMQP.Item2MethodsTests,
-  AMQP.TracingTests;
+  AMQP.TracingTests,
+  AMQP.TransportTests;
 
 var
   ConsoleApp: TTestRunner;
