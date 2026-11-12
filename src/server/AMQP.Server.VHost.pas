@@ -2,36 +2,36 @@
 
 {$I amqp.inc}
 
-{ Topologia por virtual host -- sub-modulo broker, WS2 da Fase 2 (engine de
-  roteamento em memoria, ver CLAUDE.md).
+{ Per-virtual-host topology -- broker sub-module, Phase 2 WS2 (in-memory
+  routing engine, see CLAUDE.md).
 
-  TAMQPVHost e' a dona dos exchanges, das filas (por ora so' os TAMQPQueueDef
-  do WS1 -- o objeto de fila DE VERDADE, com ator e consumidores, chega na
-  WS3) e dos bindings de um virtual host. Concorrencia: TMultiReadExclusiveWri-
-  teSynchronizer (unit SysUtils, reexportada por Classes -- testado nos dois
-  compiladores), leitura sob BeginRead/EndRead, toda mutacao sob
-  BeginWrite/EndWrite -- e' o "lookup quase-imutavel sob RWLock" que o
-  CLAUDE.md trava para exchanges/filas.
+  TAMQPVHost owns the exchanges, the queues (for now only WS1's
+  TAMQPQueueDef -- the REAL queue object, with actor and consumers, arrives in
+  WS3) and the bindings of one virtual host. Concurrency: TMultiReadExclusiveWri-
+  teSynchronizer (SysUtils unit, re-exported by Classes -- tested on both
+  compilers), reads under BeginRead/EndRead, every mutation under
+  BeginWrite/EndWrite -- it is the "almost-immutable lookup under an RWLock"
+  that CLAUDE.md locks in for exchanges/queues.
 
-  Erros de protocolo NAO SAO LEVANTADOS aqui: cada operacao devolve um
-  TAMQPTopologyResult, e quem sabe converter isso em reply-code (404/406/...)
-  e' a WS5 -- esta unit nao conhece numero de canal nem o modelo de erro da
-  conexao (EAMQPChannelError/EAMQPConnectionError vivem em AMQP.Server.Types,
-  que esta unit nem importa).
+  Protocol errors are NOT RAISED here: each operation returns a
+  TAMQPTopologyResult, and the one that knows how to turn it into a reply-code
+  (404/406/...) is WS5 -- this unit knows neither channel numbers nor the
+  connection error model (EAMQPChannelError/EAMQPConnectionError live in
+  AMQP.Server.Types, which this unit does not even import).
 
-  Posse dos argumentos: toda operacao Declare*/Bind*/Unbind* que recebe um
-  TAMQPFieldTable de argumentos TOMA POSSE dele incondicionalmente, mesmo
-  quando o resultado nao e' amqtrOk (ex.: redeclare divergente, tipo invalido)
-  -- o chamador nunca precisa decidir se libera ou nao dependendo do
-  resultado. Mesmo espirito de posse do WS1 (TAMQPExchangeDef/TAMQPQueueDef).
+  Ownership of arguments: every Declare*/Bind*/Unbind* operation that receives
+  a TAMQPFieldTable of arguments TAKES OWNERSHIP of it unconditionally, even
+  when the result is not amqtrOk (e.g. divergent redeclare, invalid type)
+  -- the caller never has to decide whether to free it depending on the
+  result. Same ownership spirit as WS1 (TAMQPExchangeDef/TAMQPQueueDef).
 
-  IMPORTANTE -- nao confundir com TAMQPVirtualHostRegistry (AMQP.Server.
-  Types): aquele e' so' o CONJUNTO DE NOMES que o handshake da FSM aceita no
-  Connection.Open (existe desde a Fase 1, WS4). Este aqui e' a TOPOLOGIA
-  (exchanges/filas/bindings) de CADA vhost. A unificacao dos dois -- um vhost
-  do registry ganhar automaticamente um TAMQPVHost de topologia -- e' trabalho
-  da WS5 (despacho real na FSM), que e' quem consome TAMQPVHostSet. Esta unit
-  deliberadamente NAO importa AMQP.Server.Types nem mexe no registry. }
+  IMPORTANT -- do not confuse with TAMQPVirtualHostRegistry (AMQP.Server.
+  Types): that one is only the SET OF NAMES the FSM handshake accepts on
+  Connection.Open (it exists since Phase 1, WS4). This one is the TOPOLOGY
+  (exchanges/queues/bindings) of EACH vhost. Unifying the two -- a registry
+  vhost automatically getting a topology TAMQPVHost -- is the job of WS5
+  (real dispatch in the FSM), which is the consumer of TAMQPVHostSet. This
+  unit deliberately does NOT import AMQP.Server.Types nor touch the registry. }
 
 interface
 
@@ -46,33 +46,33 @@ uses
   AMQP.Server.Routing;
 
 const
-  /// Profundidade maxima de encadeamento exchange->exchange (decisao D5,
-  /// CLAUDE.md: "binding exchange->exchange suportado... com conjunto de
-  /// visitados por publicacao e profundidade maxima: o grafo pode ter
-  /// ciclo"). O conjunto de visitados ja corta ciclo (nunca reentra no mesmo
-  /// exchange na mesma publicacao); esta constante e' um teto adicional pra
-  /// cadeias LEGITIMAS (sem ciclo) nao crescerem sem limite -- 16 hops e'
-  /// generoso pra qualquer topologia razoavel. Ao estourar, aquele caminho
-  /// para de descer EM SILENCIO (sem levantar excecao): um publish nao pode
-  /// falhar por causa de um teto de seguranca interno.
+  /// Maximum exchange->exchange chaining depth (decision D5, CLAUDE.md:
+  /// "exchange->exchange binding supported... with a per-publish visited set
+  /// and a maximum depth: the graph may have cycles"). The visited set
+  /// already cuts cycles (never re-enters the same exchange in the same
+  /// publish); this constant is an extra cap so LEGITIMATE (acyclic) chains
+  /// do not grow without bound -- 16 hops is generous for any reasonable
+  /// topology. When exceeded, that path stops descending SILENTLY (no
+  /// exception raised): a publish must not fail because of an internal
+  /// safety cap.
   AMQP_MAX_EXCHANGE_HOP_DEPTH = 16;
 
 type
-  { Resultado de uma operacao de topologia. Quem mapeia para reply-code AMQP
-    (403/404/405/406/...) e' a WS5 -- esta unit so' relata O QUE aconteceu. }
+  { Result of a topology operation. Mapping it to an AMQP reply-code
+    (403/404/405/406/...) is WS5's job -- this unit only reports WHAT happened. }
   TAMQPTopologyResult = (
-    amqtrOk,           // operacao concluida (criado/removido/ligado/etc.)
-    amqtrEquivalent,  // redeclare do MESMO nome com flags/argumentos IGUAIS -- idempotente, nao mudou nada
-    amqtrNotFound,// exchange/fila referenciada nao existe (delete/bind/unbind)
-    amqtrPreconditionFailed,   // redeclare do MESMO nome com flags/argumentos DIFERENTES -- 406 na WS5
-    amqtrCommandInvalid, // tipo de exchange desconhecido no declare, OU 'x-match' invalido no bind de um headers exchange -- 406 na WS5
-    amqtrInUse         // delete com if-unused=True e o recurso tem bindings -- 405 na WS5
+    amqtrOk,           // operation completed (created/removed/bound/etc.)
+    amqtrEquivalent,  // redeclare of the SAME name with EQUAL flags/arguments -- idempotent, nothing changed
+    amqtrNotFound,// referenced exchange/queue does not exist (delete/bind/unbind)
+    amqtrPreconditionFailed,   // redeclare of the SAME name with DIFFERENT flags/arguments -- 406 in WS5
+    amqtrCommandInvalid, // unknown exchange type in the declare, OR invalid 'x-match' in the bind of a headers exchange -- 406 in WS5
+    amqtrInUse         // delete with if-unused=True and the resource has bindings -- 405 in WS5
   );
 
-  { Um binding liga um exchange de ORIGEM (Source) a um destino, que e' uma
-    fila (amqbkQueue) ou outro exchange (amqbkExchange, decisao D5). Dono de
-    Arguments (mesmo espirito do WS1: quem declara o dono, sem clonar
-    TValue-em-TValue). }
+  { A binding links a SOURCE exchange (Source) to a destination, which is a
+    queue (amqbkQueue) or another exchange (amqbkExchange, decision D5). Owns
+    Arguments (same spirit as WS1: the declarer is the owner, without cloning
+    TValue-in-TValue). }
   TAMQPBindingKind = (amqbkQueue, amqbkExchange);
 
   TAMQPBinding = class
@@ -83,40 +83,40 @@ type
     FRoutingKey: string;
     FArguments: TAMQPFieldTable;
   public
-    /// AArguments: este objeto passa a ser dono (libera no destrutor); pode
-    /// ser nil.
+    /// AArguments: this object becomes its owner (frees it in the
+    /// destructor); may be nil.
     constructor Create(AKind: TAMQPBindingKind;
       const ASource, ADestination, ARoutingKey: string;
       AArguments: TAMQPFieldTable);
     destructor Destroy; override;
 
     property Kind: TAMQPBindingKind read FKind;
-    /// Exchange de onde a mensagem parte (spec: exchange do Queue.Bind, ou o
-    /// 'source' do Exchange.Bind).
+    /// Exchange the message leaves from (spec: the exchange of Queue.Bind, or
+    /// the 'source' of Exchange.Bind).
     property Source: string read FSource;
-    /// Fila (Kind=amqbkQueue) ou exchange (Kind=amqbkExchange, spec:
-    /// 'destination' do Exchange.Bind) de destino.
+    /// Destination queue (Kind=amqbkQueue) or exchange (Kind=amqbkExchange,
+    /// spec: the 'destination' of Exchange.Bind).
     property Destination: string read FDestination;
     property RoutingKey: string read FRoutingKey;
     property Arguments: TAMQPFieldTable read FArguments;
   end;
 
-  { Topologia (exchanges + filas + bindings) de UM virtual host. }
+  { Topology (exchanges + queues + bindings) of ONE virtual host. }
   TAMQPVHost = class
   private
     FLock: TMultiReadExclusiveWriteSynchronizer;
     FExchanges: TDictionary<string, TAMQPExchangeDef>;
     FQueues: TDictionary<string, TAMQPQueueDef>;
-    // Lista unica (nao indexada por origem, de proposito -- WS2 preza
-    // simplicidade e correcao sobre performance; o volume de bindings por
-    // vhost e' pequeno perto do volume de mensagens roteadas, que e' o que
-    // realmente precisaria de indice). Route filtra por Source ao percorrer.
+    // A single list (not indexed by source, on purpose -- WS2 values
+    // simplicity and correctness over performance; the number of bindings per
+    // vhost is small next to the volume of routed messages, which is what
+    // would really need an index). Route filters by Source while walking it.
     FBindings: TObjectList<TAMQPBinding>;
     procedure SeedExchange(const AName, AExchangeType: string);
     procedure SeedPredefinedExchanges;
-    // Devolve o binding EXATO (mesmo Kind/Source/Destination/RoutingKey/
-    // Arguments) ja existente, ou nil. Usado para Bind idempotente e para
-    // localizar o alvo de um Unbind.
+    // Returns the already existing EXACT binding (same Kind/Source/Destination/
+    // RoutingKey/Arguments), or nil. Used for idempotent Bind and to locate
+    // the target of an Unbind.
     function FindBinding(AKind: TAMQPBindingKind;
       const ASource, ADestination, ARoutingKey: string;
       AArguments: TAMQPFieldTable): TAMQPBinding;
@@ -127,38 +127,38 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    /// Declara um exchange. Predefinidos ('', 'amq.*') ja existem desde o
-    /// construtor -- redeclara-los com os MESMOS flags/tipo devolve
-    /// amqtrEquivalente (o bloqueio de nome reservado 'amq.' vindo do
-    /// CLIENTE e' responsabilidade da WS5, via AmqpIsReservedName; esta unit
-    /// nao distingue "declarado pelo broker" de "declarado pelo cliente").
+    /// Declares an exchange. The predefined ones ('', 'amq.*') exist since the
+    /// constructor -- redeclaring them with the SAME flags/type returns
+    /// amqtrEquivalent (blocking the reserved 'amq.' name when it comes from
+    /// the CLIENT is WS5's responsibility, via AmqpIsReservedName; this unit
+    /// does not tell "declared by the broker" from "declared by the client").
     function DeclareExchange(const AName, AExchangeType: string;
       ADurable, AAutoDelete, AInternal: Boolean;
       AArguments: TAMQPFieldTable): TAMQPTopologyResult;
-    /// AIfUnused=True: recusa (amqtrEmUso) se o exchange for ORIGEM de algum
-    /// binding. Remove tambem qualquer binding que aponte para AName como
-    /// DESTINO (exchange->exchange), pra nao sobrar referencia pendurada.
+    /// AIfUnused=True: refuses (amqtrInUse) if the exchange is the SOURCE of
+    /// any binding. Also removes any binding that points to AName as
+    /// DESTINATION (exchange->exchange), so no dangling reference is left.
     function DeleteExchange(const AName: string;
       AIfUnused: Boolean): TAMQPTopologyResult;
 
-    /// Declara uma fila. Toda fila nova e' auto-ligada ao exchange default
-    /// ('') com routing key = proprio nome (decisao do WS2, espelha o
-    /// comportamento do RabbitMQ) -- e' o que faz o publish direto na fila
-    /// funcionar sem bind explicito nenhum.
+    /// Declares a queue. Every new queue is auto-bound to the default exchange
+    /// ('') with routing key = its own name (WS2's decision, mirrors
+    /// RabbitMQ's behaviour) -- it is what makes publishing straight to the
+    /// queue work without any explicit bind.
     function DeclareQueue(const AName: string;
       ADurable, AExclusive, AAutoDelete: Boolean;
       AArguments: TAMQPFieldTable;
       AOwnerId: NativeUInt = 0): TAMQPTopologyResult;
-    /// Remove a fila e TODOS os bindings que apontam pra ela (o auto-bind no
-    /// exchange default incluso).
+    /// Removes the queue and ALL the bindings that point to it (the auto-bind
+    /// on the default exchange included).
     function DeleteQueue(const AName: string): TAMQPTopologyResult;
 
     function BindQueue(const AExchange, AQueue, ARoutingKey: string;
       AArguments: TAMQPFieldTable): TAMQPTopologyResult;
     function UnbindQueue(const AExchange, AQueue, ARoutingKey: string;
       AArguments: TAMQPFieldTable): TAMQPTopologyResult;
-    /// ADestination/ASource na mesma ordem do Exchange.Bind da spec: mensagens
-    /// que casam em ASource (o exchange de origem) sao encaminhadas pra
+    /// ADestination/ASource in the same order as the spec's Exchange.Bind:
+    /// messages that match on ASource (the source exchange) are forwarded to
     /// ADestination.
     function BindExchange(const ADestination, ASource, ARoutingKey: string;
       AArguments: TAMQPFieldTable): TAMQPTopologyResult;
@@ -166,52 +166,52 @@ type
       AArguments: TAMQPFieldTable): TAMQPTopologyResult;
 
     function ExchangeExists(const AName: string): Boolean;
-    /// Nomes de todos os exchanges declarados (snapshot).
+    /// Names of all declared exchanges (snapshot).
     function ExchangeNames: TArray<string>;
-    /// True se ALGUM binding parte de AName (fila ou exchange de destino).
-    /// E' o que decide se um exchange auto-delete ja perdeu o ultimo binding.
+    /// True if ANY binding leaves from AName (destination queue or exchange).
+    /// It is what decides whether an auto-delete exchange lost its last binding.
     function HasBindingsFrom(const AName: string): Boolean;
-    /// Nomes das filas exclusivas de AOwnerId (WS7: elas somem com a conexao
-    /// dona). Snapshot -- o chamador apaga uma a uma depois.
+    /// Names of AOwnerId's exclusive queues (WS7: they go away with the owning
+    /// connection). Snapshot -- the caller deletes them one by one afterwards.
     function ExclusiveQueuesOf(AOwnerId: NativeUInt): TArray<string>;
     function QueueExists(const AName: string): Boolean;
-    /// Devolve o descritor (referencia direta, NAO uma copia -- o chamador
-    /// NAO e' dono e nao deve reter alem do uso imediato: um Delete
-    /// concorrente libera o objeto). nil se nao existir.
+    /// Returns the descriptor (a direct reference, NOT a copy -- the caller
+    /// is NOT the owner and must not keep it beyond immediate use: a
+    /// concurrent Delete frees the object). nil if it does not exist.
     function ExchangeDef(const AName: string): TAMQPExchangeDef;
     function QueueDef(const AName: string): TAMQPQueueDef;
 
-    /// Roteia uma publicacao em AExchange com ARoutingKey/AHeaders (AHeaders
-    /// so' importa pra um exchange do tipo headers -- pode ser nil). Devolve
-    /// os nomes de fila alcancados, DEDUPLICADOS (uma fila casada por N
-    /// bindings diferentes aparece uma unica vez) -- array vazio se nao
-    /// houver rota (exchange inexistente incluso: publish sem rota, nao
-    /// erro). Percorre exchanges->exchanges (D5) com conjunto de visitados
-    /// (corta ciclo) e AMQP_MAX_EXCHANGE_HOP_DEPTH (corta cadeia longa
-    /// demais). So' faz leitura -- BeginRead/EndRead.
+    /// Routes a publish on AExchange with ARoutingKey/AHeaders (AHeaders only
+    /// matters for a headers-type exchange -- may be nil). Returns the names
+    /// of the queues reached, DEDUPLICATED (a queue matched by N different
+    /// bindings appears only once) -- an empty array if there is no route
+    /// (non-existent exchange included: an unroutable publish, not an error).
+    /// Walks exchanges->exchanges (D5) with a visited set (cuts cycles) and
+    /// AMQP_MAX_EXCHANGE_HOP_DEPTH (cuts chains that are too long). Read-only
+    /// -- BeginRead/EndRead.
     function Route(const AExchange, ARoutingKey: string;
       AHeaders: TAMQPFieldTable): TArray<string>;
   end;
 
-  { Todos os TAMQPVHost de um broker, indexados por nome. Thread-safe (varias
-    conexoes fazem handshake/declaram recursos em paralelo). '/' existe desde
-    o construtor -- mesma raiz default de TAMQPVirtualHostRegistry. }
+  { All of a broker's TAMQPVHost, indexed by name. Thread-safe (several
+    connections handshake/declare resources in parallel). '/' exists since
+    the constructor -- the same default root as TAMQPVirtualHostRegistry. }
   TAMQPVHostSet = class
   private
     FLock: TCriticalSection;
-    // TDictionary comum com liberacao manual dos vhosts no destrutor. Um
-    // TObjectDictionary com doOwnsValues tambem serviria (ele EXISTE no FPC
-    // 3.2.2, medido) -- a liberacao explicita e' so' consistencia com o resto
-    // da codebase, que sempre mostra quem e' dono de que.
+    // Plain TDictionary with the vhosts freed by hand in the destructor. A
+    // TObjectDictionary with doOwnsValues would also do (it DOES exist in FPC
+    // 3.2.2, measured) -- the explicit freeing is just consistency with the
+    // rest of the codebase, which always shows who owns what.
     FHosts: TDictionary<string, TAMQPVHost>;
   public
     constructor Create;
     destructor Destroy; override;
 
-    /// Devolve o TAMQPVHost de AName, criando um novo (vazio, so' com os
-    /// predefinidos) se ainda nao existir.
+    /// Returns AName's TAMQPVHost, creating a new one (empty, with only the
+    /// predefined exchanges) if it does not exist yet.
     function GetOrCreate(const AName: string): TAMQPVHost;
-    /// Devolve o TAMQPVHost de AName, ou nil se nao existir (nao cria).
+    /// Returns AName's TAMQPVHost, or nil if it does not exist (does not create).
     function Find(const AName: string): TAMQPVHost;
     function Contains(const AName: string): Boolean;
   end;
@@ -246,7 +246,7 @@ begin
   FLock := TMultiReadExclusiveWriteSynchronizer.Create;
   FExchanges := TDictionary<string, TAMQPExchangeDef>.Create;
   FQueues := TDictionary<string, TAMQPQueueDef>.Create;
-  FBindings := TObjectList<TAMQPBinding>.Create(True); // dono dos bindings
+  FBindings := TObjectList<TAMQPBinding>.Create(True); // owns the bindings
   SeedPredefinedExchanges;
 end;
 
@@ -255,7 +255,7 @@ var
   LExDef: TAMQPExchangeDef;
   LQDef: TAMQPQueueDef;
 begin
-  FBindings.Free; // libera os TAMQPBinding (OwnsObjects=True)
+  FBindings.Free; // frees the TAMQPBinding objects (OwnsObjects=True)
   for LExDef in FExchanges.Values do
     LExDef.Free;
   FExchanges.Free;
@@ -274,12 +274,12 @@ end;
 
 procedure TAMQPVHost.SeedPredefinedExchanges;
 begin
-  SeedExchange('', AMQP_EXCHANGE_TYPE_DIRECT); // exchange default
+  SeedExchange('', AMQP_EXCHANGE_TYPE_DIRECT); // default exchange
   SeedExchange('amq.direct', AMQP_EXCHANGE_TYPE_DIRECT);
   SeedExchange('amq.fanout', AMQP_EXCHANGE_TYPE_FANOUT);
   SeedExchange('amq.topic', AMQP_EXCHANGE_TYPE_TOPIC);
   SeedExchange('amq.headers', AMQP_EXCHANGE_TYPE_HEADERS);
-  SeedExchange('amq.match', AMQP_EXCHANGE_TYPE_HEADERS); // alias historico de headers (RabbitMQ)
+  SeedExchange('amq.match', AMQP_EXCHANGE_TYPE_HEADERS); // historical alias of headers (RabbitMQ)
 end;
 
 function TAMQPVHost.FindBinding(AKind: TAMQPBindingKind;
@@ -305,7 +305,7 @@ var
 begin
   if not AmqpIsValidExchangeType(AExchangeType) then
   begin
-    AArguments.Free; // esta unit sempre e' dona do que recebe, mesmo recusando
+    AArguments.Free; // this unit always owns what it receives, even when refusing
     Exit(amqtrCommandInvalid);
   end;
 
@@ -313,8 +313,8 @@ begin
   try
     if FExchanges.TryGetValue(AName, LExisting) then
     begin
-      // Descritor temporario SO' pra comparar -- nunca substitui o existente
-      // nem entra no dicionario, seja o resultado equivalente ou divergente.
+      // Temporary descriptor ONLY for comparing -- it never replaces the
+      // existing one nor enters the dictionary, whether equivalent or divergent.
       LCandidate := TAMQPExchangeDef.Create(AName, AExchangeType, ADurable,
         AAutoDelete, AInternal, AArguments);
       try
@@ -361,16 +361,16 @@ begin
         Exit(amqtrInUse);
     end;
 
-    // Remove bindings onde AName e' origem, e onde e' destino de um
-    // exchange->exchange (senao sobra referencia pendurada apontando pra um
-    // exchange que nao existe mais).
+    // Removes bindings where AName is the source, and where it is the
+    // destination of an exchange->exchange one (otherwise a dangling reference
+    // is left pointing to an exchange that no longer exists).
     I := 0;
     while I < FBindings.Count do
     begin
       if (FBindings[I].Source = AName) or
          ((FBindings[I].Kind = amqbkExchange) and
           (FBindings[I].Destination = AName)) then
-        FBindings.Delete(I) // OwnsObjects=True: libera o TAMQPBinding
+        FBindings.Delete(I) // OwnsObjects=True: frees the TAMQPBinding
       else
         Inc(I);
     end;
@@ -408,7 +408,7 @@ begin
 
     FQueues.Add(AName, TAMQPQueueDef.Create(AName, ADurable, AExclusive,
       AAutoDelete, AArguments, AOwnerId));
-    // Auto-liga ao exchange default com routing key = nome da fila.
+    // Auto-binds to the default exchange with routing key = queue name.
     FBindings.Add(TAMQPBinding.Create(amqbkQueue, '', AName, AName, nil));
     Result := amqtrOk;
   finally
@@ -467,13 +467,13 @@ begin
        (not AmqpParseHeadersMatch(AArguments, LMode)) then
     begin
       AArguments.Free;
-      Exit(amqtrCommandInvalid); // 'x-match' invalido -- 406 na WS5
+      Exit(amqtrCommandInvalid); // invalid 'x-match' -- 406 in WS5
     end;
 
     if FindBinding(amqbkQueue, AExchange, AQueue, ARoutingKey,
        AArguments) <> nil then
     begin
-      AArguments.Free; // binding identico ja existe -- bind idempotente
+      AArguments.Free; // identical binding already exists -- idempotent bind
       Exit(amqtrOk);
     end;
 
@@ -494,10 +494,10 @@ begin
   try
     LBind := FindBinding(amqbkQueue, AExchange, AQueue, ARoutingKey,
       AArguments);
-    AArguments.Free; // so' serviu pra comparar -- esta unit sempre libera
+    AArguments.Free; // it was only for comparing -- this unit always frees it
     if LBind = nil then
       Exit(amqtrNotFound);
-    FBindings.Remove(LBind); // OwnsObjects=True: libera o TAMQPBinding
+    FBindings.Remove(LBind); // OwnsObjects=True: frees the TAMQPBinding
     Result := amqtrOk;
   finally
     FLock.EndWrite;
@@ -583,8 +583,8 @@ begin
   try
     FLock.BeginRead;
     try
-      // NAO usar FExchanges.Values aqui -- ver o comentario em
-      // ExclusiveQueuesOf: e' uma escrita disfarcada de leitura.
+      // Do NOT use FExchanges.Values here -- see the comment in
+      // ExclusiveQueuesOf: it is a write disguised as a read.
       for LPar in FExchanges do
         LNames.Add(LPar.Value.Name);
     finally
@@ -620,15 +620,15 @@ begin
   try
     FLock.BeginRead;
     try
-      // ATENCAO: `FQueues.Values` NAO pode ser usado sob BeginRead. O
-      // TDictionary cria a colecao de valores SOB DEMANDA e a guarda num
-      // campo interno (`if not Assigned(FValues) then FValues := ...`), ou
-      // seja: e' uma ESCRITA disfarcada de leitura. Como o BeginRead admite
-      // varios leitores ao mesmo tempo, duas conexoes caindo juntas criavam
-      // duas colecoes e uma sobrescrevia a outra -- vazando 16 bytes em ~10%
-      // das execucoes. Achado com heaptrc; ver CLAUDE.md. Iterar o
-      // dicionario direto cria um enumerador NOVO a cada chamada (nada de
-      // campo compartilhado) e e' seguro entre leitores.
+      // WARNING: `FQueues.Values` must NOT be used under BeginRead. The
+      // TDictionary creates the values collection ON DEMAND and keeps it in
+      // an internal field (`if not Assigned(FValues) then FValues := ...`),
+      // that is: it is a WRITE disguised as a read. Since BeginRead admits
+      // several readers at once, two connections going down together created
+      // two collections and one overwrote the other -- leaking 16 bytes in
+      // ~10% of the runs. Found with heaptrc; see CLAUDE.md. Iterating the
+      // dictionary directly creates a NEW enumerator on each call (no shared
+      // field) and is safe among readers.
       for LPair in FQueues do
         if LPair.Value.Exclusive and (LPair.Value.OwnerId = AOwnerId) then
           LNames.Add(LPair.Value.Name);
@@ -684,14 +684,14 @@ var
   LAnyMatched: Boolean;
 begin
   if ADepth > AMQP_MAX_EXCHANGE_HOP_DEPTH then
-    Exit; // cadeia longa demais -- para em silencio, sem levantar
+    Exit; // chain too long -- stops silently, without raising
 
   if AVisited.ContainsKey(AExchange) then
-    Exit; // ja passamos por este exchange nesta publicacao -- corta o ciclo
+    Exit; // already went through this exchange in this publish -- cuts the cycle
   AVisited.Add(AExchange, True);
 
   if not FExchanges.TryGetValue(AExchange, LExDef) then
-    Exit; // exchange nao existe (ex.: deletado entre o bind e este publish)
+    Exit; // exchange does not exist (e.g. deleted between the bind and this publish)
 
   LAnyMatched := False;
   for LBind in FBindings do
@@ -708,18 +708,19 @@ begin
       if AmqpParseHeadersMatch(LBind.Arguments, LMode) then
         LMatches := AmqpHeadersMatch(LBind.Arguments, AHeaders, LMode)
       else
-        LMatches := False; // defensivo: bind com x-match invalido nao deveria ter sido aceito
+        LMatches := False; // defensive: a bind with an invalid x-match should not have been accepted
     end
-    else // direct, inclusive o exchange default ''
+    else // direct, including the default exchange ''
       LMatches := AmqpDirectMatches(LBind.RoutingKey, ARoutingKey);
 
     if not LMatches then
       Continue;
-    // O alternate-exchange dispara quando NENHUM BINDING DESTE EXCHANGE casou
-    // -- nao quando o resultado final ficou vazio. Um binding que casou e
-    // levou a um exchange sem rota JA' roteou: quem deixa de rotear e' aquele
-    // exchange, e o AE dele (se tiver) e' que responde por isso. Marcar aqui,
-    // e nao depois de olhar o AResultSet, e' o que separa as duas coisas.
+    // The alternate-exchange fires when NO BINDING OF THIS EXCHANGE matched
+    // -- not when the final result came out empty. A binding that matched and
+    // led to an exchange with no route HAS ALREADY routed: the one failing to
+    // route is that exchange, and its AE (if it has one) is what answers for
+    // it. Marking here, and not after looking at AResultSet, is what keeps the
+    // two things apart.
     LAnyMatched := True;
 
     if LBind.Kind = amqbkQueue then
@@ -727,17 +728,17 @@ begin
       if not AResultSet.ContainsKey(LBind.Destination) then
         AResultSet.Add(LBind.Destination, True);
     end
-    else // amqbkExchange (D5): desce recursivamente
+    else // amqbkExchange (D5): descends recursively
       RouteInto(LBind.Destination, ARoutingKey, AHeaders, ADepth + 1,
         AVisited, AResultSet);
   end;
 
-  // WS7 da Fase 3: nada casou aqui -- se este exchange tem alternate-exchange,
-  // a mensagem desce por ele. O conjunto de visitados e o teto de profundidade
-  // sao os MESMOS do caminho exchange->exchange, entao um AE que aponta para si
-  // mesmo, ou um ciclo X->AE->X, para sozinho. AE inexistente tambem para
-  // sozinho, no TryGetValue la' de cima -- e' o que faz declarar um AE antes de
-  // o exchange existir nao ser erro.
+  // Phase 3 WS7: nothing matched here -- if this exchange has an
+  // alternate-exchange, the message descends through it. The visited set and
+  // the depth cap are the SAME as on the exchange->exchange path, so an AE
+  // that points to itself, or an X->AE->X cycle, stops on its own. A
+  // non-existent AE also stops on its own, at the TryGetValue up above -- it
+  // is what makes declaring an AE before that exchange exists not an error.
   if (not LAnyMatched) and LExDef.HasAlternateExchange then
     RouteInto(LExDef.AlternateExchange, ARoutingKey, AHeaders, ADepth + 1,
       AVisited, AResultSet);

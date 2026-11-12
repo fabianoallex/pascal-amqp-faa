@@ -2,13 +2,13 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ O contrato de mensagens entre o servidor de automacao e os PDVs
-  (ARQUITETURA.md §5 e §6): nomes de topologia, nomes de comando/evento e a
-  (de)serializacao JSON de cada payload. Um fonte para os dois compiladores.
+{ The message contract between the automation server and the POS terminals
+  (ARCHITECTURE.md §5 and §6): topology names, command/event names and the
+  JSON (de)serialization of each payload. One source for both compilers.
 
-  O corpo de toda mensagem e' JSON UTF-8 (content-type application/json).
-  A requisicao RPC leva o nome do comando tanto na propriedade 'type' do AMQP
-  quanto no campo "cmd" do corpo -- o servidor despacha pelo "cmd". }
+  Every message body is UTF-8 JSON (content-type application/json).
+  The RPC request carries the command name both in the AMQP 'type' property
+  and in the "cmd" field of the body; the server dispatches on "cmd". }
 
 interface
 
@@ -19,23 +19,23 @@ uses
   Posto.Abastecida;
 
 const
-  { --- topologia --- }
+  { --- topology --- }
   EXCHANGE_EVENTOS = 'posto.eventos';
   FILA_COMANDOS    = 'posto.comandos';
   BIND_EVENTOS     = 'abastecida.#';
 
-  { --- usuarios AMQP --- }
+  { --- AMQP users --- }
   USER_AUTOMACAO   = 'automacao';
   PREFIXO_USER_PDV = 'pdv-';      // pdv-01, pdv-02, ...
 
-  { --- eventos (routing key em posto.eventos) --- }
+  { --- events (routing key on posto.eventos) --- }
   EVT_NOVA       = 'abastecida.nova';
   EVT_LANCANDO   = 'abastecida.lancando';
   EVT_LANCADO    = 'abastecida.lancado';
   EVT_DISPONIVEL = 'abastecida.disponivel';
   EVT_DESCARTADA = 'abastecida.descartada';
 
-  { --- comandos (propriedade 'type' e campo "cmd") --- }
+  { --- commands ('type' property and "cmd" field) --- }
   CMD_SNAPSHOT            = 'snapshot';
   CMD_LANCAR             = 'lancar';
   CMD_ESTORNAR           = 'estornar';
@@ -44,11 +44,11 @@ const
   CMD_LIBERAR_FORCADO    = 'liberar_forcado';
   CMD_DESCARTAR          = 'descartar';
 
-  { motivos de abastecida.disponivel (MOT_*) e de recusa (REC_*) vivem em
-    Posto.Abastecida -- sao desfechos da maquina de estados. }
+  { the reasons for abastecida.disponivel (MOT_*) and for refusal (REC_*) live in
+    Posto.Abastecida; they are outcomes of the state machine. }
 
 type
-  { Resultado de um id dentro de finalizar / cancelar_finalizada. }
+  { Result for one id inside finalizar / cancelar_finalizada. }
   TItemResultado = record
     Id: string;
     Ok: Boolean;
@@ -61,17 +61,17 @@ function JsonParaBytes(J: TJsonValue): TBytes;
 function BytesParaJson(const ABytes: TBytes): TJsonValue;   // raises EPostoJson
 function BytesParaTexto(const ABytes: TBytes): string;
 
-{ ------------------------------------------------------- abastecida <-> json - }
+{ ------------------------------------------------------- fueling <-> json ---- }
 
-{ Novo no' de objeto com os campos da abastecida (o chamador assume a posse
-  ou o passa a um Put*). }
+{ New object node with the fueling's fields (the caller takes ownership
+  or hands it to a Put*). }
 function AbastecidaParaJson(const A: TAbastecida): TJsonValue;
 procedure JsonParaAbastecida(J: TJsonValue; out A: TAbastecida);
 
-{ No' de objeto para a lista "bloqueadas" do snapshot. }
+{ Object node for the snapshot's "bloqueadas" list. }
 function EstadoParaJson(const AE: TAbastecidaEstado): TJsonValue;
 
-{ ------------------------------------------------------- eventos (servidor) - }
+{ ------------------------------------------------------- events (server) ---- }
 
 function EncEventoNova(const A: TAbastecida; AVersao: Int64): TBytes;
 function EncEventoLancando(const AId, APdv, AVenda: string; AVersao: Int64): TBytes;
@@ -79,7 +79,7 @@ function EncEventoLancado(const AId, APdv, AVenda: string; AVersao: Int64): TByt
 function EncEventoDisponivel(const AId, AMotivo: string; AVersao: Int64): TBytes;
 function EncEventoDescartada(const AId: string; AVersao: Int64): TBytes;
 
-{ ------------------------------------------------------- respostas (servidor) }
+{ ------------------------------------------------------- replies (server) --- }
 
 function EncRespSnapshot(AVersao: Int64;
   const ADisponiveis: array of TAbastecida;
@@ -90,7 +90,7 @@ function EncRespItens(AVersao: Int64; const AItens: array of TItemResultado): TB
 function EncRespLiberarForcado(AVersao: Int64;
   const AEstadoAnterior, APdvAnterior: string): TBytes;
 
-{ ------------------------------------------------------- requisicoes (PDV) -- }
+{ ------------------------------------------------------- requests (POS) ----- }
 
 function EncReqSnapshot: TBytes;
 function EncReqLancar(const AId, APdv, AVenda: string): TBytes;
@@ -121,7 +121,7 @@ begin
   Result := AmqpUtf8Decode(ABytes);
 end;
 
-{ um helper local: monta o corpo, serializa, libera. }
+{ a local helper: builds the body, serializes it, frees it. }
 function Serializa(J: TJsonValue): TBytes;
 begin
   try
@@ -131,7 +131,7 @@ begin
   end;
 end;
 
-{ ------------------------------------------------------- abastecida <-> json - }
+{ ------------------------------------------------------- fueling <-> json ---- }
 
 function AbastecidaParaJson(const A: TAbastecida): TJsonValue;
 begin
@@ -177,7 +177,7 @@ begin
   Result.PutInt('desde', AE.DesdeMs);
 end;
 
-{ ------------------------------------------------------- eventos --- }
+{ ------------------------------------------------------- events --- }
 
 function EncEventoNova(const A: TAbastecida; AVersao: Int64): TBytes;
 var
@@ -235,7 +235,7 @@ begin
   Result := Serializa(J);
 end;
 
-{ ------------------------------------------------------- respostas --- }
+{ ------------------------------------------------------- replies --- }
 
 function EncRespSnapshot(AVersao: Int64;
   const ADisponiveis: array of TAbastecida;
@@ -313,7 +313,7 @@ begin
   Result := Serializa(J);
 end;
 
-{ ------------------------------------------------------- requisicoes --- }
+{ ------------------------------------------------------- requests --- }
 
 function EncReqSnapshot: TBytes;
 var

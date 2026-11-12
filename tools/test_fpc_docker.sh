@@ -1,30 +1,30 @@
 #!/bin/sh
-# Suítes FPCUnit no Linux (FPC 3.2.2, Debian bookworm), num container Docker,
-# com heaptrc. Critério de aceite, por configuração: 0 erros, 0 falhas e
+# FPCUnit suites on Linux (FPC 3.2.2, Debian bookworm), in a Docker container,
+# with heaptrc. Acceptance criterion, per configuration: 0 errors, 0 failures and
 # "0 unfreed memory blocks".
 #
-# Configurações (as mesmas das validações Linux registradas no worklog):
+# Configurations (the same as the Linux validations recorded in the worklog):
 #   unit | server, server-openssl | integration, integration-openssl |
-#   acceptance e acceptance-durable (as duas passagens), em Default e openssl |
+#   acceptance and acceptance-durable (the two passes), in Default and openssl |
 #   outbox (src/outbox, the bridge to pascal-db-faa: SQLite through SQLdb,
 #   libsqlite3.so.0 in the image).
 #
-# Antes de compilar, confere os espelhos gerados (tools/gen_fpc_mirror.py
-# --check) e o verificador do que o gerador não cobre
+# Before compiling, checks the generated mirrors (tools/gen_fpc_mirror.py
+# --check) and runs the checker for what the generator does not cover
 # (tests/tools/verifica_espelhos.py).
 #
-# A integração precisa de um RabbitMQ: o container roda na rede do
-# RABBIT_CONTAINER (padrão: delphi-amqp-faa-rabbitmq, do docker compose do
-# delphi-amqp-faa; os certs de TLS são os de docker/certs). Sem ele, passe
-# SUITES sem integration (ex.: SUITES="unit server acceptance").
+# The integration suite needs a RabbitMQ: the container runs on the network of
+# RABBIT_CONTAINER (default: delphi-amqp-faa-rabbitmq, from delphi-amqp-faa's
+# docker compose; the TLS certs are the ones in docker/certs). Without it, pass
+# SUITES without integration (e.g. SUITES="unit server acceptance").
 #
-# O repositório é montado só para leitura e copiado dentro do container: nada
-# é escrito na árvore de trabalho. Sem Lazarus: os runners FPCUnit só puxam a
-# LCL no Windows.
+# The repository is mounted read-only and copied inside the container: nothing
+# is written to the working tree. No Lazarus: the FPCUnit runners only pull in
+# the LCL on Windows.
 #
-# FPC_IMAGE: imagem com FPC 3.2.2 e libssl3 (padrão: pamqp-fpc322, construída
-# aqui a partir do pacote fpc do bookworm se não existir).
-# Heaptrc: o FPC do Debian só imprime o resumo com HEAPTRC=log=<arquivo>.
+# FPC_IMAGE: image with FPC 3.2.2 and libssl3 (default: pamqp-fpc322, built
+# here from bookworm's fpc package if it does not exist).
+# Heaptrc: Debian's FPC only prints the summary with HEAPTRC=log=<file>.
 set -e
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="${FPC_IMAGE:-pamqp-fpc322}"
@@ -73,7 +73,7 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
   cp -r /src/external/pascal-common-faa /t/external/
   if [ -d /src/external/pascal-db-faa/src ]; then cp -r /src/external/pascal-db-faa /t/external/; fi
   C=/t/external/pascal-common-faa/src
-  # build <nome> <lpr> [defines]
+  # build <name> <lpr> [defines]
   build() {
     mkdir -p /t/u/$1
     fpc -v0 $3 -Mdelphi -Fu/t/src -Fu/t/src/server -Fu$C -Fi/t/src -Fi$C -Fu/t/tests \
@@ -81,7 +81,7 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
       > /t/log/build-$1.log 2>&1 || { grep -iE "error|fatal" /t/log/build-$1.log | head -30; exit 1; }
   }
   FALHOU=0
-  # run <nome> <binario> [VAR=valor ...]
+  # run <name> <binary> [VAR=value ...]
   run() {
     N=$1; B=$2; shift 2
     (cd /t/tests && env "$@" HEAPTRC="log=/t/log/heap-$N.txt" /t/bin/$B --all --format=plain > /t/log/run-$N.log 2>&1) || true
@@ -97,7 +97,7 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
       grep -A6 -E "^ +(Error|Failure)|Message:" /t/log/run-$N.log | head -40 || true
     fi
   }
-  # O AMQP_TEST_HOST da integração: o RabbitMQ, na mesma rede do container.
+  # The integration suite's AMQP_TEST_HOST: the RabbitMQ, on the same network as the container.
   for S in $SUITES; do
     case $S in
       unit)

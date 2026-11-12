@@ -6,10 +6,10 @@
   tests/Integration/AMQP.ReviewRegressionTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
   master and run the script again. }
 
-{ Regressões dos achados da revisão que dão para testar de forma determinística:
-  - bug_006: Close/Free do canal espera (drena) callbacks em voo (sem UAF).
-  - bug_002: CreateChannel concorrente gera IDs distintos, sem erro nem leak.
-  Precisa de RabbitMQ em localhost:5672. }
+{ Regressions for the review findings that can be tested deterministically:
+  - bug_006: the channel's Close/Free waits for (drains) in-flight callbacks (no UAF).
+  - bug_002: concurrent CreateChannel produces distinct IDs, with no error or leak.
+  Needs RabbitMQ on localhost:5672. }
 
 
 interface
@@ -24,21 +24,21 @@ uses
   AMQP.Queue.Methods;
 
 type
-  // Tipos nomeados (nao "array of X" direto como parametro, que seria open
-  // array — semantica de VALOR, copia os elementos): um dynamic array named
-  // type passado por parametro compartilha o mesmo buffer com o chamador.
+  // Named types (not "array of X" directly as a parameter, which would be an
+  // open array — VALUE semantics, copies the elements): a named dynamic array
+  // type passed as a parameter shares the same buffer with the caller.
   TAMQPChannelArr = array of TAMQPChannel;
   TAMQPStringArr = array of string;
 
-  // System.Threading (TParallel.For) nao existe no FPC (ver CLAUDE.md) —
-  // dispara N criacoes de canal concorrentes via PcPool (o thread pool
-  // proprio da lib) em vez disso. O pool assume a posse do item: nao se
-  // libera manualmente apos Queue.
+  // System.Threading (TParallel.For) does not exist in FPC (see CLAUDE.md) —
+  // fires N concurrent channel creations through PcPool (the library's own
+  // thread pool) instead. The pool takes ownership of the item: it is not
+  // freed manually after Queue.
   TCreateChannelWorkItem = class(TPcWorkItem)
   private
     FConn: TAMQPConnection;
     FIndex: Integer;
-    FChannels: TAMQPChannelArr; // compartilhado com o chamador (mesmo buffer)
+    FChannels: TAMQPChannelArr; // shared with the caller (same buffer)
     FErrors: TAMQPStringArr;
     FDone: PInteger;
   public
@@ -52,8 +52,8 @@ type
     FConn: TAMQPConnection;
     FStarted: Integer;
     FFinished: Integer;
-    // Callback de consumer é 'of object' na lib (ver CLAUDE.md) — sem métodos
-    // anônimos. TInterlocked não existe no FPC -> PcAtomic*.
+    // The consumer callback is 'of object' in the library (see CLAUDE.md) — no
+    // anonymous methods. TInterlocked does not exist in FPC -> PcAtomic*.
     procedure HandleSlowDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   protected
     procedure SetUp; override;
@@ -73,7 +73,7 @@ begin
   inherited Create;
   FConn := AConn;
   FIndex := AIndex;
-  FChannels := AChannels; // copia so' a referencia (mesmo buffer do chamador)
+  FChannels := AChannels; // copies only the reference (same buffer as the caller)
   FErrors := AErrors;
   FDone := ADone;
 end;
@@ -126,15 +126,15 @@ begin
     LDecl.AutoDelete := True;
     LQueue := LChan.DeclareQueue(LDecl).QueueName;
 
-    // Consumer (no-ack, para não ackar num canal em fechamento) cujo callback
-    // demora ~6 s — DE PROPÓSITO mais que o antigo timeout de drain (5 s): o
-    // código com bug retornaria do Close com o callback ainda em voo
-    // (FFinished=0); o corrigido espera até o fim (FFinished=1).
+    // Consumer (no-ack, so as not to ack on a closing channel) whose callback
+    // takes ~6 s — ON PURPOSE longer than the old drain timeout (5 s): the
+    // buggy code would return from Close with the callback still in flight
+    // (FFinished=0); the fixed one waits until the end (FFinished=1).
     LChan.Consume(LQueue, HandleSlowDelivery, True {no-ack});
 
     LChan.PublishText('', LQueue, 'processa-devagar');
 
-    // Espera o callback começar (mas ainda dormindo).
+    // Waits for the callback to start (but still sleeping).
     LWaited := 0;
     while (PcAtomicGet(FStarted) = 0) and (LWaited < 5000) do
     begin
@@ -145,7 +145,7 @@ begin
     TAssert.AssertEquals('o callback ainda deveria estar em voo (dormindo)',
       0, PcAtomicGet(FFinished));
 
-    // Fecha o canal COM o callback em voo: DrainInFlight deve esperar terminar.
+    // Closes the channel WITH the callback in flight: DrainInFlight must wait for it to finish.
     LChan.Close;
 
     TAssert.AssertEquals('Close deveria ter drenado (esperado) o callback em voo antes de retornar',
@@ -173,8 +173,8 @@ begin
     LErrors[I] := '';
   end;
 
-  // Cria N canais concorrentemente via PcPool (thread pool proprio da lib,
-  // ver comentario do TCreateChannelWorkItem acima).
+  // Creates N channels concurrently through PcPool (the library's own thread
+  // pool, see the TCreateChannelWorkItem comment above).
   LDone := 0;
   for I := 0 to N - 1 do
     PcPool.Queue(TCreateChannelWorkItem.Create(FConn, I, LChannels, LErrors, @LDone));
@@ -202,7 +202,7 @@ begin
   finally
     LSeen.Free;
     for I := 0 to N - 1 do
-      LChannels[I].Free; // Free em nil é seguro
+      LChannels[I].Free; // Free on nil is safe
   end;
 end;
 

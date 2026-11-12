@@ -1,8 +1,8 @@
 ﻿unit AMQP.ConsumeIntegrationTests;
 
-{ Integração de consumo concorrente — precisa de RabbitMQ em localhost:5672.
-  Valida o critério de aceite do MVP: Basic.Consume com despacho para thread
-  pool, ack manual e processamento NÃO serializado de mensagens diferentes. }
+{ Concurrent consumption integration — needs RabbitMQ on localhost:5672.
+  Validates the MVP acceptance criterion: Basic.Consume dispatching to a thread
+  pool, manual ack and NON-serialized processing of different messages. }
 
 
 interface
@@ -23,13 +23,13 @@ type
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
     FReceived: TThreadList<string>;
-    FCount: Integer;      // mensagens processadas (atômico)
-    FCurrent: Integer;    // callbacks rodando agora (atômico)
-    FPeak: Integer;       // pico de concorrência observado (atômico)
+    FCount: Integer;      // messages processed (atomic)
+    FCurrent: Integer;    // callbacks running right now (atomic)
+    FPeak: Integer;       // observed concurrency peak (atomic)
     function DeclareTempQueue: string;
     procedure WaitCount(AExpected, ATimeoutMs: Integer);
-    // Callbacks de consumer são 'of object' na lib (ver CLAUDE.md) — sem
-    // métodos anônimos; TInterlocked não existe no FPC -> PcAtomic*.
+    // Consumer callbacks are 'of object' in the library (see CLAUDE.md) — no
+    // anonymous methods; TInterlocked does not exist in FPC -> PcAtomic*.
     procedure HandleDeliverySimple(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleDeliveryConcurrent(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleDeliveryDedicated(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
@@ -56,7 +56,7 @@ end;
 
 procedure TAMQPConsumeIntegrationTests.TearDown;
 begin
-  FChan.Free;  // fecha o canal e drena callbacks em voo
+  FChan.Free;  // closes the channel and drains in-flight callbacks
   FConn.Free;
   FReceived.Free;
 end;
@@ -97,17 +97,18 @@ var
   LCur, LOldPeak, LWaited: Integer;
 begin
   LCur := PcAtomicInc(FCurrent);
-  // atualiza o pico de concorrência (CAS)
+  // updates the concurrency peak (CAS)
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
   until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
-  // Segura o callback até OBSERVAR outro rodando junto (ou timeout): prova a
-  // sobreposição sem depender de janela de timing (um sleep fixo flakeia
-  // quando os workers do pool demoram a subir sob carga). Se o pico >= 2 já
-  // foi registrado, a prova está feita e ninguém mais precisa esperar.
+  // Holds the callback until it OBSERVES another one running alongside (or a
+  // timeout): proves the overlap without depending on a timing window (a fixed
+  // sleep flakes when the pool workers are slow to start under load). If a
+  // peak >= 2 has already been recorded, the proof is done and nobody else
+  // needs to wait.
   LWaited := 0;
   while (PcAtomicGet(FCurrent) < 2) and (PcAtomicGet(FPeak) < 2) and
         (LWaited < 2000) do
@@ -128,16 +129,16 @@ var
   LCur, LOldPeak: Integer;
 begin
   LCur := PcAtomicInc(FCurrent);
-  // mesma atualização de pico do teste de concorrência; aqui esperamos que
-  // nunca passe de 1 (worker dedicado é sequencial).
+  // same peak update as the concurrency test; here we expect it never to go
+  // above 1 (a dedicated worker is sequential).
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
   until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
-  // Dá tempo de sobra para outro worker do pool global sobrepor, se o
-  // despacho estivesse indo para lá em vez do worker dedicado do canal.
+  // Gives plenty of time for another worker of the global pool to overlap, if
+  // dispatch were going there instead of to the channel's dedicated worker.
   TThread.Sleep(30);
 
   FReceived.Add(ADelivery.BodyAsText);
@@ -179,12 +180,12 @@ begin
   for I := 1 to N do
     FChan.PublishText('', LQueue, Format('msg-%d', [I]));
 
-  // prefetch alto: deixa o servidor entregar todas, permitindo concorrência.
+  // high prefetch: lets the server deliver all of them, allowing concurrency.
   FChan.Qos(N);
   FChan.Consume(LQueue, HandleDeliveryConcurrent);
 
-  // Timeout > N × timeout do callback: execução serializada de verdade chega
-  // ao fim e falha na asserção de pico (a mensagem certa), não na contagem.
+  // Timeout > N × the callback's timeout: truly serialized execution reaches
+  // the end and fails on the peak assertion (the right message), not on the count.
   WaitCount(N, 30000);
 
   LList := FReceived.LockList;
@@ -205,7 +206,7 @@ var
   I: Integer;
   LList: TList<string>;
 begin
-  // Substitui o canal do SetUp por um com worker dedicado (CreateChannel(True)).
+  // Replaces the SetUp channel with one that has a dedicated worker (CreateChannel(True)).
   FChan.Free;
   FChan := FConn.CreateChannel(True);
 

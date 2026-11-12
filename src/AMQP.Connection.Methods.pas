@@ -2,26 +2,26 @@
 
 {$I amqp.inc}
 
-{ Métodos da classe Connection (10) do AMQP 0-9-1 usados no handshake.
+{ Methods of the AMQP 0-9-1 Connection class (10) used in the handshake.
 
-  Cada Build* devolve o payload completo de um frame de método (cabeçalho
-  class/method + argumentos), pronto para virar um TAMQPFrame de tipo método no
-  canal 0. Cada Decode* recebe um TAMQPReader já posicionado logo APÓS o
-  cabeçalho do método (isto é, no início dos argumentos) — o chamador lê o
-  cabeçalho antes, com AMQP.Method.ReadMethodHeader, para despachar.
+  Each Build* returns the complete payload of a method frame (class/method
+  header + arguments), ready to become a method-type TAMQPFrame on
+  channel 0. Each Decode* takes a TAMQPReader already positioned right AFTER the
+  method header (that is, at the start of the arguments) — the caller reads the
+  header first, with AMQP.Method.ReadMethodHeader, to dispatch.
 
-  Sequência do handshake:
+  Handshake sequence:
     C: protocol-header
     S: Start          -> DecodeStart
     C: Start-Ok       <- BuildStartOk
     S: Tune           -> DecodeTune
-    C: Tune-Ok        <- BuildTuneOk (ver NegotiateTune)
+    C: Tune-Ok        <- BuildTuneOk (see NegotiateTune)
     C: Open           <- BuildOpen
     S: Open-Ok        -> DecodeOpenOk
 
-  Gotcha do channel-max (ver CLAUDE.md): o valor devolvido em Tune-Ok nunca pode
-  exceder o proposto pelo servidor nem ser 0 quando o servidor propôs um limite
-  finito. NegotiateTune resolve isso. }
+  channel-max gotcha (see CLAUDE.md): the value returned in Tune-Ok may never
+  exceed the one the server proposed, nor be 0 when the server proposed a finite
+  limit. NegotiateTune takes care of that. }
 
 interface
 
@@ -47,10 +47,10 @@ type
   TAMQPConnectionStart = record
     VersionMajor: Byte;
     VersionMinor: Byte;
-    ServerProperties: TAMQPFieldTable; // dono: chamador (deve liberar)
-    Mechanisms: string;                // lista separada por espaços (ex.: 'PLAIN AMQPLAIN')
+    ServerProperties: TAMQPFieldTable; // owner: caller (must free)
+    Mechanisms: string;                // space-separated list (e.g. 'PLAIN AMQPLAIN')
     Locales: string;
-    /// True se AMechanism estiver na lista de Mechanisms.
+    /// True if AMechanism is in the Mechanisms list.
     function SupportsMechanism(const AMechanism: string): Boolean;
   end;
 
@@ -67,16 +67,16 @@ type
     MethodId: Word;
   end;
 
-// --- Construção de client-properties e credenciais ------------------------
+// --- Building client-properties and credentials ---------------------------
 
-/// Client-properties padrão (product/version/platform/capabilities).
-/// O chamador é dono da tabela retornada (deve liberá-la).
+/// Default client-properties (product/version/platform/capabilities).
+/// The caller owns the returned table (must free it).
 function DefaultClientProperties: TAMQPFieldTable;
 
-/// Resposta do mecanismo PLAIN: #0 + usuário + #0 + senha.
+/// PLAIN mechanism response: #0 + user + #0 + password.
 function PlainAuthResponse(const AUser, APassword: string): string;
 
-// --- Encode / decode dos métodos ------------------------------------------
+// --- Method encode / decode -----------------------------------------------
 
 function DecodeStart(const AReader: TAMQPReader): TAMQPConnectionStart;
 
@@ -89,103 +89,103 @@ function BuildTuneOk(const ATune: TAMQPConnectionTune): TBytes;
 
 function BuildOpen(const AVirtualHost: string): TBytes;
 
-/// Lê Open-Ok (só um shortstr reservado, descartado).
+/// Reads Open-Ok (just one reserved shortstr, discarded).
 procedure DecodeOpenOk(const AReader: TAMQPReader);
 
 function DecodeClose(const AReader: TAMQPReader): TAMQPConnectionClose;
 
-/// Lê Connection.Blocked (extensão RabbitMQ): devolve o motivo (reason) informado
-/// pelo broker ao entrar em resource alarm. Connection.Unblocked não tem args.
+/// Reads Connection.Blocked (RabbitMQ extension): returns the reason given
+/// by the broker when entering a resource alarm. Connection.Unblocked has no args.
 function DecodeBlocked(const AReader: TAMQPReader): string;
 
 function BuildClose(const AClose: TAMQPConnectionClose): TBytes;
 
 function BuildCloseOk: TBytes;
 
-// --- Negociação do Tune ----------------------------------------------------
+// --- Tune negotiation ------------------------------------------------------
 
-/// Valor negociado onde 0 significa "sem limite": se qualquer lado é 0, vence o
-/// outro (o maior); se ambos são finitos, vence o menor. Assim o Tune-Ok nunca
-/// excede um limite finito do servidor e nunca manda 0 sob limite finito.
+/// Negotiated value where 0 means "no limit": if either side is 0, the other
+/// one wins (the larger); if both are finite, the smaller wins. So Tune-Ok never
+/// exceeds a finite server limit and never sends 0 under a finite limit.
 function NegotiateChannelMax(AServer, AClient: Word): Word;
 function NegotiateFrameMax(AServer, AClient: Cardinal): Cardinal;
 function NegotiateHeartbeat(AServer, AClient: Word): Word;
 
-/// Combina o Tune do servidor com as preferências do cliente.
+/// Combines the server's Tune with the client's preferences.
 function NegotiateTune(const AServerTune: TAMQPConnectionTune;
   AClientChannelMax: Word; AClientFrameMax: Cardinal;
   AClientHeartbeat: Word): TAMQPConnectionTune;
 
 // =========================================================================
-//  Lado servidor (sub-módulo broker) — build dos métodos servidor->cliente
-//  e decode dos métodos cliente->servidor. O cliente não usa nada daqui;
-//  vive nesta unit para o codec da classe Connection ficar todo junto.
+//  Server side (broker sub-module) — build of the server->client methods
+//  and decode of the client->server methods. The client uses nothing here;
+//  it lives in this unit so the Connection class codec stays all together.
 // =========================================================================
 
 const
   AMQP_SERVER_PRODUCT  = 'pascal-amqp-faa (broker)';
   AMQP_SERVER_VERSION  = '0.6.0';
   AMQP_SERVER_PLATFORM = AMQP_CLIENT_PLATFORM; // 'Delphi' | 'FreePascal'
-  /// Versão do protocolo que o broker anuncia no Connection.Start.
+  /// Protocol version the broker announces in Connection.Start.
   AMQP_VERSION_MAJOR = 0;
   AMQP_VERSION_MINOR = 9;
 
 type
-  { Argumentos de Connection.Start-Ok (cliente -> servidor). }
+  { Arguments of Connection.Start-Ok (client -> server). }
   TAMQPConnectionStartOk = record
-    ClientProperties: TAMQPFieldTable; // dono: chamador (deve liberar)
+    ClientProperties: TAMQPFieldTable; // owner: caller (must free)
     Mechanism: string;
-    Response: TBytes;                  // resposta SASL crua (PLAIN tem #0 embutido)
+    Response: TBytes;                  // raw SASL response (PLAIN has #0 embedded)
     Locale: string;
   end;
 
-  { Argumento de Connection.Open (cliente -> servidor). Os dois campos
-    reservados (capabilities/insist, obsoletos) são consumidos e descartados. }
+  { Argument of Connection.Open (client -> server). The two reserved
+    fields (capabilities/insist, obsolete) are consumed and discarded. }
   TAMQPConnectionOpen = record
     VirtualHost: string;
   end;
 
-/// Server-properties padrão do broker (product/version/platform/capabilities).
-/// O chamador é dono da tabela retornada (deve liberá-la).
+/// The broker's default server-properties (product/version/platform/capabilities).
+/// The caller owns the returned table (must free it).
 function DefaultServerProperties: TAMQPFieldTable;
 
-/// Connection.Start (10). AServerProperties é escrita mas não liberada aqui.
+/// Connection.Start (10). AServerProperties is written but not freed here.
 function BuildStart(AVersionMajor, AVersionMinor: Byte;
   AServerProperties: TAMQPFieldTable;
   const AMechanisms, ALocales: string): TBytes;
 
-/// Connection.Secure (20) — desafio SASL multi-step. A Fase 1 não usa
-/// (PLAIN é single-step), mas o codec fica completo.
+/// Connection.Secure (20) — multi-step SASL challenge. Phase 1 does not use it
+/// (PLAIN is single-step), but the codec stays complete.
 function BuildSecure(const AChallenge: string): TBytes;
 
 /// Connection.Tune (30).
 function BuildTune(const ATune: TAMQPConnectionTune): TBytes;
 
-/// Connection.Open-Ok (41) — só um shortstr reservado (known-hosts), vazio.
+/// Connection.Open-Ok (41) — just one reserved shortstr (known-hosts), empty.
 function BuildOpenOk: TBytes;
 
-/// Connection.Blocked (60) / Unblocked (61) — extensão RabbitMQ (o broker
-/// avisa que parou/voltou a aceitar publishes por resource alarm).
+/// Connection.Blocked (60) / Unblocked (61) — RabbitMQ extension (the broker
+/// announces it stopped/resumed accepting publishes because of a resource alarm).
 function BuildBlocked(const AReason: string): TBytes;
 function BuildUnblocked: TBytes;
 
 function DecodeStartOk(const AReader: TAMQPReader): TAMQPConnectionStartOk;
 
-/// Connection.Secure-Ok (21) — devolve a resposta SASL crua.
+/// Connection.Secure-Ok (21) — returns the raw SASL response.
 function DecodeSecureOk(const AReader: TAMQPReader): TBytes;
 
-/// Connection.Tune-Ok (31) — mesmo layout de Tune.
+/// Connection.Tune-Ok (31) — same layout as Tune.
 function DecodeTuneOk(const AReader: TAMQPReader): TAMQPConnectionTune;
 
 function DecodeOpen(const AReader: TAMQPReader): TAMQPConnectionOpen;
 
-/// Connection.Close-Ok (51) — sem argumentos (consome nada). Existe para o
-/// dispatcher do broker/cliente tratar todos os métodos por igual.
+/// Connection.Close-Ok (51) — no arguments (consumes nothing). Exists so the
+/// broker/client dispatcher treats every method the same way.
 procedure DecodeCloseOk(const AReader: TAMQPReader);
 
 implementation
 
-// 0 = "sem limite": se algum lado é 0, usa o maior; senão o menor.
+// 0 = "no limit": if either side is 0, use the larger; otherwise the smaller.
 function NegotiateLimit(AServer, AClient: UInt64): UInt64;
 begin
   if (AServer = 0) or (AClient = 0) then
@@ -211,7 +211,7 @@ var
   LRest, LItem: string;
   LSep: Integer;
 begin
-  // Split manual (sem TStringHelper, para nao depender de type helpers no FPC).
+  // Manual split (no TStringHelper, so as not to depend on type helpers in FPC).
   Result := False;
   LRest := Mechanisms;
   while LRest <> '' do
@@ -232,7 +232,7 @@ begin
   end;
 end;
 
-{ Client-properties e credenciais }
+{ Client-properties and credentials }
 
 function DefaultClientProperties: TAMQPFieldTable;
 var
@@ -313,8 +313,8 @@ begin
   W := BeginMethod(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN);
   try
     W.WriteShortStr(AVirtualHost);
-    W.WriteShortStr('');   // reserved-1 (capabilities, obsoleto)
-    W.WriteBit(False);     // reserved-2 (insist, obsoleto)
+    W.WriteShortStr('');   // reserved-1 (capabilities, obsolete)
+    W.WriteBit(False);     // reserved-2 (insist, obsolete)
     Result := W.ToBytes;
   finally
     W.Free;
@@ -323,7 +323,7 @@ end;
 
 procedure DecodeOpenOk(const AReader: TAMQPReader);
 begin
-  AReader.ReadShortStr; // reserved-1 (known-hosts) — descartado
+  AReader.ReadShortStr; // reserved-1 (known-hosts) — discarded
 end;
 
 function DecodeClose(const AReader: TAMQPReader): TAMQPConnectionClose;
@@ -367,7 +367,7 @@ begin
   end;
 end;
 
-{ Negociação }
+{ Negotiation }
 
 function NegotiateChannelMax(AServer, AClient: Word): Word;
 begin
@@ -394,7 +394,7 @@ begin
 end;
 
 { ===================================================================== }
-{  Lado servidor                                                        }
+{  Server side                                                          }
 { ===================================================================== }
 
 function DefaultServerProperties: TAMQPFieldTable;
@@ -469,7 +469,7 @@ var
 begin
   W := BeginMethod(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK);
   try
-    W.WriteShortStr(''); // reserved-1 (known-hosts) — obsoleto
+    W.WriteShortStr(''); // reserved-1 (known-hosts) — obsolete
     Result := W.ToBytes;
   finally
     W.Free;
@@ -507,9 +507,9 @@ var
 begin
   Result.ClientProperties := AReader.ReadFieldTable;
   Result.Mechanism := AReader.ReadShortStr;
-  // response é longstr, mas o SASL PLAIN carrega #0 — lemos os bytes crus
-  // (ReadLongStr passaria por AmqpUtf8Decode; ler u32 e vars separadas por
-  // causa da ordem de avaliação não garantida).
+  // response is a longstr, but SASL PLAIN carries #0 — we read the raw bytes
+  // (ReadLongStr would go through AmqpUtf8Decode; read the u32 and separate vars
+  // because evaluation order is not guaranteed).
   LRespLen := AReader.ReadLongUInt;
   Result.Response := AReader.ReadRaw(Integer(LRespLen));
   Result.Locale := AReader.ReadShortStr;
@@ -533,13 +533,13 @@ end;
 function DecodeOpen(const AReader: TAMQPReader): TAMQPConnectionOpen;
 begin
   Result.VirtualHost := AReader.ReadShortStr;
-  AReader.ReadShortStr; // reserved-1 (capabilities) — descartado
-  AReader.ReadBit;      // reserved-2 (insist) — descartado
+  AReader.ReadShortStr; // reserved-1 (capabilities) — discarded
+  AReader.ReadBit;      // reserved-2 (insist) — discarded
 end;
 
 procedure DecodeCloseOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
 end.

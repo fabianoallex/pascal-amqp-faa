@@ -1,9 +1,9 @@
 ﻿program ServidorPosto;
 
-{ Servidor de automacao de bombas com o broker AMQP embutido + painel do
-  supervisor (ARQUITETURA.md). Um fonte para os dois compiladores:
+{ Pump automation server with the embedded AMQP broker + the supervisor's
+  panel (ARCHITECTURE.md). One source for both compilers:
     FPC:    lazbuild ServidorPosto.lpi
-    Delphi: abrir ServidorPosto.dproj no IDE }
+    Delphi: open ServidorPosto.dproj in the IDE }
 
 uses
   {$IFDEF FPC}

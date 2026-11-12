@@ -2,19 +2,19 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Codec JSON minimo (DOM), um fonte para os dois compiladores.
+{ Minimal JSON codec (DOM), one source for both compilers.
 
-  Existe porque fpjson (FPC) e System.JSON (Delphi) divergem em API e em
-  detalhe de tipo, e o sample precisa de UM contrato de serializacao. Cobre
-  o que os payloads do posto usam: objeto, array, string, numero, booleano,
-  null. Nao pretende ser RFC 8259 completo -- sem numeros em notacao
-  estranha, sem chaves duplicadas.
+  It exists because fpjson (FPC) and System.JSON (Delphi) differ in API and in
+  type details, and the sample needs ONE serialization contract. It covers
+  what the station payloads use: object, array, string, number, boolean,
+  null. It does not aim to be complete RFC 8259: no numbers in odd
+  notation, no duplicate keys.
 
-  Numeros sao guardados como Double (todos os valores do dominio -- versao,
-  epoch ms, litros, precos -- cabem exatos abaixo de 2^53). A saida usa '.'
-  como separador decimal SEMPRE (JsonFormatSettings), independente do locale.
+  Numbers are kept as Double (every domain value -- version,
+  epoch ms, liters, prices -- fits exactly below 2^53). The output ALWAYS uses
+  '.' as decimal separator (JsonFormatSettings), regardless of the locale.
 
-  Posse: um TJsonValue e' dono dos filhos. Liberar a raiz libera a arvore. }
+  Ownership: a TJsonValue owns its children. Freeing the root frees the tree. }
 
 interface
 
@@ -32,7 +32,7 @@ type
     function Children: TObjectList<TJsonValue>;
     procedure AppendTo(var ABuf: string);
   public
-    Name: string;      // chave, quando este valor e' membro de um objeto
+    Name: string;      // key, when this value is a member of an object
     Kind: TJsonKind;
     BoolVal: Boolean;
     NumVal: Double;
@@ -45,33 +45,33 @@ type
     class function NewArray: TJsonValue; static;
     class function Parse(const AText: string): TJsonValue; static;
 
-    { --- construcao (objeto) --- }
+    { --- building (object) --- }
     procedure Put(const AKey, AValue: string); overload;
     procedure Put(const AKey: string; const AValue: Double); overload;
     procedure Put(const AKey: string; const AValue: Boolean); overload;
     procedure PutInt(const AKey: string; const AValue: Int64);
-    procedure PutRaw(const AKey: string; AValue: TJsonValue); // assume posse
+    procedure PutRaw(const AKey: string; AValue: TJsonValue); // takes ownership
     function PutObject(const AKey: string): TJsonValue;
     function PutArray(const AKey: string): TJsonValue;
 
-    { --- construcao (array) --- }
-    procedure AddItem(AValue: TJsonValue);   // assume posse
+    { --- building (array) --- }
+    procedure AddItem(AValue: TJsonValue);   // takes ownership
     function AddItemObject: TJsonValue;
 
-    { --- leitura --- }
+    { --- reading --- }
     function Has(const AKey: string): Boolean;
-    function Get(const AKey: string): TJsonValue;   // nil se ausente
+    function Get(const AKey: string): TJsonValue;   // nil if absent
     function AsStr(const AKey: string; const ADef: string = ''): string;
     function AsNum(const AKey: string; const ADef: Double = 0): Double;
     function AsInt(const AKey: string; const ADef: Int64 = 0): Int64;
     function AsBool(const AKey: string; const ADef: Boolean = False): Boolean;
-    function Count: Integer;                 // nº de itens (array ou objeto)
+    function Count: Integer;                 // number of items (array or object)
     function Item(AIndex: Integer): TJsonValue;
 
     function ToJson: string;
   end;
 
-{ TFormatSettings com ponto decimal, para FloatToStr/StrToFloat locale-safe. }
+{ TFormatSettings with a decimal point, for locale-safe FloatToStr/StrToFloat. }
 function JsonFormatSettings: TFormatSettings;
 
 implementation
@@ -84,12 +84,12 @@ begin
   Result := GFmt;
 end;
 
-{ ----------------------------------------------------------------- saida --- }
+{ ---------------------------------------------------------------- output --- }
 
 procedure AppendCp(var S: string; ACp: Cardinal);
 {$IFDEF FPC}
 begin
-  // string do FPC (mode delphi) e' AnsiString -- emitir bytes UTF-8.
+  // FPC string (mode delphi) is AnsiString -- emit UTF-8 bytes.
   if ACp < $80 then
     S := S + Chr(ACp)
   else if ACp < $800 then
@@ -103,7 +103,7 @@ begin
 end;
 {$ELSE}
 begin
-  // string do Delphi e' UTF-16.
+  // Delphi string is UTF-16.
   if ACp < $10000 then
     S := S + Char(ACp)
   else
@@ -135,7 +135,7 @@ begin
       if C < ' ' then
         Result := Result + '\u' + LowerCase(IntToHex(Ord(C), 4))
       else
-        Result := Result + C;   // UTF-8 (FPC) / UTF-16 (Delphi) passa direto
+        Result := Result + C;   // UTF-8 (FPC) / UTF-16 (Delphi) passes straight through
     end;
   end;
   Result := Result + '"';

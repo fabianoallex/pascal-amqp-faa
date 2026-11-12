@@ -2,18 +2,18 @@
 
 {$I amqp.inc}
 
-{ Codec dos tipos primitivos do AMQP 0-9-1 (spec 4.2.5).
+{ Codec for the AMQP 0-9-1 primitive types (spec 4.2.5).
 
-  TAMQPWriter acumula dados em um buffer de bytes; TAMQPReader consome de um
-  TBytes. Todos os inteiros multi-byte sao big-endian (network byte order).
+  TAMQPWriter accumulates data in a byte buffer; TAMQPReader consumes from a
+  TBytes. Every multi-byte integer is big-endian (network byte order).
 
-  Cuidados de protocolo (ver CLAUDE.md):
-  - shortstr/longstr trafegam em UTF-8 (o string do Delphi e' UTF-16); shortstr
-    tem no maximo 255 octetos.
-  - bits consecutivos (usados em argumentos de metodo) sao empacotados LSB
-    primeiro dentro de um octeto; um campo nao-bit "descarrega" o octeto parcial.
-  - field-table usa TValue para carregar o valor de cada campo. Tabelas
-    aninhadas ('F') sao TAMQPFieldTable e a tabela dona as libera. }
+  Protocol caveats (see CLAUDE.md):
+  - shortstr/longstr travel as UTF-8 (Delphi's string is UTF-16); a shortstr
+    is at most 255 octets.
+  - consecutive bits (used in method arguments) are packed LSB
+    first within an octet; a non-bit field "flushes" the partial octet.
+  - field-table uses TValue to carry each field's value. Nested tables
+    ('F') are TAMQPFieldTable and the owning table frees them. }
 
 interface
 
@@ -24,51 +24,51 @@ uses
   Rtti,
   Generics.Collections;
 
-// --- Conversao string <-> UTF-8 ---------------------------------------------
-// No Delphi, string e' UTF-16 e a conversao e' TEncoding.UTF8. No FPC, string
-// (AnsiString) carrega um codepage dinamico; convertemos via RawByteString +
-// SetCodePage, que respeita o codepage real da string dos dois lados. Em apps
-// Lazarus (DefaultSystemCodePage = UTF-8) o caminho todo e' lossless; em
-// console FPC puro, configure SetMultiByteConversionCodePage(CP_UTF8) se for
-// usar strings nao-ASCII.
+// --- string <-> UTF-8 conversion --------------------------------------------
+// In Delphi, string is UTF-16 and the conversion is TEncoding.UTF8. In FPC, string
+// (AnsiString) carries a dynamic codepage; we convert via RawByteString +
+// SetCodePage, which respects the string's real codepage on both sides. In
+// Lazarus apps (DefaultSystemCodePage = UTF-8) the whole path is lossless; in a
+// pure FPC console app, set SetMultiByteConversionCodePage(CP_UTF8) if you are
+// going to use non-ASCII strings.
 
 function AmqpUtf8Encode(const AValue: string): TBytes;
 function AmqpUtf8Decode(const ABytes: TBytes): string;
 
-{ Desembrulha TValue-dentro-de-TValue. GetArrayElement sobre um array 'A'
-  (TArray<TValue>) devolve o elemento RE-EMBRULHADO num TValue de Kind=tkRecord
-  contendo o TValue interno — IsObject/IsArray/As* falham no embrulho. Vale nos
-  DOIS compiladores: o GetArrayElement monta o resultado com
-  TValue.Make(elemento, TypeInfo(TValue)), e nem o Make do Delphi 12 nem o do
-  FPC 3.2 colapsam TValue-em-TValue (medido; antes se achava que o Delphi
-  colapsava). Use apos todo GetArrayElement de um array de field-values — ex.:
-  as entradas do header x-death de mensagens dead-lettered — sem condicional
-  de compilador. Idempotente: num TValue ja "plano" devolve o valor como veio. }
+{ Unwraps TValue-inside-TValue. GetArrayElement on an 'A' array
+  (TArray<TValue>) returns the element RE-WRAPPED in a TValue of Kind=tkRecord
+  containing the inner TValue — IsObject/IsArray/As* fail on the wrapper. This holds on
+  BOTH compilers: GetArrayElement builds the result with
+  TValue.Make(element, TypeInfo(TValue)), and neither Delphi 12's Make nor
+  FPC 3.2's collapses TValue-in-TValue (measured; it used to be believed that Delphi
+  collapsed it). Use after every GetArrayElement of an array of field-values — e.g.
+  the entries of the x-death header of dead-lettered messages — with no compiler
+  conditional. Idempotent: on an already "flat" TValue it returns the value as is. }
 function AmqpUnwrapValue(const AValue: TValue): TValue;
 
 type
-  /// Erro de encode/decode no nível do wire AMQP (shortstr/field-table fora
-  /// dos limites do protocolo, tipo de TValue não suportado num field-table,
-  /// leitura além do fim do buffer). Quase sempre aponta payload malformado
-  /// vindo do broker, ou um TValue de tipo não suportado passado pela
-  /// aplicação em TAMQPFieldTable.Put.
+  /// Encode/decode error at the AMQP wire level (shortstr/field-table outside
+  /// the protocol limits, TValue type not supported in a field-table,
+  /// read past the end of the buffer). Almost always points to a malformed payload
+  /// coming from the broker, or a TValue of an unsupported type passed by the
+  /// application in TAMQPFieldTable.Put.
   EAMQPWire = class(Exception);
 
-  { Alias para arrays de field-value ('A'). Alem de documentar, contorna o
-    parser do FPC 3.2, que nao aceita o generic aninhado TValue.From<TArray<
-    TValue>> em expressao. E' um alias puro: TypeInfo identico ao de
+  { Alias for field-value arrays ('A'). Besides documenting, it works around the
+    FPC 3.2 parser, which does not accept the nested generic TValue.From<TArray<
+    TValue>> in an expression. It is a pure alias: TypeInfo identical to that of
     TArray<TValue>. }
   TAMQPValueArray = TArray<TValue>;
 
-  { Tabela de campos AMQP (field-table).
-    Mapeia nome do campo -> valor (TValue). Valores aninhados do tipo tabela
-    ('F') sao instancias de TAMQPFieldTable e sao liberados no destrutor desta
-    tabela. Arrays ('A') decodificados que contenham tabelas tambem tem suas
-    tabelas liberadas. }
+  { AMQP field table (field-table).
+    Maps field name -> value (TValue). Nested values of table type
+    ('F') are TAMQPFieldTable instances and are freed in this table's
+    destructor. Decoded arrays ('A') that contain tables also have their
+    tables freed. }
   TAMQPFieldTable = class(TDictionary<string, TValue>)
   public
     destructor Destroy; override;
-    /// Acesso fluente para montar tabelas (ex.: client-properties).
+    /// Fluent access for building tables (e.g. client-properties).
     function Put(const AName: string; const AValue: TValue): TAMQPFieldTable;
   end;
 
@@ -93,15 +93,15 @@ type
     procedure WriteBit(AValue: Boolean);
     procedure WriteTimestamp(AValue: UInt64);
     procedure WriteFieldTable(ATable: TAMQPFieldTable); overload;
-    /// A tabela (pode ser nil) seguida dos pares AExtraNames[i] = AExtraValues[i]
-    /// como longstr, sem alterar ATable. Quem chama garante que os nomes extras
-    /// nao estao em ATable (field-table nao admite nome repetido).
+    /// The table (may be nil) followed by the pairs AExtraNames[i] = AExtraValues[i]
+    /// as longstr, without changing ATable. The caller guarantees the extra names
+    /// are not in ATable (a field-table does not allow a repeated name).
     procedure WriteFieldTable(ATable: TAMQPFieldTable;
       const AExtraNames, AExtraValues: array of string); overload;
-    /// Escreve bytes crus, sem qualquer prefixo (descarrega bits pendentes antes).
+    /// Writes raw bytes, with no prefix at all (flushes pending bits first).
     procedure WriteRaw(const ABytes: TBytes);
 
-    /// Snapshot do conteudo acumulado (descarrega bits pendentes).
+    /// Snapshot of the accumulated content (flushes pending bits).
     function ToBytes: TBytes;
     function Size: Integer;
   end;
@@ -117,7 +117,7 @@ type
     function ReadRawByte: Byte;
     function ReadFieldValue: TValue;
   public
-    /// Le a partir de AData[AOffset .. AOffset+ACount-1]. ACount<0 = ate o fim.
+    /// Reads from AData[AOffset .. AOffset+ACount-1]. ACount<0 = to the end.
     constructor Create(const AData: TBytes; AOffset: Integer = 0; ACount: Integer = -1);
 
     function ReadOctet: Byte;
@@ -144,7 +144,7 @@ var
 begin
   R := AValue;
   if (R <> '') and (StringCodePage(R) <> CP_UTF8) then
-    SetCodePage(R, CP_UTF8, True); // converte do codepage real para UTF-8
+    SetCodePage(R, CP_UTF8, True); // converts from the real codepage to UTF-8
   SetLength(Result, Length(R));
   if R <> '' then
     Move(R[1], Result[0], Length(R));
@@ -157,8 +157,8 @@ begin
   SetLength(R, Length(ABytes));
   if Length(ABytes) > 0 then
     Move(ABytes[0], R[1], Length(ABytes));
-  SetCodePage(R, CP_UTF8, False); // marca os bytes como UTF-8 (sem converter)
-  Result := R; // conversao (se houver) respeita o codepage de destino
+  SetCodePage(R, CP_UTF8, False); // marks the bytes as UTF-8 (without converting)
+  Result := R; // the conversion (if any) respects the destination codepage
 end;
 {$ELSE}
 function AmqpUtf8Encode(const AValue: string): TBytes;
@@ -172,7 +172,7 @@ begin
 end;
 {$ENDIF}
 
-// Tags de tipo de field-value conforme implementadas pelo RabbitMQ.
+// Field-value type tags as implemented by RabbitMQ.
 const
   FV_BOOLEAN     = Ord('t');
   FV_INT8        = Ord('b');
@@ -192,8 +192,8 @@ const
   FV_VOID        = Ord('V');
   FV_BYTES       = Ord('x');
 
-// Potencia inteira de 10 (auxiliar para decodificar 'D' decimal),
-// evitando dependencia de System.Math so por isto.
+// Integer power of 10 (helper for decoding 'D' decimal),
+// avoiding a dependency on System.Math just for this.
 function Power10(AExp: Byte): Double;
 var
   I: Integer;
@@ -208,9 +208,9 @@ type
   PLocalValue = ^TValue;
 begin
   Result := AValue;
-  // Loop por segurança (aninhamento múltiplo é teórico). Entra nos dois
-  // compiladores: nem o TValue.Make do Delphi nem o do FPC colapsam
-  // TValue-em-TValue.
+  // Loop for safety (multiple nesting is theoretical). Runs on both
+  // compilers: neither Delphi's TValue.Make nor FPC's collapses
+  // TValue-in-TValue.
   while (Result.Kind = tkRecord) and (Result.TypeInfo = TypeInfo(TValue)) do
     Result := PLocalValue(Result.GetReferenceToRawData)^;
 end;
@@ -230,15 +230,15 @@ destructor TAMQPFieldTable.Destroy;
       if LObj is TAMQPFieldTable then
         LObj.Free;
     end
-    // So arrays 'A' (TArray<TValue>) podem conter tabelas a liberar; um 'x'
-    // (TBytes) tambem satisfaz IsArray, por isso checamos o tipo exato.
-    // (GetArrayLength/GetArrayElement em vez de AsType<TArray<TValue>>, que
-    // nao existe no TValue do FPC 3.2.)
+    // Only 'A' arrays (TArray<TValue>) can contain tables to free; an 'x'
+    // (TBytes) also satisfies IsArray, so we check the exact type.
+    // (GetArrayLength/GetArrayElement instead of AsType<TArray<TValue>>, which
+    // does not exist in FPC 3.2's TValue.)
     else if AValue.IsArray and (AValue.TypeInfo = TypeInfo(TArray<TValue>)) then
     begin
-      // AmqpUnwrapValue: GetArrayElement devolve o elemento re-embrulhado
-      // (tkRecord), no Delphi e no FPC, e o IsObject do embrulho daria False —
-      // as tabelas aninhadas vazariam.
+      // AmqpUnwrapValue: GetArrayElement returns the element re-wrapped
+      // (tkRecord), on Delphi and on FPC, and IsObject on the wrapper would be False —
+      // the nested tables would leak.
       for I := 0 to AValue.GetArrayLength - 1 do
         FreeValue(AmqpUnwrapValue(AValue.GetArrayElement(I)));
     end;
@@ -276,7 +276,7 @@ procedure TAMQPWriter.FlushBits;
 begin
   if FBitCount > 0 then
   begin
-    // Buffer passado por referencia (untyped) — sem @ (ver CLAUDE.md).
+    // Buffer passed by reference (untyped) — no @ (see CLAUDE.md).
     FStream.Write(FBitBuffer, 1);
     FBitBuffer := 0;
     FBitCount := 0;
@@ -374,7 +374,7 @@ var
   I: Integer;
 begin
   case AValue.Kind of
-    // No FPC, Boolean tem Kind proprio (tkBool); no Delphi cai em tkEnumeration.
+    // In FPC, Boolean has its own Kind (tkBool); in Delphi it falls into tkEnumeration.
     {$IFDEF FPC}
     tkBool:
       begin
@@ -424,7 +424,7 @@ begin
       end;
 
     tkString, tkUString, tkLString, tkWString, tkChar, tkWChar
-    {$IFDEF FPC}, tkAString{$ENDIF}: // AnsiString do FPC tem kind proprio
+    {$IFDEF FPC}, tkAString{$ENDIF}: // FPC's AnsiString has its own kind
       begin
         WriteOctet(FV_LONGSTR);
         WriteLongStr(AValue.AsString);
@@ -442,11 +442,11 @@ begin
           raise EAMQPWire.Create('field-table: unsupported object (TAMQPFieldTable only)');
       end;
 
-    // Dynamic array. TBytes ('x') e' um caso a' parte porque TAMQPReader
-    // produz TValue.From<TBytes> para FV_BYTES e TBytes TAMBEM e' dynamic
-    // array -- sem esta distincao, um valor de bytes relido do wire seria
-    // reescrito como array de inteiros. Qualquer outro dynamic array vira
-    // field-array ('A'), cada elemento com o proprio octeto de tipo.
+    // Dynamic array. TBytes ('x') is a case apart because TAMQPReader
+    // produces TValue.From<TBytes> for FV_BYTES and TBytes is ALSO a dynamic
+    // array -- without this distinction, a bytes value read back from the wire would be
+    // rewritten as an array of integers. Any other dynamic array becomes a
+    // field-array ('A'), each element with its own type octet.
     tkDynArray:
       if AValue.TypeInfo = TypeInfo(TBytes) then
       begin
@@ -467,16 +467,16 @@ begin
   end;
 end;
 
-// Corpo de um field-array ('A'): long-uint com o tamanho em bytes, seguido dos
-// field-values concatenados -- cada um com o proprio octeto de tipo, exatamente
-// o que TAMQPReader.ReadFieldValue consome no ramo FV_ARRAY. O octeto 'A' e' do
-// chamador (WriteFieldValue), como em WriteFieldTable.
+// Body of a field-array ('A'): long-uint with the size in bytes, followed by the
+// concatenated field-values -- each with its own type octet, exactly
+// what TAMQPReader.ReadFieldValue consumes in the FV_ARRAY branch. The 'A' octet belongs
+// to the caller (WriteFieldValue), as in WriteFieldTable.
 //
-// AmqpUnwrapValue em CADA elemento: GetArrayElement sobre um TArray<TValue>
-// devolve o elemento re-embrulhado (um TValue de Kind=tkRecord contendo o
-// TValue interno), no Delphi e no FPC -- sem desembrulhar, todo elemento
-// cairia no "Kind nao suportado". E' no-op em array cujo elemento nao seja
-// TValue, entao pode ser aplicado sem condicional.
+// AmqpUnwrapValue on EACH element: GetArrayElement on a TArray<TValue>
+// returns the element re-wrapped (a TValue of Kind=tkRecord containing the
+// inner TValue), on Delphi and on FPC -- without unwrapping, every element
+// would fall into "unsupported Kind". It is a no-op on an array whose element is not
+// TValue, so it can be applied with no conditional.
 procedure TAMQPWriter.WriteFieldArray(const AValue: TValue);
 var
   LInner: TAMQPWriter;
@@ -582,8 +582,8 @@ var
   LHi, LLo: Byte;
 begin
   ResetBits;
-  // Ler em locais separados: a ordem de avaliacao de operandos com efeito
-  // colateral nao e' garantida no Delphi (leria os octetos trocados).
+  // Read into separate locals: the evaluation order of operands with side
+  // effects is not guaranteed in Delphi (it would read the octets swapped).
   LHi := ReadRawByte;
   LLo := ReadRawByte;
   Result := (Word(LHi) shl 8) or Word(LLo);

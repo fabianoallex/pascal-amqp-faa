@@ -1,41 +1,41 @@
 unit uHeadersMain;
 
-{ Pub/sub com exchange HEADERS: o roteamento não usa routing key, e sim o
-  CASAMENTO de campos do header da mensagem contra critérios declarados em cada
-  binding. Cada binding traz um argumento `x-match`:
-    - `all` — a mensagem casa se TODOS os campos do critério baterem (E lógico);
-    - `any` — casa se QUALQUER um bater (OU lógico).
-  A routing key é ignorada pelo broker neste tipo de exchange.
+{ Pub/sub with a HEADERS exchange: routing does not use the routing key but the
+  MATCHING of the message's header fields against criteria declared on each
+  binding. Each binding carries an `x-match` argument:
+    - `all`: the message matches if ALL the criterion's fields match (logical AND);
+    - `any`: it matches if ANY of them matches (logical OR).
+  The broker ignores the routing key on this exchange type.
 
-  É o contraponto do EventosTopicVcl (roteamento por routing key hierárquica):
-  aqui o assinante filtra por atributos independentes do evento — no exemplo,
-  `tipo` (nfe/nfce/cte) e `regiao` (sul/sudeste/...). Um assinante "all,
-  tipo=nfe, regiao=sul" só recebe nota fiscal do sul; um "any, tipo=nfe,
-  regiao=sul" recebe qualquer nfe OU qualquer evento do sul.
+  It is the counterpart of EventosTopicVcl (routing by hierarchical routing key):
+  here the subscriber filters by independent attributes of the event; in the
+  example, `tipo` (nfe/nfce/cte) and `regiao` (sul/sudeste/...). A subscriber "all,
+  tipo=nfe, regiao=sul" only receives invoices from the south; an "any, tipo=nfe,
+  regiao=sul" receives any nfe OR any event from the south.
 
-  Único sample que exercita:
-    - *binding arguments* — a `TAMQPFieldTable` no BindQueue (x-match + critérios),
-      diferente do RetryDlqVcl, que usa Arguments no DECLARE da fila;
-    - a propriedade Headers da mensagem (SetHeaders no publish, e a leitura dos
-      headers na entrega).
+  The only sample that exercises:
+    - *binding arguments*: the `TAMQPFieldTable` in BindQueue (x-match + criteria),
+      unlike RetryDlqVcl, which uses Arguments on the queue DECLARE;
+    - the message's Headers property (SetHeaders on publish, and reading the
+      headers on delivery).
 
-  Como no topic, cada assinante tem a PRÓPRIA fila (exclusiva + auto-delete)
-  ligada ao exchange, e o mesmo evento pode chegar a vários assinantes ou a
-  nenhum (mandatory + OnBasicReturn torna o descarte visível). Remover um
-  assinante desfaz na ordem Cancel -> Unbind -> DeleteQueue, reconciliando a
-  topologia de recovery (o Unbind precisa repetir os MESMOS argumentos do bind:
-  no headers exchange é o argumento que identifica o binding, não a routing key).
+  As with topic, each subscriber has its OWN queue (exclusive + auto-delete)
+  bound to the exchange, and the same event may reach several subscribers or
+  none (mandatory + OnBasicReturn makes the drop visible). Removing a
+  subscriber undoes in the order Cancel -> Unbind -> DeleteQueue, reconciling the
+  recovery topology (Unbind must repeat the SAME arguments as the bind: on a
+  headers exchange the argument identifies the binding, not the routing key).
 
-  Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
-  callbacks nomeados ('of object'), marshals descartáveis + TThread.Queue para
-  a UI (ver RetaguardaVcl) e eventos de conexão saltando pelo PcPool (gotcha
-  do TThread.Queue descartado; ver TConexaoEventoWork e CLAUDE.md). }
+  Compiles in both worlds from the SAME source (GUI samples pattern):
+  named callbacks ('of object'), disposable marshals + TThread.Queue for
+  the UI (see RetaguardaVcl) and connection events hopping through PcPool (the
+  dropped TThread.Queue gotcha; see TConexaoEventoWork and CLAUDE.md). }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -48,15 +48,15 @@ uses
   AMQP.Exchange.Methods, AMQP.Queue.Methods, AMQP.Basic.Methods;
 
 type
-  { Um assinante: fila exclusiva própria ligada ao exchange por um binding com
-    argumentos (x-match + critérios). Os critérios ficam guardados em campos
-    simples (não numa TAMQPFieldTable viva) para reconstruir a tabela idêntica
-    no unbind. Criado/destruído SOMENTE na thread da UI. }
+  { One subscriber: its own exclusive queue bound to the exchange by a binding with
+    arguments (x-match + criteria). The criteria are kept in plain fields
+    (not in a live TAMQPFieldTable) to rebuild the identical table
+    on unbind. Created/destroyed ONLY on the UI thread. }
   TAssinante = class
     Numero: Integer;
     Match: string;      // 'all' ou 'any'
-    CriTipo: string;    // '' = não faz parte do critério
-    CriRegiao: string;  // '' = não faz parte do critério
+    CriTipo: string;    // '' = not part of the criterion
+    CriRegiao: string;  // '' = not part of the criterion
     Fila: string;
     Tag: string;
     Recebidas: Integer;
@@ -118,7 +118,7 @@ type
     FChannel: TAMQPChannel;
     FExchange: string;
     FProximoNumero: Integer;
-    // Assinantes por consumer-tag; tocado SOMENTE na thread da UI.
+    // Subscribers by consumer tag; touched ONLY on the UI thread.
     FAssinantes: TDictionary<string, TAssinante>;
     function ScrollAtBottom(AHandle: HWND): Boolean;
     procedure Log(const AMsg: string);
@@ -126,13 +126,13 @@ type
     function BuildParams: TAMQPConnectionParams;
     procedure RemoverAssinante(AAssinante: TAssinante);
     procedure RemoverTodosAssinantes;
-    // Atualizações de UI (thread da UI, via marshals):
+    // UI updates (UI thread, through marshals):
     procedure EventoRecebido(const ATag, ATipo, ARegiao, ACorpo: string);
     procedure EventoDevolvido(const ATipo, ARegiao, ACorpo: string);
     procedure ConexaoCaiu;
     procedure ConexaoVoltou;
     procedure ConexaoFalhou;
-    // Callbacks da lib (threads do pool / de reconexão):
+    // Lib callbacks (pool / reconnection threads):
     procedure OnEvento(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnDevolvida(AChannel: TAMQPChannel; const AReturned: TAMQPReturnedMessage);
     procedure OnDesconectado(AConnection: TAMQPConnection);
@@ -153,7 +153,7 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
@@ -165,7 +165,7 @@ begin
   Result := Copy(GUIDToString(LGuid), 2, 8);
 end;
 
-// Texto legível dos critérios de um binding (ex.: 'tipo=nfe, regiao=sul').
+// Readable text of a binding's criteria (e.g. 'tipo=nfe, regiao=sul').
 function DescCriterios(const ATipo, ARegiao: string): string;
 begin
   Result := '';
@@ -181,10 +181,10 @@ begin
     Result := '(sem critério)';
 end;
 
-// Monta a tabela de argumentos do binding: x-match + os critérios não-vazios.
-// O chamador é DONO da tabela e a libera após o bind/unbind. Os Puts ficam em
-// comandos separados de propósito (encadear terminando num TValue.From<T>
-// inline dá erro interno no FPC 3.2 — gotcha no CLAUDE.md).
+// Builds the binding's argument table: x-match + the non-empty criteria.
+// The caller OWNS the table and frees it after the bind/unbind. The Puts are
+// separate statements on purpose (chaining that ends in an inline
+// TValue.From<T> gives an internal error on FPC 3.2; gotcha in CLAUDE.md).
 function MontarArgumentos(const AMatch, ATipo, ARegiao: string): TAMQPFieldTable;
 begin
   Result := TAMQPFieldTable.Create;
@@ -195,9 +195,9 @@ begin
     Result.Put('regiao', TValue.From<string>(ARegiao));
 end;
 
-// Lê um header string da tabela da entrega. O valor é atribuído a uma TValue
-// local ANTES do .AsString: encadear .AsString direto no indexador/retorno
-// dispara erro interno no FPC 3.2 (gotcha no CLAUDE.md).
+// Reads a string header from the delivery's table. The value is assigned to a
+// local TValue BEFORE .AsString: chaining .AsString straight on the indexer/result
+// triggers an internal error on FPC 3.2 (gotcha in CLAUDE.md).
 function LerHeader(AHeaders: TAMQPFieldTable; const AKey: string): string;
 var
   LValor: TValue;
@@ -208,10 +208,10 @@ begin
 end;
 
 type
-  // Um objeto por chamada: TThread.Queue no FPC so' aceita 'procedure of
-  // object' SEM PARAMETROS, entao os dados viajam num objeto descartavel
-  // (nao num campo compartilhado da form, que teria corrida entre callbacks
-  // concorrentes). Se autodestroi apos rodar. Ver RetaguardaVcl.
+  // One object per call: TThread.Queue on FPC only accepts a 'procedure of
+  // object' WITHOUT PARAMETERS, so the data travels in a disposable object
+  // (not in a shared field of the form, which would race between concurrent
+  // callbacks). It frees itself after running. See RetaguardaVcl.
   TLogMarshal = class
     Form: TfrmHeaders;
     Texto: string;
@@ -238,10 +238,10 @@ type
     procedure Execute;
   end;
 
-  { Eventos de conexão rodam na thread de RECONEXÃO da lib, que morre logo
-    após o OnReconnect — no FPC um TThread.Queue postado por thread que morre
-    antes do bombeio é DESCARTADO (gotcha no CLAUDE.md). Salto por um worker
-    persistente do PcPool. }
+  { Connection events run on the lib's RECONNECTION thread, which dies right
+    after OnReconnect; on FPC a TThread.Queue posted by a thread that dies
+    before the pump is DROPPED (gotcha in CLAUDE.md). Hop through a persistent
+    PcPool worker. }
   TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmHeaders;
@@ -300,8 +300,8 @@ end;
 
 procedure TfrmHeaders.FormCreate(Sender: TObject);
 begin
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   cmbMatch.ItemIndex := 0; // 'all'
   FAssinantes := TDictionary<string, TAssinante>.Create;
@@ -319,18 +319,18 @@ end;
 
 procedure TfrmHeaders.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
-  // Só cancela os consumers (as filas são exclusivas + auto-delete: morrem
-  // com a conexão). O desfazer completo fica no botão Remover.
+  // Only cancels the consumers (the queues are exclusive + auto-delete: they die
+  // with the connection). The full undo is the Remove button's job.
   if Assigned(FChannel) then
     RemoverTodosAssinantes;
   FreeAndNil(FChannel);
-  // O Free acima drena os callbacks em voo; os marshals que eles postaram
-  // ainda estao na fila do TThread.Queue — bombear aqui os drena com a form
-  // ainda viva (ver RetaguardaVcl.FormClose).
+  // The Free above drains the callbacks in flight; the marshals they posted
+  // are still in the TThread.Queue queue, and pumping here drains them with the
+  // form still alive (see RetaguardaVcl.FormClose).
   Application.ProcessMessages;
   FreeAndNil(FConn);
-  // O Free da conexao encerra a thread de reconexao; um TConexaoEventoWork ja
-  // enfileirado no pool pode estar postando o ultimo marshal NESTE instante.
+  // Freeing the connection ends the reconnection thread; a TConexaoEventoWork
+  // already queued on the pool may be posting the last marshal RIGHT NOW.
   Sleep(100);
   Application.ProcessMessages;
 end;
@@ -343,7 +343,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -400,8 +400,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -427,7 +427,7 @@ begin
   btnRemover.Enabled := AConectado;
 end;
 
-{ --- assinantes ------------------------------------------------------------- }
+{ --- subscribers ------------------------------------------------------------ }
 
 procedure TfrmHeaders.btnAssinarClick(Sender: TObject);
 var
@@ -448,15 +448,15 @@ begin
     LAssinante.CriRegiao := Trim(edtCriRegiao.Text);
     LAssinante.Fila := Format('headers-sub%d-%s', [LAssinante.Numero, NovoSufixo]);
 
-    // Fila descartável do assinante: exclusiva (só esta conexão) e
-    // auto-delete (morre quando o consumer cancela / a conexão cai).
+    // The subscriber's disposable queue: exclusive (this connection only) and
+    // auto-delete (dies when the consumer cancels / the connection drops).
     LDeclare := TAMQPQueueDeclare.Create(LAssinante.Fila, False);
     LDeclare.Exclusive := True;
     LDeclare.AutoDelete := True;
     FChannel.DeclareQueue(LDeclare);
 
-    // Binding SEM routing key (ignorada no headers exchange): o que decide é a
-    // tabela de argumentos (x-match + critérios). O chamador é dono da tabela.
+    // Binding WITHOUT a routing key (ignored on a headers exchange): what decides is
+    // the argument table (x-match + criteria). The caller owns the table.
     LArgs := MontarArgumentos(LAssinante.Match, LAssinante.CriTipo, LAssinante.CriRegiao);
     try
       LQueueBind := Default(TAMQPQueueBind);
@@ -495,11 +495,11 @@ begin
     Log('Aviso: x-match=any sem nenhum critério não casa com nada — nenhum evento chegará.');
 end;
 
-// Desfaz na ordem inversa da criação — e reconcilia a topologia de recovery:
-// sem o Unbind/DeleteQueue, uma reconexão replayaria o bind gravado para uma
-// fila que não existe mais (erro 404 fecharia o canal no meio do recovery). No
-// headers exchange o Unbind precisa repetir os MESMOS argumentos do bind (é o
-// argumento, não a routing key, que identifica o binding).
+// Undoes in the reverse order of creation, and reconciles the recovery topology:
+// without the Unbind/DeleteQueue, a reconnection would replay the recorded bind
+// for a queue that no longer exists (a 404 would close the channel in the middle
+// of recovery). On a headers exchange the Unbind must repeat the SAME arguments
+// as the bind (the argument, not the routing key, identifies the binding).
 procedure TfrmHeaders.RemoverAssinante(AAssinante: TAssinante);
 var
   LUnbind: TAMQPQueueUnbind;
@@ -507,21 +507,21 @@ var
   LArgs: TAMQPFieldTable;
 begin
   try
-    FChannel.Cancel(AAssinante.Tag); // para as entregas (e limpa o recovery do consumer)
+    FChannel.Cancel(AAssinante.Tag); // stops the deliveries (and clears the consumer from recovery)
     LArgs := MontarArgumentos(AAssinante.Match, AAssinante.CriTipo, AAssinante.CriRegiao);
     try
       LUnbind := Default(TAMQPQueueUnbind);
       LUnbind.QueueName := AAssinante.Fila;
       LUnbind.ExchangeName := FExchange;
       LUnbind.RoutingKey := '';
-      LUnbind.Arguments := LArgs;      // deve casar com o do bind
-      FChannel.UnbindQueue(LUnbind);   // desfaz o binding (e o remove do recovery)
+      LUnbind.Arguments := LArgs;      // must match the bind's
+      FChannel.UnbindQueue(LUnbind);   // undoes the binding (and removes it from recovery)
     finally
       LArgs.Free;
     end;
     LDelete := Default(TAMQPQueueDelete);
     LDelete.QueueName := AAssinante.Fila;
-    FChannel.DeleteQueue(LDelete);   // apaga a fila (e remove o declare do recovery)
+    FChannel.DeleteQueue(LDelete);   // deletes the queue (and removes the declare from recovery)
   except
     on E: Exception do
       Log('Erro ao remover assinante ' + IntToStr(AAssinante.Numero) + ': ' + E.Message);
@@ -547,8 +547,8 @@ begin
   RemoverAssinante(TAssinante(lvAssinantes.Selected.Data));
 end;
 
-// No encerramento/desconexão: só cancela os consumers (drena as entregas em
-// voo); as filas exclusivas/auto-delete morrem sozinhas com a conexão.
+// On shutdown/disconnect: only cancels the consumers (drains the deliveries in
+// flight); the exclusive/auto-delete queues die on their own with the connection.
 procedure TfrmHeaders.RemoverTodosAssinantes;
 var
   LAssinante: TAssinante;
@@ -567,18 +567,18 @@ begin
   lvAssinantes.Items.Clear;
 end;
 
-{ --- eventos ---------------------------------------------------------------- }
+{ --- events ----------------------------------------------------------------- }
 
-// Roda numa thread do pool; um mesmo evento dispara este callback uma vez POR
-// assinante casado (cada um tem fila e consumer próprios). Os headers vêm nas
-// propriedades da entrega — lidos AQUI, antes de a entrega ser liberada.
+// Runs on a pool thread; one event fires this callback once PER matched
+// subscriber (each has its own queue and consumer). The headers come in the
+// delivery's properties, read HERE, before the delivery is released.
 procedure TfrmHeaders.OnEvento(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LMarshal: TEventoMarshal;
 begin
   LMarshal := TEventoMarshal.Create;
   LMarshal.Form := Self;
-  LMarshal.Tag := ADelivery.ConsumerTag; // identifica o assinante
+  LMarshal.Tag := ADelivery.ConsumerTag; // identifies the subscriber
   LMarshal.Tipo := LerHeader(ADelivery.Properties.Headers, 'tipo');
   LMarshal.Regiao := LerHeader(ADelivery.Properties.Headers, 'regiao');
   LMarshal.Corpo := ADelivery.BodyAsText;
@@ -592,7 +592,7 @@ var
   LAtBottom: Boolean;
 begin
   if not FAssinantes.TryGetValue(ATag, LAssinante) then
-    Exit; // entrega tardia de assinante já removido: descarta em silêncio
+    Exit; // late delivery for a subscriber already removed: drop it silently
 
   Inc(LAssinante.Recebidas);
   if LAssinante.Item <> nil then
@@ -631,7 +631,7 @@ begin
     [ACorpo, ATipo, ARegiao]));
 end;
 
-{ --- publicação ------------------------------------------------------------- }
+{ --- publishing ------------------------------------------------------------- }
 
 procedure TfrmHeaders.btnPublicarClick(Sender: TObject);
 var
@@ -647,9 +647,9 @@ begin
   if LCorpo = '' then
     LCorpo := 'EVT-' + FormatDateTime('hhnnsszzz', Now);
 
-  // Os headers da mensagem são o que o broker casa contra os critérios dos
-  // bindings. O chamador é dono da tabela (SetHeaders não a copia) — liberada
-  // após o publish, que serializa o frame de forma síncrona.
+  // The message headers are what the broker matches against the bindings'
+  // criteria. The caller owns the table (SetHeaders does not copy it); it is
+  // freed after the publish, which serializes the frame synchronously.
   LHeaders := TAMQPFieldTable.Create;
   try
     if LTipo <> '' then
@@ -661,9 +661,9 @@ begin
     LProps.SetContentType('text/plain');
     LProps.SetHeaders(LHeaders);
     try
-      // routing key vazia (ignorada no headers exchange). mandatory=True: sem
-      // NENHUM binding casando, o broker devolve o evento (Basic.Return) em vez
-      // de descartar em silêncio — visível no log.
+      // empty routing key (ignored on a headers exchange). mandatory=True: with
+      // NO matching binding, the broker returns the event (Basic.Return) instead
+      // of dropping it silently, so it is visible in the log.
       FChannel.Publish(FExchange, '', AmqpUtf8Encode(LCorpo), LProps, True);
       Log(Format('Publicado "%s" com headers tipo=%s, regiao=%s.',
         [LCorpo, LTipo, LRegiao]));
@@ -676,7 +676,7 @@ begin
   end;
 end;
 
-{ --- eventos de conexão ------------------------------------------------------ }
+{ --- connection events ------------------------------------------------------ }
 
 procedure TfrmHeaders.ConexaoCaiu;
 begin
@@ -699,8 +699,8 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo PcPool em vez de postar direto
-// (ver o comentário de TConexaoEventoWork).
+// The three connection events hop through PcPool instead of posting directly
+// (see the comment on TConexaoEventoWork).
 procedure TfrmHeaders.OnDesconectado(AConnection: TAMQPConnection);
 begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
@@ -716,7 +716,7 @@ begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
-{ --- conexão ----------------------------------------------------------------- }
+{ --- connection ------------------------------------------------------------- }
 
 procedure TfrmHeaders.btnConectarClick(Sender: TObject);
 var

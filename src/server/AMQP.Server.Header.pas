@@ -2,44 +2,44 @@
 
 {$I amqp.inc}
 
-{ Reescrita do content-header -- sub-modulo broker, WS3 da Fase 3 (ciclo de
-  vida da mensagem, ver CLAUDE.md).
+{ Content-header rewriting -- broker sub-module, WS3 of Phase 3 (message
+  lifecycle, see CLAUDE.md).
 
-  POR QUE ISTO EXISTE, E POR QUE NAO FERE A D1
-  --------------------------------------------
-  A decisao D1 (Fase 2) fez a TAMQPMessage carregar o payload CRU do
-  content-header em vez de um clone da TAMQPFieldTable: reemissao fiel byte a
-  byte ao consumidor, e nada do problema de TValue-em-TValue do FPC 3.2 ao
-  clonar tabelas/arrays aninhados. O dead-lettering (WS5) precisa do oposto --
-  mexer no header, para acrescentar ou estender o x-death.
+  WHY THIS EXISTS, AND WHY IT DOES NOT VIOLATE D1
+  -----------------------------------------------
+  Decision D1 (Phase 2) made TAMQPMessage carry the RAW content-header
+  payload instead of a clone of the TAMQPFieldTable: faithful byte-by-byte
+  re-emission to the consumer, and none of FPC 3.2's TValue-in-TValue problem when
+  cloning nested tables/arrays. Dead-lettering (WS5) needs the opposite --
+  touching the header, to add or extend x-death.
 
-  O ponto que desfaz o no: a D1 proibe clonar no caminho QUENTE (todo publish,
-  toda entrega), nao no frio. Uma mensagem MORRE UMA VEZ. E a TAMQPMessage ja
-  e' imutavel por invariante da Fase 2 ("ninguem muta a mensagem depois de
-  criada"), entao a reescrita nao muta nada: DERIVA uma mensagem nova, com
-  HeaderPayload reconstruido e O MESMO Body por referencia. O caro (o corpo)
-  nunca e' copiado; o barato (o header) e' refeito so' quando muda de fato.
+  The point that undoes the knot: D1 forbids cloning on the HOT path (every publish,
+  every delivery), not on the cold one. A message DIES ONCE. And TAMQPMessage is
+  already immutable by a Phase 2 invariant ("nobody mutates the message after it
+  is created"), so the rewrite mutates nothing: it DERIVES a new message, with a
+  rebuilt HeaderPayload and THE SAME Body by reference. The expensive part (the body)
+  is never copied; the cheap part (the header) is rebuilt only when it actually changes.
 
-  FIDELIDADE, MEDIDA E NAO PRESUMIDA
+  FIDELITY, MEASURED AND NOT ASSUMED
   ----------------------------------
-  O round-trip DecodeContentHeader -> BuildContentHeader devolve os MESMOS
-  bytes: conferido antes de este codigo existir e coberto pelos testes desta
-  frente sobre as CATORZE propriedades da classe Basic, nao sobre uma amostra.
+  The DecodeContentHeader -> BuildContentHeader round trip returns the SAME
+  bytes: checked before this code existed and covered by this workstream's tests
+  over all FOURTEEN properties of the Basic class, not over a sample.
 
-  LIMITACAO CONHECIDA, deliberada: DecodeContentHeader consome e DESCARTA as
-  palavras de continuacao do property-flags (o bit 0 de cada palavra encadeia a
-  proxima). Nenhuma propriedade da classe Basic vive alem da primeira palavra,
-  entao na pratica isto e' teorico -- mas se um peer mandar continuacao, a
-  reescrita a apaga em silencio. Uma mensagem que NUNCA passa por aqui segue
-  intacta, porque a entrega normal reemite o payload cru sem tocar nele.
+  KNOWN LIMITATION, deliberate: DecodeContentHeader consumes and DROPS the
+  property-flags continuation words (bit 0 of each word chains the
+  next). No property of the Basic class lives beyond the first word,
+  so in practice this is theoretical -- but if a peer sends a continuation, the
+  rewrite silently erases it. A message that NEVER goes through here stays
+  intact, because normal delivery re-emits the raw payload without touching it.
 
-  SEM CALLBACK, DE PROPOSITO
-  --------------------------
-  O jeito obvio seria "reescreva este payload aplicando esta funcao a' tabela",
-  mas o FPC 3.2 nao tem metodo anonimo e um `procedure of object` obrigaria
-  quem chama a criar uma classe so' para carregar o estado da mutacao (ver a
-  tabela de proibidos do CLAUDE.md). Em vez disso, um EDITOR explicito:
-  construir (decodifica) -> mexer na tabela viva -> BuildPayload (re-encoda). }
+  NO CALLBACK, ON PURPOSE
+  -----------------------
+  The obvious way would be "rewrite this payload applying this function to the table",
+  but FPC 3.2 has no anonymous methods and a `procedure of object` would force
+  the caller to create a class just to carry the mutation state (see the
+  forbidden table in CLAUDE.md). Instead, an explicit EDITOR:
+  construct (decodes) -> touch the live table -> BuildPayload (re-encodes). }
 
 interface
 
@@ -52,103 +52,103 @@ uses
   AMQP.Server.Message;
 
 const
-  /// Razoes de dead-letter que este broker produz (spec de fato do RabbitMQ).
-  /// 'delivery_limit' fica de fora: e' de quorum queue, que nao existe aqui.
-  AMQP_DEATH_REJECTED = 'rejected'; // Basic.Nack/Reject com requeue=false
-  AMQP_DEATH_EXPIRED  = 'expired';  // TTL (da fila ou da mensagem)
-  AMQP_DEATH_MAXLEN   = 'maxlen';   // estourou o teto de mensagens
+  /// Dead-letter reasons this broker produces (RabbitMQ's de facto spec).
+  /// 'delivery_limit' is left out: it belongs to quorum queues, which do not exist here.
+  AMQP_DEATH_REJECTED = 'rejected'; // Basic.Nack/Reject with requeue=false
+  AMQP_DEATH_EXPIRED  = 'expired';  // TTL (queue's or message's)
+  AMQP_DEATH_MAXLEN   = 'maxlen';   // exceeded the message cap
 
 type
-  { Editor de um content-header ja' serializado.
+  { Editor of an already serialized content header.
 
-    Ciclo de uso:
+    Usage cycle:
       LEd := TAMQPHeaderEditor.Create(AMsg.HeaderPayload);
       try
-        LEd.Headers.Put('x-death', ...);      // tabela VIVA, mexa a' vontade
+        LEd.Headers.Put('x-death', ...);      // LIVE table, change it freely
         LNovo := LEd.BuildPayload(AMsg.BodySize);
       finally
         LEd.Free;
       end;
 
-    Posse: o editor e' dono da tabela de headers decodificada e a libera no
-    destrutor. O TBytes devolvido por BuildPayload e' do chamador. O payload de
-    entrada NAO e' modificado -- e' so' lido. }
+    Ownership: the editor owns the decoded headers table and frees it in the
+    destructor. The TBytes returned by BuildPayload belongs to the caller. The input
+    payload is NOT modified -- it is only read. }
   TAMQPHeaderEditor = class
   private
     FProps: TAMQPBasicProperties;
     FBodySize: UInt64;
     FHadHeaders: Boolean;
   public
-    /// Decodifica APayload (o content-header cru, como veio no frame).
-    /// Levanta EAMQPWire se o payload for malformado.
+    /// Decodes APayload (the raw content header, as it came in the frame).
+    /// Raises EAMQPWire if the payload is malformed.
     constructor Create(const APayload: TBytes);
     destructor Destroy; override;
 
-    /// Tabela de headers VIVA, para ler e mexer. Criada vazia sob demanda se a
-    /// mensagem nao tinha a propriedade -- pedir a tabela ja e' declarar
-    /// intencao de mexer nela, e sem isso nao haveria como acrescentar x-death
-    /// numa mensagem publicada sem headers. Continua sendo do EDITOR: nao
-    /// libere, nao guarde depois do destrutor.
+    /// LIVE headers table, to read and change. Created empty on demand if the
+    /// message did not have the property -- asking for the table already declares
+    /// the intent to change it, and without that there would be no way to add x-death
+    /// to a message published without headers. It still belongs to the EDITOR: do not
+    /// free it, do not keep it after the destructor.
     function Headers: TAMQPFieldTable;
-    /// True se a mensagem ORIGINAL trazia a propriedade headers -- util para
-    /// quem quiser evitar acrescentar uma tabela vazia sem necessidade.
+    /// True if the ORIGINAL message carried the headers property -- useful for
+    /// callers that want to avoid adding an empty table needlessly.
     function HadHeaders: Boolean;
 
-    /// Re-encoda o header com as mudancas. ABodySize e' EXPLICITO de proposito:
-    /// derivar uma mensagem com corpo diferente e esquecer de ajustar o
-    /// body-size faria o consumidor esperar body frames que nunca chegam. Quem
-    /// so' compartilha o corpo deve usar AmqpDeriveMessage abaixo, que
-    /// preenche isto sozinho e nao tem como errar.
+    /// Re-encodes the header with the changes. ABodySize is EXPLICIT on purpose:
+    /// deriving a message with a different body and forgetting to adjust the
+    /// body-size would make the consumer wait for body frames that never arrive.
+    /// Callers that only share the body should use AmqpDeriveMessage below, which
+    /// fills this in by itself and cannot get it wrong.
     function BuildPayload(ABodySize: UInt64): TBytes;
 
-    /// Remove a propriedade 'expiration' e devolve o valor que ela tinha
-    /// ('' se nao havia). Existe para o dead-lettering: uma mensagem que
-    /// morreu POR TTL nao pode levar o mesmo prazo para a DLQ, senao morre de
-    /// novo no ato e o padrao retry-com-espera nao funciona. O valor antigo
-    /// vira 'original-expiration' na entrada de x-death.
+    /// Removes the 'expiration' property and returns the value it had
+    /// ('' if there was none). It exists for dead-lettering: a message that
+    /// died BY TTL cannot carry the same deadline to the DLQ, or it dies
+    /// again on arrival and the retry-with-delay pattern does not work. The old value
+    /// becomes 'original-expiration' in the x-death entry.
     function TakeExpiration: string;
 
-    /// Body-size lido do payload original.
+    /// Body-size read from the original payload.
     property BodySizeOriginal: UInt64 read FBodySize;
-    /// Propriedades decodificadas (leitura). A tabela de headers dentro delas
-    /// e' a mesma que Headers devolve.
+    /// Decoded properties (read-only). The headers table inside them
+    /// is the same one Headers returns.
     property Properties: TAMQPBasicProperties read FProps;
   end;
 
-/// Soma dos campos 'count' de TODAS as entradas de x-death -- ou seja,
-/// quantos saltos de dead-letter a mensagem ja' deu. E' o contador da guarda
-/// de ciclo (decisao D14): o grafo de DLX pode ter ciclo, e o teto por
-/// PROFUNDIDADE e' mais barato que o conjunto de filas visitadas do RabbitMQ,
-/// com o mesmo efeito pratico numa engine em memoria.
-/// Tabela nil, ausencia de x-death ou x-death malformado devolvem 0.
+/// Sum of the 'count' fields of ALL x-death entries -- that is,
+/// how many dead-letter hops the message has already made. It is the counter of
+/// the cycle guard (decision D14): the DLX graph may have a cycle, and the cap by
+/// DEPTH is cheaper than RabbitMQ's set of visited queues,
+/// with the same practical effect in an in-memory engine.
+/// A nil table, absent x-death or malformed x-death return 0.
 function AmqpDeathHops(AHeaders: TAMQPFieldTable): Int64;
 
-/// Acrescenta uma morte ao x-death da tabela VIVA do editor.
+/// Adds a death to the x-death of the editor's LIVE table.
 ///
-/// COLAPSA por (fila, razao): se ja' existe entrada com a mesma dupla, apenas
-/// incrementa o 'count' e atualiza o 'time'. Sem isso um laco de retry infla o
-/// header a cada volta ate' estourar o frame-max -- e' para isso que a spec
-/// tem o campo count. Entrada nova vai para a FRENTE do array (mais recente
-/// primeiro), como o RabbitMQ faz.
+/// COLLAPSES by (queue, reason): if an entry with the same pair already exists, it only
+/// increments 'count' and updates 'time'. Without this a retry loop inflates the
+/// header on every round until it exceeds the frame-max -- that is why the spec
+/// has the count field. A new entry goes to the FRONT of the array (most recent
+/// first), as RabbitMQ does.
 ///
-/// AOriginalExpiration: quando a mensagem trazia 'expiration', o valor entra
-/// na entrada e a PROPRIEDADE E' REMOVIDA do header (o chamador ja' a tirou
-/// com TakeExpiration). Sem isso a mensagem morreria de novo no ato ao chegar
-/// na DLQ, e o padrao retry-com-espera nao funcionaria. Passe '' se nao havia.
+/// AOriginalExpiration: when the message carried 'expiration', the value goes
+/// into the entry and the PROPERTY IS REMOVED from the header (the caller already took
+/// it out with TakeExpiration). Without this the message would die again on arrival
+/// at the DLQ, and the retry-with-delay pattern would not work. Pass '' if there was none.
 procedure AmqpAddDeath(AEditor: TAMQPHeaderEditor;
   const AQueue, AReason, AExchange, ARoutingKey, AOriginalExpiration: string);
 
-/// Deriva uma mensagem NOVA a partir de ASource, trocando so' o header.
+/// Derives a NEW message from ASource, swapping only the header.
 ///
-/// O Body e' COMPARTILHADO por referencia (semantica normal de dynamic array):
-/// nada e' copiado, e como a TAMQPMessage e' imutavel, compartilhar e' seguro.
-/// O body-size do header novo vem do corpo real, entao nao ha como divergir.
+/// The Body is SHARED by reference (normal dynamic array semantics):
+/// nothing is copied, and since TAMQPMessage is immutable, sharing is safe.
+/// The new header's body-size comes from the real body, so they cannot diverge.
 ///
-/// A mensagem devolvida nasce com RefCount=1 e e' do chamador (Release, nunca
-/// Free). ASource NAO e' tocada nem liberada.
+/// The returned message is born with RefCount=1 and belongs to the caller (Release,
+/// never Free). ASource is NOT touched nor freed.
 ///
-/// AExchange/ARoutingKey trocam o destino -- e' o que o dead-lettering precisa
-/// (a mensagem morta e' republicada no DLX com outra routing key).
+/// AExchange/ARoutingKey change the destination -- it is what dead-lettering needs
+/// (the dead message is republished to the DLX with another routing key).
 function AmqpDeriveMessage(ASource: TAMQPMessage;
   const ANewHeaderPayload: TBytes;
   const AExchange, ARoutingKey: string): TAMQPMessage;
@@ -176,7 +176,7 @@ end;
 
 destructor TAMQPHeaderEditor.Destroy;
 begin
-  // O decode entrega a tabela para quem chamou; aqui o dono e' o editor.
+  // The decode hands the table to the caller; here the owner is the editor.
   if FProps.Has(bpHeaders) then
     FProps.Headers.Free;
   inherited;
@@ -185,7 +185,7 @@ end;
 function TAMQPHeaderEditor.Headers: TAMQPFieldTable;
 begin
   if not (FProps.Has(bpHeaders) and (FProps.Headers <> nil)) then
-    // SetHeaders preenche o valor e marca o flag juntos.
+    // SetHeaders fills the value and sets the flag together.
     FProps.SetHeaders(TAMQPFieldTable.Create);
   Result := FProps.Headers;
 end;
@@ -212,28 +212,28 @@ end;
 
 { --- x-death --------------------------------------------------------------
 
-  Forma do header, tal como o RabbitMQ define e os clientes esperam:
+  Shape of the header, as RabbitMQ defines it and clients expect it:
 
-    x-death = array de TABELAS, cada uma com os campos
+    x-death = array of TABLES, each one with the fields
        count               long
        reason              longstr   (rejected | expired | maxlen)
        queue               longstr
        time                timestamp
        exchange            longstr
-       routing-keys        array de longstr
-       original-expiration longstr, so' quando havia 'expiration'
+       routing-keys        array of longstr
+       original-expiration longstr, only when there was 'expiration'
 
-  ATENCAO ao escrever esta prosa: chave de fechar dentro de comentario de bloco
-  FECHA O COMENTARIO -- por isso os campos vao em lista, e nao na notacao de
-  chaves. E' o mesmo gotcha que o CLAUDE.md ja registra para diretivas citadas
-  em comentario, e mordeu aqui na primeira escrita.
+  CAREFUL when writing this prose: a closing brace inside a block comment
+  CLOSES THE COMMENT -- that is why the fields go in a list, and not in brace
+  notation. It is the same gotcha CLAUDE.md already records for directives quoted
+  in comments, and it bit here on the first writing.
 
-  Array de TABELAS -- exatamente a forma que o codec so' passou a saber
-  ESCREVER na WS1 desta fase. Ate' la' isto aqui levantaria EAMQPWire. }
+  Array of TABLES -- exactly the shape the codec only learned to
+  WRITE in WS1 of this phase. Before that, this would raise EAMQPWire. }
 
-// Le o x-death como array, ja' desembrulhado. nil se ausente/malformado.
-// AmqpUnwrapValue e' obrigatorio em TODO GetArrayElement (gotcha do TValue,
-// nos dois compiladores: elemento de TArray<TValue> volta re-embrulhado).
+// Reads x-death as an array, already unwrapped. nil if absent/malformed.
+// AmqpUnwrapValue is mandatory on EVERY GetArrayElement (the TValue gotcha,
+// on both compilers: an element of TArray<TValue> comes back re-wrapped).
 function ReadDeaths(AHeaders: TAMQPFieldTable; out AArr: TValue): Boolean;
 begin
   AArr := TValue.Empty;
@@ -303,11 +303,11 @@ var
   I, N: Integer;
   LNow: Int64;
 begin
-  LHeaders := AEditor.Headers; // cria sob demanda se a mensagem nao tinha
-  LNow := DateTimeToUnix(Now, False); // False = a entrada e' hora LOCAL
+  LHeaders := AEditor.Headers; // created on demand if the message had none
+  LNow := DateTimeToUnix(Now, False); // False = the input is LOCAL time
   LEntry := nil;
 
-  // Colapso por (fila, razao).
+  // Collapse by (queue, reason).
   if ReadDeaths(LHeaders, LArr) then
     for I := 0 to LArr.GetArrayLength - 1 do
     begin
@@ -326,10 +326,10 @@ begin
     LEntry.Put('count', LVal);
     LVal := TValue.From<Int64>(LNow);
     LEntry.Put('time', LVal);
-    Exit; // o array nao muda: a entrada ja' esta' nele
+    Exit; // the array does not change: the entry is already in it
   end;
 
-  // Entrada nova.
+  // New entry.
   LEntry := TAMQPFieldTable.Create;
   LVal := TValue.From<Int64>(1);
   LEntry.Put('count', LVal);
@@ -351,7 +351,7 @@ begin
     LEntry.Put('original-expiration', LVal);
   end;
 
-  // Mais recente na FRENTE (ordem do RabbitMQ).
+  // Most recent at the FRONT (RabbitMQ's order).
   N := 0;
   if LArr.IsArray then
     N := LArr.GetArrayLength;
@@ -362,7 +362,7 @@ begin
   LVal := TValue.From<TAMQPValueArray>(LNewArr);
   LHeaders.Put('x-death', LVal);
 
-  // x-first-death-*: so' na PRIMEIRA morte, nunca sobrescritos depois.
+  // x-first-death-*: only on the FIRST death, never overwritten afterwards.
   if not LHeaders.ContainsKey('x-first-death-queue') then
   begin
     LVal := TValue.From<string>(AQueue);
@@ -382,8 +382,8 @@ function AmqpDeriveMessage(ASource: TAMQPMessage;
 begin
   if ASource = nil then
     raise EAMQPWire.Create('AmqpDeriveMessage: source message is nil');
-  // UserId vem da origem: quem publicou continua sendo quem publicou, mesmo
-  // depois de a mensagem ser republicada num dead-letter exchange.
+  // UserId comes from the source: whoever published is still the publisher, even
+  // after the message is republished to a dead-letter exchange.
   Result := TAMQPMessage.Create(AExchange, ARoutingKey, ASource.UserId,
     ANewHeaderPayload, ASource.Body);
 end;

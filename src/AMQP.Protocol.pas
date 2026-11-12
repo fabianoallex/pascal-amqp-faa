@@ -2,53 +2,53 @@
 
 {$I amqp.inc}
 
-{ Constantes do protocolo AMQP 0-9-1.
+{ AMQP 0-9-1 protocol constants.
 
-  Fonte: especificacao publica AMQP 0-9-1 (documento de protocolo). Nada aqui
-  deriva de codigo de terceiros — sao apenas os valores numericos definidos pela
-  especificacao (tipos de frame, octeto de fim de frame, IDs de classe/metodo).
+  Source: the public AMQP 0-9-1 specification (protocol document). Nothing here
+  derives from third-party code — these are only the numeric values defined by the
+  specification (frame types, frame-end octet, class/method IDs).
 
-  Todos os inteiros multi-byte no protocolo trafegam em big-endian (network
-  byte order). Ver AMQP.Wire para o encode/decode. }
+  Every multi-byte integer in the protocol travels big-endian (network
+  byte order). See AMQP.Wire for encode/decode. }
 
 interface
 
 const
-  /// Cabecalho de protocolo enviado pelo cliente logo apos abrir o socket:
-  /// os 4 octetos ASCII "AMQP" seguidos de major=0, minor=9, revision=1.
-  /// (o 5o octeto e' o protocol-id, 0 para AMQP; depois vem 0,9,1).
+  /// Protocol header sent by the client right after opening the socket:
+  /// the 4 ASCII octets "AMQP" followed by major=0, minor=9, revision=1.
+  /// (the 5th octet is the protocol-id, 0 for AMQP; then comes 0,9,1).
   AMQP_PROTOCOL_HEADER: array[0..7] of Byte =
     (Ord('A'), Ord('M'), Ord('Q'), Ord('P'), 0, 0, 9, 1);
 
-  // --- Tipos de frame (octeto 0 do frame) ---------------------------------
+  // --- Frame types (octet 0 of the frame) ---------------------------------
   AMQP_FRAME_METHOD    = 1;
   AMQP_FRAME_HEADER    = 2;
   AMQP_FRAME_BODY      = 3;
   AMQP_FRAME_HEARTBEAT = 8;
 
-  /// Octeto que encerra todo frame (0xCE). Se o byte lido nesta posicao for
-  /// diferente disto, o stream esta dessincronizado / corrompido.
+  /// Octet that ends every frame (0xCE). If the byte read at this position is
+  /// anything else, the stream is out of sync / corrupted.
   AMQP_FRAME_END = $CE;
 
-  /// Tamanho minimo de frame que todo peer deve aceitar (spec 4.2.5).
-  /// Usado como piso ao negociar frame-max no handshake.
+  /// Minimum frame size every peer must accept (spec 4.2.5).
+  /// Used as the floor when negotiating frame-max in the handshake.
   AMQP_FRAME_MIN_SIZE = 4096;
 
-  /// Canal 0 e' reservado para metodos de nivel de conexao (Connection.*).
+  /// Channel 0 is reserved for connection-level methods (Connection.*).
   AMQP_CHANNEL_CONNECTION = 0;
 
-  // --- IDs de classe ------------------------------------------------------
+  // --- Class IDs ----------------------------------------------------------
   AMQP_CLASS_CONNECTION = 10;
   AMQP_CLASS_CHANNEL    = 20;
   AMQP_CLASS_EXCHANGE   = 40;
   AMQP_CLASS_QUEUE      = 50;
   AMQP_CLASS_BASIC      = 60;
-  /// Extensao 'confirm' da RabbitMQ (publisher confirms). Nao faz parte do
-  /// AMQP 0-9-1 base, mas e' amplamente suportada; ver AMQP.Basic.Methods.
+  /// RabbitMQ 'confirm' extension (publisher confirms). Not part of base
+  /// AMQP 0-9-1, but widely supported; see AMQP.Basic.Methods.
   AMQP_CLASS_CONFIRM    = 85;
   AMQP_CLASS_TX         = 90;
 
-  // --- Metodos de Connection (classe 10) ----------------------------------
+  // --- Connection methods (class 10) --------------------------------------
   AMQP_CONNECTION_START    = 10;
   AMQP_CONNECTION_START_OK  = 11;
   AMQP_CONNECTION_SECURE   = 20;
@@ -59,13 +59,13 @@ const
   AMQP_CONNECTION_OPEN_OK   = 41;
   AMQP_CONNECTION_CLOSE    = 50;
   AMQP_CONNECTION_CLOSE_OK  = 51;
-  /// Extensao RabbitMQ: o broker avisa (canal 0) quando entra/sai de um
-  /// resource alarm (memoria/disco) e para/volta a aceitar publishes. So sao
-  /// enviados se o cliente anunciou a capability 'connection.blocked'.
+  /// RabbitMQ extension: the broker notifies (channel 0) when it enters/leaves a
+  /// resource alarm (memory/disk) and stops/resumes accepting publishes. Only
+  /// sent if the client announced the 'connection.blocked' capability.
   AMQP_CONNECTION_BLOCKED   = 60;
   AMQP_CONNECTION_UNBLOCKED = 61;
 
-  // --- Metodos de Channel (classe 20) -------------------------------------
+  // --- Channel methods (class 20) -----------------------------------------
   AMQP_CHANNEL_OPEN     = 10;
   AMQP_CHANNEL_OPEN_OK   = 11;
   AMQP_CHANNEL_FLOW     = 20;
@@ -73,20 +73,20 @@ const
   AMQP_CHANNEL_CLOSE    = 40;
   AMQP_CHANNEL_CLOSE_OK  = 41;
 
-  // --- Metodos de Exchange (classe 40) ------------------------------------
+  // --- Exchange methods (class 40) ----------------------------------------
   AMQP_EXCHANGE_DECLARE    = 10;
   AMQP_EXCHANGE_DECLARE_OK  = 11;
   AMQP_EXCHANGE_DELETE     = 20;
   AMQP_EXCHANGE_DELETE_OK   = 21;
-  /// Binding exchange->exchange (extensao RabbitMQ 'exchange_exchange_bindings',
-  /// nao faz parte do 0-9-1 core). Nota: unbind-ok e' 51 (nao 41), por
-  /// peculiaridade da spec estendida da RabbitMQ.
+  /// Exchange->exchange binding (RabbitMQ extension 'exchange_exchange_bindings',
+  /// not part of core 0-9-1). Note: unbind-ok is 51 (not 41), a
+  /// quirk of RabbitMQ's extended spec.
   AMQP_EXCHANGE_BIND       = 30;
   AMQP_EXCHANGE_BIND_OK     = 31;
   AMQP_EXCHANGE_UNBIND     = 40;
   AMQP_EXCHANGE_UNBIND_OK   = 51;
 
-  // --- Metodos de Queue (classe 50) ---------------------------------------
+  // --- Queue methods (class 50) -------------------------------------------
   AMQP_QUEUE_DECLARE    = 10;
   AMQP_QUEUE_DECLARE_OK  = 11;
   AMQP_QUEUE_BIND       = 20;
@@ -98,7 +98,7 @@ const
   AMQP_QUEUE_DELETE     = 40;
   AMQP_QUEUE_DELETE_OK   = 41;
 
-  // --- Metodos de Basic (classe 60) ---------------------------------------
+  // --- Basic methods (class 60) -------------------------------------------
   AMQP_BASIC_QOS        = 10;
   AMQP_BASIC_QOS_OK      = 11;
   AMQP_BASIC_CONSUME    = 20;
@@ -115,33 +115,33 @@ const
   AMQP_BASIC_REJECT     = 90;
   AMQP_BASIC_NACK       = 120;
 
-  // --- Metodos de Confirm (classe 85, extensao RabbitMQ) ------------------
+  // --- Confirm methods (class 85, RabbitMQ extension) ---------------------
   AMQP_CONFIRM_SELECT    = 10;
   AMQP_CONFIRM_SELECT_OK = 11;
 
-  // --- Reply codes (spec 0-9-1, secao "constants") ------------------------
-  // Sao os codigos que vao no reply-code de Connection.Close / Channel.Close.
-  // A spec classifica cada um como "channel error" (fecha so o canal) ou
-  // "connection error" (fecha a conexao inteira) — anotado ao lado.
-  AMQP_REPLY_SUCCESS       = 200; // resposta normal (Close a pedido do peer)
-  AMQP_CONTENT_TOO_LARGE   = 311; // canal
-  AMQP_NO_ROUTE            = 312; // canal
-  AMQP_NO_CONSUMERS        = 313; // canal
-  AMQP_CONNECTION_FORCED   = 320; // conexao (operador derrubou)
-  AMQP_INVALID_PATH        = 402; // conexao (vhost/path invalido)
-  AMQP_ACCESS_REFUSED      = 403; // canal (tambem usado no 403 de auth)
-  AMQP_NOT_FOUND           = 404; // canal
-  AMQP_RESOURCE_LOCKED     = 405; // canal
-  AMQP_PRECONDITION_FAILED = 406; // canal
-  AMQP_FRAME_ERROR         = 501; // conexao (frame malformado/dessincronizado)
-  AMQP_SYNTAX_ERROR        = 502; // conexao
-  AMQP_COMMAND_INVALID     = 503; // conexao (metodo invalido neste estado)
-  AMQP_CHANNEL_ERROR       = 504; // conexao (canal inexistente/ja aberto)
-  AMQP_UNEXPECTED_FRAME    = 505; // conexao (content fora de sequencia)
-  AMQP_RESOURCE_ERROR      = 506; // conexao
-  AMQP_NOT_ALLOWED         = 530; // conexao (vhost negado, tune fora da faixa)
-  AMQP_NOT_IMPLEMENTED     = 540; // conexao/canal (metodo nao implementado)
-  AMQP_INTERNAL_ERROR      = 541; // conexao
+  // --- Reply codes (spec 0-9-1, "constants" section) ----------------------
+  // These are the codes that go in the reply-code of Connection.Close / Channel.Close.
+  // The spec classifies each one as a "channel error" (closes only the channel) or
+  // a "connection error" (closes the whole connection) — noted alongside.
+  AMQP_REPLY_SUCCESS       = 200; // normal reply (Close requested by the peer)
+  AMQP_CONTENT_TOO_LARGE   = 311; // channel
+  AMQP_NO_ROUTE            = 312; // channel
+  AMQP_NO_CONSUMERS        = 313; // channel
+  AMQP_CONNECTION_FORCED   = 320; // connection (operator dropped it)
+  AMQP_INVALID_PATH        = 402; // connection (invalid vhost/path)
+  AMQP_ACCESS_REFUSED      = 403; // channel (also used for the auth 403)
+  AMQP_NOT_FOUND           = 404; // channel
+  AMQP_RESOURCE_LOCKED     = 405; // channel
+  AMQP_PRECONDITION_FAILED = 406; // channel
+  AMQP_FRAME_ERROR         = 501; // connection (malformed/out-of-sync frame)
+  AMQP_SYNTAX_ERROR        = 502; // connection
+  AMQP_COMMAND_INVALID     = 503; // connection (method invalid in this state)
+  AMQP_CHANNEL_ERROR       = 504; // connection (channel nonexistent/already open)
+  AMQP_UNEXPECTED_FRAME    = 505; // connection (content out of sequence)
+  AMQP_RESOURCE_ERROR      = 506; // connection
+  AMQP_NOT_ALLOWED         = 530; // connection (vhost denied, tune out of range)
+  AMQP_NOT_IMPLEMENTED     = 540; // connection/channel (method not implemented)
+  AMQP_INTERNAL_ERROR      = 541; // connection
 
 implementation
 

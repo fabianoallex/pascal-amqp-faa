@@ -62,16 +62,16 @@ type
 
 implementation
 
-// Compara um octeto esperado (como Integer) com o octeto real, forcando a
-// sobrecarga AssertEquals(Integer, Integer).
+// Compares an expected octet (as Integer) with the actual octet, forcing the
+// AssertEquals(Integer, Integer) overload.
 procedure EqualByte(AExpected: Integer; AActual: Byte);
 begin
   TAssert.AssertEquals(AExpected, Integer(AActual));
 end;
 
-// Hex de um TBytes, para comparar buffers inteiros numa assercao so' (a
-// mensagem de falha mostra os dois lados, o que um AssertEquals byte a byte
-// nao daria).
+// Hex of a TBytes, to compare whole buffers in a single assertion (the
+// failure message shows both sides, which a byte-by-byte AssertEquals
+// would not).
 function BytesHex(const ABytes: TBytes): string;
 var
   I: Integer;
@@ -159,7 +159,7 @@ procedure TAMQPWriterTests.ShortStr_UsaUTF8;
 var
   B: TBytes;
 begin
-  // 'á' = 2 octetos em UTF-8 (0xC3 0xA1).
+  // 'á' = 2 octets in UTF-8 (0xC3 0xA1).
   FWriter.WriteShortStr('á');
   B := FWriter.ToBytes;
   TAssert.AssertEquals(3, Length(B));
@@ -191,7 +191,7 @@ procedure TAMQPWriterTests.Bits_EmpacotaLSBPrimeiro;
 var
   B: TBytes;
 begin
-  // true, false, true -> bits 0 e 2 setados = 0b00000101 = 0x05
+  // true, false, true -> bits 0 and 2 set = 0b00000101 = 0x05
   FWriter.WriteBit(True);
   FWriter.WriteBit(False);
   FWriter.WriteBit(True);
@@ -205,7 +205,7 @@ var
   B: TBytes;
   I: Integer;
 begin
-  // 8 bits true = 0xFF, depois 1 bit true = 0x01 no segundo octeto.
+  // 8 bits true = 0xFF, then 1 bit true = 0x01 in the second octet.
   for I := 1 to 8 do
     FWriter.WriteBit(True);
   FWriter.WriteBit(True);
@@ -219,8 +219,8 @@ procedure TAMQPWriterTests.Bit_SeguidoDeOcteto_DescarregaByteParcial;
 var
   B: TBytes;
 begin
-  FWriter.WriteBit(True);       // octeto parcial = 0x01
-  FWriter.WriteOctet($AA);      // deve descarregar o bit antes
+  FWriter.WriteBit(True);       // partial octet = 0x01
+  FWriter.WriteOctet($AA);      // must flush the bit first
   B := FWriter.ToBytes;
   TAssert.AssertEquals(2, Length(B));
   EqualByte($01, B[0]);
@@ -356,7 +356,7 @@ var
   R: TAMQPReader;
   V: UInt64;
 begin
-  V := UInt64(1751731200); // ~2025-07-05 em segundos epoch
+  V := UInt64(1751731200); // ~2025-07-05 in epoch seconds
   W := TAMQPWriter.Create;
   try
     W.WriteTimestamp(V);
@@ -410,10 +410,10 @@ begin
   LIn := TAMQPFieldTable.Create;
   W := TAMQPWriter.Create;
   try
-    // Chamadas separadas (nao encadeadas) e resultados intermediarios em
-    // variaveis locais (nao inline): algumas combinacoes de generics/TValue
-    // encadeados disparam erros internos do FPC 3.2.2 nesta unit especifica
-    // (Internal error 2015071704 / 200510032) — ver notas abaixo.
+    // Separate (not chained) calls and intermediate results in
+    // local variables (not inline): some combinations of chained generics/TValue
+    // trigger FPC 3.2.2 internal errors in this specific unit
+    // (Internal error 2015071704 / 200510032) — see notes below.
     LIn.Put('flag', True);
     LIn.Put('numero', Integer(42));
     LIn.Put('grande', Int64(9876543210));
@@ -428,9 +428,9 @@ begin
         TAssert.AssertTrue('flag', LOut['flag'].AsBoolean);
         TAssert.AssertEquals('numero', 42, LOut['numero'].AsInteger);
         TAssert.AssertEquals('grande', Int64(9876543210), LOut['grande'].AsInt64);
-        // .AsString/.AsExtended encadeados direto no indexador (Tabela['x'].AsY)
-        // disparam um erro interno do FPC 3.2.2 (ver nota acima) — por isso o
-        // valor do indexador vai para uma TValue local antes do accessor.
+        // .AsString/.AsExtended chained directly on the indexer (Tabela['x'].AsY)
+        // trigger an FPC 3.2.2 internal error (see note above) — that is why the
+        // indexer's value goes into a local TValue before the accessor.
         LTextoVal := LOut['texto'];
         LTexto := LTextoVal.AsString;
         TAssert.AssertEquals('texto', 'olá', LTexto);
@@ -469,20 +469,20 @@ begin
     try
       LOut := R.ReadFieldTable;
       try
-        // TValue.AsType<T> nao existe no FPC (ver CLAUDE.md) -> AsObject + cast.
+        // TValue.AsType<T> does not exist in FPC (see CLAUDE.md) -> AsObject + cast.
         LCapsVal := LOut['capabilities'];
         LOutNested := TAMQPFieldTable(LCapsVal.AsObject);
         LFlagVal := LOutNested['authentication_failure_close'];
         TAssert.AssertTrue(LFlagVal.AsBoolean);
       finally
-        LOut.Free; // libera tambem a tabela aninhada decodificada
+        LOut.Free; // also frees the decoded nested table
       end;
     finally
       R.Free;
     end;
   finally
     W.Free;
-    LIn.Free; // libera tambem LNested (dona da tabela aninhada de entrada)
+    LIn.Free; // also frees LNested (owner of the input nested table)
   end;
 end;
 
@@ -497,7 +497,7 @@ begin
   try
     W.WriteFieldTable(LIn);
     B := W.ToBytes;
-    // Apenas o u32 de comprimento = 0.
+    // Just the u32 length = 0.
     TAssert.AssertEquals(4, Length(B));
     EqualByte(0, B[0]);
     EqualByte(0, B[3]);
@@ -512,7 +512,7 @@ var
   R: TAMQPReader;
   T: TAMQPFieldTable;
 begin
-  // len=4; nome 'k'(len 1); 't'; 0x01
+  // len=4; name 'k'(len 1); 't'; 0x01
   R := TAMQPReader.Create(
     TBytes.Create(0, 0, 0, 4,
                   1, Ord('k'),
@@ -536,7 +536,7 @@ var
   T: TAMQPFieldTable;
   LVal: TValue;
 begin
-  // nome 'v'; 'S' longstr len=2 "hi"
+  // name 'v'; 'S' longstr len=2 "hi"
   R := TAMQPReader.Create(
     TBytes.Create(0, 0, 0, 9,
                   1, Ord('v'),
@@ -554,10 +554,10 @@ begin
   end;
 end;
 
-// Monta na mao o wire de {'x-death': [tabela {queue,reason,count}]} — o
-// formato que o broker envia em mensagens dead-lettered. O writer nao emite
-// arrays 'A' (sao decode-only nesta lib), entao o wrapper do array e' escrito
-// cru: 'A' + u32(tamanho) + elementos ('F' + tabela).
+// Builds by hand the wire of {'x-death': [table {queue,reason,count}]} — the
+// format the broker sends in dead-lettered messages. The writer does not emit
+// 'A' arrays (they are decode-only in this lib), so the array wrapper is written
+// raw: 'A' + u32(size) + elements ('F' + table).
 procedure TAMQPFieldTableTests.Decode_ArrayDeTabelas_EstiloXDeath;
 var
   W: TAMQPWriter;
@@ -582,7 +582,7 @@ begin
 
   W := TAMQPWriter.Create;
   try
-    W.WriteOctet(Ord('F')); // um elemento: field-table
+    W.WriteOctet(Ord('F')); // one element: field-table
     W.WriteRaw(LInnerBytes);
     LArrPayload := W.ToBytes;
   finally
@@ -616,9 +616,9 @@ begin
       TAssert.AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
       TAssert.AssertTrue('valor deve ser array', LVal.IsArray);
       TAssert.AssertEquals('um elemento', 1, LVal.GetArrayLength);
-      // AmqpUnwrapValue e' obrigatorio: o GetArrayElement devolve o elemento
-      // re-embrulhado num TValue tkRecord — sem o unwrap, IsObject daria
-      // False. Vale no Delphi tambem: nenhum dos dois colapsa no Make.
+      // AmqpUnwrapValue is mandatory: GetArrayElement returns the element
+      // re-wrapped in a tkRecord TValue — without the unwrap, IsObject would give
+      // False. It holds on Delphi too: neither of the two collapses in Make.
       LEntrada := AmqpUnwrapValue(LVal.GetArrayElement(0));
       TAssert.AssertTrue('elemento deve ser objeto', LEntrada.IsObject);
       TAssert.AssertTrue('elemento deve ser tabela', LEntrada.AsObject is TAMQPFieldTable);
@@ -632,8 +632,8 @@ begin
       TAssert.AssertTrue('tabela deve ter count', LTab.TryGetValue('count', LCampo));
       TAssert.AssertEquals('count', 2, Integer(LCampo.AsInt64));
     finally
-      // Tambem exercita o destrutor: a tabela aninhada DENTRO do array deve
-      // ser liberada (fazia leak no FPC antes do AmqpUnwrapValue no Destroy).
+      // Also exercises the destructor: the nested table INSIDE the array must
+      // be freed (it leaked on FPC before AmqpUnwrapValue in Destroy).
       LOut.Free;
     end;
   finally
@@ -641,12 +641,12 @@ begin
   end;
 end;
 
-// O caminho de ESCRITA do mesmo x-death que o teste acima le'. Ate' a Fase 3
-// o codec era assimetrico: lia arrays 'A' e nao os escrevia (o
-// WriteFieldValue nao tratava tkDynArray), entao esta forma -- array de
-// tabelas, que e' exatamente o header x-death do dead-lettering -- levantava
-// EAMQPWire. Vale para as duas pontas: sem isto, nem o broker emite x-death
-// nem uma aplicacao cliente publica header de array.
+// The WRITE path of the same x-death the test above reads. Until Phase 3
+// the codec was asymmetric: it read 'A' arrays and did not write them
+// (WriteFieldValue did not handle tkDynArray), so this shape -- an array of
+// tables, which is exactly dead-lettering's x-death header -- raised
+// EAMQPWire. It holds for both ends: without this, neither does the broker emit
+// x-death nor can a client application publish an array header.
 procedure TAMQPFieldTableTests.Encode_ArrayDeTabelas_EstiloXDeath;
 var
   W: TAMQPWriter;
@@ -667,8 +667,8 @@ begin
 
   LOut := TAMQPFieldTable.Create;
   try
-    // TValue.From<T> numa variavel antes do Put: encadear a especializacao
-    // inline num Put trava o FPC 3.2 com erro interno (gotcha do CLAUDE.md).
+    // TValue.From<T> into a variable before Put: chaining the specialization
+    // inline in a Put crashes FPC 3.2 with an internal error (CLAUDE.md gotcha).
     LVal := TValue.From<TAMQPValueArray>(LArr);
     LOut.Put('x-death', LVal);
 
@@ -680,7 +680,7 @@ begin
       W.Free;
     end;
   finally
-    LOut.Free; // dona da entrada aninhada dentro do array
+    LOut.Free; // owner of the nested input inside the array
   end;
 
   TAssert.AssertTrue('deve ter escrito bytes', Length(LBytes) > 0);
@@ -713,9 +713,9 @@ begin
   end;
 end;
 
-// Escrever -> ler -> escrever tem de dar os MESMOS bytes. E' a propriedade que
-// o dead-lettering depende: reescrever um header so' pode mudar o que mudou de
-// fato. Cobre tres tipos de elemento no mesmo array.
+// Write -> read -> write must give the SAME bytes. It is the property
+// dead-lettering depends on: rewriting a header may only change what actually
+// changed. Covers three element types in the same array.
 procedure TAMQPFieldTableTests.RoundTrip_ArrayDeEscalares;
 var
   W: TAMQPWriter;
@@ -820,9 +820,9 @@ begin
   end;
 end;
 
-// TBytes TAMBEM e' dynamic array, mas o wire dele e' 'x' (FV_BYTES), nao 'A'.
-// Sem essa distincao no WriteFieldValue, um valor de bytes relido do wire
-// seria reescrito como array de inteiros -- o tipo mudaria em silencio no
+// TBytes is ALSO a dynamic array, but its wire form is 'x' (FV_BYTES), not 'A'.
+// Without that distinction in WriteFieldValue, a bytes value read back from the wire
+// would be rewritten as an array of integers -- the type would silently change in the
 // round-trip.
 procedure TAMQPFieldTableTests.Encode_TBytes_SaiComoTagX_NaoComoArray;
 var
@@ -851,7 +851,7 @@ begin
     LT1.Free;
   end;
 
-  // 4 (tamanho da tabela) + 1 (tamanho do nome) + 4 ('blob') = offset do tag.
+  // 4 (table size) + 1 (name size) + 4 ('blob') = offset of the tag.
   TAssert.AssertEquals('tag do valor tem de ser x (FV_BYTES), nao A',
     Ord('x'), Integer(LBytes[9]));
 
@@ -860,8 +860,8 @@ begin
     LT2 := R.ReadFieldTable;
     try
       TAssert.AssertTrue('deve ter blob', LT2.TryGetValue('blob', LVal));
-      // AsType<T> nao existe no FPC 3.2 -- extrai elemento a elemento, que
-      // funciona nos dois compiladores.
+      // AsType<T> does not exist in FPC 3.2 -- extracts element by element, which
+      // works on both compilers.
       SetLength(LVolta, LVal.GetArrayLength);
       for I := 0 to High(LVolta) do
         LVolta[I] := Byte(LVal.GetArrayElement(I).AsInteger);
@@ -882,14 +882,14 @@ var
   LProps, LCaps, LOut, LCapsOut: TAMQPFieldTable;
   LProdutoVal, LCapsVal, LConfirmsVal: TValue;
 begin
-  // Monta client-properties como no Start-Ok e confere o round-trip.
+  // Builds client-properties as in Start-Ok and checks the round-trip.
   LCaps := TAMQPFieldTable.Create;
   LCaps.Put('publisher_confirms', True)
        .Put('consumer_cancel_notify', True);
 
   LProps := TAMQPFieldTable.Create;
-  // Chamadas separadas (ver nota em RoundTrip_TiposBasicos sobre o ICE do FPC
-  // ao encadear .Put(...) terminando num TValue.From<T> generico).
+  // Separate calls (see the note in RoundTrip_TiposBasicos about the FPC ICE
+  // when chaining .Put(...) ending in a generic TValue.From<T>).
   LProps.Put('product', 'pascal-amqp-faa');
   LProps.Put('version', '0.1.0');
   LProps.Put('platform', 'FreePascal');

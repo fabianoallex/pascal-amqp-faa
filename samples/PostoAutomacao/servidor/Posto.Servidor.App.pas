@@ -2,12 +2,12 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ A montagem do servidor de automacao SEM UI: broker embutido + conexao
-  'automacao' de loopback + registro + eventos + consumidor de comandos +
-  Vigia + (opcional) simulador de bombas.
+{ The assembly of the automation server WITHOUT UI: embedded broker + loopback
+  'automacao' connection + registry + events + command consumer +
+  Vigia + (optional) pump simulator.
 
-  O painel GUI e o smoke test usam esta classe -- a UI so' liga callbacks e
-  le' Registro/Vigia. }
+  The GUI panel and the smoke test use this class -- the UI only wires callbacks
+  and reads Registro/Vigia. }
 
 interface
 
@@ -58,7 +58,7 @@ type
     property Bombas: TPostoBombas read FBombas;
 
     property OnLog: TPostoLog read FOnLog write FOnLog;
-    { Chamado (de threads variadas) quando algo muda -- a UI marca-se suja. }
+    { Called (from various threads) when something changes -- the UI marks itself dirty. }
     property OnMudou: TPostoAviso read FOnMudou write FOnMudou;
   end;
 
@@ -97,7 +97,7 @@ begin
     Result := 0;
 end;
 
-// Roda na thread do simulador de bombas.
+// Runs on the pump simulator thread.
 procedure TPostoServidorApp.OnAbastecida(const A: TAbastecida);
 var
   LVersao: Int64;
@@ -160,8 +160,8 @@ begin
   FVigia.OnMudou := FOnMudou;
   FVigia.Iniciar;
 
-  // A thread do simulador sobe sempre; comeca gerando ou pausada conforme
-  // AComBombas. O painel liga/desliga a geracao pelo FBombas.DefinePausado.
+  // The simulator thread always starts; it begins generating or paused depending
+  // on AComBombas. The panel turns generation on/off through FBombas.DefinePausado.
   FBombas := TPostoBombas.Create(OnAbastecida);
   FBombas.DefinePausado(not AComBombas);
   FBombas.Start;

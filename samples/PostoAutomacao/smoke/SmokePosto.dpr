@@ -1,15 +1,15 @@
 program SmokePosto;
 
-{ Smoke test do sample Posto Automacao: sobe a TPostoServidorApp in-process
-  (sem GUI, sem bombas), conecta dois PDVs pelo TPostoPdvCliente e exercita o
-  caminho completo de mensagens -- snapshot, lancar, recusa por concorrencia,
+{ Smoke test of the Posto Automacao sample: brings up TPostoServidorApp in-process
+  (no GUI, no pumps), connects two POS terminals through TPostoPdvCliente and
+  exercises the full message path -- snapshot, lancar, refusal on concurrency,
   finalizar, estornar, liberar_forcado.
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    lazbuild SmokePosto.lpi
-    Delphi: abrir SmokePosto.dproj no IDE
+    Delphi: open SmokePosto.dproj in the IDE
 
-  Sai com codigo 0 se tudo passou, 1 caso contrario. }
+  Exits with code 0 if everything passed, 1 otherwise. }
 
 {$IFDEF FPC}
   {$MODE DELPHI}
@@ -147,7 +147,7 @@ begin
       'liberar_forcado devolveu estadoAnterior=lancado');
     if LR.Chegou then LR.Json.Free;
 
-    Sleep(300);  // deixa os ultimos eventos drenarem
+    Sleep(300);  // let the last events drain
   finally
     LPdv1.Free;
     LPdv2.Free;

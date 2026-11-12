@@ -33,10 +33,10 @@ type
     procedure DefaultClientProperties_AnunciaConnectionBlocked;
   end;
 
-  { Lado servidor (sub-módulo broker): build dos métodos servidor->cliente e
-    decode dos métodos cliente->servidor. Vários testes alimentam o Decode do
-    servidor com o output do Build que o CLIENTE já produz — garante interop
-    com o próprio cliente da lib. }
+  { Server side (broker sub-module): build of the server->client methods and
+    decode of the client->server methods. Several tests feed the server's
+    Decode with the output of the Build the CLIENT already produces — it ensures
+    interop with the lib's own client. }
   TConnectionServerCodecTests = class(TTestCase)
   published
     procedure Start_RoundTrip;
@@ -54,7 +54,7 @@ type
 
   TTuneNegotiationTests = class(TTestCase)
   published
-    // Gotcha do channel-max (ver CLAUDE.md)
+    // channel-max gotcha (see CLAUDE.md)
     procedure ChannelMax_ClienteZero_AdotaServidor;
     procedure ChannelMax_NuncaExcedeServidor;
     procedure ChannelMax_ServidorZero_UsaCliente;
@@ -116,7 +116,7 @@ var
   LStart: TAMQPConnectionStart;
   LProdutoVal: TValue;
 begin
-  // Monta um Start como o servidor mandaria.
+  // Builds a Start as the server would send it.
   LServerProps := TAMQPFieldTable.Create;
   LServerProps.Put('product', 'RabbitMQ');
   W := TAMQPWriter.Create;
@@ -172,7 +172,7 @@ var
   LTune: TAMQPConnectionTune;
   LPayload: TBytes;
 begin
-  // Tune do servidor: channel-max=2047, frame-max=131072, heartbeat=60
+  // Server Tune: channel-max=2047, frame-max=131072, heartbeat=60
   W := TAMQPWriter.Create;
   try
     WriteMethodHeader(W, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE);
@@ -195,7 +195,7 @@ begin
     W.Free;
   end;
 
-  // Tune-Ok de volta com os mesmos valores.
+  // Tune-Ok back with the same values.
   LTune.ChannelMax := 2047;
   LTune.FrameMax := 131072;
   LTune.Heartbeat := 60;
@@ -241,7 +241,7 @@ begin
   W := TAMQPWriter.Create;
   try
     WriteMethodHeader(W, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK);
-    W.WriteShortStr(''); // known-hosts reservado
+    W.WriteShortStr(''); // known-hosts reserved
     R := TAMQPReader.Create(W.ToBytes);
     try
       LId := ReadMethodHeader(R);
@@ -289,7 +289,7 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
 begin
-  // Connection.Blocked como o broker mandaria: só um shortstr com o motivo.
+  // Connection.Blocked as the broker would send it: just a shortstr with the reason.
   W := TAMQPWriter.Create;
   try
     WriteMethodHeader(W, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED);
@@ -312,7 +312,7 @@ procedure TConnectionMethodsTests.PlainAuth_Formato;
 var
   S: string;
 begin
-  // #0 guest #0 guest -> 1 + 5 + 1 + 5 = 12 caracteres
+  // #0 guest #0 guest -> 1 + 5 + 1 + 5 = 12 characters
   S := PlainAuthResponse('guest', 'guest');
   TAssert.AssertEquals(12, Length(S));
   TAssert.AssertTrue('separador inicial', S[1] = #0);
@@ -339,12 +339,12 @@ var
   P, LCaps: TAMQPFieldTable;
   LCapsVal, LBlockedVal: TValue;
 begin
-  // O broker só envia Connection.Blocked/Unblocked se o cliente anunciar esta
-  // capability em client-properties -> tem de estar presente e True.
+  // The broker only sends Connection.Blocked/Unblocked if the client announces this
+  // capability in client-properties -> it must be present and True.
   P := DefaultClientProperties;
   try
     LCapsVal := P['capabilities'];
-    // TValue.AsType<T> nao existe no FPC (ver CLAUDE.md) -> AsObject + cast.
+    // TValue.AsType<T> does not exist in FPC (see CLAUDE.md) -> AsObject + cast.
     LCaps := TAMQPFieldTable(LCapsVal.AsObject);
     TAssert.AssertTrue('capability presente', LCaps.ContainsKey('connection.blocked'));
     LBlockedVal := LCaps['connection.blocked'];
@@ -377,7 +377,7 @@ begin
     LId := ReadMethodHeader(R);
     TAssert.AssertTrue('class/method de Start',
       LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START));
-    // Decodifica com o mesmo DecodeStart que o cliente usa.
+    // Decodes with the same DecodeStart the client uses.
     LStart := DecodeStart(R);
     try
       TAssert.AssertEquals(0, Integer(LStart.VersionMajor));
@@ -453,8 +453,8 @@ begin
     ReadMethodHeader(R);
     LStartOk := DecodeStartOk(R);
     try
-      // A resposta SASL (#0 guest #0 secret) tem de sobreviver byte-a-byte:
-      // nada de passar por AmqpUtf8Decode e perder os #0.
+      // The SASL response (#0 guest #0 secret) must survive byte for byte:
+      // no going through AmqpUtf8Decode and losing the #0s.
       TAssert.AssertEquals('tamanho da resposta', Length(LEsperado), Length(LStartOk.Response));
       for I := 0 to High(LEsperado) do
         TAssert.AssertEquals('byte ' + IntToStr(I),
@@ -479,13 +479,13 @@ begin
   LTune.ChannelMax := 100;
   LTune.FrameMax := 65536;
   LTune.Heartbeat := 30;
-  LPayload := BuildTuneOk(LTune); // build do CLIENTE
+  LPayload := BuildTuneOk(LTune); // CLIENT build
 
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
     TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_TUNE_OK));
-    LDecoded := DecodeTuneOk(R); // decode do SERVIDOR
+    LDecoded := DecodeTuneOk(R); // SERVER decode
     TAssert.AssertEquals(100, Integer(LDecoded.ChannelMax));
     TAssert.AssertEquals(Int64(65536), Int64(LDecoded.FrameMax));
     TAssert.AssertEquals(30, Integer(LDecoded.Heartbeat));
@@ -494,7 +494,7 @@ begin
     R.Free;
   end;
 
-  // E o Tune que o servidor manda decodifica com o DecodeTune do cliente.
+  // And the Tune the server sends decodes with the client's DecodeTune.
   LPayload := BuildTune(LTune);
   R := TAMQPReader.Create(LPayload);
   try
@@ -515,7 +515,7 @@ var
   LId: TAMQPMethodId;
   LOpen: TAMQPConnectionOpen;
 begin
-  LPayload := BuildOpen('/app'); // build do CLIENTE
+  LPayload := BuildOpen('/app'); // CLIENT build
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
@@ -534,12 +534,12 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
 begin
-  LPayload := BuildOpenOk; // build do SERVIDOR
+  LPayload := BuildOpenOk; // SERVER build
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
     TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN_OK));
-    DecodeOpenOk(R); // decode do CLIENTE
+    DecodeOpenOk(R); // CLIENT decode
     TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
@@ -552,12 +552,12 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
 begin
-  LPayload := BuildBlocked('low on memory'); // build do SERVIDOR
+  LPayload := BuildBlocked('low on memory'); // SERVER build
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
     TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED));
-    TAssert.AssertEquals('reason', 'low on memory', DecodeBlocked(R)); // decode do CLIENTE
+    TAssert.AssertEquals('reason', 'low on memory', DecodeBlocked(R)); // CLIENT decode
     TAssert.AssertTrue(R.EndOfData);
   finally
     R.Free;
@@ -600,7 +600,7 @@ begin
     R.Free;
   end;
 
-  // Secure-Ok: o servidor lê a resposta crua.
+  // Secure-Ok: the server reads the raw response.
   W := TAMQPWriter.Create;
   try
     WriteMethodHeader(W, AMQP_CLASS_CONNECTION, AMQP_CONNECTION_SECURE_OK);
@@ -665,13 +665,13 @@ end;
 
 procedure TTuneNegotiationTests.ChannelMax_ClienteZero_AdotaServidor;
 begin
-  // Cliente quer "sem limite" (0), servidor propõe 2047 -> usa 2047, nunca 0.
+  // Client wants "no limit" (0), server proposes 2047 -> uses 2047, never 0.
   TAssert.AssertEquals(2047, Integer(NegotiateChannelMax(2047, 0)));
 end;
 
 procedure TTuneNegotiationTests.ChannelMax_NuncaExcedeServidor;
 begin
-  // Cliente pede mais do que o servidor permite -> limita ao servidor.
+  // Client asks for more than the server allows -> capped at the server's value.
   TAssert.AssertEquals(2047, Integer(NegotiateChannelMax(2047, 5000)));
 end;
 
@@ -704,7 +704,7 @@ begin
   LServer.ChannelMax := 2047;
   LServer.FrameMax := 131072;
   LServer.Heartbeat := 60;
-  // Cliente: channel-max 0 (sem limite), frame-max 0, heartbeat 30.
+  // Client: channel-max 0 (no limit), frame-max 0, heartbeat 30.
   LResult := NegotiateTune(LServer, 0, 0, 30);
   TAssert.AssertEquals('channel-max adota servidor', 2047, Integer(LResult.ChannelMax));
   TAssert.AssertEquals('frame-max adota servidor', Int64(131072), Int64(LResult.FrameMax));

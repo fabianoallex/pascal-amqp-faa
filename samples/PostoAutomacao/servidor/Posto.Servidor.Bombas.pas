@@ -2,13 +2,13 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Simulador das bombas: uma thread nomeada que a cada intervalo aleatorio
-  fabrica uma abastecida concluida e a entrega pelo callback
-  (ARQUITETURA.md §1, "aqui: um simulador por timer").
+{ Pump simulator: a named thread that at each random interval
+  makes a completed fueling and hands it over through the callback
+  (ARCHITECTURE.md §1, "here: a timer-driven simulator").
 
-  O callback roda na thread da bomba. O handler do servidor (Registrar +
-  Eventos.Nova + refresh do painel) tem de ser thread-safe -- e' (Registro e
-  Eventos tem lock proprio; o painel marshaliza). }
+  The callback runs on the pump thread. The server handler (Registrar +
+  Eventos.Nova + panel refresh) must be thread-safe -- and it is (Registro and
+  Eventos have their own lock; the panel marshals). }
 
 interface
 
@@ -25,12 +25,12 @@ type
   private
     FOnAbastecida: TOnAbastecida;
     FParar: TEvent;
-    FPausado: Integer;   // atomico: 1 = nao gera (continua no laco)
+    FPausado: Integer;   // atomic: 1 = does not generate (stays in the loop)
     FNumBombas: Integer;
     FBicosPorBomba: Integer;
     FIntervaloMinMs: Integer;
     FIntervaloMaxMs: Integer;
-    FEncerrante: array of Double;   // acumulado por bico ((bomba-1)*bicos + (bico-1))
+    FEncerrante: array of Double;   // accumulated per nozzle ((pump-1)*nozzles + (nozzle-1))
     function EncerranteRef(ABomba, ABico: Integer): Integer;
     procedure Gera;
   protected
@@ -38,9 +38,9 @@ type
   public
     constructor Create(AOnAbastecida: TOnAbastecida);
     destructor Destroy; override;
-    { Sinaliza a parada; a thread sai no proximo laco. }
+    { Signals the stop; the thread leaves on the next loop. }
     procedure Parar;
-    { Liga/desliga a geracao sem parar a thread (o painel usa isto). }
+    { Turns generation on/off without stopping the thread (the panel uses this). }
     procedure DefinePausado(AValor: Boolean);
     function Pausado: Boolean;
 
@@ -58,7 +58,7 @@ const
 
 constructor TPostoBombas.Create(AOnAbastecida: TOnAbastecida);
 begin
-  inherited Create(True);   // suspensa; o chamador ajusta as props e da Start
+  inherited Create(True);   // suspended; the caller sets the props and calls Start
   FOnAbastecida := AOnAbastecida;
   FParar := TEvent.Create(nil, True, False, '');
   FNumBombas := 4;
@@ -157,7 +157,7 @@ begin
     try
       Gera;
     except
-      // um erro no callback nao pode matar o simulador
+      // an error in the callback must not kill the simulator
     end;
   end;
 end;

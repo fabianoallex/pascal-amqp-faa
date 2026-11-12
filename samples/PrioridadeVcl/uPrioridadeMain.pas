@@ -1,41 +1,41 @@
 unit uPrioridadeMain;
 
-{ Fila com PRIORIDADE: uma fila declarada com o argumento `x-max-priority`
-  entrega primeiro as mensagens de maior prioridade (propriedade `Priority`,
-  0..N), furando a ordem de chegada das de prioridade menor que ainda estejam
-  esperando.
+{ PRIORITY queue: a queue declared with the `x-max-priority` argument
+  delivers the highest-priority messages first (`Priority` property,
+  0..N), jumping ahead of lower-priority messages that are still
+  waiting, regardless of arrival order.
 
-  Detalhe que decide se a demonstração funciona: a reordenação só acontece
-  entre mensagens que estão JUNTAS na fila no momento em que o broker escolhe a
-  próxima. Por isso o roteiro é:
-    1. deixe o consumidor PARADO e publique um lote de prioridades misturadas
-       (constrói o backlog);
-    2. só então inicie o consumidor LENTO — as mensagens saem em ordem
-       decrescente de prioridade, não na ordem em que foram publicadas.
+  The detail that decides whether the demo works: reordering only happens
+  among messages that are in the queue TOGETHER at the moment the broker picks
+  the next one. That is why the script is:
+    1. leave the consumer STOPPED and publish a batch of mixed priorities
+       (builds the backlog);
+    2. only then start the SLOW consumer: the messages come out in descending
+       priority order, not in the order they were published.
 
-  Duas condições são essenciais para ver o efeito e estão no sample:
-    - o consumidor precisa de `Qos(prefetch)` BAIXO (1): com prefetch alto o
-      broker despeja um lote no buffer do cliente de uma vez e a prioridade não
-      reordena o que já saiu da fila. O campo Prefetch é editável de propósito
-      — suba para, digamos, 20 e veja a ordenação por prioridade sumir;
-    - o consumidor precisa ser mais lento que o produtor (delay por mensagem +
-      ack manual), senão ele esvazia a fila sem nunca formar backlog.
+  Two conditions are essential to see the effect, and the sample has both:
+    - the consumer needs a LOW `Qos(prefetch)` (1): with a high prefetch the
+      broker dumps a batch into the client buffer at once and priority does not
+      reorder what has already left the queue. The Prefetch field is editable on
+      purpose: raise it to, say, 20 and watch the priority ordering vanish;
+    - the consumer must be slower than the producer (delay per message +
+      manual ack), otherwise it empties the queue without ever building a backlog.
 
-  Conectar recria a fila do zero (DeleteQueue → DeclareQueue): redeclarar uma
-  fila existente com `x-max-priority` diferente é PRECONDITION_FAILED (mesmo
-  motivo do RetryDlqVcl). É o sample que exercita a propriedade `Priority`
-  (`SetPriority` no publish, leitura na entrega).
+  Connecting recreates the queue from scratch (DeleteQueue → DeclareQueue):
+  redeclaring an existing queue with a different `x-max-priority` is
+  PRECONDITION_FAILED (same reason as in RetryDlqVcl). It is the sample that
+  exercises the `Priority` property (`SetPriority` on publish, read on delivery).
 
-  Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
-  callbacks nomeados ('of object'), marshals descartáveis + TThread.Queue para
-  a UI (ver RetaguardaVcl) e eventos de conexão saltando pelo PcPool (gotcha
-  do TThread.Queue descartado; ver TConexaoEventoWork e CLAUDE.md). }
+  Compiles in both worlds from the SAME source (GUI samples pattern):
+  named callbacks ('of object'), disposable marshals + TThread.Queue for
+  the UI (see RetaguardaVcl) and connection events hopping through PcPool (the
+  dropped TThread.Queue gotcha; see TConexaoEventoWork and CLAUDE.md). }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -96,26 +96,26 @@ type
     procedure chkUseTlsClick(Sender: TObject);
   private
     FConn: TAMQPConnection;
-    FChannel: TAMQPChannel;      // canal do produtor (declare + publish)
-    FCanalConsumo: TAMQPChannel; // canal separado do consumidor (Qos próprio)
+    FChannel: TAMQPChannel;      // producer channel (declare + publish)
+    FCanalConsumo: TAMQPChannel; // separate consumer channel (its own Qos)
     FFila: string;
     FMaxPrio: Integer;
-    FTagConsumidor: string;      // '' = consumidor parado
-    FDelayMs: Integer;           // demora por mensagem do consumidor
+    FTagConsumidor: string;      // '' = consumer stopped
+    FDelayMs: Integer;           // consumer delay per message
     FConsumidas: Integer;
-    FSaidaSeq: Integer;          // ordem de SAÍDA (drenagem)
+    FSaidaSeq: Integer;          // OUTPUT order (draining)
     function ScrollAtBottom(AHandle: HWND): Boolean;
     procedure Log(const AMsg: string);
     procedure SetConectado(AConectado: Boolean);
     procedure SetConsumindo(AConsumindo: Boolean);
     function BuildParams: TAMQPConnectionParams;
     procedure PublicarUma(APrioridade: Integer; const ACorpo: string);
-    // Atualizações de UI (thread da UI, via marshals):
+    // UI updates (UI thread, through marshals):
     procedure MensagemConsumida(APrioridade: Integer; const ACorpo: string);
     procedure ConexaoCaiu;
     procedure ConexaoVoltou;
     procedure ConexaoFalhou;
-    // Callbacks da lib (threads do pool / de reconexão):
+    // Lib callbacks (pool / reconnection threads):
     procedure OnMensagem(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnDesconectado(AConnection: TAMQPConnection);
     procedure OnReconectado(AConnection: TAMQPConnection);
@@ -135,20 +135,20 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
 const
-  // Prioridades do "lote": deliberadamente fora de ordem, para a drenagem sair
-  // em ordem decrescente bem diferente da ordem de publicação.
+  // Priorities of the "batch": deliberately out of order, so the drain comes out
+  // in descending order, quite different from the publish order.
   cLotePrioridades: array[0..9] of Integer = (2, 8, 5, 9, 1, 7, 3, 9, 0, 6);
 
 type
-  // Um objeto por chamada: TThread.Queue no FPC so' aceita 'procedure of
-  // object' SEM PARAMETROS, entao os dados viajam num objeto descartavel
-  // (nao num campo compartilhado da form, que teria corrida entre callbacks
-  // concorrentes). Se autodestroi apos rodar. Ver RetaguardaVcl.
+  // One object per call: TThread.Queue on FPC only accepts a 'procedure of
+  // object' WITHOUT PARAMETERS, so the data travels in a disposable object
+  // (not in a shared field of the form, which would race between concurrent
+  // callbacks). It frees itself after running. See RetaguardaVcl.
   TLogMarshal = class
     Form: TfrmPrioridade;
     Texto: string;
@@ -170,10 +170,10 @@ type
     procedure Execute;
   end;
 
-  { Eventos de conexão rodam na thread de RECONEXÃO da lib, que morre logo
-    após o OnReconnect — no FPC um TThread.Queue postado por thread que morre
-    antes do bombeio é DESCARTADO (gotcha no CLAUDE.md). Salto por um worker
-    persistente do PcPool. }
+  { Connection events run on the lib's RECONNECTION thread, which dies right
+    after OnReconnect; on FPC a TThread.Queue posted by a thread that dies
+    before the pump is DROPPED (gotcha in CLAUDE.md). Hop through a persistent
+    PcPool worker. }
   TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmPrioridade;
@@ -226,8 +226,8 @@ end;
 
 procedure TfrmPrioridade.FormCreate(Sender: TObject);
 begin
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   SetConectado(False);
 end;
@@ -241,13 +241,13 @@ begin
     end;
   FreeAndNil(FCanalConsumo);
   FreeAndNil(FChannel);
-  // Os Free acima drenam os callbacks em voo; os marshals que eles postaram
-  // ainda estao na fila do TThread.Queue — bombear aqui os drena com a form
-  // ainda viva (ver RetaguardaVcl.FormClose).
+  // The Free calls above drain the callbacks in flight; the marshals they posted
+  // are still in the TThread.Queue queue, and pumping here drains them with the
+  // form still alive (see RetaguardaVcl.FormClose).
   Application.ProcessMessages;
   FreeAndNil(FConn);
-  // O Free da conexao encerra a thread de reconexao; um TConexaoEventoWork ja
-  // enfileirado no pool pode estar postando o ultimo marshal NESTE instante.
+  // Freeing the connection ends the reconnection thread; a TConexaoEventoWork
+  // already queued on the pool may be posting the last marshal RIGHT NOW.
   Sleep(100);
   Application.ProcessMessages;
 end;
@@ -260,7 +260,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -318,8 +318,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -356,7 +356,7 @@ begin
   edtPrefetch.Enabled := not AConsumindo;
 end;
 
-{ --- publicação ------------------------------------------------------------- }
+{ --- publishing ------------------------------------------------------------- }
 
 procedure TfrmPrioridade.PublicarUma(APrioridade: Integer; const ACorpo: string);
 var
@@ -365,11 +365,11 @@ begin
   if APrioridade < 0 then
     APrioridade := 0;
   if APrioridade > FMaxPrio then
-    APrioridade := FMaxPrio; // o broker também limita ao teto, mas deixamos explícito
+    APrioridade := FMaxPrio; // the broker also clamps to the cap, but we make it explicit
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
   LProps.SetPriority(Byte(APrioridade));
-  // Publica direto na fila pelo default exchange (routing key = nome da fila).
+  // Publishes straight to the queue through the default exchange (routing key = queue name).
   FChannel.Publish('', FFila, AmqpUtf8Encode(ACorpo), LProps);
 end;
 
@@ -405,12 +405,12 @@ begin
     for I := Low(cLotePrioridades) to High(cLotePrioridades) do
     begin
       LPrio := cLotePrioridades[I];
-      // Corpo identifica a ORDEM de publicação (1..N) — na drenagem ela sai
-      // embaralhada, provando que quem manda é a prioridade.
+      // The body identifies the publish ORDER (1..N); when draining it comes out
+      // shuffled, proving that priority is what rules.
       LCorpo := Format('pub#%d', [I + 1]);
       PublicarUma(LPrio, LCorpo);
-      // Registra a composição no log (pub#N=prioridade) para conferência
-      // posterior só pelo texto do log, sem depender da lista.
+      // Records the composition in the log (pub#N=priority) for later checking
+      // from the log text alone, without depending on the list.
       if LMapa <> '' then
         LMapa := LMapa + ' ';
       LMapa := LMapa + Format('%s=p%d', [LCorpo, LPrio]);
@@ -425,11 +425,11 @@ begin
   end;
 end;
 
-{ --- consumidor ------------------------------------------------------------- }
+{ --- consumer --------------------------------------------------------------- }
 
-// Roda numa thread do pool. Com prefetch=1 e ack manual, o broker só entrega a
-// PRÓXIMA mensagem (a de maior prioridade ainda na fila) depois do Ack — por
-// isso o Sleep vai ANTES do Ack: segura o ritmo e mantém o backlog.
+// Runs on a pool thread. With prefetch=1 and manual ack, the broker only delivers
+// the NEXT message (the highest-priority one still in the queue) after the Ack;
+// that is why the Sleep goes BEFORE the Ack: it holds the pace and keeps the backlog.
 procedure TfrmPrioridade.OnMensagem(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LMarshal: TConsumoMarshal;
@@ -440,7 +440,7 @@ begin
   LMarshal.Corpo := ADelivery.BodyAsText;
   TThread.Queue(nil, LMarshal.Execute);
 
-  Sleep(FDelayMs);                    // consumidor "lento" de propósito
+  Sleep(FDelayMs);                    // deliberately "slow" consumer
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
 
@@ -460,8 +460,8 @@ begin
   LItem.SubItems.Add(FormatDateTime('hh:nn:ss.zzz', Now));
   if LAtBottom then
     LItem.MakeVisible(False);
-  // Log da ordem de SAÍDA: assim o texto do log já mostra a drenagem por
-  // prioridade (saída #N: prioridade P — corpo), sem depender da lista.
+  // Log of the OUTPUT order: this way the log text already shows the drain by
+  // priority (output #N: priority P, body), without depending on the list.
   Log(Format('Consumida (saída #%d): prioridade %d — %s',
     [FSaidaSeq, APrioridade, ACorpo]));
 end;
@@ -495,7 +495,7 @@ begin
     LPrefetch := 1;
   try
     FCanalConsumo.Qos(Word(LPrefetch));
-    FTagConsumidor := FCanalConsumo.Consume(FFila, OnMensagem); // ack manual
+    FTagConsumidor := FCanalConsumo.Consume(FFila, OnMensagem); // manual ack
     Log(Format('Consumidor iniciado: prefetch=%d, delay=%d ms por mensagem.',
       [LPrefetch, FDelayMs]));
     if LPrefetch > 1 then
@@ -508,7 +508,7 @@ begin
   end;
 end;
 
-{ --- eventos de conexão ------------------------------------------------------ }
+{ --- connection events ------------------------------------------------------ }
 
 procedure TfrmPrioridade.ConexaoCaiu;
 begin
@@ -533,8 +533,8 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo PcPool em vez de postar direto
-// (ver o comentário de TConexaoEventoWork).
+// The three connection events hop through PcPool instead of posting directly
+// (see the comment on TConexaoEventoWork).
 procedure TfrmPrioridade.OnDesconectado(AConnection: TAMQPConnection);
 begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
@@ -550,7 +550,7 @@ begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
-{ --- conexão ----------------------------------------------------------------- }
+{ --- connection ------------------------------------------------------------- }
 
 procedure TfrmPrioridade.btnConectarClick(Sender: TObject);
 var
@@ -584,7 +584,7 @@ begin
   if FMaxPrio < 1 then
     FMaxPrio := 1;
   if FMaxPrio > 255 then
-    FMaxPrio := 255; // teto do AMQP (x-max-priority aceita até 255; RabbitMQ recomenda <= 10)
+    FMaxPrio := 255; // AMQP cap (x-max-priority accepts up to 255; RabbitMQ recommends <= 10)
   try
     FConn := TAMQPConnection.Create(LParams);
     FConn.OnDisconnect := OnDesconectado;
@@ -594,9 +594,9 @@ begin
 
     FChannel := FConn.CreateChannel;
 
-    // Recria a fila do zero: redeclarar uma fila existente com x-max-priority
-    // diferente é PRECONDITION_FAILED. DeleteQueue reconcilia a topologia de
-    // recovery (ver RetryDlqVcl).
+    // Recreates the queue from scratch: redeclaring an existing queue with a different
+    // x-max-priority is PRECONDITION_FAILED. DeleteQueue reconciles the recovery
+    // topology (see RetryDlqVcl).
     LDel := Default(TAMQPQueueDelete);
     LDel.QueueName := FFila;
     FChannel.DeleteQueue(LDel);
@@ -604,15 +604,15 @@ begin
     LArgs := TAMQPFieldTable.Create;
     try
       LArgs.Put('x-max-priority', TValue.From<Integer>(FMaxPrio));
-      LDecl := TAMQPQueueDeclare.Create(FFila, True); // durável; recriada a cada conexão
+      LDecl := TAMQPQueueDeclare.Create(FFila, True); // durable; recreated on every connection
       LDecl.Arguments := LArgs;
       FChannel.DeclareQueue(LDecl);
     finally
       LArgs.Free;
     end;
 
-    // Canal separado do consumidor: o Qos(prefetch) dele não interfere no
-    // canal do produtor.
+    // Separate consumer channel: its Qos(prefetch) does not interfere with the
+    // producer channel.
     FCanalConsumo := FConn.CreateChannel;
     FConsumidas := 0;
     lblConsumidas.Caption := 'Consumidas: 0';

@@ -2,18 +2,18 @@
 
 {$I amqp.inc}
 
-{ Classe Basic (60): publicação de mensagens.
+{ Basic class (60): message publishing.
 
-  Uma mensagem publicada vai em três partes no wire:
-    1) um frame de MÉTODO com Basic.Publish (BuildBasicPublish);
-    2) um frame de CONTENT HEADER (BuildContentHeader) com class-id, body-size e
-       as propriedades presentes;
-    3) zero ou mais frames de CONTENT BODY com os bytes do corpo.
+  A published message goes on the wire in three parts:
+    1) a METHOD frame with Basic.Publish (BuildBasicPublish);
+    2) a CONTENT HEADER frame (BuildContentHeader) with class-id, body-size and
+       the properties present;
+    3) zero or more CONTENT BODY frames with the body bytes.
 
-  As propriedades (TAMQPBasicProperties) são todas opcionais; um bitmap
-  (property-flags, u16, bit 15 = primeira propriedade) indica quais estão
-  presentes. O conjunto Flags controla isso — use os setters (SetXxx), que
-  preenchem o valor e marcam o flag juntos. }
+  The properties (TAMQPBasicProperties) are all optional; a bitmap
+  (property-flags, u16, bit 15 = first property) tells which are
+  present. The Flags set controls that — use the setters (SetXxx), which
+  fill in the value and set the flag together. }
 
 interface
 
@@ -24,7 +24,7 @@ uses
   AMQP.Method;
 
 type
-  { Propriedades na ordem do property-flags (a primeira ocupa o bit 15). }
+  { Properties in property-flags order (the first takes bit 15). }
   TAMQPBasicProp = (
     bpContentType, bpContentEncoding, bpHeaders, bpDeliveryMode, bpPriority,
     bpCorrelationId, bpReplyTo, bpExpiration, bpMessageId, bpTimestamp,
@@ -32,21 +32,21 @@ type
   TAMQPBasicProps = set of TAMQPBasicProp;
 
   TAMQPBasicProperties = record
-    Flags: TAMQPBasicProps;      // quais propriedades estão presentes
-    ContentType: string;         // ex. 'application/json'; livre, não validado pelo broker
-    ContentEncoding: string;     // ex. 'gzip'; livre, não validado pelo broker
-    Headers: TAMQPFieldTable;    // dono: chamador (liberar se presente)
-    DeliveryMode: Byte;          // 1 = transiente, 2 = persistente
-    Priority: Byte;              // 0-9; só tem efeito se a fila foi declarada com x-max-priority
-    CorrelationId: string;       // correlaciona request/reply (RPC); ecoada pelo servidor na resposta
-    ReplyTo: string;             // fila (ou 'amq.rabbitmq.reply-to') para onde enviar a resposta
-    Expiration: string;          // TTL da mensagem em ms, como STRING decimal (ex. '5000'); não é número
-    MessageId: string;           // id de aplicação; a lib não gera nem valida, é opaco pro broker
-    Timestamp: UInt64;           // epoch em segundos (não ms); opaco pro broker, informativo
-    MsgType: string;             // a propriedade 'type'; livre, uso da aplicação
-    UserId: string;              // se setado, o broker valida contra o usuário autenticado da conexão
-    AppId: string;               // livre, uso da aplicação
-    ClusterId: string;           // reservado pelo protocolo; sem uso prático no RabbitMQ
+    Flags: TAMQPBasicProps;      // which properties are present
+    ContentType: string;         // e.g. 'application/json'; free-form, not validated by the broker
+    ContentEncoding: string;     // e.g. 'gzip'; free-form, not validated by the broker
+    Headers: TAMQPFieldTable;    // owner: caller (free if present)
+    DeliveryMode: Byte;          // 1 = transient, 2 = persistent
+    Priority: Byte;              // 0-9; only has effect if the queue was declared with x-max-priority
+    CorrelationId: string;       // correlates request/reply (RPC); echoed by the server in the reply
+    ReplyTo: string;             // queue (or 'amq.rabbitmq.reply-to') to send the reply to
+    Expiration: string;          // message TTL in ms, as a decimal STRING (e.g. '5000'); not a number
+    MessageId: string;           // application id; the lib neither generates nor validates it, opaque to the broker
+    Timestamp: UInt64;           // epoch in seconds (not ms); opaque to the broker, informational
+    MsgType: string;             // the 'type' property; free-form, for the application
+    UserId: string;              // if set, the broker validates it against the connection's authenticated user
+    AppId: string;               // free-form, for the application
+    ClusterId: string;           // reserved by the protocol; no practical use in RabbitMQ
 
     procedure SetContentType(const AValue: string);
     procedure SetContentEncoding(const AValue: string);
@@ -73,7 +73,7 @@ type
     Properties: TAMQPBasicProperties;
   end;
 
-  { Argumentos de Basic.Get-Ok (a mensagem em si vem no content header + body). }
+  { Arguments of Basic.Get-Ok (the message itself comes in the content header + body). }
   TAMQPBasicGetOk = record
     DeliveryTag: UInt64;
     Redelivered: Boolean;
@@ -82,20 +82,20 @@ type
     MessageCount: Cardinal;
   end;
 
-  { Argumentos de Basic.Consume. }
+  { Arguments of Basic.Consume. }
   TAMQPBasicConsume = record
     Queue: string;
-    ConsumerTag: string;    // '' => o servidor gera
+    ConsumerTag: string;    // '' => the server generates one
     NoLocal: Boolean;
-    NoAck: Boolean;         // True = sem ack (auto); False = ack manual
+    NoAck: Boolean;         // True = no ack (auto); False = manual ack
     Exclusive: Boolean;
     NoWait: Boolean;
-    Arguments: TAMQPFieldTable; // pode ser nil
+    Arguments: TAMQPFieldTable; // may be nil
     class function Create(const AQueue, AConsumerTag: string;
       ANoAck: Boolean = False): TAMQPBasicConsume; static;
   end;
 
-  { Argumentos de Basic.Deliver (a mensagem vem no content header + body). }
+  { Arguments of Basic.Deliver (the message comes in the content header + body). }
   TAMQPBasicDeliver = record
     ConsumerTag: string;
     DeliveryTag: UInt64;
@@ -104,9 +104,9 @@ type
     RoutingKey: string;
   end;
 
-  { Argumentos de Basic.Return (a mensagem devolvida vem no content header +
-    body). Enviado pelo broker quando um publish `mandatory` não pôde ser
-    roteado a nenhuma fila. }
+  { Arguments of Basic.Return (the returned message comes in the content header +
+    body). Sent by the broker when a `mandatory` publish could not be
+    routed to any queue. }
   TAMQPBasicReturn = record
     ReplyCode: Word;
     ReplyText: string;
@@ -114,11 +114,11 @@ type
     RoutingKey: string;
   end;
 
-  { Confirmação de publish enviada pelo broker no modo `confirm` (publisher
-    confirms). O broker reusa Basic.Ack/Basic.Nack (mesmos IDs de método que o
-    cliente usa para confirmar consumo), mas aqui DeliveryTag é o seq-no do
-    publish e Multiple significa "este e todos os anteriores ainda pendentes".
-    São frames de método puros — sem content header nem body. }
+  { Publish confirmation sent by the broker in `confirm` mode (publisher
+    confirms). The broker reuses Basic.Ack/Basic.Nack (the same method IDs the
+    client uses to acknowledge consumption), but here DeliveryTag is the publish's
+    seq-no and Multiple means "this one and all previous ones still pending".
+    They are pure method frames — no content header or body. }
   TAMQPBasicAck = record
     DeliveryTag: UInt64;
     Multiple: Boolean;
@@ -127,7 +127,7 @@ type
   TAMQPBasicNack = record
     DeliveryTag: UInt64;
     Multiple: Boolean;
-    Requeue: Boolean;    // sem uso prático em confirms; presente por simetria
+    Requeue: Boolean;    // no practical use in confirms; present for symmetry
   end;
 
 function BuildBasicPublish(const AExchange, ARoutingKey: string;
@@ -140,12 +140,12 @@ function BuildBasicAck(ADeliveryTag: UInt64; AMultiple: Boolean = False): TBytes
 function BuildBasicNack(ADeliveryTag: UInt64; AMultiple: Boolean = False;
   ARequeue: Boolean = True): TBytes;
 
-/// Decodifica um Basic.Ack/Basic.Nack vindo do broker (publisher confirms).
-/// O cabeçalho de método (class/method) já deve ter sido lido do reader.
+/// Decodes a Basic.Ack/Basic.Nack coming from the broker (publisher confirms).
+/// The method header (class/method) must already have been read from the reader.
 function DecodeBasicAck(const AReader: TAMQPReader): TAMQPBasicAck;
 function DecodeBasicNack(const AReader: TAMQPReader): TAMQPBasicNack;
 
-/// Confirm.Select (classe 85): coloca o canal em modo publisher confirms.
+/// Confirm.Select (class 85): puts the channel in publisher confirms mode.
 function BuildConfirmSelect(ANoWait: Boolean = False): TBytes;
 
 function BuildBasicQos(APrefetchCount: Word; AGlobal: Boolean = False;
@@ -156,47 +156,47 @@ function DecodeBasicConsumeOk(const AReader: TAMQPReader): string; // consumer-t
 
 function BuildBasicCancel(const AConsumerTag: string; ANoWait: Boolean = False): TBytes;
 function DecodeBasicCancelOk(const AReader: TAMQPReader): string;  // consumer-tag
-function DecodeBasicCancel(const AReader: TAMQPReader): string;    // servidor -> cliente
+function DecodeBasicCancel(const AReader: TAMQPReader): string;    // server -> client
 
 function DecodeBasicDeliver(const AReader: TAMQPReader): TAMQPBasicDeliver;
 
 function DecodeBasicReturn(const AReader: TAMQPReader): TAMQPBasicReturn;
 
-/// Payload do frame de content header (tipo 2). ABodySize = total do corpo.
+/// Payload of the content header frame (type 2). ABodySize = total body size.
 function BuildContentHeader(ABodySize: UInt64;
   const AProps: TAMQPBasicProperties): TBytes; overload;
 
-/// O mesmo, com o contexto de trace W3C nos headers: 'traceparent' (e
-/// 'tracestate', quando não vazio) como longstr no fim da tabela. A tabela do
-/// chamador NÃO é alterada — os pares entram só nos bytes. Se a tabela já tem
-/// 'traceparent', quem publicou decidiu o contexto e nada é acrescentado.
-/// ATraceParent vazio = a primeira forma.
+/// The same, with the W3C trace context in the headers: 'traceparent' (and
+/// 'tracestate', when not empty) as longstr at the end of the table. The caller's
+/// table is NOT changed — the pairs go only into the bytes. If the table already has
+/// 'traceparent', the publisher decided the context and nothing is added.
+/// Empty ATraceParent = the first form.
 function BuildContentHeader(ABodySize: UInt64; const AProps: TAMQPBasicProperties;
   const ATraceParent, ATraceState: string): TBytes; overload;
 
-/// Lê um content header já decodificado do payload de um frame tipo 2.
-/// Se as propriedades incluírem Headers, o chamador é dono dessa tabela.
+/// Reads an already decoded content header from the payload of a type 2 frame.
+/// If the properties include Headers, the caller owns that table.
 function DecodeContentHeader(const AReader: TAMQPReader): TAMQPContentHeader;
 
 // =========================================================================
-//  Lado servidor (sub-módulo broker) — decode dos métodos cliente->servidor
-//  e build dos métodos servidor->cliente. DecodeBasicAck/DecodeBasicNack e
-//  BuildBasicAck/BuildBasicNack acima já servem aos dois sentidos (o cliente
-//  usa-os para consumo; o broker, para publisher confirms).
-//  Nos records decodificados com campo Arguments/Headers a tabela é nova e
-//  pertence ao chamador (deve liberá-la).
+//  Server side (broker sub-module) — decode of the client->server methods
+//  and build of the server->client methods. DecodeBasicAck/DecodeBasicNack and
+//  BuildBasicAck/BuildBasicNack above already serve both directions (the client
+//  uses them for consumption; the broker, for publisher confirms).
+//  In decoded records with an Arguments/Headers field the table is new and
+//  belongs to the caller (who must free it).
 // =========================================================================
 
 type
-  { Basic.Qos (cliente -> servidor). }
+  { Basic.Qos (client -> server). }
   TAMQPBasicQosArgs = record
     PrefetchSize: Cardinal;
     PrefetchCount: Word;
     Global: Boolean;
   end;
 
-  { Basic.Publish (cliente -> servidor) — o cabeçalho de método; o conteúdo
-    (content header + body) vem nos frames seguintes. }
+  { Basic.Publish (client -> server) — the method header; the content
+    (content header + body) comes in the following frames. }
   TAMQPBasicPublish = record
     Exchange: string;
     RoutingKey: string;
@@ -204,22 +204,22 @@ type
     Immediate: Boolean;
   end;
 
-  { Basic.Get (cliente -> servidor). }
+  { Basic.Get (client -> server). }
   TAMQPBasicGet = record
     Queue: string;
     NoAck: Boolean;
   end;
 
-  { Basic.Cancel (cliente -> servidor) — com o no-wait, ao contrário do
-    DecodeBasicCancel legado (usado no consumer-cancel-notify servidor->cliente,
-    que só quer o consumer-tag). }
+  { Basic.Cancel (client -> server) — with the no-wait, unlike the
+    legacy DecodeBasicCancel (used in the server->client consumer-cancel-notify,
+    which only wants the consumer-tag). }
   TAMQPBasicCancelArgs = record
     ConsumerTag: string;
     NoWait: Boolean;
   end;
 
-  { Basic.Reject (cliente -> servidor) — rejeita UMA entrega (sem 'multiple',
-    ao contrário do Nack). }
+  { Basic.Reject (client -> server) — rejects ONE delivery (no 'multiple',
+    unlike Nack). }
   TAMQPBasicReject = record
     DeliveryTag: UInt64;
     Requeue: Boolean;
@@ -246,13 +246,13 @@ function BuildBasicReturn(const AReturn: TAMQPBasicReturn): TBytes;
 function DecodeBasicReject(const AReader: TAMQPReader): TAMQPBasicReject;
 function BuildBasicReject(ADeliveryTag: UInt64; ARequeue: Boolean = True): TBytes;
 
-/// Confirm.Select (classe 85, cliente -> servidor) — devolve o no-wait.
+/// Confirm.Select (class 85, client -> server) — returns the no-wait.
 function DecodeConfirmSelect(const AReader: TAMQPReader): Boolean;
 function BuildConfirmSelectOk: TBytes;
 
 implementation
 
-// Bit da property-flags para uma propriedade: a primeira (Ord=0) é o bit 15.
+// property-flags bit for a property: the first (Ord=0) is bit 15.
 function PropBit(AProp: TAMQPBasicProp): Word;
 begin
   Result := Word(1 shl (15 - Ord(AProp)));
@@ -531,7 +531,7 @@ end;
 
 function DecodeBasicCancel(const AReader: TAMQPReader): string;
 begin
-  Result := AReader.ReadShortStr; // consumer-tag (o no-wait bit que segue é ignorado)
+  Result := AReader.ReadShortStr; // consumer-tag (the no-wait bit that follows is ignored)
 end;
 
 function DecodeBasicDeliver(const AReader: TAMQPReader): TAMQPBasicDeliver;
@@ -577,7 +577,7 @@ begin
   W := TAMQPWriter.Create;
   try
     W.WriteShortUInt(AMQP_CLASS_BASIC); // class-id
-    W.WriteShortUInt(0);                // weight (sempre 0)
+    W.WriteShortUInt(0);                // weight (always 0)
     W.WriteLongLongUInt(ABodySize);
 
     LFlags := 0;
@@ -587,13 +587,13 @@ begin
       LFlags := LFlags or PropBit(bpHeaders);
     W.WriteShortUInt(LFlags);
 
-    // Propriedades presentes, na ordem do enum.
+    // Properties present, in enum order.
     if bpContentType in AProps.Flags then W.WriteShortStr(AProps.ContentType);
     if bpContentEncoding in AProps.Flags then W.WriteShortStr(AProps.ContentEncoding);
     if LInject then
     begin
-      // tracestate solto na tabela (sem traceparent) fica o do chamador:
-      // field-table não admite nome repetido.
+      // a stray tracestate in the table (without traceparent) stays the caller's:
+      // a field-table does not allow a repeated name.
       if (ATraceState <> '') and
         not (Assigned(LHeaders) and LHeaders.ContainsKey('tracestate')) then
         W.WriteFieldTable(LHeaders, ['traceparent', 'tracestate'],
@@ -632,8 +632,8 @@ begin
   Result.BodySize := AReader.ReadLongLongUInt;
 
   LFlags := AReader.ReadShortUInt;
-  // Palavras de continuação (bit 0). Nenhuma propriedade de Basic vive além da
-  // primeira palavra, então apenas consumimos e ignoramos as extras.
+  // Continuation words (bit 0). No Basic property lives beyond the
+  // first word, so we just consume and ignore the extra ones.
   LMore := LFlags;
   while (LMore and 1) <> 0 do
     LMore := AReader.ReadShortUInt;
@@ -669,7 +669,7 @@ begin
 end;
 
 { ===================================================================== }
-{  Lado servidor                                                        }
+{  Server side                                                          }
 { ===================================================================== }
 
 function DecodeBasicQos(const AReader: TAMQPReader): TAMQPBasicQosArgs;
@@ -710,7 +710,7 @@ begin
   Result.NoAck := AReader.ReadBit;
   Result.Exclusive := AReader.ReadBit;
   Result.NoWait := AReader.ReadBit;
-  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+  Result.Arguments := AReader.ReadFieldTable; // owner: caller
 end;
 
 function BuildBasicConsumeOk(const AConsumerTag: string): TBytes;
@@ -775,7 +775,7 @@ var
 begin
   W := BeginMethod(AMQP_CLASS_BASIC, AMQP_BASIC_GET_EMPTY);
   try
-    W.WriteShortStr(''); // reserved-1 (cluster-id) — obsoleto
+    W.WriteShortStr(''); // reserved-1 (cluster-id) — obsolete
     Result := W.ToBytes;
   finally
     W.Free;

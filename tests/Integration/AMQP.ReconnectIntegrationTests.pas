@@ -1,9 +1,9 @@
 ﻿unit AMQP.ReconnectIntegrationTests;
 
-{ Integração de reconexão automática — precisa de RabbitMQ em localhost:5672.
-  Simula queda (fecha o socket), aguarda a auto-reconexão + recuperação de
-  topologia (redeclara a fila e re-consome) e confere que o consumer volta a
-  receber mensagens publicadas por uma conexão de controle separada. }
+{ Automatic reconnection integration — needs RabbitMQ on localhost:5672.
+  Simulates a drop (closes the socket), waits for the auto-reconnection +
+  topology recovery (redeclares the queue and re-consumes) and checks that the
+  consumer receives again messages published by a separate control connection. }
 
 
 interface
@@ -28,19 +28,19 @@ type
     FReceived: TThreadList<string>;
     FReconnected: Integer;
     FQueue: string;
-    // Campos dedicados aos testes que abrem sua própria conexão auto-reconnect
-    // (não usam a FConsumerConn do Setup) — closures não são aceitas pelos
-    // callbacks 'of object' da lib (ver CLAUDE.md), então o que antes era
-    // variável local capturada agora precisa ser campo da fixture. TInterlocked
-    // não existe no FPC -> PcAtomic*.
+    // Fields dedicated to the tests that open their own auto-reconnect
+    // connection (they do not use the Setup's FConsumerConn) — closures are not
+    // accepted by the library's 'of object' callbacks (see CLAUDE.md), so what
+    // used to be a captured local variable now has to be a fixture field.
+    // TInterlocked does not exist in FPC -> PcAtomic*.
     FDropTestReconnected: Integer;
     FRepublishTestReconnected: Integer;
-    // Testes de fechamento durante a reconexão: quedas percebidas (OnDisconnect)
-    // e Close chamados de dentro do OnDisconnect que já voltaram.
+    // Tests of closing during reconnection: drops noticed (OnDisconnect) and
+    // Close calls made from inside OnDisconnect that have already returned.
     FCloseTestDisconnected: Integer;
     FSelfCloseDone: Integer;
-    // Testes de replay cruzado entre canais: reconexões concluídas e as falhas
-    // de tentativa reportadas por OnReconnectError ('n: motivo').
+    // Tests of cross-channel replay: completed reconnections and the attempt
+    // failures reported by OnReconnectError ('n: reason').
     FCrossReconnected: Integer;
     FReconnectErrors: TThreadList<string>;
     function ReceivedContains(const AText: string): Boolean;
@@ -92,12 +92,12 @@ begin
   FReconnectErrors := TThreadList<string>.Create;
   FQueue := 'test-recon-' + IntToStr(PcTickMs);
 
-  // Conexão de controle (sem auto-reconnect) só para publicar.
+  // Control connection (no auto-reconnect) just for publishing.
   FControlConn := TAMQPConnection.Create(IntegrationParams);
   FControlConn.Open;
   FControlChan := FControlConn.CreateChannel;
 
-  // Conexão consumidora com auto-reconexão.
+  // Consumer connection with auto-reconnection.
   LParams := IntegrationParams;
   LParams.AutoReconnect := True;
   LParams.ReconnectDelayMs := 500;
@@ -107,8 +107,8 @@ begin
   FConsumerConn.Open;
   FConsumerChan := FConsumerConn.CreateChannel;
 
-  // Fila nomeada, auto-delete (some quando o consumidor cai; a recuperação a
-  // redeclara). Declarada no canal consumidor -> gravada para recuperação.
+  // Named, auto-delete queue (goes away when the consumer drops; recovery
+  // redeclares it). Declared on the consumer channel -> recorded for recovery.
   LDecl := Default(TAMQPQueueDeclare);
   LDecl.QueueName := FQueue;
   LDecl.AutoDelete := True;
@@ -119,7 +119,7 @@ end;
 
 procedure TAMQPReconnectIntegrationTests.TearDown;
 begin
-  FConsumerChan.Free; // cancela o consumidor -> fila auto-delete some
+  FConsumerChan.Free; // cancels the consumer -> the auto-delete queue goes away
   FConsumerConn.Free;
   FControlChan.Free;
   FControlConn.Free;
@@ -156,7 +156,7 @@ end;
 
 procedure TAMQPReconnectIntegrationTests.HandleSelfCloseDisconnect(AConnection: TAMQPConnection);
 begin
-  // Roda NA thread de reconexão: o Close não pode unir a própria thread.
+  // Runs ON the reconnection thread: Close cannot join its own thread.
   AConnection.Close;
   PcAtomicInc(FSelfCloseDone);
 end;
@@ -225,23 +225,23 @@ end;
 
 procedure TAMQPReconnectIntegrationTests.Reconecta_E_ContinuaConsumindo;
 begin
-  // 1) Publica antes da queda e confirma o consumo.
+  // 1) Publishes before the drop and confirms consumption.
   FControlChan.PublishText('', FQueue, 'antes-da-queda');
   WaitReceived('antes-da-queda', 5000);
   TAssert.AssertTrue('deveria consumir antes da queda', ReceivedContains('antes-da-queda'));
 
-  // 2) Simula a queda de rede.
+  // 2) Simulates the network drop.
   FConsumerConn.DropConnectionForTest;
 
-  // 3) Aguarda a auto-reconexão + recuperação (OnReconnect dispara após
-  //    redeclarar a fila e re-consumir).
+  // 3) Waits for the auto-reconnection + recovery (OnReconnect fires after
+  //    redeclaring the queue and re-consuming).
   WaitReconnected(15000);
   TAssert.AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FReconnected));
   TAssert.AssertTrue('conexão deveria estar aberta após reconectar', FConsumerConn.IsOpen);
 
-  // 4) Publica depois da recuperação e confirma que o consumo voltou.
-  //    15s: logo após o recovery o broker/canal ainda podem estar assentando
-  //    (flakeou com 5s sob carga — broker compartilhado com outra suíte).
+  // 4) Publishes after the recovery and confirms consumption is back.
+  //    15s: right after recovery the broker/channel may still be settling
+  //    (it flaked with 5s under load — broker shared with another suite).
   FControlChan.PublishText('', FQueue, 'depois-da-recuperacao');
   WaitReceived('depois-da-recuperacao', 15000);
   TAssert.AssertTrue('deveria voltar a consumir após a reconexão',
@@ -255,7 +255,7 @@ var
   LChan: TAMQPChannel;
   I, LWaited: Integer;
 begin
-  // Conexão própria (isolada das fixtures do Setup) com auto-reconexão.
+  // Its own connection (isolated from the Setup's fixtures) with auto-reconnection.
   FDropTestReconnected := 0;
   LParams := IntegrationParams;
   LParams.AutoReconnect := True;
@@ -267,14 +267,14 @@ begin
     LChan := LConn.CreateChannel;
     LChan.ConfirmSelect;
 
-    // Publica um lote e derruba IMEDIATAMENTE, antes de os acks chegarem: os
-    // publishes ficam pendentes e a queda os marca como não confirmados
+    // Publishes a batch and drops IMMEDIATELY, before the acks arrive: the
+    // publishes stay pending and the drop marks them as unconfirmed
     // (FailAllUnconfirmed -> FNacked).
     for I := 1 to 200 do
       LChan.PublishText('', 'confirm-drop-test', 'x');
     LConn.DropConnectionForTest;
 
-    // Aguarda a auto-reconexão + recuperação (re-arma o confirm mode).
+    // Waits for the auto-reconnection + recovery (re-arms confirm mode).
     LWaited := 0;
     while (PcAtomicGet(FDropTestReconnected) = 0) and (LWaited < 15000) do
     begin
@@ -283,8 +283,8 @@ begin
     end;
     TAssert.AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FDropTestReconnected));
 
-    // Os publishes pendentes na queda foram PERDIDOS: WaitForConfirms deve
-    // reportar False. (Bug: Recover limpava FNacked e isto retornava True.)
+    // The publishes pending at the drop were LOST: WaitForConfirms must
+    // report False. (Bug: Recover cleared FNacked and this returned True.)
     TAssert.AssertFalse('WaitForConfirms deve reportar False para publishes perdidos na queda',
       LChan.WaitForConfirms(3000));
   finally
@@ -303,15 +303,16 @@ var
   I, LWaited, LCount: Integer;
   LGet: TAMQPGetResult;
 begin
-  // A fila é declarada pela conexão de CONTROLE do Setup (FControlConn), exclusiva
-  // dela — some no teardown. Como não pertence à conexão publicadora, sobrevive à
-  // queda dela e acumula as mensagens (o publisher publica via exchange padrão).
+  // The queue is declared by the Setup's CONTROL connection (FControlConn),
+  // exclusive to it — it goes away on teardown. Since it does not belong to the
+  // publishing connection, it survives that connection's drop and accumulates
+  // the messages (the publisher publishes through the default exchange).
   LCtrlChan := FControlChan;
   LDecl := Default(TAMQPQueueDeclare);
   LDecl.Exclusive := True;
   LQueue := LCtrlChan.DeclareQueue(LDecl).QueueName;
 
-  // Conexão publicadora: auto-reconnect + reenvio de não confirmados.
+  // Publishing connection: auto-reconnect + resending of unconfirmed ones.
   FRepublishTestReconnected := 0;
   LPubParams := IntegrationParams;
   LPubParams.AutoReconnect := True;
@@ -324,13 +325,13 @@ begin
     LPubChan := LPubConn.CreateChannel;
     LPubChan.ConfirmSelect;
 
-    // Publica um lote e derruba IMEDIATAMENTE: a maioria fica sem confirmação e
-    // depende do reenvio para chegar à fila.
+    // Publishes a batch and drops IMMEDIATELY: most stay unconfirmed and
+    // depend on the resend to reach the queue.
     for I := 1 to 100 do
       LPubChan.PublishText('', LQueue, 'msg-' + IntToStr(I));
     LPubConn.DropConnectionForTest;
 
-    // Aguarda a reconexão (que dispara o reenvio dos não confirmados).
+    // Waits for the reconnection (which triggers the resend of the unconfirmed ones).
     LWaited := 0;
     while (PcAtomicGet(FRepublishTestReconnected) = 0) and (LWaited < 15000) do
     begin
@@ -339,8 +340,8 @@ begin
     end;
     TAssert.AssertEquals('deveria ter reconectado', 1, PcAtomicGet(FRepublishTestReconnected));
 
-    // Drena pela conexão de controle: as 100 devem chegar (at-least-once — pode
-    // haver duplicatas de mensagens cujo ack se perdeu na queda, por isso >= 100).
+    // Drains through the control connection: all 100 must arrive (at-least-once —
+    // there may be duplicates of messages whose ack was lost in the drop, hence >= 100).
     LCount := 0;
     LWaited := 0;
     while (LCount < 100) and (LWaited < 10000) do
@@ -367,11 +368,11 @@ var
   LConn: TAMQPConnection;
   LInicio, LGasto: UInt64;
 begin
-  // A conexão cai e a reconexão entra na espera de ReconnectDelayMs (o
-  // OnDisconnect dispara logo antes dela). Fechar ali tem de ser imediato: o
-  // Close acorda a espera, não espera ela vencer. Antes era um Sleep, e o
-  // Free levava o delay inteiro (medido pelo pascal-dfe-broker: 2,0-2,1 s com
-  // 2000 ms).
+  // The connection drops and the reconnection enters the ReconnectDelayMs
+  // wait (OnDisconnect fires right before it). Closing there has to be
+  // immediate: Close wakes the wait, it does not wait for it to expire. It
+  // used to be a Sleep, and Free took the whole delay (measured by
+  // pascal-dfe-broker: 2.0-2.1 s with 2000 ms).
   LConn := NewReconnectingConnection(3000, HandleCloseTestDisconnect);
   try
     LConn.Open;
@@ -393,10 +394,10 @@ var
   LConn: TAMQPConnection;
   LInicio, LGasto: UInt64;
 begin
-  // Delay maior que o antigo teto de 12 s do WaitReconnectStopped: antes, o
-  // Close desistia de esperar com a thread de reconexão ainda dormindo, e ela
-  // acordava lendo um objeto já liberado. Agora o Close a une: volta rápido E
-  // com ela encerrada.
+  // A delay larger than WaitReconnectStopped's old 12 s cap: before, Close
+  // gave up waiting with the reconnection thread still sleeping, and it woke
+  // up reading an already freed object. Now Close joins it: it returns quickly
+  // AND with the thread finished.
   LConn := NewReconnectingConnection(60000, HandleCloseTestDisconnect);
   try
     LConn.Open;
@@ -418,9 +419,10 @@ var
   LConn: TAMQPConnection;
   LInicio, LGasto: UInt64;
 begin
-  // O OnDisconnect roda na thread de reconexão. Um Close chamado dali não pode
-  // esperar a si mesmo: antes ficava preso no teto de 12 s. Agora volta na
-  // hora, a reconexão não acontece, e o Free (de outra thread) une a thread.
+  // OnDisconnect runs on the reconnection thread. A Close called from there
+  // cannot wait for itself: before, it got stuck on the 12 s cap. Now it
+  // returns at once, the reconnection does not happen, and Free (from another
+  // thread) joins the thread.
   LConn := NewReconnectingConnection(60000, HandleSelfCloseDisconnect);
   try
     LConn.Open;
@@ -481,7 +483,7 @@ end;
 function TAMQPReconnectIntegrationTests.PublishError(AChannel: TAMQPChannel;
   const AQueue: string): string;
 begin
-  // 'Classe: mensagem' da exceção do publish, ou '' se ele passou.
+  // 'Class: message' of the publish's exception, or '' if it went through.
   Result := '';
   try
     AChannel.PublishText('', AQueue, 'na-conexao-morta');
@@ -498,21 +500,22 @@ var
   LDecl: TAMQPQueueDeclare;
   LQueue: string;
 begin
-  // O cenário medido no guia de mensageria da pascal-api-infra-faa: um canal
-  // declara a fila e publica, outro só consome. A fila some na queda
-  // (auto-delete aqui; não durável no restart do broker de lá). Antes, a
-  // reconexão replayava canal a canal na ordem do dicionário — o canal 3
-  // primeiro —, o basic.consume levava 404 antes de o declare do canal 1 voltar
-  // e a tentativa falhava igual para sempre, sem sinal nenhum.
+  // The scenario measured in pascal-api-infra-faa's messaging guide: one
+  // channel declares the queue and publishes, another only consumes. The queue
+  // goes away in the drop (auto-delete here; non-durable on the broker restart
+  // there). Before, the reconnection replayed channel by channel in dictionary
+  // order — channel 3 first —, the basic.consume got a 404 before channel 1's
+  // declare came back and the attempt failed the same way forever, with no
+  // signal at all.
   LQueue := 'test-recon-cross-' + IntToStr(PcTickMs);
   LConn := NewReconnectingConnection(500, nil);
   try
     LConn.OnReconnect := HandleCrossReconnect;
     LConn.Open;
-    LPub := LConn.CreateChannel;   // canal 1: declara e publica
-    LConf := LConn.CreateChannel;  // canal 2: confirm mode, como no sample de lá
+    LPub := LConn.CreateChannel;   // channel 1: declares and publishes
+    LConf := LConn.CreateChannel;  // channel 2: confirm mode, as in the sample there
     LConf.ConfirmSelect;
-    LCons := LConn.CreateChannel;  // canal 3: só consome
+    LCons := LConn.CreateChannel;  // channel 3: only consumes
     LDecl := Default(TAMQPQueueDeclare);
     LDecl.QueueName := LQueue;
     LDecl.AutoDelete := True;
@@ -532,7 +535,7 @@ begin
     WaitReceived('cruzado-depois', 15000);
     TAssert.AssertTrue('o consumer do canal 3 deveria voltar a receber', ReceivedContains('cruzado-depois'));
   finally
-    LConn.Free; // libera os três canais
+    LConn.Free; // frees the three channels
   end;
 end;
 
@@ -543,11 +546,12 @@ var
   LDecl: TAMQPQueueDeclare;
   LQueue, LErro, LPubErro: string;
 begin
-  // A fila é da conexão de controle (auto-delete) e a conexão que reconecta só
-  // a consome: na queda ela some, e nada nesta conexão a redeclara. O replay
-  // NÃO pode dar certo — o que se exige é que a falha apareça (callback, motivo
-  // e texto da exceção do publish) e que a reconexão volte sozinha quando a
-  // fila voltar.
+  // The queue belongs to the control connection (auto-delete) and the
+  // reconnecting connection only consumes it: in the drop it goes away, and
+  // nothing on this connection redeclares it. The replay CANNOT succeed — what
+  // is required is that the failure shows up (callback, reason and the
+  // publish exception's text) and that the reconnection comes back on its own
+  // when the queue comes back.
   LQueue := 'test-recon-missing-' + IntToStr(PcTickMs);
   LDecl := Default(TAMQPQueueDeclare);
   LDecl.QueueName := LQueue;
@@ -568,14 +572,15 @@ begin
     TAssert.AssertEquals('sem a fila, a reconexão não pode se dar por concluída', 0, PcAtomicGet(FCrossReconnected));
     TAssert.AssertTrue('LastReconnectError: ' + LConn.LastReconnectError, Pos('404', LConn.LastReconnectError) > 0);
 
-    // Logo depois de uma tentativa falhar há ReconnectDelayMs até a próxima: o
-    // publish cai na conexão indisponível e a exceção diz por quê.
+    // Right after an attempt fails there are ReconnectDelayMs until the next
+    // one: the publish lands on the unavailable connection and the exception
+    // says why.
     LPubErro := PublishError(LChan, LQueue);
     TAssert.AssertTrue('publish durante a reconexão: ' + LPubErro, Pos('EAMQPConnection', LPubErro) = 1);
     TAssert.AssertTrue('a exceção do publish deveria trazer o motivo: ' + LPubErro, Pos('404', LPubErro) > 0);
 
-    // A fila volta (outro processo a redeclara, no mundo real): a próxima
-    // tentativa recupera.
+    // The queue comes back (another process redeclares it, in the real
+    // world): the next attempt recovers.
     FControlChan.DeclareQueue(LDecl);
     WaitCounter(FCrossReconnected, 15000);
     TAssert.AssertEquals('deveria reconectar quando a fila voltasse (última falha: ' + LConn.LastReconnectError + ')', 1, PcAtomicGet(FCrossReconnected));
@@ -595,10 +600,10 @@ var
   LErro: string;
   LWaited: Integer;
 begin
-  // Sem AutoReconnect, publish numa conexão morta levantava o EWriteError da
-  // RTL ("Stream write error"), não a EAMQPConnection documentada. Dois
-  // instantes: logo após a queda (a thread de leitura pode ainda não ter
-  // percebido: falha a escrita no socket) e depois de ela perceber.
+  // Without AutoReconnect, a publish on a dead connection raised the RTL's
+  // EWriteError ("Stream write error"), not the documented EAMQPConnection.
+  // Two moments: right after the drop (the read thread may not have noticed
+  // yet: the socket write fails) and after it notices.
   LConn := TAMQPConnection.Create(IntegrationParams);
   try
     LConn.Open;

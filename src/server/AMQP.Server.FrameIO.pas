@@ -2,24 +2,25 @@
 
 {$I amqp.inc}
 
-{ Escrita serial de frames de UMA conexão do broker (sub-módulo server, WS4).
+{ Serial frame writing for ONE broker connection (server sub-module, WS4).
 
-  Vários produtores enfileiram frames — a thread de leitura (respostas de
-  método, Channel/Connection.Close), o timer de heartbeat e, na Fase 2, os
-  workers de fila (Basic.Deliver) e o handler de canal (confirms). Uma única
-  thread interna drena a fila para o TStream, na ordem de chegada. Assim o
-  objeto SSL / o socket nunca sofrem escrita concorrente e a ordem dos frames
-  no canal é determinística.
+  Several producers enqueue frames: the read thread (method replies,
+  Channel/Connection.Close), the heartbeat timer and, in Phase 2, the queue
+  workers (Basic.Deliver) and the channel handler (confirms). A single
+  internal thread drains the queue into the TStream, in arrival order. So the
+  SSL object / the socket never see concurrent writes, and the frame order on
+  the channel is deterministic.
 
-  - PostFrames enfileira um lote sob um único lock: method + content-header +
-    body de uma entrega nunca são intercalados com outra sequência no mesmo
-    canal (senão o cliente vê UNEXPECTED_FRAME / 505).
-  - A fila é limitada (FMaxDepth): quando cheia, Post* bloqueia até a escritora
-    vazar — isso propaga o backpressure do socket como flow-control natural.
-  - Se uma escrita no stream falha, a escritora guarda o erro, acorda os
-    produtores bloqueados e encerra; todo Post* seguinte levanta EAMQPTransport.
+  - PostFrames enqueues a batch under a single lock: method + content-header +
+    body of a delivery are never interleaved with another sequence on the same
+    channel (otherwise the client sees UNEXPECTED_FRAME / 505).
+  - The queue is bounded (FMaxDepth): when full, Post* blocks until the writer
+    thread drains it, which propagates the socket's backpressure as natural
+    flow control.
+  - If a write to the stream fails, the writer thread stores the error, wakes
+    the blocked producers and exits; every later Post* raises EAMQPTransport.
 
-  Não é dono do TStream (quem cria o writer é dono do stream/socket). }
+  Does not own the TStream (whoever creates the writer owns the stream/socket). }
 
 interface
 
@@ -36,7 +37,7 @@ uses
 type
   TAMQPFrameWriter = class;
 
-  { Thread interna: drena a fila e escreve no stream. }
+  { Internal thread: drains the queue and writes to the stream. }
   TAMQPFrameWriterThread = class(TThread)
   private
     FOwner: TAMQPFrameWriter;
@@ -55,46 +56,47 @@ type
     FJoinLock: TCriticalSection;
     FJoined: Boolean;
     FMaxDepth: Integer;
-    FStopping: Boolean;   // Stop pedido (sob FMon)
-    FFailed: Boolean;     // escrita falhou (sob FMon)
-    FError: string;       // motivo do FFailed (sob FMon)
+    FStopping: Boolean;   // Stop requested (under FMon)
+    FFailed: Boolean;     // a write failed (under FMon)
+    FError: string;       // reason for FFailed (under FMon)
     FStarted: Boolean;
-    FLastWriteTick: UInt64; // atomico; ultimo flush real no stream
+    FLastWriteTick: UInt64; // atomic; last real flush to the stream
     procedure DrainLoop;
     procedure EnqueueOne(const AFrame: TAMQPFrame);
   public
-    /// AMaxDepth = profundidade da fila antes de Post* bloquear.
+    /// AMaxDepth = queue depth before Post* blocks.
     constructor Create(AStream: TStream; AMaxDepth: Integer = 256);
     destructor Destroy; override;
 
-    /// Enfileira um frame. Bloqueia se a fila está cheia. Levanta
-    /// EAMQPTransport se a escritora já parou ou falhou.
+    /// Enqueues one frame. Blocks if the queue is full. Raises
+    /// EAMQPTransport if the writer thread has already stopped or failed.
     procedure PostFrame(const AFrame: TAMQPFrame);
-    /// Enfileira vários frames atomicamente (não intercalados com outro lote).
+    /// Enqueues several frames atomically (not interleaved with another batch).
     procedure PostFrames(const AFrames: array of TAMQPFrame);
-    /// Como PostFrames, mas **NÃO BLOQUEIA e NÃO LEVANTA**: devolve False se a
-    /// fila está cheia agora, ou se a escritora já parou/falhou — e nesse caso
-    /// nada é enfileirado (o lote é indivisível: method + header + body de uma
-    /// entrega jamais entram pela metade).
+    /// Like PostFrames, but **DOES NOT BLOCK and DOES NOT RAISE**: returns False
+    /// if the queue is full right now, or if the writer thread has already
+    /// stopped/failed, and in that case nothing is enqueued (the batch is
+    /// indivisible: method + header + body of a delivery never go in halfway).
     ///
-    /// É o caminho da ENTREGA (WS4 da Fase 2). O ator da fila roda num worker
-    /// do pool e não pode bloquear esperando I/O (decisão D2); um consumidor
-    /// cujo canal não aceita mais frames sai do rodízio daquela rodada em vez
-    /// de travar a fila inteira (decisão D3) — que é o que aconteceria se a
-    /// entrega usasse PostFrames.
+    /// This is the DELIVERY path (WS4 of Phase 2). The queue actor runs on a
+    /// pool worker and must not block waiting for I/O (decision D2); a consumer
+    /// whose channel accepts no more frames leaves the round-robin for that
+    /// round instead of stalling the whole queue (decision D3), which is what
+    /// would happen if delivery used PostFrames.
     function TryPostFrames(const AFrames: array of TAMQPFrame): Boolean;
 
-    /// Para a escritora: drena o que já está na fila (best-effort) e encerra a
-    /// thread. Idempotente. Após Stop, Post* levanta exceção.
+    /// Stops the writer thread: drains what is already queued (best-effort) and
+    /// ends the thread. Idempotent. After Stop, Post* raises an exception.
     procedure Stop;
 
-    /// '' enquanto sã; o motivo depois de uma falha de escrita.
+    /// '' while healthy; the reason after a write failure.
     function LastError: string;
     function Failed: Boolean;
-    /// Tick (PcTickMs) da última escrita que chegou de fato ao stream — não
-    /// do último Post*. É o que o heartbeat precisa: a spec fala em ociosidade
-    /// do envio no wire, e um frame parado na fila ainda não saiu.
-    /// 0 enquanto nada foi escrito. Leitura atômica; chamável de outra thread.
+    /// Tick (PcTickMs) of the last write that actually reached the stream, not
+    /// of the last Post*. That is what the heartbeat needs: the spec talks about
+    /// idleness of sending on the wire, and a frame sitting in the queue has not
+    /// left yet. 0 while nothing has been written. Atomic read; callable from
+    /// another thread.
     function LastWriteTick: UInt64;
   end;
 
@@ -105,7 +107,7 @@ implementation
 constructor TAMQPFrameWriterThread.Create(AOwner: TAMQPFrameWriter);
 begin
   FOwner := AOwner;
-  inherited Create(False); // arranca já
+  inherited Create(False); // starts right away
 end;
 
 procedure TAMQPFrameWriterThread.Execute;
@@ -131,7 +133,7 @@ end;
 
 destructor TAMQPFrameWriter.Destroy;
 begin
-  Stop; // ja' faz o join (uma vez so')
+  Stop; // already does the join (only once)
   FThread.Free;
   FQueue.Free;
   FMon.Free;
@@ -150,8 +152,8 @@ begin
   try
     if FStopping or FFailed or (FQueue.Count >= FMaxDepth) then
       Exit(False);
-    // Uma vez decidido que cabe, o lote inteiro entra -- como no PostFrames,
-    // o último lote pode passar do teto, e é isso que preserva a atomicidade.
+    // Once it is decided that it fits, the whole batch goes in -- as in
+    // PostFrames, the last batch may exceed the cap, and that is what keeps it atomic.
     for I := 0 to High(AFrames) do
       FQueue.Enqueue(AFrames[I]);
     FMon.PulseAll;
@@ -172,14 +174,14 @@ begin
   finally
     FMon.Leave;
   end;
-  // JOIN UMA VEZ SO'. `TThread.WaitFor` no FPC/Unix e' `pthread_join`
-  // INCONDICIONAL (rtl/unix/tthread.inc: WaitForThreadTerminate -> pthread_join,
-  // sem checar se ja' houve join); no Windows e' WaitForSingleObject, que num
-  // handle ja' sinalizado e' idempotente. Chamar duas vezes, portanto, e'
-  // inofensivo num e comportamento INDEFINIDO no outro -- e se o pthread_t
-  // tiver sido reciclado por uma thread nova, o segundo join espera pela
-  // thread ERRADA, para sempre. O lock e' o que faz o segundo chamador esperar
-  // o primeiro join TERMINAR antes de seguir, em vez de so' pular.
+  // JOIN ONLY ONCE. `TThread.WaitFor` on FPC/Unix is an UNCONDITIONAL
+  // `pthread_join` (rtl/unix/tthread.inc: WaitForThreadTerminate -> pthread_join,
+  // without checking whether a join already happened); on Windows it is
+  // WaitForSingleObject, which is idempotent on an already signaled handle.
+  // Calling it twice is therefore harmless on one and UNDEFINED behavior on the
+  // other -- and if the pthread_t has been recycled by a new thread, the second
+  // join waits for the WRONG thread, forever. The lock is what makes the second
+  // caller wait for the first join to FINISH before going on, instead of just skipping.
   FJoinLock.Enter;
   try
     if not FJoined then
@@ -194,7 +196,7 @@ end;
 
 procedure TAMQPFrameWriter.EnqueueOne(const AFrame: TAMQPFrame);
 begin
-  // chamar SEGURANDO FMon
+  // call WHILE HOLDING FMon
   while (FQueue.Count >= FMaxDepth) and (not FStopping) and (not FFailed) do
     FMon.Wait(PC_WAIT_INFINITE);
   if FStopping then
@@ -223,8 +225,8 @@ begin
     Exit;
   FMon.Enter;
   try
-    // Espera só uma vez (o lote inteiro entra junto, mesmo que passe do teto:
-    // um lote indivisível não pode ficar preso pela metade).
+    // Waits only once (the whole batch goes in together, even if it exceeds the
+    // cap: an indivisible batch cannot be left stuck halfway).
     while (FQueue.Count >= FMaxDepth) and (not FStopping) and (not FFailed) do
       FMon.Wait(PC_WAIT_INFINITE);
     if FStopping then
@@ -248,7 +250,7 @@ begin
   LBatch := nil;
   LDone := False;
   repeat
-    // Pega tudo o que houver na fila (ou espera).
+    // Takes everything in the queue (or waits).
     FMon.Enter;
     try
       while (FQueue.Count = 0) and (not FStopping) and (not FFailed) do
@@ -264,16 +266,16 @@ begin
       else
         SetLength(LBatch, 0);
 
-      // Depois de Stop, drenamos o que restou e então saímos.
+      // After Stop, we drain what is left and then exit.
       if (FStopping or FFailed) and (FQueue.Count = 0) then
         LDone := True;
 
-      FMon.PulseAll; // libera produtores que esperavam vaga
+      FMon.PulseAll; // releases producers waiting for room
     finally
       FMon.Leave;
     end;
 
-    // Escrita FORA do lock.
+    // Write OUTSIDE the lock.
     if Length(LBatch) > 0 then
     begin
       try

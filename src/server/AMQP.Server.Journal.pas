@@ -2,106 +2,107 @@
 
 {$I amqp.inc}
 
-{ A thread do journal e o group commit -- sub-modulo broker, WS2 da Fase 4
-  (durabilidade, ver CLAUDE.md, decisoes D19-D28).
+{ The journal thread and group commit -- broker sub-module, WS2 of Phase 4
+  (durability, see CLAUDE.md, decisions D19-D28).
 
-  Esta unit e' a que transforma "escrever no arquivo" (WS1, AMQP.Server.Wal) em
-  "prometer durabilidade": ela numera os registros, junta o que chegou num
-  lote, escreve, da' UM fsync e so' entao avanca a MARCA D'AGUA -- o numero a
-  partir do qual um confirm pode ser liberado (D24).
+  This is the unit that turns "writing to the file" (WS1, AMQP.Server.Wal)
+  into "promising durability": it numbers the records, gathers what arrived
+  into a batch, writes, does ONE fsync and only then advances the WATERMARK --
+  the number up to which a confirm may be released (D24).
 
-  O LACO, QUE E' A D25 INTEIRA
-  ----------------------------
-      espera ter algo na fila
-      tira TUDO que esta' la'
-      escreve os registros
-      UM fsync
-      avanca a marca d'agua e avisa
-      repete
+  THE LOOP, WHICH IS ALL OF D25
+  -----------------------------
+      wait until there is something in the queue
+      take EVERYTHING that is there
+      write the records
+      ONE fsync
+      advance the watermark and notify
+      repeat
 
-  Nao ha janela de espera nem tamanho de lote configuravel, e isso e'
-  deliberado: sob carga baixa o lote e' 1 e a latencia e' a de um fsync
-  isolado; sob carga alta o lote cresce sozinho, porque o que chega DURANTE um
-  fsync e' exatamente o proximo lote. O ganho medido na WS0 (35x-50x no
-  Windows, ~250x no Linux da VM) vem so' disso -- e cresce quanto pior for o
-  disco, que e' a propriedade que se quer de um lote auto-ajustavel.
+  There is no wait window and no configurable batch size, and that is
+  deliberate: under low load the batch is 1 and the latency is that of a lone
+  fsync; under high load the batch grows by itself, because what arrives
+  DURING an fsync is exactly the next batch. The gain measured in WS0
+  (35x-50x on Windows, ~250x on the VM's Linux) comes from that alone -- and
+  it grows the worse the disk is, which is the property you want from a
+  self-tuning batch.
 
-  QUEM PODE BLOQUEAR, E QUEM NAO PODE (D24, corolario c)
-  ------------------------------------------------------
-  A fila de submissao tem teto, e a contrapressao vive no PUBLICADOR:
+  WHO MAY BLOCK, AND WHO MAY NOT (D24, corollary c)
+  -------------------------------------------------
+  The submission queue has a cap, and backpressure lives in the PUBLISHER:
 
-    Submit        BLOQUEIA enquanto a fila estiver acima do teto. Quem chama
-                  e' a thread de leitura da conexao, e para ela de ler aquela
-                  conexao e' exatamente a contrapressao desejada -- a mesma
-                  forma da fila de saida do writer.
-    SubmitNoWait  NUNCA bloqueia e NUNCA recusa: e' por onde o ATOR da fila
-                  escreve as retiradas que so' ele decide (ack, drop-head,
-                  expiracao, dead-letter). A D2 proibe o ator de esperar I/O, e
-                  o volume desses registros e' limitado pelo numero de entradas
-                  vivas -- nao ha como o ator, sozinho, encher a fila para
-                  sempre.
+    Submit        BLOCKS while the queue is above the cap. The caller is the
+                  connection's read thread, and making it stop reading that
+                  connection is exactly the desired backpressure -- the same
+                  shape as the writer's outbound queue.
+    SubmitNoWait  NEVER blocks and NEVER refuses: it is how the queue ACTOR
+                  writes the retirements only it decides (ack, drop-head,
+                  expiration, dead-letter). D2 forbids the actor from waiting
+                  on I/O, and the volume of these records is bounded by the
+                  number of live entries -- there is no way for the actor
+                  alone to fill the queue forever.
 
-  O SINK NAO PODE BLOQUEAR, pela mesma razao que o ator nao pode: ele roda NA
-  thread do journal, e segura-lo trava o group commit inteiro.
+  THE SINK MAY NOT BLOCK, for the same reason the actor may not: it runs ON
+  the journal thread, and holding it stalls the whole group commit.
 
-  FALHA FECHA A PORTA, NAO ABAIXA A GUARDA
-  ----------------------------------------
-  fsync que falha NAO avanca a marca d'agua -- os registros continuam
-  pendentes e o lote seguinte tenta de novo (os bytes ja' estao no arquivo; um
-  fsync posterior cobre os anteriores). Ja' ESCRITA que falha e' outra coisa: o
-  registro nao esta' em lugar nenhum, e nao ha como repor a promessa. Nesse
-  caso o journal entra em estado FALHO, definitivo: Submit passa a levantar,
-  WaitDurable devolve False, e o sink e' avisado uma vez. Um broker que nao
-  consegue mais escrever tem de dizer isso, nao continuar aceitando publish
-  persistente como se nada fosse.
+  FAILURE CLOSES THE DOOR, IT DOES NOT LOWER THE GUARD
+  ----------------------------------------------------
+  An fsync that fails does NOT advance the watermark -- the records stay
+  pending and the next batch tries again (the bytes are already in the file;
+  a later fsync covers the earlier ones). A failed WRITE is another matter:
+  the record is nowhere, and there is no way to restore the promise. In that
+  case the journal enters a FAILED state, permanently: Submit starts raising,
+  WaitDurable returns False, and the sink is notified once. A broker that can
+  no longer write has to say so, not keep accepting persistent publishes as if
+  nothing had happened.
 
-  O QUE NAO ESTA' AQUI
-  --------------------
-  COMPACTACAO (WS7, D26) -- por que ela e' segura a queda sem transacao
-  --------------------------------------------------------------------
-  Compactar e' reescrever o que ainda esta' vivo e apagar o resto. A D26 pede
-  UMA mecanica so' e nenhum arquivo de snapshot, e o jeito de conseguir as
-  duas coisas e' reusar o REPLAY: o conjunto vivo e' exatamente o que a
-  recuperacao ja' sabe calcular (AMQP.Server.Recovery).
+  WHAT IS NOT HERE
+  ----------------
+  COMPACTION (WS7, D26) -- why it is crash-safe without a transaction
+  -------------------------------------------------------------------
+  Compacting is rewriting what is still live and deleting the rest. D26 asks
+  for ONE mechanism only and no snapshot file, and the way to get both is to
+  reuse the REPLAY: the live set is exactly what recovery already knows how to
+  compute (AMQP.Server.Recovery).
 
-  A ordem e' o que substitui a transacao, como na D23:
-    1. fecha o segmento ativo (dai' em diante nada mais e' escrito nos velhos);
-    2. le' o log inteiro e descobre o que esta' vivo;
-    3. escreve tudo isso num segmento NOVO, com os MESMOS EntryId/ContentId;
+  Order is what replaces the transaction, as in D23:
+    1. close the active segment (from then on nothing is written to the old ones);
+    2. read the whole log and find out what is live;
+    3. write all of it to a NEW segment, with the SAME EntryId/ContentId;
     4. fsync;
-    5. so' entao apaga os segmentos velhos.
+    5. only then delete the old segments.
 
-  Uma queda em QUALQUER ponto e' segura, e a razao esta' no passo 3: como os
-  identificadores sao preservados, um log que contenha as duas copias descreve
-  o MESMO estado -- o replay unifica colocacao repetida por EntryId. Cair
-  entre o 3 e o 5 deixa o dobro dos bytes, nunca o dobro das mensagens. Nada
-  se perde porque o novo so' vira verdade depois do fsync, e o velho so' some
-  depois disso.
+  A crash at ANY point is safe, and the reason is in step 3: since the
+  identifiers are preserved, a log containing both copies describes the SAME
+  state -- replay unifies a repeated placement by EntryId. Crashing between
+  3 and 5 leaves twice the bytes, never twice the messages. Nothing is lost
+  because the new one only becomes truth after the fsync, and the old one only
+  goes away after that.
 
-  QUANDO ELA PODE RODAR -- e por que NAO ha gatilho automatico
-  ------------------------------------------------------------
-  So' com o journal QUIESCENTE: nada submetido e ainda nao escrito. Hoje isso
-  quer dizer DENTRO DO Start, depois da recuperacao e antes de o socket de
-  escuta abrir, onde nao existe publicador nem ator.
+  WHEN IT MAY RUN -- and why there is NO automatic trigger
+  --------------------------------------------------------
+  Only with the journal QUIESCENT: nothing submitted and not yet written.
+  Today that means INSIDE Start, after recovery and before the listening
+  socket opens, where there is no publisher and no actor.
 
-  A primeira versao disparava a compactacao na rotacao, no meio da operacao, e
-  ISSO ESTAVA ERRADO -- o teste pegou. O LSN e' atribuido no Submit, na thread
-  de quem publica; a compactacao roda depois, na thread do journal, e atribui
-  LSNs NOVOS para os registros que reescreve. Um publish que tenha pego o seu
-  LSN ANTES da compactacao e ainda esteja na fila e' escrito DEPOIS dela -- com
-  um LSN menor que o ultimo do arquivo. O Append recusa (a invariante de LSN
-  crescente da WS1), a escrita falha e o journal inteiro vai a estado falho.
+  The first version fired compaction on rotation, in mid-operation, and THAT
+  WAS WRONG -- the test caught it. The LSN is assigned in Submit, on the
+  publisher's thread; compaction runs later, on the journal thread, and
+  assigns NEW LSNs to the records it rewrites. A publish that got its LSN
+  BEFORE compaction and is still in the queue is written AFTER it -- with an
+  LSN lower than the file's last one. Append refuses (WS1's increasing-LSN
+  invariant), the write fails and the whole journal goes to the failed state.
 
-  Nao ha conserto barato: a ordem dos LSN tem de ser a ordem do arquivo, e o
-  conteudo compactado e' LOGICAMENTE MAIS VELHO que qualquer submit
-  concorrente. Compactar em voo exige quiescer a alocacao de LSN -- o que
-  esbarra na D2, que proibe o ator de esperar. Fica como trabalho proprio; o
-  que existe hoje limita o crescimento POR REINICIO, nao em voo.
+  There is no cheap fix: LSN order has to be file order, and the compacted
+  content is LOGICALLY OLDER than any concurrent submit. Compacting in flight
+  requires quiescing LSN allocation -- which runs into D2, which forbids the
+  actor from waiting. It is left as work of its own; what exists today bounds
+  growth PER RESTART, not in flight.
 
-  Antes da rotacao havia UM segmento
-  ativo e nao o rola quando ele passa do tamanho alvo. O registro de confirms
-  pendentes por canal e' a WS5 -- aqui existe so' a costura
-  (IAMQPDurabilitySink) e a marca d'agua que ela consulta. }
+  Before rotation there was ONE active
+  segment and it was not rolled when it passed the target size. The registry
+  of pending confirms per channel is WS5 -- here there is only the seam
+  (IAMQPDurabilitySink) and the watermark it consults. }
 
 interface
 
@@ -118,34 +119,34 @@ uses
   AMQP.Server.Recovery;
 
 const
-  /// Teto da fila de submissao, em bytes de payload. Acima disso o Submit
-  /// BLOQUEIA (o SubmitNoWait do ator ignora). Quatro megabytes seguram varios
-  /// milhares de registros tipicos -- fundo suficiente para o group commit
-  /// crescer, raso o bastante para a contrapressao chegar ao publicador antes
-  /// de a memoria virar problema.
+  /// Cap of the submission queue, in payload bytes. Above it Submit BLOCKS
+  /// (the actor's SubmitNoWait ignores it). Four megabytes hold several
+  /// thousand typical records -- deep enough for group commit to grow,
+  /// shallow enough for backpressure to reach the publisher before memory
+  /// becomes a problem.
   AMQP_JOURNAL_MAX_PENDING_BYTES = 4 * 1024 * 1024;
 
-  /// Quanto um Submit bloqueado espera antes de desistir. Generoso: o journal
-  /// nao espera peer nenhum, so' o disco, entao estourar isto e' disco parado
-  /// ou bug nosso.
+  /// How long a blocked Submit waits before giving up. Generous: the journal
+  /// waits on no peer, only the disk, so exceeding this means a stalled disk
+  /// or a bug of ours.
   AMQP_JOURNAL_SUBMIT_TIMEOUT_MS = 30000;
 
-  /// Quantas vezes o log pode ser MAIOR que o conteudo vivo antes de o
-  /// journal se compactar sozinho. Quatro e' a fracao viva de 25% da D26,
-  /// escrita do lado de ca': depois de cada compactacao o limiar seguinte
-  /// vira quatro vezes o que sobrou, entao um log genuinamente VIVO nunca e'
-  /// recompactado a toa -- ele so' volta a disparar quando quadruplicar de
-  /// novo. Sem parametro de tempo, na forma da D25.
+  /// How many times LARGER than the live content the log may get before the
+  /// journal compacts itself. Four is D26's 25% live fraction, written from
+  /// this side: after each compaction the next threshold becomes four times
+  /// what was left, so a genuinely LIVE log is never recompacted for nothing
+  /// -- it only fires again when it quadruples again. No time parameter, in
+  /// the shape of D25.
   AMQP_JOURNAL_COMPACT_FATOR = 4;
 
-  /// Quanto o Stop espera a thread drenar o que ja' foi aceito.
+  /// How long Stop waits for the thread to drain what was already accepted.
   AMQP_JOURNAL_STOP_TIMEOUT_MS = 30000;
 
 type
   EAMQPJournal = class(Exception);
 
-  /// Um registro a gravar. Kind e' o mesmo campo opaco da WS1 -- quem lhe da'
-  /// significado (D22: CONTENT, ENQ, DEQ, TOPO) e' a WS3/WS4.
+  /// A record to write. Kind is the same opaque field from WS1 -- its meaning
+  /// (D22: CONTENT, ENQ, DEQ, TOPO) is given by WS3/WS4.
   TAMQPJournalRecord = record
     Kind: Byte;
     Payload: TBytes;
@@ -153,56 +154,57 @@ type
 
   TAMQPJournalRecords = array of TAMQPJournalRecord;
 
-  { Quem quer saber que um LSN ficou duravel. Implementado na WS5 pelo registro
-    de confirms pendentes.
+  { Whoever wants to know that an LSN became durable. Implemented in WS5 by the
+    registry of pending confirms.
 
-    NAO PODE BLOQUEAR NEM FAZER I/O: roda na thread do journal, entre o fsync e
-    o proximo lote. E' a mesma regra do ator da fila (D2) e pela mesma razao. }
+    MAY NOT BLOCK OR DO I/O: it runs on the journal thread, between the fsync
+    and the next batch. It is the same rule as the queue actor's (D2), for the
+    same reason. }
   IAMQPDurabilitySink = interface
     ['{4A1D7E90-2C63-4B58-8F07-D9E3A5C61B24}']
-    /// Tudo com LSN <= ALsn esta' no disco.
+    /// Everything with LSN <= ALsn is on disk.
     procedure Durable(ALsn: UInt64);
-    /// O journal nao vai mais durar nada. Chamado UMA vez.
+    /// The journal will not make anything durable anymore. Called ONCE.
     procedure JournalFailed(const AMessage: string);
   end;
 
-  { Contagens do journal. Vao juntas num registro lido SOB O LOCK, e nao como
-    propriedades soltas, por uma razao medida e nao estetica: o build Delphi
-    deste projeto e' Win32, onde Inc() num Int64 e' leitura-modificacao-escrita
-    NAO atomica -- uma thread de teste lendo um contador enquanto a do journal
-    o incrementa poderia ver metade de um valor. E' a mesma razao de existirem
-    os PcAtomic*64 na PascalCommon.Threading. }
+  { Journal counters. They go together in a record read UNDER THE LOCK, not as
+    loose properties, for a measured and not aesthetic reason: this project's
+    Delphi build is Win32, where Inc() on an Int64 is a NON-atomic
+    read-modify-write -- a test thread reading a counter while the journal
+    thread increments it could see half a value. It is the same reason the
+    PcAtomic*64 exist in PascalCommon.Threading. }
   TAMQPJournalStats = record
-    /// Rodadas do laco que escreveram alguma coisa.
+    /// Loop rounds that wrote something.
     Batches: Int64;
-    /// fsyncs tentados. Registros/Syncs e' o tamanho medio do lote -- e' este
-    /// numero que prova que o group commit esta' agrupando.
+    /// fsyncs attempted. Records/Syncs is the average batch size -- it is this
+    /// number that proves group commit is grouping.
     Syncs: Int64;
-    /// fsyncs que devolveram False (nao avancaram a marca d'agua).
+    /// fsyncs that returned False (did not advance the watermark).
     FailedSyncs: Int64;
     Records: Int64;
-    /// Maior lote ja' escrito numa rodada.
+    /// Largest batch ever written in one round.
     MaxBatchSize: Integer;
-    /// Quantas vezes o segmento cheio foi fechado e outro aberto (D26).
+    /// How many times the full segment was closed and another opened (D26).
     Rotations: Int64;
-    /// Quantas compactacoes rodaram, e quantos segmentos elas apagaram.
+    /// How many compactions ran, and how many segments they deleted.
     Compactions: Int64;
     DeletedSegments: Int64;
-    /// Publishes persistentes recusados por teto de disco (D26).
+    /// Persistent publishes refused by the disk cap (D26).
     Refused: Int64;
-    /// Tamanho aproximado do log agora.
+    /// Approximate size of the log now.
     Bytes: Int64;
-    /// Bytes de payload esperando na fila de submissao AGORA.
+    /// Payload bytes waiting in the submission queue NOW.
     PendingBytes: Int64;
     DurableLsn: UInt64;
-    /// LSN que o proximo registro submetido vai receber.
+    /// LSN the next submitted record will get.
     NextLsn: UInt64;
   end;
 
   TAMQPJournal = class;
 
-  { A thread que escreve. Uma por journal, persistente, sem FreeOnTerminate --
-    a mesma forma da TAMQPMonitorThread do broker. }
+  { The thread that writes. One per journal, persistent, no FreeOnTerminate --
+    the same shape as the broker's TAMQPMonitorThread. }
   TAMQPJournalThread = class(TThread)
   private
     FJournal: TAMQPJournal;
@@ -212,9 +214,9 @@ type
     constructor Create(AJournal: TAMQPJournal);
   end;
 
-  { Um item na fila de submissao. O LSN ja' vem atribuido: e' o Submit que o
-    da', sob o lock, porque o publicador precisa dele ANTES de voltar (D24 --
-    e' o numero que ele guarda no confirm pendente). }
+  { An item in the submission queue. The LSN comes already assigned: Submit
+    gives it, under the lock, because the publisher needs it BEFORE returning
+    (D24 -- it is the number it keeps in the pending confirm). }
   TAMQPJournalItem = record
     Lsn: UInt64;
     Kind: Byte;
@@ -236,16 +238,16 @@ type
     FMaxSegmentBytes: Int64;
     FCompactAbove: Int64;
     FMaxJournalBytes: Int64;
-    /// Tamanho aproximado do log AGORA, mantido pela thread do journal e lido
-    /// sem lock pelos publicadores. Aproximado de proposito: um teto de disco
-    /// nao precisa de precisao de byte, e varrer o diretorio no caminho quente
-    /// do publish e' que seria errado.
+    /// Approximate size of the log NOW, kept by the journal thread and read
+    /// without a lock by the publishers. Approximate on purpose: a disk cap
+    /// does not need byte precision, and scanning the directory on the
+    /// publish hot path is what would be wrong.
     FTotalBytes: UInt64;
     FClosedBytes: UInt64;
     FRefused: Int64;
     FSegNo: Cardinal;
     FNextLsn: UInt64;
-    FDurableLsn: UInt64;   // atomico -- leitura fora do lock
+    FDurableLsn: UInt64;   // atomic -- read outside the lock
     FRunning: Boolean;
     FStopping: Boolean;
     FFailed: Boolean;
@@ -264,115 +266,118 @@ type
     function InternalSubmit(const ARecs: array of TAMQPJournalRecord;
       AWaitVacancy: Boolean): UInt64;
   protected
-    /// Uma rodada do laco: drena, escreve, sincroniza, avanca a marca.
-    /// Devolve False quando nao ha mais nada a fazer e a parada foi pedida.
+    /// One loop round: drains, writes, syncs, advances the watermark.
+    /// Returns False when there is nothing left to do and a stop was requested.
     function ProcessSingleBatch: Boolean;
-    /// Ponto exato entre "tirei o lote da fila" e "escrevi" -- a janela em que
-    /// um Submit concorrente decide se entra neste lote ou no proximo. No-op
-    /// em producao; o teste sobrescreve para postar de outra thread dentro
-    /// dela. NAO PODE LEVANTAR. (Mesma ideia do ActorRoundEnding da fila.)
+    /// Exact point between "took the batch from the queue" and "wrote" -- the
+    /// window in which a concurrent Submit decides whether it goes into this
+    /// batch or the next. No-op in production; the test overrides it to post
+    /// from another thread inside it. MAY NOT RAISE. (Same idea as the queue's
+    /// ActorRoundEnding.)
     procedure BatchTaken; virtual;
-    /// A costura de arquivo do segmento ativo. Virtual para o teste injetar um
-    /// duble que conta fsyncs e falha na hora escolhida (camada 2 da D28).
+    /// The file seam of the active segment. Virtual so the test can inject a
+    /// test double that counts fsyncs and fails at the chosen moment (layer 2
+    /// of D28).
     function CreateFile(const APath: string; ACreate: Boolean): IAMQPWalFile; virtual;
-    /// Fecha o segmento cheio e abre o proximo. Chamado SO' na fronteira de
-    /// lote -- ver o comentario na chamada.
+    /// Closes the full segment and opens the next. Called ONLY at a batch
+    /// boundary -- see the comment at the call site.
     procedure Rotate;
-    /// Abre um segmento novo (o proximo numero) e o torna o ativo.
+    /// Opens a new segment (the next number) and makes it the active one.
     procedure OpenNextSegment;
-    /// Recalcula FBytesTotal. So' na thread do journal.
+    /// Recomputes FBytesTotal. Only on the journal thread.
     procedure UpdateSize;
-    /// Escreve os registros vivos no segmento ativo, com os identificadores
-    /// PRESERVADOS. Devolve o LSN do ULTIMO que escreveu (0 se nao escreveu
-    /// nada) -- e' o numero que a marca d agua tem de alcancar depois do
-    /// fsync da compactacao.
+    /// Writes the live records to the active segment, with the identifiers
+    /// PRESERVED. Returns the LSN of the LAST one written (0 if it wrote
+    /// nothing) -- it is the number the watermark has to reach after the
+    /// compaction's fsync.
     function WriteLiveRecords(AState: TAMQPRecoveredState): UInt64;
   public
-    /// ADir e' o DataDir. O lock exclusivo do diretorio e' tomado no Start,
-    /// nao aqui -- construir um journal nao pode roubar o diretorio de um
-    /// broker que ainda esta' de pe'.
+    /// ADir is the DataDir. The directory's exclusive lock is taken in Start,
+    /// not here -- constructing a journal must not steal the directory from a
+    /// broker that is still up.
     constructor Create(const ADir: string);
     destructor Destroy; override;
 
-    /// Toma o lock do diretorio, abre (ou cria) o segmento ativo, recupera o
-    /// proximo LSN do que ja' estava gravado e sobe a thread. Idempotente.
+    /// Takes the directory lock, opens (or creates) the active segment,
+    /// recovers the next LSN from what was already written and starts the
+    /// thread. Idempotent.
     procedure Start;
-    /// Drena o que ja' foi aceito, sincroniza uma ultima vez e para a thread.
-    /// Idempotente; chamado pelo destrutor.
+    /// Drains what was already accepted, syncs one last time and stops the
+    /// thread. Idempotent; called by the destructor.
     procedure Stop;
 
-    /// Enfileira ARecs como um LOTE INDIVISIVEL (LSNs contiguos, na ordem
-    /// dada) e devolve o LSN do ULTIMO -- o numero que o chamador guarda para
-    /// saber quando o lote ficou duravel. BLOQUEIA enquanto a fila estiver
-    /// acima do teto. Levanta se o journal estiver parado ou falho.
+    /// Enqueues ARecs as an INDIVISIBLE BATCH (contiguous LSNs, in the given
+    /// order) and returns the LSN of the LAST one -- the number the caller
+    /// keeps to know when the batch became durable. BLOCKS while the queue is
+    /// above the cap. Raises if the journal is stopped or failed.
     function Submit(const ARecs: array of TAMQPJournalRecord): UInt64;
-    /// Igual, mas NUNCA bloqueia e NUNCA recusa -- e' por onde o ator escreve
-    /// (ver o cabecalho da unit).
+    /// Same, but NEVER blocks and NEVER refuses -- it is how the actor writes
+    /// (see the unit header).
     function SubmitNoWait(const ARecs: array of TAMQPJournalRecord): UInt64;
 
-    /// Tudo com LSN <= isto esta' no disco. Leitura atomica, sem lock.
+    /// Everything with LSN <= this is on disk. Atomic read, no lock.
     function DurableLsn: UInt64;
-    /// Espera ALsn ficar duravel. False no timeout ou se o journal falhar.
+    /// Waits for ALsn to become durable. False on timeout or if the journal fails.
     function WaitDurable(ALsn: UInt64; ATimeoutMs: Cardinal): Boolean;
 
     property Dir: string read FDir;
     property Running: Boolean read FRunning;
-    /// True depois de uma falha de ESCRITA -- definitivo (ver o cabecalho).
+    /// True after a WRITE failure -- permanent (see the header).
     property Failed: Boolean read FFailed;
     property LastError: string read FError;
-    /// Quem e' avisado a cada fsync bem-sucedido. Injetado antes do Start.
+    /// Who is notified on each successful fsync. Injected before Start.
     property DurabilitySink: IAMQPDurabilitySink read FSink write FSink;
     property MaxPendingBytes: Int64 read FMaxPendingBytes
       write FMaxPendingBytes;
-    /// Sink de observabilidade (Fase 4.1, Inc. 2). Emite UM evento por LOTE
-    /// que ficou duravel, nunca um por registro: o group commit da D25 existe
-    /// justamente porque o fsync e' caro, e um evento por registro custaria
-    /// mais que o fsync que ele observa (nao-objetivo da D36).
+    /// Observability sink (Phase 4.1, Inc. 2). Emits ONE event per BATCH that
+    /// became durable, never one per record: D25's group commit exists
+    /// precisely because fsync is expensive, and an event per record would
+    /// cost more than the fsync it observes (non-goal of D36).
     property Events: IAMQPEventSink read FEvents write FEvents;
-    /// Quanto um segmento cresce antes de o journal fechar e abrir o proximo
-    /// (D26). Mexer nisto so' faz sentido em teste: o default e' o do WAL.
+    /// How much a segment grows before the journal closes it and opens the
+    /// next (D26). Changing this only makes sense in tests: the default is the WAL's.
     property MaxSegmentBytes: Int64 read FMaxSegmentBytes
       write FMaxSegmentBytes;
-    /// A partir de que tamanho total o Start compacta o log. 0 desliga.
-    /// NAO ha compactacao em voo -- ver o cabecalho da unit.
+    /// Total size from which Start compacts the log. 0 turns it off.
+    /// There is NO in-flight compaction -- see the unit header.
     property CompactAbove: Int64 read FCompactAbove
       write FCompactAbove;
-    /// TETO DURO do log em bytes. 0 (default) = ilimitado, a forma da D7.
-    /// Ao estourar, o publish PERSISTENTE e' recusado -- ver Cheio.
+    /// HARD CAP of the log in bytes. 0 (default) = unlimited, the shape of D7.
+    /// When exceeded, the PERSISTENT publish is refused -- see Cheio.
     property MaxJournalBytes: Int64 read FMaxJournalBytes
       write FMaxJournalBytes;
 
-    /// Conta mais um publish recusado por teto de disco.
+    /// Counts one more publish refused by the disk cap.
     procedure IncrementRefused;
-    /// True quando o log alcancou o MaxJournalBytes.
+    /// True when the log has reached MaxJournalBytes.
     ///
-    /// A DIFERENCA QUE IMPORTA EM RELACAO A D7: teto de MEMORIA descarta da
-    /// cabeca; teto de DISCO **recusa**. Descartar no disco seria apagar dado
-    /// que o broker ja' confirmou como duravel -- exatamente a promessa que a
-    /// Fase 4 existe para cumprir. Recusar devolve a decisao a quem publica,
-    /// que ainda tem a mensagem na mao.
+    /// THE DIFFERENCE THAT MATTERS COMPARED TO D7: the MEMORY cap drops from
+    /// the head; the DISK cap **refuses**. Dropping on disk would mean deleting
+    /// data the broker already confirmed as durable -- exactly the promise
+    /// Phase 4 exists to keep. Refusing hands the decision back to the
+    /// publisher, who still has the message in hand.
     ///
-    /// Vale SO' para o caminho do publicador (Submit). Registro de RETIRADA
-    /// (SubmitNoWait, do ator) nunca e' recusado: alem de a D24 proibir o ator
-    /// de ser barrado, recusar um DEQ ressuscitaria a mensagem no proximo
-    /// boot -- e sao justamente os DEQs que permitem a compactacao encolher o
-    /// log e sair desta situacao.
+    /// Applies ONLY to the publisher path (Submit). A RETIREMENT record
+    /// (SubmitNoWait, from the actor) is never refused: besides D24 forbidding
+    /// the actor from being held back, refusing a DEQ would resurrect the
+    /// message on the next boot -- and it is precisely the DEQs that let
+    /// compaction shrink the log and get out of this situation.
     function IsFull: Boolean;
-    /// Numero do segmento ATIVO. Cresce a cada rotacao.
+    /// Number of the ACTIVE segment. Grows with each rotation.
     function ActiveSegment: Cardinal;
-    /// Soma dos tamanhos de todos os segmentos, em bytes.
+    /// Sum of the sizes of all segments, in bytes.
     function TotalSize: Int64;
 
-    /// Reescreve o log deixando so' o que esta' vivo e apaga o resto (D26).
-    /// SO' PODE SER CHAMADA PELA THREAD DO JOURNAL (ou com ela parada): ela e'
-    /// a unica que escreve, e a compactacao conta com isso para nao precisar
-    /// de trava nenhuma sobre o arquivo.
+    /// Rewrites the log keeping only what is live and deletes the rest (D26).
+    /// MAY ONLY BE CALLED BY THE JOURNAL THREAD (or with it stopped): it is
+    /// the only one that writes, and compaction relies on that so it needs no
+    /// lock at all over the file.
     ///
-    /// False quando nao havia nada a fazer ou o journal esta' falho; a falha
-    /// de I/O no meio marca o journal como falho, como qualquer outra.
+    /// False when there was nothing to do or the journal has failed; an I/O
+    /// failure halfway marks the journal as failed, like any other.
     function Compact: Boolean;
 
-    /// Contagens, lidas sob o lock (ver TAMQPJournalStats).
+    /// Counters, read under the lock (see TAMQPJournalStats).
     function Stats: TAMQPJournalStats;
   end;
 
@@ -445,28 +450,28 @@ begin
   end
   else
   begin
-    // O ULTIMO segmento e' o ativo. Abrir com trim descarta a cauda torta que
-    // uma queda deixou -- e' o que torna o proximo append alcancavel (WS1).
+    // The LAST segment is the active one. Opening with trim drops the torn tail
+    // a crash left -- that is what makes the next append reachable (WS1).
     LNo := LSegs[High(LSegs)];
     LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LNo);
     FFile := CreateFile(LPath, False);
     FSegment := TAMQPWalSegment.OpenExisting(FFile, True);
     FSegNo := LNo;
   end;
-  // O LSN CONTINUA DE ONDE PAROU. Recomecar do 1 depois de um restart faria o
-  // proprio Append da WS1 levantar (LSN nao crescente) -- e, pior, se nao
-  // levantasse, produziria um arquivo que a recuperacao truncaria no ponto da
-  // volta.
+  // THE LSN CONTINUES FROM WHERE IT STOPPED. Restarting from 1 after a restart
+  // would make WS1's own Append raise (non-increasing LSN) -- and, worse, if it
+  // did not raise, it would produce a file that recovery would truncate at the
+  // point where it wrapped.
   FNextLsn := FSegment.LastLsn + 1;
-  // O tamanho de partida vem do DISCO: os segmentos que ja' estavam la' contam
-  // para o teto desde o primeiro publish, e nao so' depois do primeiro lote.
+  // The starting size comes from the DISK: the segments already there count
+  // toward the cap from the first publish, not only after the first batch.
   FClosedBytes := 0;
   FTotalBytes := 0;
   if TotalSize > FSegment.EndOffset then
     FClosedBytes := UInt64(TotalSize - FSegment.EndOffset);
   UpdateSize;
-  // O que ja' estava no arquivo esta' no disco por definicao: ninguem promete
-  // nada sobre ele agora, mas a marca d'agua nao pode nascer ATRAS dele.
+  // What was already in the file is on disk by definition: nobody promises
+  // anything about it now, but the watermark must not start BEHIND it.
   PcAtomicWrite64(FDurableLsn, FSegment.LastLsn);
 end;
 
@@ -483,8 +488,8 @@ begin
     FMon.Leave;
   end;
 
-  // Fora do lock: tomar o lock do diretorio e abrir arquivo sao I/O, e podem
-  // levantar. Se levantarem, o journal continua parado e nada foi prometido.
+  // Outside the lock: taking the directory lock and opening a file are I/O,
+  // and can raise. If they do, the journal stays stopped and nothing was promised.
   FLock := TAMQPWalDirLock.Create(FDir);
   try
     OpenOrRecover;
@@ -523,11 +528,11 @@ begin
 
   if FThread <> nil then
   begin
-    // A thread sai do laco sozinha depois de drenar: RodaUmLote so' devolve
-    // False quando a fila esta' vazia E a parada foi pedida. Por isso NAO ha
-    // "comando de parada" na fila -- o que ja' foi aceito ainda vai ao disco.
-    // O WaitFor nao pode pendurar: a espera do laco tem timeout de 100 ms e
-    // re-checa FParando a cada volta.
+    // The thread leaves the loop by itself after draining: RodaUmLote only
+    // returns False when the queue is empty AND a stop was requested. That is
+    // why there is NO "stop command" in the queue -- what was already accepted
+    // still goes to disk. WaitFor cannot hang: the loop's wait has a 100 ms
+    // timeout and rechecks FParando on every turn.
     FThread.WaitFor;
     FreeAndNil(FThread);
   end;
@@ -556,7 +561,7 @@ begin
     FFailed := True;
     if FError = '' then
       FError := AMsg;
-    FMon.PulseAll; // solta quem espera vaga e quem espera durabilidade
+    FMon.PulseAll; // releases whoever waits for room and whoever waits for durability
   finally
     FMon.Leave;
   end;
@@ -587,8 +592,8 @@ begin
   try
     if AWaitVacancy then
     begin
-      // Contrapressao: espera a fila baixar do teto. Re-checa em laco com
-      // deadline, como manda o contrato do TPcMonitor (wakeup espurio).
+      // Backpressure: wait for the queue to drop below the cap. Rechecks in a
+      // loop with a deadline, as TPcMonitor's contract requires (spurious wakeup).
       LDeadline := PcTickMs + AMQP_JOURNAL_SUBMIT_TIMEOUT_MS;
       while FRunning and (not FStopping) and (not FFailed)
         and (FPendingBytes >= FMaxPendingBytes) and (PcTickMs < LDeadline) do
@@ -605,10 +610,10 @@ begin
         [AMQP_JOURNAL_SUBMIT_TIMEOUT_MS, FPendingBytes]);
 
 
-    // LSNs contiguos, atribuidos AQUI: o publicador precisa do numero antes de
-    // voltar (D24). E a fila fica ordenada por LSN de graca, porque a
-    // atribuicao e a insercao acontecem sob o mesmo lock -- e' o que torna o
-    // lote indivisivel sem nenhum marcador.
+    // Contiguous LSNs, assigned HERE: the publisher needs the number before
+    // returning (D24). And the queue is ordered by LSN for free, because
+    // assignment and insertion happen under the same lock -- that is what
+    // makes the batch indivisible without any marker.
     Result := 0;
     for I := 0 to High(ARecs) do
     begin
@@ -620,7 +625,7 @@ begin
       Inc(FNextLsn);
     end;
     Inc(FPendingBytes, LBytes);
-    FMon.PulseAll; // acorda a thread do journal
+    FMon.PulseAll; // wakes the journal thread
   finally
     FMon.Leave;
   end;
@@ -682,12 +687,12 @@ end;
 
 procedure TAMQPJournal.BatchTaken;
 begin
-  // no-op em producao -- ver a declaracao
+  // no-op in production -- see the declaration
 end;
 
-// Fecha o segmento cheio e abre o proximo. O LSN CONTINUA: a numeracao e' do
-// journal inteiro, nao do arquivo, e e' o que permite a recuperacao ler os
-// segmentos em sequencia como se fossem um log so'.
+// Closes the full segment and opens the next. The LSN CONTINUES: numbering
+// belongs to the whole journal, not to the file, and that is what lets
+// recovery read the segments in sequence as if they were a single log.
 procedure TAMQPJournal.OpenNextSegment;
 var
   LPath: string;
@@ -695,7 +700,7 @@ begin
   if FSegment <> nil then
     Inc(FClosedBytes, UInt64(FSegment.EndOffset));
   FreeAndNil(FSegment);
-  FFile := nil; // fecha o arquivo anterior
+  FFile := nil; // closes the previous file
   Inc(FSegNo);
   LPath := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(FSegNo);
   FFile := CreateFile(LPath, True);
@@ -734,10 +739,10 @@ begin
   end;
 end;
 
-// Reescreve o vivo no segmento ATIVO, com os identificadores PRESERVADOS --
-// e' o que faz a reescrita ser idempotente e, por isso, segura a queda (ver o
-// cabecalho da unit). A ordem repete a do log original: topologia primeiro,
-// depois cada conteudo antes da colocacao que o usa.
+// Rewrites the live set into the ACTIVE segment, with the identifiers
+// PRESERVED -- that is what makes the rewrite idempotent and therefore
+// crash-safe (see the unit header). The order repeats the original log's:
+// topology first, then each content before the placement that uses it.
 function TAMQPJournal.WriteLiveRecords(AState: TAMQPRecoveredState): UInt64;
 var
   I: Integer;
@@ -789,8 +794,8 @@ begin
     for I := 0 to AState.Entries.Count - 1 do
     begin
       LEnq := AState.Entries[I];
-      // O CORPO SO' UMA VEZ, como no log original (D22): N colocacoes do mesmo
-      // fan-out, e a derivada do dead-letter, compartilham o ContentId.
+      // THE BODY ONLY ONCE, as in the original log (D22): N placements of the
+      // same fan-out, and the dead-letter derivative, share the ContentId.
       if not LAlreadyWritten.ContainsKey(LEnq.ContentId) then
         if AState.Contents.TryGetValue(LEnq.ContentId, LCount) then
         begin
@@ -821,37 +826,37 @@ begin
     Exit;
 
   try
-    // (1) FECHA O ATIVO. Dai' em diante nenhum segmento velho recebe mais
-    // nada, e o replay do passo 2 le' um log que ja' parou de crescer.
+    // (1) CLOSE THE ACTIVE ONE. From then on no old segment receives anything
+    // else, and step 2's replay reads a log that has stopped growing.
     FreeAndNil(FSegment);
     FFile := nil;
 
-    // (2) O CONJUNTO VIVO -- a MESMA leitura da recuperacao, sem uma segunda
-    // implementacao da semantica (D26: uma mecanica so').
+    // (2) THE LIVE SET -- the SAME read as recovery, without a second
+    // implementation of the semantics (D26: one mechanism only).
     LState := AmqpReplayWal(FDir);
     try
-      // (3) O NOVO, com os identificadores preservados.
+      // (3) THE NEW ONE, with the identifiers preserved.
       OpenNextSegment;
       LLast := WriteLiveRecords(LState);
     finally
       LState.Free;
     end;
 
-    // (4) So' depois do fsync o novo e' verdade. Se ele falhar, NAO se apaga
-    // nada: o log fica maior do que precisava, que e' o erro certo a cometer.
+    // (4) Only after the fsync is the new one true. If it fails, NOTHING is
+    // deleted: the log stays larger than it needed to be, which is the right
+    // mistake to make.
     if not FSegment.Sync then
       Exit;
 
-    // A MARCA D AGUA TEM DE ALCANCAR O QUE A COMPACTACAO ESCREVEU. Ela
-    // consumiu LSNs; se a marca ficasse para tras, quem esperasse por um deles
-    // esperaria ate' o proximo lote de publish -- que pode nunca vir. Estes
-    // registros ESTAO no disco: dizer isso e a coisa honesta.
+    // THE WATERMARK HAS TO REACH WHAT COMPACTION WROTE. It consumed LSNs; if
+    // the watermark stayed behind, whoever waited for one of them would wait
+    // until the next publish batch -- which may never come. These records ARE
+    // on disk: saying so is the honest thing.
     if LLast > 0 then
       PcAtomicWrite64(FDurableLsn, LLast);
 
-    // (5) Agora os velhos podem ir. Uma queda aqui deixa as duas copias, e o
-    // replay as unifica por EntryId -- o dobro dos bytes, nunca o dobro das
-    // mensagens.
+    // (5) Now the old ones can go. A crash here leaves both copies, and replay
+    // unifies them by EntryId -- twice the bytes, never twice the messages.
     for I := 0 to High(LOlds) do
     begin
       LPath := IncludeTrailingPathDelimiter(FDir)
@@ -859,7 +864,7 @@ begin
       if SysUtils.DeleteFile(LPath) then
         Inc(FDeletedSegments);
     end;
-    // Os velhos foram embora: o unico segmento que conta agora e' o ativo.
+    // The old ones are gone: the only segment that counts now is the active one.
     FClosedBytes := 0;
     UpdateSize;
   except
@@ -891,16 +896,16 @@ end;
 
 function TAMQPJournal.IsFull: Boolean;
 begin
-  // Leitura sem lock, de proposito: e' um teto, nao um contador de dinheiro.
-  // O pior caso e' aceitar (ou recusar) um publish na fronteira exata, e o
-  // proximo ja' ve' o numero certo.
+  // Read without a lock, on purpose: it is a cap, not a money counter. The
+  // worst case is accepting (or refusing) one publish at the exact boundary,
+  // and the next one already sees the right number.
   Result := (FMaxJournalBytes > 0)
     and (Int64(PcAtomicRead64(FTotalBytes)) >= FMaxJournalBytes);
 end;
 
-// Recalcula o tamanho aproximado do log. Roda SO' na thread do journal, nos
-// tres momentos em que ele muda de verdade: fim de lote, rotacao e
-// compactacao.
+// Recomputes the approximate size of the log. Runs ONLY on the journal thread,
+// at the three moments it really changes: end of batch, rotation and
+// compaction.
 procedure TAMQPJournal.UpdateSize;
 var
   LEnd: Int64;
@@ -945,29 +950,29 @@ begin
     LN := FPendings.Count;
     if LN = 0 then
     begin
-      // Fila vazia E parada pedida: a thread sai. Este e' o UNICO caminho de
-      // saida normal, e ele so' acontece depois de tudo que foi aceito ter
-      // sido escrito -- e' o que faz o Stop nao perder registro.
+      // Empty queue AND stop requested: the thread exits. This is the ONLY
+      // normal exit path, and it only happens after everything accepted has
+      // been written -- that is what keeps Stop from losing records.
       if FStopping then
         Exit(False);
       Exit(True);
     end;
 
-    // TIRA TUDO -- e' o group commit. O que chegar durante a escrita ja' e' o
-    // proximo lote, e e' assim que o tamanho do lote se ajusta sozinho a'
-    // carga sem nenhum parametro (D25).
+    // TAKE EVERYTHING -- that is group commit. What arrives during the write
+    // is already the next batch, and that is how the batch size adjusts itself
+    // to the load without any parameter (D25).
     SetLength(LBatch, LN);
     for I := 0 to LN - 1 do
       LBatch[I] := FPendings.Dequeue;
     FPendingBytes := 0;
-    FMon.PulseAll; // libera quem estava bloqueado por contrapressao
+    FMon.PulseAll; // releases whoever was blocked by backpressure
   finally
     FMon.Leave;
   end;
 
   BatchTaken;
 
-  // --- fora do lock: I/O ---
+  // --- outside the lock: I/O ---
   LMaxLsn := LBatch[LN - 1].Lsn;
   try
     for I := 0 to LN - 1 do
@@ -975,29 +980,29 @@ begin
   except
     on E: Exception do
     begin
-      // Escrita que falha nao tem como ser reposta: os registros nao estao em
-      // lugar nenhum. Estado falho, definitivo.
+      // A failed write cannot be restored: the records are nowhere. Failed
+      // state, permanent.
       MarkFailed(Format('journal write failed: %s', [E.Message]));
       Exit(False);
     end;
   end;
 
-  // fsync que falha NAO e' fatal: os bytes estao no arquivo, e um fsync
-  // posterior cobre este lote. O que NAO pode acontecer e' a marca d'agua
-  // andar -- seria prometer durabilidade que ninguem confirmou.
+  // A failed fsync is NOT fatal: the bytes are in the file, and a later fsync
+  // covers this batch. What must NOT happen is the watermark moving -- that
+  // would promise durability nobody confirmed.
   LSyncOk := FSegment.Sync;
   if LSyncOk then
     PcAtomicWrite64(FDurableLsn, LMaxLsn);
   UpdateSize;
 
-  // ROTACAO, e SO' AQUI: na fronteira de lote, depois do fsync. Nunca no meio
-  // de um lote -- o lote e' indivisivel (D24) e parti-lo entre dois arquivos
-  // daria uma cauda torta artificial no primeiro, que a recuperacao
-  // descartaria junto com metade de um publish ja' aceito.
+  // ROTATION, and ONLY HERE: at the batch boundary, after the fsync. Never in
+  // the middle of a batch -- the batch is indivisible (D24) and splitting it
+  // across two files would give an artificial torn tail in the first, which
+  // recovery would drop together with half of an already accepted publish.
   //
-  // Depois de um fsync que FALHOU nao se rotaciona: os bytes deste lote ainda
-  // nao estao garantidos no disco, e fechar o arquivo agora tiraria a chance
-  // de um fsync posterior cobri-los.
+  // After an fsync that FAILED there is no rotation: this batch's bytes are
+  // not yet guaranteed on disk, and closing the file now would take away the
+  // chance of a later fsync covering them.
   if LSyncOk and (FSegment.EndOffset >= FMaxSegmentBytes) then
   begin
     try
@@ -1005,8 +1010,8 @@ begin
     except
       on E: Exception do
       begin
-        // Nao conseguir abrir o proximo segmento e' falha de escrita: os
-        // proximos registros nao teriam onde ir.
+        // Failing to open the next segment is a write failure: the next
+        // records would have nowhere to go.
         MarkFailed(Format('segment rotation failed: %s', [E.Message]));
         Exit(False);
       end;
@@ -1023,7 +1028,7 @@ begin
       Inc(FFailedSyncs);
     if LN > FMaxBatchSize then
       FMaxBatchSize := LN;
-    FMon.PulseAll; // acorda WaitDurable
+    FMon.PulseAll; // wakes WaitDurable
   finally
     FMon.Leave;
   end;
@@ -1033,11 +1038,11 @@ begin
 
   if (FEvents <> nil) and FEvents.Wants(seJournalFlushed) then
   begin
-    // Depois do fsync E de a marca d'agua ter andado: antes disso nada e'
-    // duravel, e o evento estaria prometendo o que o disco nao confirmou.
+    // After the fsync AND after the watermark moved: before that nothing is
+    // durable, and the event would be promising what the disk did not confirm.
     LEv := AmqpNewEvent(seJournalFlushed);
     LEv.Lsn := LMaxLsn;
-    LEv.Count := LN; // quantos registros este fsync cobriu
+    LEv.Count := LN; // how many records this fsync covered
     FEvents.Emit(LEv);
   end;
 
@@ -1046,9 +1051,10 @@ begin
     try
       LSink.Durable(LMaxLsn);
     except
-      // Sink que levanta nao pode derrubar a thread do journal: o registro JA'
-      // esta' duravel e a marca d'agua ja' andou. Engolir e seguir e' menos
-      // ruim que parar de durar por causa de quem so' queria ser avisado.
+      // A sink that raises must not bring down the journal thread: the record
+      // IS ALREADY durable and the watermark has already moved. Swallowing and
+      // moving on is less bad than ceasing durability because of someone who
+      // only wanted to be notified.
     end;
 end;
 

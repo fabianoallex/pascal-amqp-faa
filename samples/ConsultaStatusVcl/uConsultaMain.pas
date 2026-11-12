@@ -1,60 +1,61 @@
 ﻿unit uConsultaMain;
 
-{ RPC request/reply sobre AMQP: o cliente pergunta o status de uma nota e o
-  servidor responde — o padrão clássico com ReplyTo + CorrelationId.
+{ RPC request/reply over AMQP: the client asks for an invoice's status and the
+  server replies, the classic pattern with ReplyTo + CorrelationId.
 
-  Uma janela com os DOIS papéis, cada um opcional:
-  - Servidor: consome a fila de pedidos (durável) e, para cada consulta,
-    simula a busca (Sleep aleatório até a demora máxima configurada) e publica
-    a resposta na fila indicada pelo ReplyTo do pedido, ecoando o
-    CorrelationId. Ack manual só depois de responder.
-  - Cliente: consome uma fila de RESPOSTAS (ack automático) e, a cada consulta,
-    publica o pedido com ReplyTo = essa fila, CorrelationId = GUID novo e
-    Expiration = timeout (o
-    broker descarta pedidos que envelhecerem na fila além do timeout — não
-    faz sentido o servidor responder a quem já desistiu). A resposta resolve
-    a linha correspondente na lista pelo CorrelationId, com o tempo de ida e
-    volta; um TTimer expira consultas sem resposta, e uma resposta que chegue
-    DEPOIS do timeout é descartada com aviso no log (decisão de projeto que o
-    padrão RPC sempre exige).
+  One window with BOTH roles, each optional:
+  - Server: consumes the request queue (durable) and, for each query,
+    simulates the lookup (random Sleep up to the configured maximum delay) and
+    publishes the reply to the queue named by the request's ReplyTo, echoing
+    the CorrelationId. Manual ack only after replying.
+  - Client: consumes a REPLY queue (automatic ack) and, for each query,
+    publishes the request with ReplyTo = that queue, CorrelationId = new GUID and
+    Expiration = timeout (the
+    broker drops requests that age in the queue past the timeout; there is no
+    point in the server replying to someone who already gave up). The reply
+    resolves the matching row in the list by CorrelationId, with the round-trip
+    time; a TTimer expires queries without a reply, and a reply that arrives
+    AFTER the timeout is dropped with a warning in the log (a design decision the
+    RPC pattern always demands).
 
-  Dá pra rodar uma instância só (os dois papéis na mesma conexão, canais
-  separados) ou duas instâncias — uma como servidor, outra como cliente.
-  Consultar sem servidor ativo também é didático: o pedido fica na fila de
-  pedidos até o TTL (Expiration) estourar, e o cliente reporta timeout.
+  You can run a single instance (both roles on the same connection, separate
+  channels) or two instances, one as server, the other as client.
+  Querying with no server running is instructive too: the request stays in the
+  request queue until the TTL (Expiration) runs out, and the client reports a
+  timeout.
 
-  O checkbox "Usar Direct Reply-to" alterna o mecanismo de resposta do cliente
-  — os dois padrões clássicos de RPC, lado a lado:
+  The "Usar Direct Reply-to" checkbox switches the client's reply mechanism
+  between the two classic RPC patterns, side by side:
 
-  - Desmarcado (fila nomeada): declara uma fila de respostas exclusiva +
-    auto-delete com nome FIXO por instância ('consulta-resp-' + GUID), em vez
-    de nome gerado pelo broker (declare com nome ''). O replay de topologia da
-    reconexão reenvia o declare gravado; com nome '' o broker geraria um nome
-    NOVO e o consumer gravado apontaria para o antigo, quebrando o replay. Com
-    nome fixo, o par declare+consume sobrevive à reconexão.
+  - Unchecked (named queue): declares an exclusive + auto-delete reply queue
+    with a FIXED name per instance ('consulta-resp-' + GUID), instead of a
+    broker-generated name (declare with name ''). The reconnection topology
+    replay resends the recorded declare; with name '' the broker would generate
+    a NEW name and the recorded consumer would point at the old one, breaking
+    the replay. With a fixed name, the declare+consume pair survives reconnection.
 
-  - Marcado (Direct Reply-to, 'amq.rabbitmq.reply-to'): a pseudo-fila mágica do
-    RabbitMQ — não se declara NADA. O cliente só consome dela em no-ack antes
-    de publicar; o broker roteia a resposta de volta por um caminho rápido, sem
-    fila real. É o padrão que o README recomenda para RPC (menos topologia,
-    também imune ao problema de recovery pelo nome estável). Restrições do
-    broker: consumir e publicar o pedido no MESMO canal, e em no-ack. O lado
-    servidor é IDÊNTICO nos dois modos — publica no default exchange com routing
-    key = o ReplyTo que recebeu (que o broker reescreve para um nome opaco).
+  - Checked (Direct Reply-to, 'amq.rabbitmq.reply-to'): RabbitMQ's magic
+    pseudo-queue; NOTHING is declared. The client just consumes from it in no-ack
+    before publishing; the broker routes the reply back by a fast path, with no
+    real queue. It is the pattern the README recommends for RPC (less topology,
+    and also immune to the recovery problem thanks to the stable name). Broker
+    restrictions: consume and publish the request on the SAME channel, and in
+    no-ack. The server side is IDENTICAL in both modes: it publishes to the
+    default exchange with routing key = the ReplyTo it received (which the
+    broker rewrites to an opaque name).
 
-  Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
-  callbacks como métodos nomeados ('of object', regra do FPC) e atualizações
-  de UI via objetos de "marshal" descartáveis + TThread.Queue (ver
-  RetaguardaVcl). Os eventos de conexão saltam pelo PcPool antes de postar
-  — no FPC um TThread.Queue postado pela thread de reconexão (que morre logo
-  após o OnReconnect) seria descartado; ver TConexaoEventoWork e o gotcha no
-  CLAUDE.md. }
+  Compiles in both worlds from the SAME source (GUI samples pattern):
+  callbacks as named methods ('of object', FPC rule) and UI updates through
+  disposable "marshal" objects + TThread.Queue (see RetaguardaVcl). Connection
+  events hop through PcPool before posting: on FPC a TThread.Queue posted by
+  the reconnection thread (which dies right after OnReconnect) would be
+  dropped; see TConexaoEventoWork and the gotcha in CLAUDE.md. }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -67,8 +68,8 @@ uses
   AMQP.Queue.Methods, AMQP.Basic.Methods;
 
 type
-  { Consulta em voo no cliente, indexada pelo CorrelationId. Criada e
-    resolvida SOMENTE na thread da UI (marshals + timer). }
+  { Query in flight on the client, indexed by CorrelationId. Created and
+    resolved ONLY on the UI thread (marshals + timer). }
   TConsultaPendente = class
     Chave: string;
     EnviadaTick: UInt64;
@@ -125,17 +126,17 @@ type
     procedure tmrTimeoutTimer(Sender: TObject);
   private
     FConn: TAMQPConnection;
-    // Canais separados por papel: o consumo do servidor não disputa o RPC de
-    // canal (Publish/DeclareQueue) com o cliente.
+    // Separate channels per role: the server's consumption does not compete for
+    // the channel RPC (Publish/DeclareQueue) with the client.
     FCanalServidor: TAMQPChannel;
     FCanalCliente: TAMQPChannel;
-    FFilaPedidos: string;   // capturada ao conectar (o cliente publica nela)
-    FFilaRespostas: string; // fila de respostas do cliente (ver FModoDireto)
-    FModoDireto: Boolean;   // True = Direct Reply-to; False = fila nomeada
-    FTagServidor: string;   // consumer-tag do servidor ('' = servidor parado)
-    FDelayMaxMs: Integer;   // demora máxima simulada do servidor
+    FFilaPedidos: string;   // captured on connect (the client publishes to it)
+    FFilaRespostas: string; // client reply queue (see FModoDireto)
+    FModoDireto: Boolean;   // True = Direct Reply-to; False = named queue
+    FTagServidor: string;   // server consumer tag ('' = server stopped)
+    FDelayMaxMs: Integer;   // maximum simulated server delay
     FAtendidas: Integer;
-    // Consultas em voo do cliente; tocado SOMENTE na thread da UI.
+    // Client queries in flight; touched ONLY on the UI thread.
     FPendentes: TDictionary<string, TConsultaPendente>;
     function ScrollAtBottom(AHandle: HWND): Boolean;
     procedure Log(const AMsg: string);
@@ -144,15 +145,15 @@ type
     function BuildParams: TAMQPConnectionParams;
     procedure AtualizarAtendidas;
     procedure CancelarPendentes(const AMotivo: string);
-    // Atualizações de UI (thread da UI, via marshals):
+    // UI updates (UI thread, through marshals):
     procedure RespostaRecebida(const ACorrelationId, AStatus: string);
     procedure PedidoAtendido(const AChave, AStatus: string);
     procedure ConexaoCaiu;
     procedure ConexaoVoltou;
     procedure ConexaoFalhou;
-    // Marshalling (chamável de qualquer thread):
+    // Marshalling (callable from any thread):
     procedure QueueLog(const AMsg: string);
-    // Callbacks da lib (threads do pool / de reconexão):
+    // Lib callbacks (pool / reconnection threads):
     procedure OnPedido(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnResposta(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnDesconectado(AConnection: TAMQPConnection);
@@ -173,7 +174,7 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
@@ -190,10 +191,10 @@ begin
 end;
 
 type
-  // Um objeto por chamada: TThread.Queue no FPC so' aceita 'procedure of
-  // object' SEM PARAMETROS, entao os dados viajam num objeto descartavel
-  // (nao num campo compartilhado da form, que teria corrida entre callbacks
-  // concorrentes). Se autodestroi apos rodar. Ver RetaguardaVcl.
+  // One object per call: TThread.Queue on FPC only accepts a 'procedure of
+  // object' WITHOUT PARAMETERS, so the data travels in a disposable object
+  // (not in a shared field of the form, which would race between concurrent
+  // callbacks). It frees itself after running. See RetaguardaVcl.
   TLogMarshal = class
     Form: TfrmConsulta;
     Texto: string;
@@ -220,13 +221,13 @@ type
     procedure Execute;
   end;
 
-  { Os eventos de conexão rodam na thread de RECONEXÃO da lib, que termina
-    logo após o OnReconnect — e no FPC um TThread.Queue postado por uma
-    thread que morre antes do bombeio é DESCARTADO (TThread.Destroy remove os
-    posts pendentes dela, casando pelo ThreadID; no Delphi o descarte casa só
-    pelo parâmetro AThread, que é nil aqui). O salto por um worker do
-    PcPool — threads PERSISTENTES — garante a entrega. Gotcha no CLAUDE.md;
-    achado no PublicadorConfiavelVcl. }
+  { Connection events run on the lib's RECONNECTION thread, which ends
+    right after OnReconnect, and on FPC a TThread.Queue posted by a
+    thread that dies before the pump is DROPPED (TThread.Destroy removes its
+    pending posts, matching by ThreadID; on Delphi the removal matches only
+    by the AThread parameter, which is nil here). Hopping through a PcPool
+    worker (PERSISTENT threads) guarantees delivery. Gotcha in CLAUDE.md;
+    found in PublicadorConfiavelVcl. }
   TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmConsulta;
@@ -287,8 +288,8 @@ end;
 procedure TfrmConsulta.FormCreate(Sender: TObject);
 begin
   Randomize;
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   FPendentes := TDictionary<string, TConsultaPendente>.Create;
   SetConectado(False);
@@ -313,15 +314,15 @@ begin
     end;
   FreeAndNil(FCanalServidor);
   FreeAndNil(FCanalCliente);
-  // Os Free acima drenam os callbacks em voo; os marshals que eles postaram
-  // ainda estao na fila do TThread.Queue — bombear aqui os drena com a form
-  // ainda viva (ver RetaguardaVcl.FormClose).
+  // The Free calls above drain the callbacks in flight; the marshals they posted
+  // are still in the TThread.Queue queue, and pumping here drains them with the
+  // form still alive (see RetaguardaVcl.FormClose).
   Application.ProcessMessages;
   FreeAndNil(FConn);
-  // O Free da conexao encerra a thread de reconexao — nao nascem mais eventos
-  // de conexao. Um TConexaoEventoWork ja enfileirado no pool pode estar
-  // postando o ultimo marshal NESTE instante: a espera curta + bombeio drenam
-  // esse retardatario.
+  // Freeing the connection ends the reconnection thread, so no more connection
+  // events are born. A TConexaoEventoWork already queued on the pool may be
+  // posting the last marshal RIGHT NOW: the short wait + pump drain
+  // that straggler.
   Sleep(100);
   Application.ProcessMessages;
 end;
@@ -334,7 +335,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -367,8 +368,8 @@ procedure TfrmConsulta.btnLimparListaClick(Sender: TObject);
 var
   LPendente: TConsultaPendente;
 begin
-  // Consultas ainda em voo continuam válidas — só desligamos as linhas da
-  // lista delas (a resposta/timeout vira só log).
+  // Queries still in flight remain valid; we only detach their rows
+  // from the list (the reply/timeout becomes just a log line).
   for LPendente in FPendentes.Values do
     LPendente.Item := nil;
   lvConsultas.Items.Clear;
@@ -407,8 +408,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -429,7 +430,7 @@ begin
   chkUseTls.Enabled := not AConectado;
   chkTlsVerifyPeer.Enabled := (not AConectado) and chkUseTls.Checked;
   edtFilaPedidos.Enabled := not AConectado;
-  chkDirectReplyTo.Enabled := not AConectado; // mecanismo escolhido ao conectar
+  chkDirectReplyTo.Enabled := not AConectado; // mechanism chosen on connect
   btnServidor.Enabled := AConectado;
   btnConsultar.Enabled := AConectado;
 end;
@@ -448,10 +449,10 @@ begin
   lblAtendidas.Caption := Format('Atendidas: %d', [FAtendidas]);
 end;
 
-{ --- servidor -------------------------------------------------------------- }
+{ --- server ---------------------------------------------------------------- }
 
-// Roda numa thread do pool (uma por consulta em voo — consultas concorrentes
-// são atendidas em paralelo, como no RetaguardaVcl).
+// Runs on a pool thread (one per query in flight: concurrent queries
+// are served in parallel, as in RetaguardaVcl).
 procedure TfrmConsulta.OnPedido(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LChave, LStatus, LReplyTo, LCorr: string;
@@ -462,7 +463,7 @@ begin
   LReplyTo := ADelivery.Properties.ReplyTo;
   LCorr := ADelivery.Properties.CorrelationId;
 
-  Sleep(100 + Random(FDelayMaxMs)); // consulta simulada ao "banco"
+  Sleep(100 + Random(FDelayMaxMs)); // simulated query to the "database"
 
   case Random(10) of
     0..6: LStatus := 'Autorizada';
@@ -471,16 +472,16 @@ begin
     LStatus := 'Em processamento';
   end;
 
-  // Sem ReplyTo não há para onde responder — atende e descarta (um servidor
-  // real logaria o pedido malformado).
+  // Without ReplyTo there is nowhere to reply: serve it and drop it (a real
+  // server would log the malformed request).
   if LReplyTo <> '' then
   begin
     LProps := TAMQPBasicProperties.Empty;
     LProps.SetContentType('text/plain');
-    LProps.SetCorrelationId(LCorr); // ecoa: é assim que o cliente correlaciona
+    LProps.SetCorrelationId(LCorr); // echo: this is how the client correlates
     AChannel.Publish('', LReplyTo, AmqpUtf8Encode(LStatus), LProps);
   end;
-  AChannel.Ack(ADelivery.DeliveryTag); // só depois de responder
+  AChannel.Ack(ADelivery.DeliveryTag); // only after replying
 
   LMarshal := TAtendidoMarshal.Create;
   LMarshal.Form := Self;
@@ -529,7 +530,7 @@ begin
   end;
 end;
 
-{ --- cliente --------------------------------------------------------------- }
+{ --- client ---------------------------------------------------------------- }
 
 procedure TfrmConsulta.btnConsultarClick(Sender: TObject);
 var
@@ -562,7 +563,7 @@ begin
     LAtBottom := ScrollAtBottom(lvConsultas.Handle);
     LItem := lvConsultas.Items.Add;
     LItem.Caption := LChave;
-    LItem.SubItems.Add(Copy(LCorr, 2, 8)); // trecho do GUID, só pra enxergar
+    LItem.SubItems.Add(Copy(LCorr, 2, 8)); // slice of the GUID, just to make it visible
     LItem.SubItems.Add(cStatusAguardando);
     LItem.SubItems.Add(FormatDateTime('hh:nn:ss.zzz', Now));
     LItem.SubItems.Add('');
@@ -580,8 +581,8 @@ begin
     LProps.SetContentType('text/plain');
     LProps.SetReplyTo(FFilaRespostas);
     LProps.SetCorrelationId(LCorr);
-    // TTL do pedido = timeout do cliente: se envelhecer na fila (servidor
-    // parado/lento), o broker o descarta — ninguém responde a quem desistiu.
+    // Request TTL = client timeout: if it ages in the queue (server
+    // stopped/slow), the broker drops it; nobody replies to someone who gave up.
     LProps.SetExpiration(IntToStr(LTimeout));
     try
       FCanalCliente.Publish('', FFilaPedidos, AmqpUtf8Encode(LChave), LProps);
@@ -598,7 +599,7 @@ begin
   end;
 end;
 
-// Roda numa thread do pool (consumer da fila de respostas, ack automático).
+// Runs on a pool thread (consumer of the reply queue, automatic ack).
 procedure TfrmConsulta.OnResposta(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LMarshal: TRespostaMarshal;
@@ -617,8 +618,8 @@ var
 begin
   if not FPendentes.TryGetValue(ACorrelationId, LPendente) then
   begin
-    // Já expirou (timeout) ou correlação desconhecida: a regra do padrão RPC
-    // é descartar — quem esperava já foi embora.
+    // Already expired (timeout) or unknown correlation: the RPC pattern's rule
+    // is to drop it; whoever was waiting is gone.
     Log(Format('Resposta tardia descartada (correlação %s): %s.',
       [Copy(ACorrelationId, 2, 8), AStatus]));
     Exit;
@@ -684,7 +685,7 @@ begin
   FPendentes.Clear;
 end;
 
-{ --- eventos de conexão ----------------------------------------------------- }
+{ --- connection events ----------------------------------------------------- }
 
 procedure TfrmConsulta.ConexaoCaiu;
 begin
@@ -707,9 +708,9 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo PcPool em vez de postar direto:
-// a thread de reconexão morre logo após o OnReconnect e, no FPC, levaria o
-// post pendente junto (ver o comentário de TConexaoEventoWork).
+// The three connection events hop through PcPool instead of posting directly:
+// the reconnection thread dies right after OnReconnect and, on FPC, would take
+// the pending post with it (see the comment on TConexaoEventoWork).
 procedure TfrmConsulta.OnDesconectado(AConnection: TAMQPConnection);
 begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
@@ -725,7 +726,7 @@ begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
-{ --- conexão ---------------------------------------------------------------- }
+{ --- connection ------------------------------------------------------------ }
 
 procedure TfrmConsulta.btnConectarClick(Sender: TObject);
 var
@@ -761,38 +762,40 @@ begin
     FConn.OnReconnectFailed := OnReconexaoFalhou;
     FConn.Open;
 
-    // Canal do servidor: fila de pedidos durável + prefetch. Declarada já na
-    // conexão (mesmo sem iniciar o servidor): consultas publicadas sem
-    // servidor ativo ficam na fila até o TTL do pedido estourar.
+    // Server channel: durable request queue + prefetch. Declared already on
+    // connect (even without starting the server): queries published with no
+    // server running stay in the queue until the request TTL runs out.
     FCanalServidor := FConn.CreateChannel;
     FCanalServidor.DeclareQueue(TAMQPQueueDeclare.Create(FFilaPedidos, True));
     FCanalServidor.Qos(16);
 
-    // Canal do cliente: dois mecanismos de resposta, escolhidos no checkbox.
-    // Em ambos o consume é NoAck (resposta perdida = timeout, o cliente não
-    // reprocessa) e o publish do pedido sai NESTE mesmo canal.
+    // Client channel: two reply mechanisms, chosen in the checkbox.
+    // In both the consume is NoAck (lost reply = timeout, the client does not
+    // reprocess) and the request publish goes out on THIS same channel.
     FModoDireto := chkDirectReplyTo.Checked;
     FCanalCliente := FConn.CreateChannel;
     if FModoDireto then
     begin
-      // Direct Reply-to (amq.rabbitmq.reply-to): pseudo-fila de nome fixo do
-      // broker — NÃO se declara. Basta consumir dela em no-ack ANTES de
-      // publicar; o broker reescreve o ReplyTo do pedido para um nome opaco e
-      // roteia a resposta de volta por um caminho rápido, sem fila real. O
-      // servidor não muda: publica no default exchange com routing key = o
-      // ReplyTo que recebeu. É o padrão que o README recomenda para RPC.
-      // Restrições (RabbitMQ): consumir e publicar o pedido no MESMO canal
-      // (garantido aqui — os dois usam FCanalCliente) e em no-ack. Sobrevive
-      // ao recovery pelo nome estável, sem gerenciar fila por instância.
+      // Direct Reply-to (amq.rabbitmq.reply-to): the broker's fixed-name
+      // pseudo-queue; it is NOT declared. It is enough to consume from it in
+      // no-ack BEFORE publishing; the broker rewrites the request's ReplyTo to an
+      // opaque name and routes the reply back by a fast path, with no real
+      // queue. The server does not change: it publishes to the default exchange
+      // with routing key = the ReplyTo it received. It is the pattern the README
+      // recommends for RPC. Restrictions (RabbitMQ): consume and publish the
+      // request on the SAME channel (guaranteed here: both use FCanalCliente) and
+      // in no-ack. It survives recovery thanks to the stable name, without
+      // managing a queue per instance.
       FFilaRespostas := 'amq.rabbitmq.reply-to';
-      FCanalCliente.Consume(FFilaRespostas, OnResposta, True); // NoAck obrigatório
+      FCanalCliente.Consume(FFilaRespostas, OnResposta, True); // NoAck is mandatory
     end
     else
     begin
-      // Fila nomeada exclusiva desta instância, com nome FIXO (não '' gerado
-      // pelo broker — esse não sobrevive ao replay do recovery: o redeclare
-      // geraria um nome novo e o consumer gravado apontaria para o antigo).
-      // Exclusiva + auto-delete: o broker a remove quando a conexão morre.
+      // Named queue exclusive to this instance, with a FIXED name (not a ''
+      // generated by the broker, which does not survive the recovery replay: the
+      // redeclare would generate a new name and the recorded consumer would point
+      // at the old one). Exclusive + auto-delete: the broker removes it when the
+      // connection dies.
       FFilaRespostas := 'consulta-resp-' + Copy(NovoGuid, 2, 8);
       LDeclare := TAMQPQueueDeclare.Create(FFilaRespostas, False);
       LDeclare.Exclusive := True;

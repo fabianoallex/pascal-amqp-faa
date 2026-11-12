@@ -1,8 +1,8 @@
 ﻿unit AMQP.HandshakeIntegrationTests;
 
-{ Testes de integração do handshake — precisam de um RabbitMQ real em
-  localhost:5672 (guest/guest). Suba com: docker compose -f docker/docker-compose.yml up -d
-  Sem broker, os testes que abrem conexão vão ERRAR (não é falha da lib). }
+{ Handshake integration tests — they need a real RabbitMQ on
+  localhost:5672 (guest/guest). Start it with: docker compose -f docker/docker-compose.yml up -d
+  Without a broker, the tests that open a connection will ERROR (not a library failure). }
 
 
 interface
@@ -71,11 +71,11 @@ begin
   try
     LConn.Open;
     LTune := LConn.NegotiatedTune;
-    // channel-max negociado nunca deve exceder o proposto pelo cliente (2047)
-    // nem ser 0 (o RabbitMQ 3.13 propõe 2047 por padrão).
+    // The negotiated channel-max must never exceed the client's proposal
+    // (2047) nor be 0 (RabbitMQ 3.13 proposes 2047 by default).
     TAssert.AssertTrue('channel-max deveria ser > 0', LTune.ChannelMax > 0);
     TAssert.AssertTrue('channel-max não deveria exceder 2047', LTune.ChannelMax <= 2047);
-    // frame-max deve respeitar o mínimo do protocolo (4096).
+    // frame-max must respect the protocol minimum (4096).
     TAssert.AssertTrue('frame-max deveria ser >= 4096', LTune.FrameMax >= 4096);
     LConn.Close;
   finally
@@ -89,12 +89,12 @@ var
 begin
   FParams := IntegrationParams;
   FParams.Password := 'senha-obviamente-errada';
-  // Com a capability authentication_failure_close, o servidor responde
-  // Connection.Close (403) — mas aceitamos qualquer exceção (broker pode só
-  // derrubar o socket em versões antigas). O ChecaLevanta exige a classe
-  // EXATA, então "qualquer exceção" precisa de try/except manual (Fail()
-  // dentro do try seria capturado pelo próprio except, já que a falha de
-  // asserção também é Exception).
+  // With the authentication_failure_close capability, the server replies
+  // Connection.Close (403) — but we accept any exception (in old versions the
+  // broker may just drop the socket). ChecaLevanta requires the EXACT class,
+  // so "any exception" needs a manual try/except (Fail() inside the try would
+  // be caught by the except itself, since an assertion failure is also an
+  // Exception).
   LRaised := False;
   try
     DoOpenWithParams;
@@ -120,20 +120,20 @@ var
   LDecl: TAMQPQueueDeclare;
 begin
   LParams := IntegrationParams;
-  LParams.Heartbeat := 2; // negocia 2s; cliente manda heartbeat a cada 1s
+  LParams.Heartbeat := 2; // negotiates 2s; the client sends a heartbeat every 1s
   LConn := TAMQPConnection.Create(LParams);
   try
     LConn.Open;
     TAssert.AssertTrue('heartbeat deveria ser > 0', LConn.NegotiatedTune.Heartbeat > 0);
     TAssert.AssertTrue('heartbeat negociado <= 2s', LConn.NegotiatedTune.Heartbeat <= 2);
 
-    // Fica ocioso por mais que 2x o intervalo. Sem heartbeat, o broker
-    // derrubaria a conexão; com heartbeat, ela continua viva.
+    // Stays idle for more than 2x the interval. Without heartbeat, the broker
+    // would drop the connection; with heartbeat, it stays alive.
     TThread.Sleep(5000);
 
     TAssert.AssertTrue('conexão deveria continuar aberta após ociosidade', LConn.IsOpen);
 
-    // E continua utilizável:
+    // And it is still usable:
     LChan := LConn.CreateChannel;
     try
       LDecl := Default(TAMQPQueueDeclare);

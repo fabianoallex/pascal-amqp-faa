@@ -2,9 +2,9 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Publicacao dos eventos de abastecida no exchange posto.eventos
-  (ARQUITETURA.md §6.3). Um canal dedicado; um lock interno porque a thread
-  das bombas e a thread do consumidor de comandos publicam as duas. }
+{ Publishing of the fueling events to the posto.eventos exchange
+  (ARCHITECTURE.md §6.3). One dedicated channel; an internal lock because the
+  pump thread and the command consumer thread both publish. }
 
 interface
 

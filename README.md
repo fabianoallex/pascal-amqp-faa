@@ -1,76 +1,74 @@
 ﻿# pascal-amqp-faa
 
-> 🇬🇧 This document is also available in [English](README.en.md).
+**AMQP 0-9-1** for **Free Pascal / Lazarus** and **Delphi**, from a single codebase — **both ends**:
 
-**AMQP 0-9-1** para **Free Pascal / Lazarus** e **Delphi**, a partir de uma única codebase — as **duas pontas**:
+- a full **client** (publish/consume, confirms, TLS, automatic reconnection), used in production against RabbitMQ;
+- an **embeddable broker**: `TAMQPServer` runs an AMQP server **inside your application**, with no RabbitMQ install. Useful for integration tests without an external dependency, for messaging between processes on the same machine, and for shipping a queue inside a product that cannot require an installed broker.
 
-- um **cliente** completo (publish/consume, confirms, TLS, reconexão automática), usado em produção contra RabbitMQ;
-- um **broker embutível**: `TAMQPServer` sobe um servidor AMQP **dentro da sua aplicação**, sem instalar RabbitMQ. Útil para testes de integração sem dependência externa, para mensageria entre processos da mesma máquina e para embarcar uma fila num produto que não pode exigir um broker instalado.
+Cross-platform port of [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa) (same author, MIT), which was Delphi/Windows-only and client-only.
 
-Porte multiplataforma da [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa) (mesmo autor, MIT), que era exclusiva de Delphi/Windows e só tinha o cliente.
+> Proof that the two ends talk to each other: **the client's integration suite runs in full against the embedded broker, without a single test rewritten** — all 28 pass, with nothing skipped for a missing feature. The `SmokeTest` goes further and runs the same 9 steps against RabbitMQ **and** against the embedded broker, TTL, dead-letter and priority included.
 
-> A prova de que as duas pontas conversam: **a suíte de integração do cliente roda inteira contra o broker embutido, sem um único teste reescrito** — os 28 passam, sem nada ignorado por recurso faltante. O `SmokeTest` vai além e executa os mesmos 9 passos contra o RabbitMQ **e** contra o broker embutido, TTL, dead-letter e prioridade inclusos.
+## Features
 
-## Recursos
+### Client
 
-### Cliente
+- Full handshake (`Start/Tune/Open`) with correct `channel-max`/`frame-max`/`heartbeat` negotiation (compatible with RabbitMQ 3.13+).
+- Publish/consume with **manual ack** (at-least-once); consumer callbacks dispatched on the library's **own thread pool** — the read thread never runs user code. An exception in the callback goes to `OnConsumerError` and the delivery gets a `Nack` (see [Exception in a consumer callback](#exception-in-a-consumer-callback)).
+- **Publisher confirms** (`confirm.select`): `Publish` returns a seq-no, asynchronous `OnConfirm`, `WaitForConfirm`/`WaitForConfirms`.
+- `Basic.Return` (unroutable `mandatory` publish), `Connection.Blocked/Unblocked` (broker resource alarm).
+- **Heartbeat** on a dedicated thread (dead-connection detection + sending when idle).
+- **Automatic reconnection** (opt-in) with topology recovery (exchanges, queues, bindings, qos, confirm mode and consumers) and, optionally, republishing of unconfirmed publishes (`RepublishUnconfirmedOnReconnect`).
+- **TLS (amqps)** through pascal-common-faa, with two backends chosen at run time: native **SChannel** on Windows (zero dependencies) and **OpenSSL** on any platform; a private CA and client certificates (mTLS) on both — see the [TLS (amqps)](#tls-amqps) section.
+- `Queue.Unbind`, `Exchange.Bind/Unbind` (RabbitMQ extension), `Basic.Get`, `Qos`.
+- **OpenTelemetry tracing** (opt-in, through pascal-common-faa): a span per publish and per consumed message, with the W3C `traceparent` in the message headers. Producer and consumer end up in the same trace — see [Tracing (OpenTelemetry)](#tracing-opentelemetry).
+- **Transactional outbox through the broker** (an optional bridge in `src/outbox`, outside the packages): pascal-db-faa's outbox sink publishes with confirms, and the consumer has a retry queue with a TTL, a dead queue and deduplication in the database before the ack — see [Transactional outbox](#transactional-outbox-srcoutbox).
 
-- Handshake completo (`Start/Tune/Open`) com negociação correta de `channel-max`/`frame-max`/`heartbeat` (compatível com RabbitMQ 3.13+).
-- Publish/consume com **ack manual** (at-least-once); callbacks de consumer despachados em **thread pool próprio** — a thread de leitura nunca roda código do usuário. Exceção no callback vai para `OnConsumerError` e a entrega leva `Nack` (ver [Exceção no callback de consumer](#exceção-no-callback-de-consumer)).
-- **Publisher confirms** (`confirm.select`): `Publish` devolve seq-no, `OnConfirm` assíncrono, `WaitForConfirm`/`WaitForConfirms`.
-- `Basic.Return` (publish `mandatory` não roteável), `Connection.Blocked/Unblocked` (resource alarm do broker).
-- **Heartbeat** em thread dedicada (detecção de conexão morta + envio quando ocioso).
-- **Reconexão automática** (opt-in) com recuperação de topologia (exchanges, filas, binds, qos, confirm mode e consumers) e, opcionalmente, reenvio de publishes não confirmados (`RepublishUnconfirmedOnReconnect`).
-- **TLS (amqps)** pela pascal-common-faa, com dois backends escolhidos em tempo de execução: **SChannel** nativo no Windows (sem dependências) e **OpenSSL** em qualquer plataforma; CA privada e certificado de cliente (mTLS) nos dois — ver a seção [TLS (amqps)](#tls-amqps).
-- `Queue.Unbind`, `Exchange.Bind/Unbind` (extensão RabbitMQ), `Basic.Get`, `Qos`.
-- **Tracing OpenTelemetry** (opt-in, pela pascal-common-faa): span por publish e por mensagem consumida, com o `traceparent` W3C nos headers. Produtor e consumidor saem na mesma trace — ver [Tracing (OpenTelemetry)](#tracing-opentelemetry).
-- **Outbox transacional por broker** (ponte opcional em `src/outbox`, fora dos pacotes): o sink do outbox da pascal-db-faa publica com confirm, e o consumidor tem fila de retry com TTL, fila de mortos e deduplicação no banco antes do ack — ver [Outbox transacional](#outbox-transacional-srcoutbox).
+### Embedded broker
 
-### Broker embutido
+- **Full handshake** with SASL PLAIN, virtual hosts, `channel-max`/`frame-max`/`heartbeat` negotiation and the spec's channel-vs-connection error model.
+- **Routing** through `direct`, `fanout`, `topic` and `headers` exchanges, plus the default one (`""`) and the predefined `amq.*`; **exchange-to-exchange** bindings (RabbitMQ extension), with cycle cutting.
+- **In-memory queues** with round-robin delivery to consumers, `Basic.Get`, `Ack`/`Nack`/`Reject` with requeue and the `redelivered` flag, and **per-channel prefetch** (`Basic.Qos`).
+- **Publisher confirms** and `mandatory` → `Basic.Return`.
+- `exclusive` queues (they die with the owning connection), queue and exchange `auto-delete`, and `Basic.Cancel` notifying the consumers of a deleted queue.
+- **TTL**: per-queue `x-message-ttl` and the per-message `expiration` property (the smaller one wins).
+- **Dead-lettering**: `x-dead-letter-exchange` and `x-dead-letter-routing-key`, with the full `x-death` header — `rejected`/`expired`/`maxlen` reasons, `count` accumulated per (queue, reason), `x-first-death-*` and `original-expiration`.
+- **Priority**: `x-max-priority` (0–9), with FIFO preserved inside each level.
+- **Per-queue ceilings**: `x-max-length` and `x-max-length-bytes`, with `x-overflow` set to `drop-head` (drops the oldest) or `reject-publish` (refuses the publish, which comes back as `Basic.Nack` in confirm mode).
+- **`alternate-exchange`**: whatever matches no binding goes down to the AE before becoming a `Basic.Return`.
+- **`x-expires`**: a queue unused for the period is collected (use = consumer, `Basic.Get` or redeclare; publishing does not count).
+- **Durability** (opt-in through `DataDir`): append-only WAL with batched fsync, durable topology and persistent messages surviving a restart, confirms held back by the durability watermark, and log compaction. See [Durability](#durability-opt-in).
+- **Server-side TLS** on a dedicated 5671-style port, on both backends (PFX on SChannel, PEM on OpenSSL), with optional mTLS.
+- **Separate package** (`pascal_amqp_faa_server`): client-only users link nothing from the server.
 
-- **Handshake completo** com SASL PLAIN, virtual hosts, negociação de `channel-max`/`frame-max`/`heartbeat` e o modelo de erro canal-vs-conexão da spec.
-- **Roteamento** por exchange `direct`, `fanout`, `topic` e `headers`, mais o default (`""`) e os `amq.*` predefinidos; binding **exchange→exchange** (extensão RabbitMQ), com corte de ciclo.
-- **Filas em memória** com entrega a consumidores em rodízio, `Basic.Get`, `Ack`/`Nack`/`Reject` com requeue e flag `redelivered`, e **prefetch por canal** (`Basic.Qos`).
-- **Publisher confirms** e `mandatory` → `Basic.Return`.
-- Fila `exclusive` (morre com a conexão dona), `auto-delete` de fila e de exchange, e `Basic.Cancel` avisando os consumidores de uma fila apagada.
-- **TTL**: `x-message-ttl` por fila e a propriedade `expiration` por mensagem (o menor vence).
-- **Dead-lettering**: `x-dead-letter-exchange` e `x-dead-letter-routing-key`, com o header `x-death` completo — razões `rejected`/`expired`/`maxlen`, `count` acumulado por (fila, razão), `x-first-death-*` e `original-expiration`.
-- **Prioridade**: `x-max-priority` (0–9), com FIFO preservado dentro de cada nível.
-- **Tetos por fila**: `x-max-length` e `x-max-length-bytes`, com `x-overflow` em `drop-head` (descarta a mais velha) ou `reject-publish` (recusa o publish, que em confirm mode volta como `Basic.Nack`).
-- **`alternate-exchange`**: o que não casa binding nenhum desce para o AE antes de virar `Basic.Return`.
-- **`x-expires`**: fila sem uso pelo prazo é recolhida (uso = consumidor, `Basic.Get` ou redeclare; publicar não conta).
-- **Durabilidade** (opt-in por `DataDir`): WAL append-only com fsync por lote, topologia e mensagens persistentes sobrevivendo ao restart, confirm preso à marca d'água de durabilidade, e compactação do log. Ver [Durabilidade](#durabilidade-opt-in).
-- **TLS de servidor** em porta dedicada tipo 5671, nos dois backends (PFX no SChannel, PEM no OpenSSL), com mTLS opcional.
-- Pacote **separado** (`pascal_amqp_faa_server`): quem só usa o cliente não linka nada do servidor.
+## Compatibility
 
-## Compatibilidade
-
-| Compilador | Status |
+| Compiler | Status |
 |---|---|
-| FPC 3.2.2 (Lazarus 4.0), Win64 | Compila; smoke test (plain e `--tls`, nos dois backends), suítes FPCUnit (145 unitários + 48 integração + 509 do broker + 48 de aceitação, sem e com `DataDir` + 8 do outbox, nos build modes Default e `openssl`) e os samples passam contra RabbitMQ real |
-| Delphi 12 (Athens), Win32 e Win64 | Mesma codebase; suítes DUnitX (mesmos números, nas duas plataformas) e os samples validados via IDE (Community Edition não compila por linha de comando) |
-| FPC 3.2.2, Linux x86_64 (Debian, container) | Compila; smoke test (plain e `--tls` com `-dAMQP_OPENSSL`), as quatro suítes FPCUnit com os mesmos números do Win64 (TLS via OpenSSL), inclusive repetidas em containers paralelos a `--cpus=1`, e os 4 samples (console e GUI/LCL-GTK2) passam contra RabbitMQ real |
-| FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Mesma cobertura do x86_64: smoke test plain e `--tls` (OpenSSL aarch64) e suíte FPCUnit 80 + 27 passam contra RabbitMQ real |
+| FPC 3.2.2 (Lazarus 4.0), Win64 | Compiles; smoke test (plain and `--tls`, on both backends), FPCUnit suites (145 unit + 48 integration + 509 broker + 48 acceptance, without and with `DataDir` + 8 outbox, in the Default and `openssl` build modes) and the samples pass against a real RabbitMQ |
+| Delphi 12 (Athens), Win32 and Win64 | Same codebase; DUnitX suites (same numbers, on both platforms) and the samples validated through the IDE (Community Edition has no command-line compiler) |
+| FPC 3.2.2, Linux x86_64 (Debian, container) | Compiles; smoke test (plain and `--tls` with `-dAMQP_OPENSSL`), the four FPCUnit suites with the same numbers as Win64 (TLS via OpenSSL), also repeated in parallel containers at `--cpus=1`, and the 4 samples (console and GUI/LCL-GTK2) pass against a real RabbitMQ |
+| FPC 3.2.2, Linux ARM64 (Debian, container/QEMU) | Same coverage as x86_64: smoke test plain and `--tls` (aarch64 OpenSSL) and FPCUnit suite 80 + 27 pass against a real RabbitMQ |
 
-Decisões do porte (ver `CLAUDE.md` para detalhes):
+Porting decisions (see `CLAUDE.md` for details):
 
-- **Callbacks são `procedure ... of object`** (não `reference to`), porque o FPC estável não tem métodos anônimos. No Delphi, use métodos de uma classe sua em vez de lambdas.
-- Nada de `System.Threading`/`TTask` nem `System.TMonitor`: thread pool, monitor/condvar e atomics portáveis vêm da [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (`PcPool`, `TPcMonitor`, `PcAtomic*`), a base compartilhada pelas libs `*-faa` (ver [Compilando](#compilando)).
-- Socket em `AMQP.Transport` (`System.Net.Socket` no Delphi, `ssockets` no FPC).
+- **Callbacks are `procedure ... of object`** (not `reference to`), because stable FPC has no anonymous methods. In Delphi, use methods of your own class instead of lambdas.
+- No `System.Threading`/`TTask` and no `System.TMonitor`: the portable thread pool, monitor/condvar and atomics come from [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (`PcPool`, `TPcMonitor`, `PcAtomic*`), the base shared by the `*-faa` libraries (see [Building](#building)).
+- TCP and TLS come from the pascal-common-faa transport (`PcTcpConnect`/`PcTcpListen`/`PcTlsWrap`, since v0.6.0); `AMQP.Transport` keeps only the exceptions, the `TAMQPEndpointStream` adapter and the options.
 
-## Uso rápido
+## Quick start
 
 ```pascal
 uses AMQP.Connection, AMQP.Exchange.Methods, AMQP.Queue.Methods;
 
 type
-  TMeuConsumidor = class
+  TMyConsumer = class
     procedure OnMsg(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   end;
 
-procedure TMeuConsumidor.OnMsg(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+procedure TMyConsumer.OnMsg(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 begin
-  // roda numa thread do pool; processe e confirme:
+  // runs on a pool thread; process and acknowledge:
   WriteLn(ADelivery.BodyAsText);
   AChannel.Ack(ADelivery.DeliveryTag);
 end;
@@ -78,50 +76,50 @@ end;
 var
   Conn: TAMQPConnection;
   Chan: TAMQPChannel;
-  Consumidor: TMeuConsumidor;
+  Consumer: TMyConsumer;
 begin
   Conn := TAMQPConnection.Create(TAMQPConnectionParams.Localhost);
   Conn.Open;
   Chan := Conn.CreateChannel;
-  Chan.DeclareQueue(TAMQPQueueDeclare.Create('minha-fila'));
+  Chan.DeclareQueue(TAMQPQueueDeclare.Create('my-queue'));
 
-  Chan.ConfirmSelect; // publisher confirms (opcional)
-  Chan.PublishText('', 'minha-fila', 'ola');
+  Chan.ConfirmSelect; // publisher confirms (optional)
+  Chan.PublishText('', 'my-queue', 'hello');
   Chan.WaitForConfirms(5000);
 
-  Consumidor := TMeuConsumidor.Create;
+  Consumer := TMyConsumer.Create;
   Chan.Qos(10);
-  Chan.Consume('minha-fila', Consumidor.OnMsg);
-  // ... Chan.Close; Chan.Free; Conn.Close; Conn.Free; Consumidor.Free;
+  Chan.Consume('my-queue', Consumer.OnMsg);
+  // ... Chan.Close; Chan.Free; Conn.Close; Conn.Free; Consumer.Free;
 end;
 ```
 
-No FPC em **Linux**, adicione `cthreads` como primeira unit do programa. Para strings não-ASCII no FPC fora do Lazarus, configure `SetMultiByteConversionCodePage(CP_UTF8)` (aplicações Lazarus já usam UTF-8 por padrão).
+With FPC on **Linux**, add `cthreads` as the first unit of the program. For non-ASCII strings on FPC outside Lazarus, call `SetMultiByteConversionCodePage(CP_UTF8)` (Lazarus applications already default to UTF-8).
 
-> O `TAMQPConnection` é dono das threads internas (leitura + heartbeat). Libere os canais antes da conexão (ou deixe o `Free` da conexão cuidar deles).
+> `TAMQPConnection` owns the internal threads (read + heartbeat). Free the channels before the connection (or let the connection's `Free` take care of them).
 
-## Uso em detalhe
+## Usage in detail
 
-### Declarar fila / exchange / binding
+### Declaring queue / exchange / binding
 
 ```pascal
-// Fila durável nomeada:
-Chan.DeclareQueue(TAMQPQueueDeclare.Create('nfe.respostas', True));
+// Named durable queue:
+Chan.DeclareQueue(TAMQPQueueDeclare.Create('invoice.responses', True));
 
-// Exchange topic + binding:
+// Topic exchange + binding:
 var
   LBind: TAMQPQueueBind;
 begin
-  Chan.DeclareExchange(TAMQPExchangeDeclare.Create('nfe', AMQP_EXCHANGE_TYPE_TOPIC));
+  Chan.DeclareExchange(TAMQPExchangeDeclare.Create('invoice', AMQP_EXCHANGE_TYPE_TOPIC));
   LBind := Default(TAMQPQueueBind);
-  LBind.QueueName := 'nfe.respostas';
-  LBind.ExchangeName := 'nfe';
-  LBind.RoutingKey := 'resposta.#';
+  LBind.QueueName := 'invoice.responses';
+  LBind.ExchangeName := 'invoice';
+  LBind.RoutingKey := 'response.#';
   Chan.BindQueue(LBind);
 end;
 ```
 
-### Publicar com propriedades
+### Publishing with properties
 
 ```pascal
 uses AMQP.Wire, AMQP.Basic.Methods;
@@ -132,211 +130,211 @@ begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('application/json');
   LProps.SetPersistent;                       // delivery-mode 2
-  LProps.SetCorrelationId('NFe3524...9012');
+  LProps.SetCorrelationId('Invoice3524...9012');
   LProps.SetMessageId('req-42');
-  Chan.Publish('', 'nfe.respostas',
-    AmqpUtf8Encode('{"status":"autorizada"}'), LProps);
+  Chan.Publish('', 'invoice.responses',
+    AmqpUtf8Encode('{"status":"authorized"}'), LProps);
 end;
 ```
 
-O exchange vazio (`''`) roteia pela *routing key* = nome da fila (default exchange). Sem confirm mode, publicar é fire-and-forget e `Publish` retorna 0. `AmqpUtf8Encode` (unit `AMQP.Wire`) é o substituto portável de `TEncoding.UTF8.GetBytes`.
+The empty exchange (`''`) routes by *routing key* = queue name (default exchange). Without confirm mode, publishing is fire-and-forget and `Publish` returns 0. `AmqpUtf8Encode` (unit `AMQP.Wire`) is the portable replacement for `TEncoding.UTF8.GetBytes`.
 
-### Consumir uma mensagem (pull)
+### Consuming one message (pull)
 
 ```pascal
 var
   LMsg: TAMQPGetResult;
 begin
-  LMsg := Chan.BasicGet('nfe.respostas', True {no-ack});
+  LMsg := Chan.BasicGet('invoice.responses', True {no-ack});
   if LMsg.Found then
     WriteLn(LMsg.BodyAsText);
 end;
 ```
 
-Para consumo contínuo (push, concorrente, com ack manual), veja o `Consume` do [Uso rápido](#uso-rápido) — e a seção de [concorrência e ordenação](#concorrência-e-ordenação-de-mensagens) abaixo.
+For continuous consumption (push, concurrent, with manual ack), see `Consume` in the [Quick start](#quick-start) — and the [concurrency and ordering](#concurrency-and-message-ordering) section below.
 
-### Publisher confirms em detalhe
+### Publisher confirms in detail
 
-`ConfirmSelect` coloca o canal em modo confirm: a partir daí cada `Publish` recebe um *seq-no* (1, 2, 3, ...) e o broker o confirma (`ack`) ou rejeita (`nack`). Dá para tratar de forma assíncrona com `OnConfirm` e/ou bloquear até a confirmação com `WaitForConfirm` (um publish) ou `WaitForConfirms` (todos os pendentes):
+`ConfirmSelect` puts the channel in confirm mode: from then on each `Publish` gets a *seq-no* (1, 2, 3, ...) and the broker confirms (`ack`) or rejects (`nack`) it. You can handle it asynchronously with `OnConfirm` and/or block until confirmation with `WaitForConfirm` (one publish) or `WaitForConfirms` (all pending):
 
 ```pascal
 type
-  TMeuPublicador = class
-    procedure QuandoConfirmar(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
+  TMyPublisher = class
+    procedure WhenConfirmed(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
   end;
 
-procedure TMeuPublicador.QuandoConfirmar(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
+procedure TMyPublisher.WhenConfirmed(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
 begin
   if not AAck then
-    Log(Format('publish %d foi NACK-ado pelo broker', [ASeqNo]));
+    Log(Format('publish %d was NACKed by the broker', [ASeqNo]));
 end;
 
 // ...
 Chan.ConfirmSelect;
-Chan.OnConfirm := Publicador.QuandoConfirmar; // assíncrono, numa thread do pool
+Chan.OnConfirm := Publisher.WhenConfirmed; // asynchronous, on a pool thread
 
-// Síncrono: bloqueia até o broker confirmar este publish.
-LSeq := Chan.Publish('', 'nfe.respostas', LBody, LProps);
+// Synchronous: blocks until the broker confirms this publish.
+LSeq := Chan.Publish('', 'invoice.responses', LBody, LProps);
 if Chan.WaitForConfirm(LSeq, 5000) then
-  WriteLn('confirmado')
+  WriteLn('confirmed')
 else
-  WriteLn('não confirmado (nack, queda de conexão ou timeout)');
+  WriteLn('not confirmed (nack, connection drop or timeout)');
 
-// Ou publique em lote e espere todos de uma vez:
-Chan.Publish('', 'nfe.respostas', LBody1, LProps);
-Chan.Publish('', 'nfe.respostas', LBody2, LProps);
+// Or publish a batch and wait for all at once:
+Chan.Publish('', 'invoice.responses', LBody1, LProps);
+Chan.Publish('', 'invoice.responses', LBody2, LProps);
 if not Chan.WaitForConfirms(5000) then
-  WriteLn('algum publish não foi confirmado');
+  WriteLn('some publish was not confirmed');
 ```
 
-Se a conexão cair antes da confirmação, o publish pendente é reportado como **não confirmado** (`WaitForConfirm` retorna `False`); `OnConfirm` dispara apenas para confirmações reais do broker. Após uma reconexão os seq-nos seguem **monotônicos** (não reiniciam).
+If the connection drops before the confirmation, the pending publish is reported as **not confirmed** (`WaitForConfirm` returns `False`); `OnConfirm` fires only for real broker confirmations. After a reconnection the seq-nos remain **monotonic** (they do not restart).
 
-**Reenvio automático (opt-in)**: com `RepublishUnconfirmedOnReconnect := True` nos parâmetros da conexão (junto de `AutoReconnect`), os publishes que ficaram sem confirmação numa queda são **re-publicados automaticamente na reconexão**, com seq-nos novos (observáveis via `OnConfirm`). É *at-least-once* — pode haver duplicatas quando o broker recebeu a mensagem mas o `ack` se perdeu na queda; os seq-nos originais seguem reportando "não confirmado". Custo: guarda o corpo de cada publish pendente até a confirmação.
+**Automatic republish (opt-in)**: with `RepublishUnconfirmedOnReconnect := True` in the connection parameters (together with `AutoReconnect`), publishes left unconfirmed by a drop are **automatically republished on reconnection**, with new seq-nos (observable via `OnConfirm`). It is *at-least-once* — duplicates can happen when the broker received the message but the `ack` was lost in the drop; the original seq-nos still report "not confirmed". Cost: the body of each pending publish is kept until confirmation.
 
-### `Basic.Return` (publish `mandatory` não roteável)
+### `Basic.Return` (unroutable `mandatory` publish)
 
-Para saber se um publish `mandatory` não foi roteado a nenhuma fila, trate `OnBasicReturn` (dispara numa thread do pool, como o callback de consumer):
+To know whether a `mandatory` publish was not routed to any queue, handle `OnBasicReturn` (fires on a pool thread, like the consumer callback):
 
 ```pascal
-procedure TMeuPublicador.QuandoNaoRotear(AChannel: TAMQPChannel;
+procedure TMyPublisher.WhenUnroutable(AChannel: TAMQPChannel;
   const AReturned: TAMQPReturnedMessage);
 begin
-  Log(Format('mensagem não roteada: %s (%d) exchange=%s rk=%s',
+  Log(Format('unrouted message: %s (%d) exchange=%s rk=%s',
     [AReturned.ReplyText, AReturned.ReplyCode, AReturned.Exchange, AReturned.RoutingKey]));
 end;
 
 // ...
-Chan.OnBasicReturn := Publicador.QuandoNaoRotear;
-Chan.Publish('nfe', 'resposta.inexistente', LBody, LProps, True {mandatory});
+Chan.OnBasicReturn := Publisher.WhenUnroutable;
+Chan.Publish('invoice', 'response.nonexistent', LBody, LProps, True {mandatory});
 ```
 
-### Reconexão automática
+### Automatic reconnection
 
 ```pascal
 LParams := TAMQPConnectionParams.Localhost;
 LParams.AutoReconnect := True;
-LParams.ReconnectDelayMs := 2000;   // backoff entre tentativas
-LParams.MaxReconnectAttempts := 0;  // 0 = infinitas
+LParams.ReconnectDelayMs := 2000;   // backoff between attempts
+LParams.MaxReconnectAttempts := 0;  // 0 = unlimited
 
 Conn := TAMQPConnection.Create(LParams);
-Conn.OnReconnect := MeuApp.QuandoReconectar; // dispara após reconectar E restaurar a topologia
-Conn.OnReconnectError := MeuApp.QuandoTentativaFalhar; // (Conn, Tentativa, Motivo): cada tentativa que falha
+Conn.OnReconnect := MyApp.WhenReconnected; // fires after reconnecting AND restoring the topology
+Conn.OnReconnectError := MyApp.WhenAttemptFailed; // (Conn, Attempt, Reason): every failed attempt
 Conn.Open;
 ```
 
-Na queda, a lib reconecta e **restaura a topologia** declarada nos canais da conexão (filas, exchanges, bindings, Qos, confirm mode) e **re-registra os consumers** — o seu callback volta a receber mensagens sem intervenção. Como *delivery-tags* reiniciam a cada sessão, mensagens não confirmadas são reentregues: projete os handlers para serem **idempotentes** (at-least-once). Em testes/sincronização, espere o `OnReconnect` (que dispara após o recovery completo), não `IsOpen` (fica `True` antes do replay da topologia).
+On a drop, the library reconnects and **restores the topology** declared on the connection's channels (queues, exchanges, bindings, Qos, confirm mode) and **re-registers the consumers** — your callback receives messages again with no intervention. Since *delivery-tags* restart on each session, unconfirmed messages are redelivered: design your handlers to be **idempotent** (at-least-once). For tests/synchronization, wait for `OnReconnect` (which fires after the full recovery), not `IsOpen` (it turns `True` before the topology replay).
 
-**O replay é da conexão inteira, fase a fase**: primeiro as exchanges de todos os canais, depois as filas, depois os bindings e só então os consumers (dentro de cada fase, na ordem de criação dos canais e, em cada canal, na ordem em que você declarou). Então declarar a fila num canal e consumir noutro funciona — não é preciso redeclarar a fila no canal consumidor. *(Até a 0.2.0 o replay era canal a canal, numa ordem que não era a de criação: com a fila declarada só no canal publicador, o `basic.consume` do canal consumidor chegava antes do declare, levava `404` porque o restart do broker tinha apagado a fila não durável, e a reconexão repetia a mesma falha para sempre, sem sinal nenhum.)*
+**The replay covers the whole connection, phase by phase**: first the exchanges of every channel, then the queues, then the bindings, and only then the consumers (within each phase, in channel creation order and, on each channel, in the order you declared things). So declaring a queue on one channel and consuming it on another works — there is no need to redeclare the queue on the consuming channel. *(Up to 0.2.0 the replay went channel by channel, in an order that wasn't creation order: with the queue declared only on the publishing channel, the consuming channel's `basic.consume` arrived before the declare, got `404` because the broker restart had deleted the non-durable queue, and reconnection repeated the same failure forever, with no signal at all.)*
 
-**Uma tentativa que falha nunca é silenciosa.** Cada uma dispara `OnReconnectError(Conn, Tentativa, Motivo)` e fica em `Conn.LastReconnectError` (zerado quando uma reconexão dá certo). O publish feito nesse meio-tempo levanta `EAMQPConnection` com o motivo da queda e o da última tentativa no texto, por exemplo `connection unavailable right now (reconnecting; connection closed by server: 320 CONNECTION_FORCED - ...; last attempt failed: channel 1 closed by server: 404 NOT_FOUND - no queue 'pedidos' ...)`. Com o broker ainda subindo, o motivo é de socket ou de handshake; se é o replay que falha (o `404` de um consumer numa fila que **ninguém nesta conexão** declara, porque quem a declara é outro processo), a reconexão continua tentando a cada `ReconnectDelayMs` e se recupera sozinha na primeira tentativa depois de a fila voltar. Com `MaxReconnectAttempts = 0` (infinitas), é por `OnReconnectError` que se descobre que ela não está andando.
+**A failed attempt is never silent.** Each one fires `OnReconnectError(Conn, Attempt, Reason)` and is kept in `Conn.LastReconnectError` (cleared when a reconnection succeeds). A publish made in the meantime raises `EAMQPConnection` with the reason for the drop and that of the last attempt in its text, for example `connection unavailable right now (reconnecting; connection closed by server: 320 CONNECTION_FORCED - ...; last attempt failed: channel 1 closed by server: 404 NOT_FOUND - no queue 'orders' ...)`. While the broker is still starting, the reason is a socket or handshake one; if it's the replay that fails (the `404` of a consumer on a queue that **nobody on this connection** declares, because another process declares it), reconnection keeps trying every `ReconnectDelayMs` and recovers by itself on the first attempt after the queue is back. With `MaxReconnectAttempts = 0` (unlimited), `OnReconnectError` is how you find out it isn't getting anywhere.
 
-**Fechar durante uma queda é imediato.** `Close`/`Free` acordam a espera entre tentativas na hora (ela é um `TEvent`, não um `Sleep`), então fechar a aplicação com o broker fora do ar não espera o `ReconnectDelayMs`. E só voltam **depois** de a thread de reconexão sair — nunca a deixam rodando contra um objeto liberado, qualquer que seja o delay. A exceção é uma tentativa que já está em curso (connect, handshake, replay da topologia): ela termina antes, limitada pelos timeouts dela. `Close` pode ser chamado de dentro de `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (a reconexão para ali); `Free` não — libere a conexão de outra thread.
+**Closing during an outage is immediate.** `Close`/`Free` wake the wait between attempts right away (it is a `TEvent`, not a `Sleep`), so closing the application while the broker is down does not wait for `ReconnectDelayMs`. And they only return **after** the reconnection thread has exited: they never leave it running against a freed object, whatever the delay. The exception is an attempt already under way (connect, handshake, topology replay): it finishes first, bounded by its own timeouts. `Close` may be called from inside `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (reconnection stops there); `Free` may not — free the connection from another thread.
 
-### Exceção no callback de consumer
+### Exception in a consumer callback
 
-Se o callback de consumer levanta, a exceção vai para `Chan.OnConsumerError` e, **se a entrega ainda não foi confirmada, a lib faz `Nack` sem requeue**: a mensagem vai para a dead-letter exchange da fila, se houver; sem DLX, o broker a descarta. O handler é opcional e decide a ação:
+If the consumer callback raises, the exception goes to `Chan.OnConsumerError` and, **if the delivery hasn't been settled yet, the library sends a `Nack` without requeue**: the message goes to the queue's dead-letter exchange, if there is one; without a DLX, the broker drops it. The handler is optional and picks the action:
 
 ```pascal
-procedure TMeuConsumidor.QuandoFalhar(AChannel: TAMQPChannel;
+procedure TMyConsumer.OnFailure(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery; AError: Exception;
   var AAction: TAMQPConsumerErrorAction);
 begin
-  Log.Error('pedido %s: %s', [ADelivery.Properties.MessageId, AError.Message]);
-  if AError is ETimeoutBanco then
-    AAction := ceaRequeue; // falha transitória: volta para a fila
-  // senão fica o padrão, ceaReject (Nack sem requeue -> DLX)
+  Log.Error('order %s: %s', [ADelivery.Properties.MessageId, AError.Message]);
+  if AError is EDatabaseTimeout then
+    AAction := ceaRequeue; // transient failure: back to the queue
+  // otherwise the default stays, ceaReject (Nack without requeue -> DLX)
 end;
 
 // ...
-Chan.OnConsumerError := Consumidor.QuandoFalhar;
-Chan.Consume('pedidos', Consumidor.OnMsg);
+Chan.OnConsumerError := Consumer.OnFailure;
+Chan.Consume('orders', Consumer.OnMsg);
 ```
 
-| `AAction` | O que a lib faz |
+| `AAction` | What the library does |
 |---|---|
-| `ceaReject` (padrão) | `Nack` sem requeue: DLX da fila, se houver; senão a mensagem é descartada |
-| `ceaRequeue` | `Nack` com requeue: a mensagem volta para a fila com `Redelivered=True`. Cuidado com a mensagem que **sempre** falha: ela volta na hora e vira um loop |
-| `ceaNone` | nada: o aplicativo confirma depois, com `Ack`/`Nack` (até lá, a entrega conta no `Qos`) |
+| `ceaReject` (default) | `Nack` without requeue: the queue's DLX, if any; otherwise the message is dropped |
+| `ceaRequeue` | `Nack` with requeue: the message goes back to the queue with `Redelivered=True`. Beware of a message that **always** fails: it comes straight back and loops |
+| `ceaNone` | nothing: the application settles it later with `Ack`/`Nack` (until then, the delivery counts against `Qos`) |
 
-**Nunca confirma duas vezes.** Se o callback já deu `Ack`/`Nack` antes de levantar, ou se o próprio handler confirmou, a lib não manda nada: confirmar duas vezes o mesmo *delivery-tag* é `406 PRECONDITION_FAILED`, e o broker fecha o canal. O handler recebe `AAction = ceaNone` quando a entrega já está confirmada ou quando o consumer é no-ack (sem nada a confirmar). Se a conexão caiu durante o callback, o `Nack` falha em silêncio: o broker já devolveu a mensagem à fila, e ela volta com `Redelivered=True` depois da reconexão. Uma exceção levantada pelo próprio handler é ignorada, e a ação vale como estava. O handler roda na mesma thread do pool do callback e, com o tracing ligado, dentro do span `process` da mensagem: o log escrito ali leva o trace id dela. A exceção é da lib (não a libere nem a relance).
+**It never settles twice.** If the callback already called `Ack`/`Nack` before raising, or the handler itself settled the delivery, the library sends nothing: settling the same *delivery-tag* twice is `406 PRECONDITION_FAILED`, and the broker closes the channel. The handler gets `AAction = ceaNone` when the delivery is already settled or the consumer is no-ack (nothing to settle). If the connection dropped during the callback, the `Nack` fails silently: the broker has already put the message back in the queue, and it comes back with `Redelivered=True` after reconnection. An exception raised by the handler itself is ignored, and the action stands as it was. The handler runs on the same pool thread as the callback and, with tracing on, inside the message's `process` span: a log line written there carries its trace id. The exception belongs to the library (don't free it or re-raise it).
 
-*(Até a 0.3.0 a exceção era engolida pelo pool: a entrega ficava sem ack até a conexão cair, nada era logado, a mensagem voltava a cada reinício do processo e travava de novo, e com `Qos(1)` o consumer inteiro parava. Medido contra o RabbitMQ 3: com a 1ª de 5 mensagens levantando, 1 callback em 8 s e 4 prontas para sempre; agora as 4 passam.)*
+*(Up to 0.3.0 the exception was swallowed by the pool: the delivery stayed unacked until the connection dropped, nothing was logged, the message came back on every process restart and got stuck again, and with `Qos(1)` the whole consumer stopped. Measured against RabbitMQ 3: with the 1st of 5 messages raising, 1 callback in 8 s and 4 ready forever; now the 4 go through.)*
 
-### O callback de consumer precisa sempre terminar sozinho
+### The consumer callback must always finish on its own
 
-`Close`/`Destroy` do canal esperam (sem timeout, de propósito) os callbacks em voo terminarem antes de liberar o objeto — I/O demorado é ok, mas um callback que bloqueia indefinidamente esperando interação do usuário ou um evento que só outra thread da aplicação sinaliza trava esse fechamento; se o `Free` roda na thread principal de uma app VCL/LCL, a UI congela junto (deadlock). Se o fluxo depende de aprovação humana, prefira **não bloquear**: guarde o *delivery-tag* e o conteúdo numa estrutura própria, retorne, e confirme depois (`Ack`/`Nack` podem ser chamados de qualquer thread). Se optar por bloquear num `TEvent`, o encerramento precisa acordar **todas** as esperas e também cobrir entregas que cheguem *durante* a desconexão — um nack+requeue pode ser reentregue imediatamente ao mesmo consumer até o `Cancel` completar (`samples/RetaguardaVcl` mostra o padrão com flag de encerramento).
+The channel's `Close`/`Destroy` wait (without timeout, on purpose) for in-flight callbacks to finish before releasing the object — slow I/O is fine, but a callback that blocks indefinitely waiting for user interaction, or for an event only another application thread signals, stalls that shutdown; if the `Free` runs on the main thread of a VCL/LCL app, the UI freezes with it (deadlock). If the flow depends on human approval, prefer **not blocking**: store the *delivery-tag* and the content in your own structure, return, and confirm later (`Ack`/`Nack` can be called from any thread). If you choose to block on a `TEvent`, the shutdown must wake **all** the waits and also cover deliveries arriving *during* the disconnection — a nack+requeue can be redelivered immediately to the same consumer until `Cancel` completes (`samples/RetaguardaVcl` shows the pattern with a shutdown flag).
 
-**A espera conta desde o enfileiramento, e o pool é do processo.** Os callbacks de um canal comum rodam no `PcPool`, que é dividido com as outras libs `*-faa` do processo; o `Close`/`Free` do canal espera também as entregas que **ainda estão na fila** do pool, não só as que estão rodando. Se outra parte do processo ocupar todos os workers do `PcPool` (callbacks presos em I/O, por exemplo), parar um consumidor espera a fila compartilhada andar até os itens dele. Medido com o `PcPool` saturado por itens bloqueados: o `Free` de um canal com uma entrega enfileirada esperou os 1,5 s em que o pool ficou ocupado; o mesmo cenário com `CreateChannel(True)` levou 29 ms, porque as entregas desse canal rodam numa thread só dele. Se o seu consumidor precisa parar no prazo dele, independente do resto do processo, use `CreateChannel(True)`. Não há prazo nessa espera de propósito: desistir liberaria o canal com itens ainda na fila apontando para ele.
+**The wait counts from enqueueing, and the pool belongs to the process.** A regular channel's callbacks run on `PcPool`, which is shared with the other `*-faa` libraries in the process; the channel's `Close`/`Free` also waits for deliveries that are **still queued** in the pool, not only the ones running. If another part of the process occupies every `PcPool` worker (callbacks stuck on I/O, for example), stopping a consumer waits for the shared queue to reach its items. Measured with `PcPool` saturated by blocked items: freeing a channel with one queued delivery waited the 1.5 s the pool stayed busy; the same scenario with `CreateChannel(True)` took 29 ms, because that channel's deliveries run on a thread of its own. If your consumer has to stop on its own schedule, regardless of the rest of the process, use `CreateChannel(True)`. There is no deadline on this wait on purpose: giving up would free the channel while queued items still point at it.
 
-### Fechar um canal com consumers ativos
+### Closing a channel with active consumers
 
-`Close` (e o `Free`, que fecha antes de liberar) para o consumo na ordem que mantém a conexão de pé e não reentrega o que já foi processado:
+`Close` (and `Free`, which closes before releasing) stops consuming in the order that keeps the connection up and does not redeliver what was already processed:
 
-1. cancela cada consumer do canal (`Basic.Cancel` + `Cancel-Ok`), e o broker para de entregar;
-2. espera os callbacks já despachados terminarem **com o canal ainda aberto**, e o `Ack`/`Nack` deles vale;
-3. manda o `Channel.Close` e espera o `Close-Ok`.
+1. it cancels each consumer on the channel (`Basic.Cancel` + `Cancel-Ok`), and the broker stops delivering;
+2. it waits for the callbacks already dispatched to finish **while the channel is still open**, and their `Ack`/`Nack` counts;
+3. it sends `Channel.Close` and waits for `Close-Ok`.
 
-Um `Ack`/`Nack` num canal fechado ou fechando não sai para o fio e não levanta exceção. Isso vale para um callback atrasado, para outra thread e para o caso em que **o broker** fechou o canal (um 404, um 406). O broker já devolveu à fila, marcado como `redelivered`, o que ficou sem ack quando o canal fechou. Mandar o `Ack` mesmo assim seria erro de **conexão** pela spec (`504 CHANNEL_ERROR`), e cairiam todos os canais. Depois de uma **queda de conexão** é diferente: `Ack`/`Nack` levantam `EAMQPConnection`, como qualquer escrita.
+An `Ack`/`Nack` on a closed or closing channel does not go on the wire and does not raise. This holds for a late callback, for another thread and for the case where **the broker** closed the channel (a 404, a 406). The broker has already put back on the queue, marked `redelivered`, whatever was left unacked when the channel closed. Sending the `Ack` anyway would be a **connection** error by the spec (`504 CHANNEL_ERROR`), and every channel would go down. After a **connection drop** it is different: `Ack`/`Nack` raise `EAMQPConnection`, like any write.
 
-Não chame `Close` de dentro de um callback do próprio canal, porque ele espera os callbacks, inclusive o que o chamou.
+Do not call `Close` from inside a callback of the same channel, because it waits for the callbacks, including the one that called it.
 
-*(Até a 0.4.1, `Close` mandava o `Channel.Close` antes de esperar os callbacks. Um callback que terminava depois do `Close-Ok` e dava `Ack` derrubava a conexão inteira com 504, contra o RabbitMQ e contra o broker embutido. Achado pelo pascal-agenda-faa.)*
+*(Up to 0.4.1, `Close` sent `Channel.Close` before waiting for the callbacks. A callback that finished after the `Close-Ok` and called `Ack` brought the whole connection down with a 504, against RabbitMQ and against the embedded broker. Found by pascal-agenda-faa.)*
 
 ### Tracing (OpenTelemetry)
 
-Com o tracer da pascal-common-faa ligado, o canal abre os spans sozinho. Sem ele, nada muda: nenhum span, nenhum header, os mesmos bytes de sempre.
+With pascal-common-faa's tracer started, the channel opens the spans on its own. Without it nothing changes: no span, no header, the same bytes as always.
 
 ```pascal
 uses PascalCommon.Tracing;
 
-TPcTracing.Start(TPcTracingOptions.FromEnvironment('pedidos', '1.0.0'), Exportador);
-// ... Publish, Consume e BasicGet como sempre ...
-TPcTracing.Shutdown; // exporta os últimos spans antes de o programa terminar
+TPcTracing.Start(TPcTracingOptions.FromEnvironment('orders', '1.0.0'), Exporter);
+// ... Publish, Consume and BasicGet as usual ...
+TPcTracing.Shutdown; // exports the last spans before the program ends
 ```
 
-| Onde | Span | Kind | Pai |
+| Where | Span | Kind | Parent |
 |---|---|---|---|
-| `Publish`/`PublishText` | `publish <exchange>` (`publish amq.default` no exchange padrão) | producer | o span corrente da thread |
-| callback do `Consume` | `process <fila>` | consumer | o `traceparent` da mensagem |
-| `BasicGet` | `receive <fila>` | client | o span corrente da thread |
+| `Publish`/`PublishText` | `publish <exchange>` (`publish amq.default` on the default exchange) | producer | the thread's current span |
+| `Consume` callback | `process <queue>` | consumer | the message's `traceparent` |
+| `BasicGet` | `receive <queue>` | client | the thread's current span |
 
-- O `traceparent` (e o `tracestate`) do publish vai **nos headers da mensagem**, e o `process` do consumidor nasce filho dele: uma requisição HTTP que publica e o worker que consome aparecem como **uma trace só**. Durante o callback, o `process` é o span corrente, então o que o callback fizer (query, Redis, outro publish) entra na mesma trace.
-- A sua tabela de headers **não é alterada**: o contexto entra só nos bytes. Se ela já tem um `traceparent`, o seu vence.
-- O span de publish termina quando os frames saem, não no confirm (o seq-no vai no atributo `pascalamqp.publish.sequence_number`). O `process` mede o callback, não o tempo até o ack. Callback que levanta deixa o `process` com status de erro, e o `OnConsumerError` roda **dentro** dele: o log do handler sai com o trace id da mensagem (`TPcTracing.Current` é o `process`), e o span termina depois do handler e do `Nack`.
-- Para processar um `BasicGet` na trace do produtor: `AmqpStartProcessSpan('fila', R.Properties, ...)` e `AmqpFinishSpan` (unit `AMQP.Tracing`).
-- O broker embutido não abre span, mas repassa o header intacto, inclusive no dead-letter.
+- The publish span's `traceparent` (and `tracestate`) goes **in the message headers**, and the consumer's `process` span is its child: an HTTP request that publishes and the worker that consumes show up as **a single trace**. During the callback `process` is the current span, so whatever the callback does (a query, Redis, another publish) joins the same trace.
+- Your headers table is **not modified**: the context goes into the bytes only. If it already has a `traceparent`, yours wins.
+- The publish span ends when the frames are sent, not on the confirm (the seq-no is in the `pascalamqp.publish.sequence_number` attribute). `process` measures the callback, not the time until the ack. A callback that raises leaves `process` with an error status, and `OnConsumerError` runs **inside** it: the handler's log line carries the message's trace id (`TPcTracing.Current` is the `process` span), and the span ends after the handler and the `Nack`.
+- To process a `BasicGet` result in the producer's trace: `AmqpStartProcessSpan('queue', R.Properties, ...)` and `AmqpFinishSpan` (unit `AMQP.Tracing`).
+- The embedded broker opens no span, but passes the header through untouched, dead-lettering included.
 
-Atributos, decisões e testes em [`docs/tracing.md`](docs/tracing.md).
+Attributes, decisions and tests in [`docs/tracing.md`](docs/tracing.md).
 
-### Outbox transacional (`src/outbox`)
+### Transactional outbox (`src/outbox`)
 
-`AMQP.Outbox` é a ponte entre o outbox transacional da [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa) (`PascalDb.Outbox`, 0.18.0 ou mais nova) e um broker AMQP. Fica **fora dos pacotes**, porque precisa da pascal-db-faa: some `src/outbox` ao search path (e, no Lazarus, `src` aos include files) só se for usar.
+`AMQP.Outbox` is the bridge between [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa)'s transactional outbox (`PascalDb.Outbox`, 0.18.0 or later) and an AMQP broker. It sits **outside the packages**, because it needs pascal-db-faa: add `src/outbox` to the search path (and, in Lazarus, `src` to the include files) only if you use it.
 
 ```pascal
 uses PascalDb.Outbox, AMQP.Outbox;
 
-// produtor: o relay do outbox publica cada evento e espera o confirm
-Relay := TOutboxRelay.Create(Factory, TOutboxAmqpSink.Create(CanalDoRelay, 'loja.eventos'),
+// producer: the outbox relay publishes each event and waits for the confirm
+Relay := TOutboxRelay.Create(Factory, TOutboxAmqpSink.Create(RelayChannel, 'shop.events'),
   PdbOutboxNewOwner('relay'), TOutboxOptions.Default);
 
-// consumidor: fila de trabalho + .retry (TTL) + .dead
-Fila := TOutboxAmqpQueue.Create('loja.email', 'loja.eventos', 'pedido.#');
-OutboxAmqpDeclareQueues(Canal, Fila);
-Consumidor := TOutboxAmqpConsumer.Create(Factory, CanalDoConsumidor, Fila, 'email', HandlerDeEmail);
-Consumidor.Start;
+// consumer: work queue + .retry (TTL) + .dead
+Queue := TOutboxAmqpQueue.Create('shop.email', 'shop.events', 'order.#');
+OutboxAmqpDeclareQueues(Channel, Queue);
+Consumer := TOutboxAmqpConsumer.Create(Factory, ConsumerChannel, Queue, 'email', EmailHandler);
+Consumer.Start;
 ```
 
-- O sink publica o evento persistente (corpo = payload JSON, `message-id` = id do evento, `type` e routing key = tipo, header `tenant-id`) num exchange `topic` e espera o ack do broker; sem ack, levanta, e o relay tenta de novo depois.
-- O consumidor roda o handler, grava o evento em `PROCESSED_EVENTS` e só então dá ack (at-least-once). Reentrega de evento já gravado leva ack sem rodar o handler.
-- Handler que falha leva `Nack` sem requeue: o dead-letter da fila de trabalho põe a mensagem na fila `.retry`, que a devolve depois do TTL. As tentativas são contadas pelo `x-death`; na última, a mensagem vai para a fila `.dead`.
-- O SQL (`PROCESSED.EXISTS`, `.INSERT`, `.PURGE`) é da aplicação, lido pelo nome no loader da factory, como o do próprio outbox.
+- The sink publishes the event as persistent (body = the JSON payload, `message-id` = the event id, `type` and routing key = the kind, a `tenant-id` header) on a `topic` exchange and waits for the broker's ack; without one it raises, and the relay tries again later.
+- The consumer runs the handler, records the event in `PROCESSED_EVENTS` and only then acks (at least once). A redelivered event already recorded is acked without running the handler.
+- A failing handler gets a `Nack` without requeue: the work queue's dead-letter moves the message to the `.retry` queue, which sends it back after the TTL. Tries are counted from `x-death`; after the last one, the message goes to the `.dead` queue.
+- The SQL (`PROCESSED.EXISTS`, `.INSERT`, `.PURGE`) is the application's, read by name through the factory's loader, as the outbox's own.
 
-Topologia, SQL de referência, métricas e testes em [`docs/outbox.md`](docs/outbox.md).
+Topology, reference SQL, metrics and tests in [`docs/outbox.md`](docs/outbox.md).
 
-## Broker embutido
+## Embedded broker
 
-Um broker AMQP 0-9-1 **dentro do seu processo**. O cliente desta lib — ou qualquer
-cliente AMQP 0-9-1 — conecta nele por TCP como conectaria num RabbitMQ.
+An AMQP 0-9-1 broker **inside your process**. This library's client — or any AMQP 0-9-1
+client — connects to it over TCP just like it would to a RabbitMQ.
 
 ```pascal
 uses AMQP.Server.Broker;
@@ -347,267 +345,269 @@ begin
   LBroker := TAMQPServer.Create;
   try
     LBroker.BindAddress := '127.0.0.1';
-    LBroker.Port := 5672;        // 0 = o SO escolhe (use LBroker.Port depois do Start)
+    LBroker.Port := 5672;        // 0 = the OS picks one (read LBroker.Port after Start)
     LBroker.Start;
-    // ... a aplicação segue; o broker atende em threads próprias ...
+    // ... your application carries on; the broker serves on its own threads ...
   finally
-    LBroker.Free;                // para o accept, fecha as conexões e libera as filas
+    LBroker.Free;                // stops accepting, closes connections, releases the queues
   end;
 end;
 ```
 
-Isso basta: um cliente já pode conectar com `guest`/`guest` no vhost `/`, declarar
-topologia, publicar e consumir. Configuração útil:
+That is all it takes: a client can already connect as `guest`/`guest` on vhost `/`,
+declare topology, publish and consume. Useful configuration:
 
-| Propriedade | Para quê |
+| Property | What for |
 |---|---|
-| `BindAddress` / `Port` | onde ouvir; `Port := 0` pega uma porta efêmera (ótimo para testes) |
-| `Authenticator` | troque o `TAMQPStaticAuthenticator` (guest/guest) pelo seu — a interface é `IAMQPAuthenticator` |
-| `VirtualHosts` | vhosts aceitos no `Connection.Open` (default: só `/`) |
-| `ChannelMax` / `FrameMax` / `Heartbeat` | limites propostos no `Connection.Tune` (defaults iguais aos do RabbitMQ) |
-| `MaxQueueLength` | teto de mensagens prontas **por fila** (0 = ilimitado). Ao estourar, descarta da cabeça — o broker roda dentro da sua app, e uma fila sem consumidor não pode derrubar o processo hospedeiro |
-| `DataDir` | diretório do WAL. **Vazio (default) = sem durabilidade**; preenchido = topologia durável e mensagens persistentes sobrevivem ao restart. Ver [Durabilidade](#durabilidade-opt-in) |
-| `MaxJournalBytes` | teto do WAL em bytes (0 = ilimitado). Ao estourar, o publish **persistente** leva `Basic.Nack` — teto de memória descarta, teto de disco **recusa** |
-| `UseTls` + `TlsCertFile` / `TlsKeyFile` / `TlsCertPassword` / `TlsCaFile` / `TlsBackend` | porta cifrada, nos dois backends; `TlsCaFile` liga o mTLS (ver [TLS do lado servidor](#tls-do-lado-servidor-broker-embutido)) |
+| `BindAddress` / `Port` | where to listen; `Port := 0` grabs an ephemeral port (great for tests) |
+| `Authenticator` | replace `TAMQPStaticAuthenticator` (guest/guest) with your own — the interface is `IAMQPAuthenticator` |
+| `VirtualHosts` | vhosts accepted on `Connection.Open` (default: only `/`) |
+| `ChannelMax` / `FrameMax` / `Heartbeat` | limits proposed in `Connection.Tune` (defaults match RabbitMQ's) |
+| `MaxQueueLength` | cap of ready messages **per queue** (0 = unlimited). On overflow it drops from the head — the broker runs inside your app, and a queue with no consumer must not take the host process down |
+| `DataDir` | WAL directory. **Empty (default) = no durability**; set = durable topology and persistent messages survive a restart. See [Durability](#durability-opt-in) |
+| `MaxJournalBytes` | WAL cap in bytes (0 = unlimited). On overflow the **persistent** publish gets a `Basic.Nack` — a memory cap discards, a disk cap **refuses** |
+| `UseTls` + `TlsCertFile` / `TlsKeyFile` / `TlsCertPassword` / `TlsCaFile` / `TlsBackend` | encrypted port, on both backends; `TlsCaFile` turns mTLS on (see [Server-side TLS](#server-side-tls-embedded-broker)) |
 
-**Compilando com o broker.** É um pacote à parte, que depende do pacote cliente:
+**Building with the broker.** It is a separate package that depends on the client package:
 
 ```
 lazbuild packages\pascal_amqp_faa_server.lpk
 ```
 
-No FPC puro, some `-Fusrc\server` ao que você já usa para o cliente. No Delphi,
-acrescente `src\server\` ao search path.
+With plain FPC, add `-Fusrc\server` to what you already use for the client. In Delphi,
+add `src\server\` to the search path.
 
-### Durabilidade (opt-in)
+### Durability (opt-in)
 
-**Sem `DataDir`, o broker é inteiramente em memória** — é o default, e é o modo em que
-`durable` e `delivery-mode 2` continuam aceitos e ignorados. Ninguém ganha arquivo em
-disco por ter chamado `Start`.
+**Without `DataDir` the broker is entirely in memory** — that is the default, and the mode
+in which `durable` and `delivery-mode 2` are still accepted and ignored. Nobody gets a file
+on disk just for calling `Start`.
 
-Com `DataDir` preenchido, o broker mantém um **WAL append-only** e a regra clássica dos
-três passa a valer: vai para o disco a mensagem com **`delivery-mode = 2`**, publicada em
-uma fila **`durable`**, num broker com **`DataDir`**. Faltando qualquer um dos três, o
-caminho é o de sempre — fila não durável nunca toca o journal.
+With `DataDir` set, the broker keeps an **append-only WAL** and the classic rule of three
+applies: a message goes to disk when it has **`delivery-mode = 2`**, is published into a
+**`durable`** queue, on a broker with a **`DataDir`**. Miss any one of the three and the
+path is the usual one — a non-durable queue never touches the journal.
 
 ```pascal
 LBroker := TAMQPServer.Create;
 LBroker.Port := 5672;
-LBroker.DataDir := 'C:\dados\meubroker';   // <- liga a durabilidade
-LBroker.MaxJournalBytes := 2 * 1024 * 1024 * 1024;  // opcional: teto de 2 GB
+LBroker.DataDir := 'C:\data\mybroker';            // <- turns durability on
+LBroker.MaxJournalBytes := 2 * 1024 * 1024 * 1024;  // optional: 2 GB cap
 LBroker.Start;
 ```
 
-**O que sobrevive a um restart:** exchanges, filas e bindings declarados como duráveis; e
-as mensagens persistentes que estavam nas filas duráveis, **na mesma ordem e no mesmo
-balde de prioridade**, com o prazo de TTL descontado do tempo que o broker ficou fora.
-Uma mensagem entregue e ainda **não confirmada** volta **pronta para entrega** e marcada
-`redelivered` — o broker não persiste o estado do consumidor, e depois de uma queda ele
-não teria como saber se alguém chegou a ver a mensagem.
+**What survives a restart:** exchanges, queues and bindings declared durable; and the
+persistent messages that were sitting in durable queues, **in the same order and the same
+priority bucket**, with the TTL deadline reduced by the time the broker was down. A message
+that was delivered and **not yet acked** comes back **ready for delivery** and flagged
+`redelivered` — the broker does not persist consumer state, and after a crash it could not
+know whether anyone ever saw the message.
 
-**O confirm passa a ser assíncrono.** Com durabilidade ligada, o `Basic.Ack` de um publish
-persistente só sai depois de o registro estar no disco, e vários confirms são colapsados
-num único `Basic.Ack(seq, multiple=true)`. A ordem por canal é preservada: um publish
-transiente atrás de um persistente pendente espera e sai junto. Para o cliente, nada muda
-além do momento — `WaitForConfirm`/`WaitForConfirms` funcionam igual.
+**Confirms become asynchronous.** With durability on, a persistent publish's `Basic.Ack`
+only goes out after the record is on disk, and several confirms are collapsed into a single
+`Basic.Ack(seq, multiple=true)`. Per-channel order is preserved: a transient publish behind
+a pending persistent one waits and goes out with it. For the client nothing changes but the
+timing — `WaitForConfirm`/`WaitForConfirms` work the same.
 
-**O crescimento do log tem duas defesas.** Ele é dividido em segmentos e é **compactado
-a cada `Start`**: antes de o socket de escuta abrir, o broker reescreve só o que ainda
-está vivo e apaga o resto. E, com `MaxJournalBytes`, ao estourar o teto o publish
-persistente é **recusado** com `Basic.Nack` em vez de descartado — descartar no disco
-seria apagar dado que o broker já confirmou como durável.
+**Log growth has two defences.** The log is split into segments and is **compacted on every
+`Start`**: before the listening socket opens, the broker rewrites only what is still live
+and deletes the rest. And, with `MaxJournalBytes`, once the cap is hit the persistent
+publish is **refused** with a `Basic.Nack` rather than discarded — discarding on disk would
+erase data the broker has already confirmed as durable.
 
-**Não há compactação em voo**, e vale saber por quê: o LSN de um registro é atribuído
-quando o publish o submete, e a compactação atribui LSNs novos aos registros que reescreve
-— um publish que pegou o seu LSN antes e ainda estava na fila seria gravado depois, com um
-número menor, quebrando a ordem que o log exige. Compactar com o broker no ar exigiria
-suspender essa atribuição, o que esbarra na regra de o ator da fila nunca esperar. Na
-prática: **um broker que reinicia periodicamente mantém o log podado; um que nunca reinicia
-depende do `MaxJournalBytes`.**
+**There is no in-flight compaction**, and the reason is worth knowing: a record's LSN is
+assigned when the publish submits it, and compaction assigns fresh LSNs to the records it
+rewrites — a publish that took its LSN earlier and was still queued would be written
+afterwards with a smaller number, breaking the ordering the log requires. Compacting with
+the broker live would mean suspending that assignment, which collides with the rule that
+the queue actor never waits. In practice: **a broker that restarts periodically keeps its
+log pruned; one that never restarts relies on `MaxJournalBytes`.**
 
-> **O que "durável" quer dizer aqui, sem eufemismo.** **Matar o processo não testa fsync.**
-> A cache do sistema operacional sobrevive à morte do processo; só a queda da *máquina* a
-> perde. O que esta implementação afirma, e testa, é mais estreito e verificável:
-> **recuperação correta a partir de qualquer ponto de truncamento do log** (varredura
-> exaustiva, determinística) e **fsync comprovadamente chamado na fronteira do lote**
-> (dublê de arquivo que conta as chamadas e falha na hora escolhida). Há ainda uma matriz
-> de morte de processo (`tests/tools/matriz_de_queda.py`) e um passo de restart do
-> SmokeTest, e os dois trazem o mesmo aviso: eles provam que o log escrito basta para
-> reconstruir o estado — não que o disco recebeu os bytes.
+> **What "durable" means here, with no euphemism.** **Killing the process does not test
+> fsync.** The OS cache survives the death of the process; only the *machine* going down
+> loses it. What this implementation claims, and tests, is narrower and verifiable:
+> **correct recovery from any truncation point of the log** (an exhaustive, deterministic
+> sweep) and **fsync demonstrably called at the batch boundary** (a file double that counts
+> the calls and fails at a chosen instant). There is also a process-kill matrix
+> (`tests/tools/matriz_de_queda.py`) and a SmokeTest restart step, and both carry the same
+> caveat: they prove the written log is enough to rebuild the state — not that the disk
+> received the bytes.
 
-### Observabilidade (opt-in)
+### Observability (opt-in)
 
-O broker emite eventos estruturados sobre o que acontece dentro dele — conexões, canais,
-publicações, consumidores, acks. Você assina o que interessa:
+The broker emits structured events about what happens inside it — connections, channels,
+publishes, consumers, acks. You subscribe to what you care about:
 
 ```pascal
 uses AMQP.Server.Events;
 
-procedure TMeuLog.AoEvento(const AEvento: TAMQPServerEvent);
+procedure TMyLog.OnEvent(const AEvent: TAMQPServerEvent);
 begin
-  Writeln(AmqpEventTypeName(AEvento.EventType), ' conn=', AEvento.ConnectionId);
+  Writeln(AmqpEventTypeName(AEvent.EventType), ' conn=', AEvent.ConnectionId);
 end;
 
-Broker.Subscribe(Log.AoEvento);   // antes do Start
-// ou, filtrando:
-Broker.Subscribe(Log.AoEvento, [seMessagePublished, seMessageAcked]);
+Broker.Subscribe(Log.OnEvent);   // before Start
+// or, filtered:
+Broker.Subscribe(Log.OnEvent, [seMessagePublished, seMessageAcked]);
 ```
 
-Sem nenhum assinante o broker é byte a byte o de sempre: o caminho quente testa uma
-máscara e nem chega a montar o registro do evento.
+With no subscriber the broker is byte for byte the same as before: the hot path tests a
+bitmask and never even builds the event record.
 
-O handler roda numa **thread notificadora dedicada** — nunca na thread de leitura de uma
-conexão, nunca num worker do pool. É o que permite que ele demore (escrever em disco,
-falar com a rede) sem atrasar o broker, e é por isso que ele nunca pode influenciar
-roteamento ou autenticação: quem precisa *decidir* implementa `IAMQPAuthorizer`.
+The handler runs on a **dedicated notifier thread** — never on a connection's read thread,
+never on a pool worker. That is what lets it take its time (write to disk, talk to the
+network) without slowing the broker down, and it is why it can never influence routing or
+authentication: if you need to *decide*, implement `IAMQPAuthorizer`.
 
-> **Eventos não são log de auditoria, e isso é por desenho.** A entrega é *best-effort*:
-> se o handler não acompanha a carga, o ring enche e o evento **mais novo** é descartado.
-> O emissor nunca bloqueia o broker para esperar por um observador. O que você perdeu não
-> é invisível — `EventsDropped` conta cada descarte, e um valor maior que zero quer dizer
-> exatamente "o observador não viu tudo". Aumentar `EventQueueCapacity` adia o problema;
-> não o remove.
+> **Events are not an audit log, and that is by design.** Delivery is *best-effort*: if the
+> handler cannot keep up, the ring fills and the **newest** event is dropped. The emitter
+> never blocks the broker waiting on an observer. What you lost is not invisible —
+> `EventsDropped` counts every drop, and a value above zero means exactly "the observer did
+> not see everything". Raising `EventQueueCapacity` postpones the problem; it does not
+> remove it.
 
-Manual completo, com a tabela de que campos cada tipo de evento preenche e as armadilhas
-de tempo de vida do handler: [`docs/observabilidade.md`](docs/observabilidade.md). Sample:
-`samples/Server/AMQPServer.dpr`.
+Full manual, with the table of which fields each event type populates and the handler
+lifetime pitfalls: [`docs/observability.md`](docs/observability.md).
+Sample: `samples/Server/AMQPServer.dpr`.
 
-### O que o broker ainda não faz
+### What the broker does not do yet
 
-**Não há paginação para disco** ("lazy queues"): durabilidade não é paginação, e a fila
-continua inteira na memória — o `MaxQueueLength` continua sendo a defesa do processo
-hospedeiro. Também não há `Connection.Blocked`/alarmes de memória ou disco, nem
-persistência de fila `exclusive` (ela morre com a conexão dona, por definição).
+**There is no paging to disk** ("lazy queues"): durability is not paging, and the queue
+still lives entirely in memory — `MaxQueueLength` remains the host process's defence. There
+is also no `Connection.Blocked`/memory or disk alarms, and no persistence of `exclusive`
+queues (they die with the owning connection, by definition).
 
-A suíte de aceitação roda a suíte de integração do cliente contra o broker embutido, e
-hoje **os 28 testes passam sem nenhum ignorado por recurso faltante** — e passam **duas
-vezes**, com e sem `DataDir`, porque ligar a durabilidade não pode mudar a semântica que o
-cliente vê. O `SmokeTest` executa os mesmos 9 passos contra o RabbitMQ e contra o broker
-embutido, e tem um passo extra de **restart**: publica persistente, o broker é morto, outro
-sobe no mesmo diretório e o cliente confere que as mensagens estão lá.
+The acceptance suite runs the client's integration suite against the embedded broker, and
+today **all 28 tests pass with nothing skipped for a missing feature** — and they pass
+**twice**, with and without `DataDir`, because turning durability on must not change the
+semantics the client sees. The `SmokeTest` runs the same 9 steps against RabbitMQ and
+against the embedded broker, and has an extra **restart** step: it publishes persistent
+messages, the broker is killed, another one comes up on the same directory, and the client
+checks the messages are there.
 
-Fora de escopo por decisão, em qualquer versão: cluster, HTTP management API,
-federation/shovel, AMQP 1.0, STOMP/MQTT, quorum queues e streams.
+Out of scope by decision, in any version: clustering, HTTP management API,
+federation/shovel, AMQP 1.0, STOMP/MQTT, quorum queues and streams.
 
-### Desvios deliberados do RabbitMQ
+### Deliberate deviations from RabbitMQ
 
-Documentados de propósito — não são bugs:
+Documented on purpose — these are not bugs:
 
-- **`guest` conecta de qualquer origem.** O RabbitMQ restringe `guest` a conexões locais;
-  para um broker embarcado isso seria um footgun. Troque o `Authenticator` em produção.
-- **Sem permissões por vhost** (o `IAMQPAuthorizer` existe como ponto de extensão).
-- **Tipo de exchange desconhecido é `406` de canal**, não `503` de conexão como no
-  RabbitMQ — config errada num declare não precisa levar a conexão junto.
-- **`Basic.Recover` só com `requeue=true`**; com `false`, `540`.
-- **Teto de disco recusa, teto de memória descarta.** O `MaxQueueLength` descarta da
-  cabeça quando estoura; o `MaxJournalBytes` **recusa o publish** com `Basic.Nack`.
-  Descartar no disco seria apagar dado já confirmado como durável.
-- **`x-max-priority` vai até 9**, não até 255. Acima disso é `406` — recusa explícita, não
-  clamp silencioso. O RabbitMQ recomenda ≤ 5; acima de 9 o custo de memória por fila (um
-  balde de prontas por nível) deixa de valer o que entrega.
-- **`x-overflow` aceita só `drop-head` e `reject-publish`.** `reject-publish-dlx` do
-  RabbitMQ não entra: dead-letter no overflow já é a razão `maxlen`, pelo caminho normal.
-- **Argumento de fila inválido é `406` nomeando o argumento** (`invalid arg
-  'x-max-priority' for queue: ...`), inclusive `expiration` malformada no publish.
-- **O teto global `MaxQueueLength` e o `x-max-length` da fila compõem pelo MENOR.** O
-  global é rede de segurança do processo hospedeiro, e um argumento vindo do cliente não
-  pode afrouxá-la.
+- **`guest` connects from anywhere.** RabbitMQ restricts `guest` to local connections; for
+  an embedded broker that would be a footgun. Replace the `Authenticator` in production.
+- **No per-vhost permissions** (`IAMQPAuthorizer` exists as the extension point).
+- **An unknown exchange type is a channel-level `406`**, not a connection-level `503` as in
+  RabbitMQ — a bad declare need not take the connection down with it.
+- **`Basic.Recover` only with `requeue=true`**; with `false`, `540`.
+- **A disk cap refuses; a memory cap discards.** `MaxQueueLength` drops from the head on
+  overflow; `MaxJournalBytes` **refuses the publish** with a `Basic.Nack`. Discarding on
+  disk would erase data already confirmed as durable.
+- **`x-max-priority` goes up to 9**, not 255. Above that it is a `406` — an explicit
+  refusal, not a silent clamp. RabbitMQ recommends ≤ 5; past 9 the per-queue memory cost
+  (one ready-bucket per level) stops paying for itself.
+- **`x-overflow` accepts only `drop-head` and `reject-publish`.** RabbitMQ's
+  `reject-publish-dlx` is out: dead-lettering on overflow is already the `maxlen` reason,
+  through the normal path.
+- **An invalid queue argument is a `406` naming the argument** (`invalid arg
+  'x-max-priority' for queue: ...`), including a malformed `expiration` on publish.
+- **The global `MaxQueueLength` and the queue's `x-max-length` compose by the SMALLER
+  one.** The global cap is a safety net for the host process, and a client-supplied
+  argument must not loosen it.
 
-## Arquitetura (resumo)
+## Architecture (summary)
 
-- **Uma thread de leitura** é a única que lê o socket após o handshake; ela demultiplexa frames por canal e **despacha callbacks de consumer para o thread pool** (`PcPool`, da pascal-common-faa) — nunca roda código do usuário nem bloqueia. O `PcPool` é **um pool para o processo inteiro**, dividido com as outras libs `*-faa` que você usar; o teto de workers é `max(16, 4 × núcleos)`.
-- Todas as **escritas** são serializadas por um lock; os frames de uma mensagem (método + header + corpo) saem juntos.
-- **RPC** (declare/bind/get/consume/close) é feito por evento: envia e aguarda a thread de leitura entregar a resposta.
-- **Heartbeat** e **reconexão** rodam em threads próprias com espera interrompível (`TEvent`).
+- **One read thread** is the only one reading the socket after the handshake; it demultiplexes frames per channel and **dispatches consumer callbacks to the thread pool** (`PcPool`, from pascal-common-faa) — it never runs user code and never blocks. `PcPool` is **one pool for the whole process**, shared with the other `*-faa` libraries you use; its worker ceiling is `max(16, 4 × cores)`.
+- All **writes** are serialized by a lock; the frames of one message (method + header + body) go out together.
+- **RPC** (declare/bind/get/consume/close) is event-based: send and wait for the read thread to deliver the response.
+- **Heartbeat** and **reconnection** run on their own threads with interruptible waits (`TEvent`).
 
-Do lado do **broker**, o modelo é: **uma thread por conexão** com I/O bloqueante, **uma thread escritora por conexão** (fila de saída limitada = backpressure natural), **uma única thread monitora** para o broker inteiro (heartbeats, prazo do `Close-Ok`, reap de conexões mortas) e **um ator por fila** — cada fila tem uma caixa de comandos serial agendada num thread pool, então nenhum estado de fila é tocado por duas threads. Esse pool é **do próprio `TAMQPServer`**, não o `PcPool`: callback de consumer pode bloquear em I/O, e com os atores no pool do processo um `PcPool` saturado travava o broker (medido: o `Queue.Declare-Ok` esperava 15 s e a conexão caía; com o pool próprio, 26 ms). O casamento de bindings roda na thread do publicador; só o enfileiramento atravessa para o ator.
+On the **broker** side the model is: **one thread per connection** with blocking I/O, **one writer thread per connection** (a bounded outbound queue gives natural backpressure), **a single monitor thread** for the whole broker (heartbeats, the `Close-Ok` deadline, reaping dead connections) and **one actor per queue** — each queue has a serial command mailbox scheduled on a thread pool, so no queue state is ever touched by two threads. That pool **belongs to the `TAMQPServer`**, not `PcPool`: a consumer callback may block on I/O, and with the actors on the process-wide pool a saturated `PcPool` stalled the broker (measured: `Queue.Declare-Ok` waited 15 s and the connection dropped; with its own pool, 26 ms). Binding matching runs on the publisher's thread; only the enqueue crosses over to the actor.
 
-## Erros e exceções
+## Errors and exceptions
 
-Todas descendem direto de `Exception` (sem classe-base comum). `EAMQPConnection`/`EAMQPChannel` (`AMQP.Connection`) são as que a aplicação normalmente trata; as outras quatro são de camadas internas e costumam só aparecer na prática durante `Open` (encapsuladas ou não).
+All descend directly from `Exception` (no common base class). `EAMQPConnection`/`EAMQPChannel` (`AMQP.Connection`) are the ones an application normally handles; the other four belong to internal layers and in practice usually only surface during `Open` (wrapped or not).
 
-| Exceção | Quando é levantada |
+| Exception | Raised when |
 |---|---|
-| `EAMQPConnection` | Falha no handshake/`Open` (recusa do broker, resposta em canal inesperado); `Publish`/`Ack`/`Nack`/`CreateChannel` chamado com a conexão fechada, caída ou em processo de reconexão — o texto traz o motivo (`connection closed by server: 320 ...`, `connection write failed (...)`, `connection unavailable right now (reconnecting; ...)`). Nos dois compiladores, também quando a escrita falha antes de a queda ser percebida (até a 0.2.0 isso vazava o `EWriteError` da RTL). |
-| `EAMQPChannel` | RPC de canal (declare/bind/get/consume/close) recebeu `Channel.Close` do broker, deu timeout, ou foi chamado com o canal já fechado; uso indevido da API (ex. `WaitForConfirm` fora de confirm mode). |
-| `EAMQPTransport` | Erro de socket plain (host/porta inalcançável, nome que não resolve, conexão derrubada) fora do handshake TLS; no broker, porta já ocupada no `Start`. Desde a 0.6.0 também a falha de conexão, que antes saía como a exceção da RTL. |
-| `EAMQPTls` | Falha de handshake TLS, certificado rejeitado (`TlsVerifyPeer=True`, `TlsCaFile`, mTLS), `tbSChannel` fora do Windows, ou `libssl`/`libcrypto` não encontrada em runtime; no broker, certificado que não carrega no `Start`. **Não** descende de `EAMQPTransport`. Ver [TLS (amqps)](#tls-amqps). |
-| `EAMQPFrame` | Frame malformado ou conexão encerrada no meio de um frame — normalmente sintoma de queda de conexão, não bug de aplicação. |
-| `EAMQPWire` | Encode/decode fora dos limites do protocolo (shortstr > 255 bytes, tipo de `TValue` não suportado num `TAMQPFieldTable`) — geralmente aponta erro da aplicação ao montar `Arguments`/`Headers`. |
+| `EAMQPConnection` | Handshake/`Open` failure (broker refusal, response on an unexpected channel); `Publish`/`Ack`/`Nack`/`CreateChannel` called with the connection closed, dropped or mid-reconnect — the text carries the reason (`connection closed by server: 320 ...`, `connection write failed (...)`, `connection unavailable right now (reconnecting; ...)`). On both compilers, including when the write fails before the drop has been noticed (up to 0.2.0 this leaked the RTL's `EWriteError`). |
+| `EAMQPChannel` | A channel RPC (declare/bind/get/consume/close) got `Channel.Close` from the broker, timed out, or was called with the channel already closed; API misuse (e.g. `WaitForConfirm` outside confirm mode). |
+| `EAMQPTransport` | Plain socket error (unreachable host/port, a name that doesn't resolve, dropped connection) outside the TLS handshake; on the broker, a port already taken at `Start`. Since 0.6.0 also a failed connect, which used to leak the RTL's exception. |
+| `EAMQPTls` | TLS handshake failure, rejected certificate (`TlsVerifyPeer=True`, `TlsCaFile`, mTLS), `tbSChannel` off Windows, or `libssl`/`libcrypto` not found at runtime; on the broker, a certificate that doesn't load at `Start`. It does **not** descend from `EAMQPTransport`. See [TLS (amqps)](#tls-amqps). |
+| `EAMQPFrame` | Malformed frame, or the connection closed mid-frame — usually a symptom of a dropped connection, not an application bug. |
+| `EAMQPWire` | Encode/decode outside protocol limits (shortstr > 255 bytes, unsupported `TValue` kind in a `TAMQPFieldTable`) — generally points to an application error building `Arguments`/`Headers`. |
 
-Pontos práticos:
+Practical notes:
 
-- **`Open`** é onde mais se espera capturar exceção síncrona: `EAMQPConnection`, e — se `UseTls=True` — `EAMQPTransport`/`EAMQPTls`.
-- **Chamadas de canal** (`DeclareQueue`, `BindQueue`, `Publish`, `Consume`, etc.) podem levantar `EAMQPChannel` de forma síncrona quando o broker recusa o pedido ou o canal já caiu.
-- **Depois de `Open` bem-sucedido, uma queda de conexão não vira exceção na thread da aplicação** — ela é reportada pelos callbacks `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (ver [Reconexão automática](#reconexão-automática)); sem `AutoReconnect`, a próxima chamada de RPC naquele canal falha com `EAMQPChannel` ("canal fechado"), e `Publish`/`Ack`/`Nack` falham com `EAMQPConnection` trazendo o motivo da queda.
-- **Exceção levantada no callback de consumer não chega à aplicação por `raise`** — vai para `OnConsumerError`, e a entrega pendente leva `Nack` sem requeue (ver [Exceção no callback de consumer](#exceção-no-callback-de-consumer)).
-- **Falha de publisher confirm não é exceção** — é `WaitForConfirm`/`WaitForConfirms` retornando `False`, ou `AAck=False` no `OnConfirm` (ver [Publisher confirms em detalhe](#publisher-confirms-em-detalhe)).
+- **`Open`** is where you most expect to catch a synchronous exception: `EAMQPConnection`, and — if `UseTls=True` — `EAMQPTransport`/`EAMQPTls`.
+- **Channel calls** (`DeclareQueue`, `BindQueue`, `Publish`, `Consume`, etc.) can raise `EAMQPChannel` synchronously when the broker refuses the request or the channel already dropped.
+- **After a successful `Open`, a connection drop does not turn into an exception on the application thread** — it is reported through the `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` callbacks (see [Automatic reconnection](#automatic-reconnection)); without `AutoReconnect`, the next RPC call on that channel fails with `EAMQPChannel` ("canal fechado"), and `Publish`/`Ack`/`Nack` fail with `EAMQPConnection` carrying the reason for the drop.
+- **An exception raised in a consumer callback doesn't reach the application through `raise`** — it goes to `OnConsumerError`, and the pending delivery gets a `Nack` without requeue (see [Exception in a consumer callback](#exception-in-a-consumer-callback)).
+- **A publisher-confirm failure is not an exception** — it's `WaitForConfirm`/`WaitForConfirms` returning `False`, or `AAck=False` in `OnConfirm` (see [Publisher confirms in detail](#publisher-confirms-in-detail)).
 
-## Concorrência e ordenação de mensagens
+## Concurrency and message ordering
 
-Cada entrega é despachada pro **thread pool** (`PcPool`, da pascal-common-faa) como um item de trabalho independente — não existe uma fila única por canal/consumer sendo drenada em ordem. É uma escolha de design deliberada, diferente do padrão comum em outras linguagens:
+Each delivery is dispatched to the **thread pool** (`PcPool`, from pascal-common-faa) as an independent work item — there is no single per-channel/consumer queue being drained in order. It is a deliberate design choice, different from the common pattern in other languages:
 
-- **RabbitMQ Java/.NET client**: cada canal é processado sequencialmente por um único worker tirado de um pool compartilhado — canais diferentes rodam em paralelo entre si, mas dentro de um canal a ordem é preservada por padrão.
-- **pika (Python) / node-amqplib**: single-threaded, orientado a event loop — todos os callbacks rodam na mesma thread/loop; paralelismo é opt-in, por conta do código do usuário.
-- **amqp091-go**: expõe um channel de Go com as entregas; quem consome decide se processa serial ou dispara goroutines.
+- **RabbitMQ Java/.NET client**: each channel is processed sequentially by a single worker taken from a shared pool — different channels run in parallel with each other, but within a channel order is preserved by default.
+- **pika (Python) / node-amqplib**: single-threaded, event-loop oriented — all callbacks run on the same thread/loop; parallelism is opt-in, on the user's side.
+- **amqp091-go**: exposes a Go channel with the deliveries; the consumer decides whether to process serially or spawn goroutines.
 
-Aqui o padrão é o oposto: **paralelismo por padrão, ordem por opt-in**. O ganho real de throughput aparece quando o callback faz algo bloqueante (I/O de rede, banco, disco) — várias mensagens processam ao mesmo tempo em vez de uma esperar a outra terminar. Se o callback for leve/CPU-bound, o ganho é marginal (o hand-off pro pool custa mais que processar inline). Em qualquer um dos dois casos, o efeito colateral não muda: **duas entregas do mesmo consumer podem terminar de processar fora de ordem.**
+Here the default is the opposite: **parallelism by default, ordering by opt-in**. The real throughput gain shows up when the callback does something blocking (network I/O, database, disk) — several messages are processed at the same time instead of one waiting for the other to finish. If the callback is light/CPU-bound, the gain is marginal (the hand-off to the pool costs more than processing inline). Either way, the side effect is the same: **two deliveries of the same consumer can finish processing out of order.**
 
-### Como obter ordem quando ela importa
+### How to get ordering when it matters
 
-**1. `Qos(1)` + ack só ao final do processamento** — a opção mais simples, usa só API pública já existente. O broker não entrega a próxima mensagem daquele consumer enquanto a anterior não for confirmada:
+**1. `Qos(1)` + ack only at the end of processing** — the simplest option, uses only the existing public API. The broker won't deliver the next message of that consumer while the previous one is unconfirmed:
 
 ```pascal
 Chan.Qos(1);
-Chan.Consume('minha-fila', Consumidor.OnMsg);
-// dentro de OnMsg: só chame Ack depois de terminar o processamento
+Chan.Consume('my-queue', Consumer.OnMsg);
+// inside OnMsg: only call Ack after finishing the processing
 ```
 
-Serializa **tudo** daquele consumer — sem paralelismo algum. Boa escolha quando ordem estrita é obrigatória e o volume não é o gargalo.
+Serializes **everything** for that consumer — no parallelism at all. A good choice when strict ordering is mandatory and volume is not the bottleneck.
 
-**2. Canal com worker dedicado (`CreateChannel(True)`)** — opção nativa da lib: em vez do `PcPool` global, o canal ganha uma thread própria (`TPcThreadPool.Create(1)` internamente) que processa deliveries/returns/confirms um de cada vez, na ordem de chegada. Diferente do `Qos(1)`, o broker continua entregando até o prefetch configurado — só o processamento no cliente é serializado, não o fluxo de rede. Zero código de aplicação; outros canais da mesma conexão continuam concorrentes normalmente. Ver `samples/Retaguarda` (flag `--dedicado`) e `samples/RetaguardaVcl` (checkbox "Thread dedicada").
+**2. Channel with a dedicated worker (`CreateChannel(True)`)** — native library option: instead of the global `PcPool`, the channel gets its own thread (`TPcThreadPool.Create(1)` internally) that processes deliveries/returns/confirms one at a time, in arrival order. Unlike `Qos(1)`, the broker keeps delivering up to the configured prefetch — only client-side processing is serialized, not the network flow. Zero application code; other channels on the same connection stay concurrent as usual. See `samples/Retaguarda` (`--dedicado` flag) and `samples/RetaguardaVcl` (the "Thread dedicada" checkbox).
 
-**3. Fila própria da aplicação + uma thread dedicada** — a callback só empilha a entrega numa fila thread-safe (ex. `TCriticalSection` + `TQueue`); uma única thread dedicada drena e processa em ordem de chegada, chamando `Ack` no fim de cada item. Só vale a pena sobre a opção 2 quando você precisa de algo que o worker dedicado da lib não oferece — por exemplo, backpressure própria (limitar o tamanho da fila) ou compartilhar uma única fila de processamento entre mais de um canal/consumer.
+**3. Application-owned queue + one dedicated thread** — the callback only enqueues the delivery into a thread-safe queue (e.g. `TCriticalSection` + `TQueue`); a single dedicated thread drains and processes in arrival order, calling `Ack` at the end of each item. Only worth it over option 2 when you need something the library's dedicated worker doesn't offer — e.g. your own backpressure (bounding the queue size) or sharing a single processing queue across more than one channel/consumer.
 
-**4. Sharding por chave** — variação da opção 3 com N filas de uma thread cada, escolhida por hash de alguma chave de domínio (ex. id do pedido, id do cliente). Ordem garantida *por chave*, paralelismo entre chaves diferentes — bom meio-termo quando só importa "ordem por entidade", não ordem global.
+**4. Sharding by key** — a variation of option 3 with N queues of one thread each, chosen by hashing some domain key (e.g. order id, customer id). Ordering guaranteed *per key*, parallelism between different keys — a good middle ground when only "per-entity ordering" matters, not global ordering.
 
-A opção 2 é built-in (`CreateChannel(ADedicatedConsumerThread: Boolean)`); as opções 3 e 4 são implementadas inteiramente na aplicação, com a API pública já existente (`Consume`/`Ack`/`Qos`/`TAMQPDelivery`) — não exigem nenhuma mudança na lib. Duas pegadinhas a observar nas opções 3 e 4:
+Option 2 is built-in (`CreateChannel(ADedicatedConsumerThread: Boolean)`); options 3 and 4 are implemented entirely in the application, with the existing public API (`Consume`/`Ack`/`Qos`/`TAMQPDelivery`) — they require no change in the library. Two gotchas to watch on options 3 and 4:
 
-- **`ADelivery.Properties.Headers` é liberado pela lib assim que a callback retorna** (o dono é o chamador, mas o pool libera automaticamente depois que `OnMsg` volta). Se a callback só empilha a entrega e retorna na hora, `Headers` já estará inválido quando a thread dedicada for processar depois — extraia o que precisar dos headers **antes** de retornar da callback; não guarde a referência ao `TAMQPFieldTable` pra usar depois.
-- **`Channel.Close`/`Free` não sabe da sua fila própria.** Como a callback retorna assim que empilha, o contador interno de "em voo" da lib já dá aquela mensagem como concluída. Ao fechar a aplicação, é responsabilidade de quem implementou a fila própria esperá-la esvaziar antes de fechar o canal — senão mensagens já retiradas da lib mas ainda não processadas/ackadas podem se perder.
+- **`ADelivery.Properties.Headers` is freed by the library as soon as the callback returns** (the caller owns it, but the pool frees it automatically after `OnMsg` returns). If the callback only enqueues the delivery and returns right away, `Headers` will already be invalid when the dedicated thread processes it later — extract whatever you need from the headers **before** returning from the callback; do not keep the `TAMQPFieldTable` reference for later use.
+- **`Channel.Close`/`Free` doesn't know about your own queue.** Since the callback returns as soon as it enqueues, the library's internal "in-flight" counter already counts that message as done. When shutting the application down, it is the responsibility of whoever implemented the own-queue to wait for it to drain before closing the channel — otherwise messages already taken from the library but not yet processed/acked can be lost.
 
-Por que começar do lado paralelo em vez do serializado: adicionar ordem sobre uma lib *concurrency-first* é aditivo e contido (as opções acima). O caminho inverso — adicionar paralelismo numa lib que serializa por padrão — normalmente exige reconstruir na aplicação o que aqui já vem pronto: garantir que operações no canal são seguras por múltiplas threads (bibliotecas serializadas por padrão costumam não garantir isso, forçando um canal por worker), backpressure própria e drenagem segura no encerramento.
+Why start from the parallel side instead of the serialized one: adding ordering on top of a *concurrency-first* library is additive and contained (the options above). The opposite path — adding parallelism to a library that serializes by default — usually requires rebuilding in the application what already comes ready here: guaranteeing that channel operations are safe across multiple threads (serialized-by-default libraries usually don't guarantee that, forcing one channel per worker), your own backpressure, and safe draining on shutdown.
 
-## Compilando
+## Building
 
-**Dependência: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.27.0 ou mais nova.** É a base comum das libs `*-faa` (atomics, monitor, thread pool, tracing e, desde a 0.6.0 desta lib, o transporte TCP/TLS). A **aplicação** fornece uma cópia só dela, mesmo usando várias libs `*-faa`: esta lib não a embute. O submódulo `external/pascal-common-faa` existe para os testes e samples deste repositório, não para o seu build. Uma cópia mais velha que a mínima para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.27.0 ou mais nova`. A 1.27.0 traz o transporte (`PascalCommon.Transport*`) que o cliente e o broker usam; a 1.8.0, o `PascalCommon.Tracing` (os spans). Antes da 1.1.3 o `PcPool` não crescia numa rajada de itens, e os callbacks deste cliente rodam nele: entregas cujos callbacks bloqueiam podiam rodar uma de cada vez.
+**Dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) 1.27.0 or newer.** It is the common base of the `*-faa` libraries (atomics, monitor, thread pool, tracing and, since this library's 0.6.0, the TCP/TLS transport). The **application** provides a single copy of it, even when it uses several `*-faa` libraries: this library does not ship it. The `external/pascal-common-faa` submodule is there for this repository's tests and samples, not for your build. A copy older than the minimum stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.27.0 ou mais nova` ("needs pascal-common-faa 1.27.0 or newer"). 1.27.0 brings the transport (`PascalCommon.Transport*`) the client and the broker use; 1.8.0, `PascalCommon.Tracing` (the spans). Before 1.1.3 `PcPool` did not grow during a burst of items, and this client's callbacks run on it: deliveries whose callbacks block could run one at a time.
 
-**Lazarus**: instale (ou registre) `pascal_common_faa.lpk` da pascal-common-faa e depois abra/instale `packages/pascal_amqp_faa.lpk` (ou `lazbuild packages\pascal_amqp_faa.lpk`). O pacote exige `pascal_common_faa` pelo nome, versão 1.27 ou mais nova.
+**Lazarus**: install (or register) pascal-common-faa's `pascal_common_faa.lpk`, then open/install `packages/pascal_amqp_faa.lpk` (or `lazbuild packages\pascal_amqp_faa.lpk`). The package requires `pascal_common_faa` by name, version 1.27 or newer.
 
-**FPC puro**:
+**Plain FPC**:
 
 ```
-fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src seu_programa.pas
+fpc -Fusrc -Fisrc -Fu<pascal-common-faa>\src -Fi<pascal-common-faa>\src your_program.pas
 ```
 
-**Delphi**: adicione `src\` e o `src\` da pascal-common-faa ao search path do projeto (unit scope names `System;Winapi`, que é o padrão). Exemplo pronto em `samples\SmokeTest\SmokeTest.dproj`.
+**Delphi**: add `src\` and pascal-common-faa's `src\` to the project search path (unit scope names `System;Winapi`, which is the default). Ready-made example in `samples\SmokeTest\SmokeTest.dproj`.
 
-**Para usar o broker embutido**, some o pacote/diretório do servidor: `packages\pascal_amqp_faa_server.lpk` no Lazarus, `-Fusrc\server` no FPC puro, `src\server\` no search path do Delphi. Quem só usa o cliente não precisa de nada disso — os dois pacotes são separados de propósito.
+**To use the embedded broker**, add the server package/directory as well: `packages\pascal_amqp_faa_server.lpk` in Lazarus, `-Fusrc\server` in plain FPC, `src\server\` in Delphi's search path. Client-only users need none of this — the two packages are separate on purpose.
 
-**Para usar a ponte do outbox** (`AMQP.Outbox`), some `src\outbox` ao search path (no Lazarus, também `src` aos include files) e a [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa) 0.18.0 ou mais nova, que a aplicação fornece como fornece a pascal-common-faa (e que exige a pascal-common-faa 1.17 ou mais nova). Ela não está em pacote nenhum: quem não a usa não depende da pascal-db-faa. Ver [`docs/outbox.md`](docs/outbox.md).
+**To use the outbox bridge** (`AMQP.Outbox`), add `src\outbox` to the search path (in Lazarus, also `src` to the include files) and [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa) 0.18.0 or later, which the application provides as it provides pascal-common-faa (and which requires pascal-common-faa 1.17 or later). It is in no package: whoever doesn't use it doesn't depend on pascal-db-faa. See [`docs/outbox.md`](docs/outbox.md).
 
 ## TLS (amqps)
 
-Desde a 0.6.0 o TCP e o TLS vêm da [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (1.27.0 ou mais nova): os dois backends atrás da **mesma API**, escolhidos **em tempo de execução**:
+Since 0.6.0 TCP and TLS come from [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa) (1.27.0 or newer): two backends behind the **same API**, chosen **at run time**:
 
-| Backend | Plataformas | Dependência em runtime | Certificado próprio |
+| Backend | Platforms | Runtime dependency | Own certificate |
 |---|---|---|---|
-| **SChannel** | Windows (FPC e Delphi) | Nenhuma (`secur32.dll` do próprio Windows) | PFX + senha |
-| **OpenSSL** | Qualquer uma (validado em Linux x86_64, OpenSSL 3 e 1.1.1, e no Windows) | `libssl`/`libcrypto` **3.x** ou **1.1.1** | par PEM (certificado + chave) |
+| **SChannel** | Windows (FPC and Delphi) | None (Windows' own `secur32.dll`) | PFX + password |
+| **OpenSSL** | Any (validated on Linux x86_64, OpenSSL 3 and 1.1.1, and on Windows) | `libssl`/`libcrypto` **3.x** or **1.1.1** | PEM pair (certificate + key) |
 
-`TlsBackend` (no cliente e no broker) escolhe: `tbDefault` (o padrão), `tbSChannel` ou `tbOpenSsl`. No Windows os dois backends estão em **todo** build; fora dele o OpenSSL é o único, e `tbSChannel` levanta `EAMQPTls`. O `tbDefault` é o SChannel no Windows e o OpenSSL fora dele — ou o OpenSSL em qualquer plataforma num build com `-dAMQP_OPENSSL`, que desde a 0.6.0 **só troca o padrão** (`AmqpDefaultTlsBackend`). A CA (`TlsCaFile`) é PEM nos dois backends.
+`TlsBackend` (on the client and on the broker) picks one: `tbDefault` (the default), `tbSChannel` or `tbOpenSsl`. On Windows both backends are in **every** build; elsewhere OpenSSL is the only one, and `tbSChannel` raises `EAMQPTls`. `tbDefault` is SChannel on Windows and OpenSSL elsewhere — or OpenSSL on any platform in a build with `-dAMQP_OPENSSL`, which since 0.6.0 **only changes the default** (`AmqpDefaultTlsBackend`). The CA (`TlsCaFile`) is PEM on both backends.
 
-### Usando
+### Using it
 
 ```pascal
 var
@@ -616,80 +616,80 @@ begin
   Params := TAMQPConnectionParams.Localhost;
   Params.Port := 5671;
   Params.UseTls := True;
-  Params.TlsVerifyPeer := True; // padrão: valida cadeia + hostname
-  Params.TlsServerName := '';   // '' => usa Host (SNI / nome validado)
-  // Opcionais:
-  Params.TlsCaFile := 'ca.pem'; // CA privada (PEM): confia NELA em vez do repositório do sistema
-  Params.TlsBackend := tbOpenSsl; // padrão tbDefault (unit PascalCommon.Transport)
+  Params.TlsVerifyPeer := True; // default: validates chain + hostname
+  Params.TlsServerName := '';   // '' => uses Host (SNI / validated name)
+  // Optional:
+  Params.TlsCaFile := 'ca.pem'; // private CA (PEM): trust IT instead of the system store
+  Params.TlsBackend := tbOpenSsl; // default tbDefault (unit PascalCommon.Transport)
   Conn := TAMQPConnection.Create(Params);
 ```
 
-Para broker de dev com certificado self-signed, `TAMQPConnectionParams.LocalhostTls` já vem pronto (porta 5671, `TlsVerifyPeer=False`). Para um broker com CA privada, prefira `TlsCaFile` a desligar a validação: o tráfego cifrado vai para quem a CA atesta, não para quem responder.
+For a dev broker with a self-signed certificate, `TAMQPConnectionParams.LocalhostTls` comes ready (port 5671, `TlsVerifyPeer=False`). For a broker with a private CA, prefer `TlsCaFile` over turning validation off: the encrypted traffic goes to whoever the CA vouches for, not to whoever answers.
 
-**Certificado de cliente (mTLS)**, para um broker que exige um (`ssl_options.verify = verify_peer` + `fail_if_no_peer_cert = true` no RabbitMQ):
+**Client certificate (mTLS)**, for a broker that requires one (`ssl_options.verify = verify_peer` + `fail_if_no_peer_cert = true` on RabbitMQ):
 
 ```pascal
-  // OpenSSL: par PEM
-  Params.TlsCertFile := 'cliente.pem';
-  Params.TlsKeyFile := 'cliente.key';
+  // OpenSSL: PEM pair
+  Params.TlsCertFile := 'client.pem';
+  Params.TlsKeyFile := 'client.key';
   // SChannel: PFX
-  Params.TlsCertFile := 'cliente.pfx';
-  Params.TlsCertPassword := 'senha';
+  Params.TlsCertFile := 'client.pfx';
+  Params.TlsCertPassword := 'password';
 ```
 
-**Prazos.** O connect tem orçamento (`ConnectTimeoutMs`, 0 = 10 s) e o handshake TLS tem o prazo padrão da pascal-common-faa (15 s), que sai assim que ele termina. Leituras e escritas **não** têm prazo: o AMQP tem heartbeat para descobrir conexão morta. TCP_NODELAY fica ligado em todo socket (cliente e aceito).
+**Deadlines.** The connect has a budget (`ConnectTimeoutMs`, 0 = 10 s) and the TLS handshake has pascal-common-faa's default deadline (15 s), removed as soon as it's done. Reads and writes have **no** deadline: AMQP has heartbeats to find a dead connection. TCP_NODELAY stays on for every socket (client and accepted).
 
-### Escolhendo o padrão: `AMQP_OPENSSL`
+### Choosing the default: `AMQP_OPENSSL`
 
-A diretiva é **opt-in** e hoje só decide o `tbDefault`: com ela, o OpenSSL é o padrão em qualquer plataforma (inclusive no Windows, no lugar do SChannel). Sem ela, uma conexão ainda pode pedir `tbOpenSsl` explicitamente.
+The define is **opt-in** and now only decides `tbDefault`: with it, OpenSSL is the default on any platform (Windows included, replacing SChannel). Without it, a connection can still ask for `tbOpenSsl` explicitly.
 
-- **FPC por linha de comando**: acrescente `-dAMQP_OPENSSL`:
+- **FPC on the command line**: add `-dAMQP_OPENSSL`:
 
   ```
-  fpc -dAMQP_OPENSSL -Fusrc -Fisrc seu_programa.pas
+  fpc -dAMQP_OPENSSL -Fusrc -Fisrc your_program.pas
   ```
 
-- **Lazarus**: o `SmokeTest.lpi` e os runners FPCUnit já vêm com um **build mode `openssl`** — selecione no dropdown de build modes da IDE, ou por linha de comando: `lazbuild -B --build-mode=openssl samples\SmokeTest\SmokeTest.lpi`. Para outros projetos, lembre que a lib compila via pacote e defines do projeto **não** recompilam as units do pacote — a diretiva precisa chegar lá por `Project Options → Compiler Options → Additions and Overrides` (Custom Option `-dAMQP_OPENSSL`, que vale para os pacotes do projeto) ou direto no `packages/pascal_amqp_faa.lpk` (`Options → Custom Options`, valendo então para todo projeto que use o pacote).
-- **Delphi (IDE)**: o `SmokeTest.dproj` e os projetos de teste já vêm com uma *build configuration* **`OpenSSL`** (filha da Debug) — basta ativá-la no Project Manager. Para outros projetos: `Project → Options → Building → Delphi Compiler → Conditional defines` → adicione `AMQP_OPENSSL`. *(Pendente de validação em alvo Linux: a Community Edition não tem esse target — o mesmo fonte é o validado pelo FPC/Linux.)*
+- **Lazarus**: `SmokeTest.lpi` and the FPCUnit runners ship with an **`openssl` build mode** — pick it in the IDE's build-mode dropdown, or on the command line: `lazbuild -B --build-mode=openssl samples\SmokeTest\SmokeTest.lpi`. For other projects, remember the library compiles through a package and project defines do **not** recompile the package's units — the define has to reach it through `Project Options → Compiler Options → Additions and Overrides` (Custom Option `-dAMQP_OPENSSL`, which applies to the project's packages) or directly in `packages/pascal_amqp_faa.lpk` (`Options → Custom Options`, then valid for every project using the package).
+- **Delphi (IDE)**: `SmokeTest.dproj` and the test projects ship with an **`OpenSSL`** *build configuration* (child of Debug) — just activate it in the Project Manager. For other projects: `Project → Options → Building → Delphi Compiler → Conditional defines` → add `AMQP_OPENSSL`. *(Pending validation on a Linux target: the Community Edition doesn't have it — the same source is the one validated by FPC/Linux.)*
 
-As bibliotecas do OpenSSL são carregadas **dinamicamente no primeiro uso** (`libssl.so.3` → `libssl.so.1.1` no Linux; `libssl-3-x64.dll` etc. no Windows). O executável não ganha dependência de link: se a `libssl` não estiver instalada, o erro só acontece ao chamar `Open` com `UseTls=True` (ou no `Start` de um broker TLS), como `EAMQPTls`.
+The OpenSSL libraries are loaded **dynamically on first use** (`libssl.so.3` → `libssl.so.1.1` on Linux; `libssl-3-x64.dll` etc. on Windows). The executable gains no link-time dependency: if `libssl` is not installed, the error only happens when calling `Open` with `UseTls=True` (or at `Start` of a TLS broker), as `EAMQPTls`.
 
-Para saber **qual motor um executável está usando** (útil em UI/log — os samples VCL/LCL mostram no caption e no status): `AmqpTlsBackendName` (unit `AMQP.Transport`) devolve o nome do backend padrão do build (`SChannel`/`OpenSSL`); `AmqpTlsBackendInfo` acrescenta, depois da primeira conexão TLS com OpenSSL, a versão e a biblioteca carregadas de fato (ex.: `OpenSSL 3.5.2 ... (libssl-3-x64.dll)`). As duas têm uma sobrecarga que recebe o backend. O SmokeTest `--tls` imprime isso no passo 1.
+To know **which engine an executable is using** (useful in UI/log — the VCL/LCL samples show it in the caption and status): `AmqpTlsBackendName` (unit `AMQP.Transport`) returns the name of the build's default backend (`SChannel`/`OpenSSL`); `AmqpTlsBackendInfo` adds, after the first TLS connection with OpenSSL, the version and library actually loaded (e.g. `OpenSSL 3.5.2 ... (libssl-3-x64.dll)`). Both have an overload that takes the backend. The SmokeTest `--tls` prints it in step 1.
 
-Escopo: TLS 1.2+, validação de cadeia e de hostname (IP literal incluso), CA privada e mTLS nos dois backends; sem renegociação iniciada pelo servidor nem escolha manual de versão/cipher suite.
+Scope: TLS 1.2+, chain and hostname validation (IP literals included), private CA and mTLS on both backends; no server-initiated renegotiation and no manual version/cipher-suite selection.
 
-### TLS do lado servidor (broker embutido)
+### Server-side TLS (embedded broker)
 
-Nos **dois** backends desde a 0.6.0 (antes, só OpenSSL). É porta dedicada tipo 5671, não STARTTLS:
+On **both** backends since 0.6.0 (OpenSSL only before). It is a dedicated 5671-style port, not STARTTLS:
 
 ```pascal
 LBroker.UseTls := True;
-// OpenSSL: cadeia e chave em PEM (a chave sem senha)
-LBroker.TlsCertFile := 'servidor.pem';
-LBroker.TlsKeyFile  := 'servidor.key';
+// OpenSSL: PEM chain and key (the key without a passphrase)
+LBroker.TlsCertFile := 'server.pem';
+LBroker.TlsKeyFile  := 'server.key';
 // SChannel (Windows): PFX
-// LBroker.TlsCertFile := 'servidor.pfx';
-// LBroker.TlsCertPassword := 'senha';
-// mTLS (opcional): exige certificado de cliente emitido por esta CA
+// LBroker.TlsCertFile := 'server.pfx';
+// LBroker.TlsCertPassword := 'password';
+// mTLS (optional): require a client certificate issued by this CA
 // LBroker.TlsCaFile := 'ca.pem';
 LBroker.Port := 5671;
 LBroker.Start;
 ```
 
-O certificado é carregado **uma vez, no `Start`**: arquivo ou senha errados levantam `EAMQPTls` ali, com o broker parado, e não num handshake obscuro depois. O handshake de cada conexão roda na thread **dela**, nunca na de accept, com o prazo de 15 s: um cliente que abre o TCP e não fala prende só a própria thread, e só por esse tempo.
+The certificate is loaded **once, at `Start`**: a wrong file or password raises `EAMQPTls` there, with the broker stopped, not in an obscure handshake later. Each connection's handshake runs on **its own** thread, never on the accept thread, with the 15 s deadline: a client that opens TCP and never talks holds only its own thread, and only for that long.
 
-### Broker de dev com TLS
+### Dev broker with TLS
 
-O overlay `docker/docker-compose.tls.yml` adiciona o listener 5671 ao broker do compose principal — o cabeçalho do arquivo tem o passo a passo para gerar o certificado self-signed (incluindo o `chmod 644` na chave, que é obrigatório):
+The `docker/docker-compose.tls.yml` overlay adds the 5671 listener to the main compose broker — the file header has the step-by-step to generate the self-signed certificate (including the mandatory `chmod 644` on the key):
 
 ```
 cd docker
 docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
 ```
 
-## Smoke test (integração)
+## Smoke test (integration)
 
-Suba o RabbitMQ (`docker compose -f docker/docker-compose.yml up -d`) e:
+Start RabbitMQ (`docker compose -f docker/docker-compose.yml up -d`) and:
 
 ```
 cd samples\SmokeTest
@@ -697,73 +697,73 @@ fpc -Fu..\..\src -Fi..\..\src SmokeTest.dpr
 SmokeTest.exe
 ```
 
-Exercita, em 9 passos: handshake, topologia, confirms, `Basic.Get`, consume concorrente com ack, **TTL + dead-letter** (a mensagem vence na fila de espera e reaparece na do DLX, com `x-death`), **fila com prioridade** (lote misturado drenado em ordem decrescente), teardown e reconexão automática com recovery. Sai com código 0 em sucesso.
+It exercises, in 9 steps: handshake, topology, confirms, `Basic.Get`, concurrent consume with ack, **TTL + dead-letter** (the message expires in the waiting queue and reappears in the DLX one, carrying `x-death`), **priority queue** (a mixed batch drained in descending order), teardown and automatic reconnection with recovery. Exits with code 0 on success.
 
-Os passos de TTL+DLX e prioridade rodam **iguais contra o RabbitMQ e contra o broker embutido** — é a prova dupla de que a semântica implementada é a da spec, e não a nossa. Foi ela que pegou, por exemplo, que o broker embutido devolvia `404` ao apagar fila inexistente onde o RabbitMQ é idempotente.
+The TTL+DLX and priority steps run **identically against RabbitMQ and against the embedded broker** — that is the double proof that the implemented semantics are the spec's, not ours. It is what caught, for instance, that the embedded broker returned `404` when deleting a non-existent queue where RabbitMQ is idempotent.
 
-Com o argumento `--tls`, roda os mesmos passos sobre TLS (precisa do broker com o overlay `docker-compose.tls.yml`, ver seção TLS acima):
+With the `--tls` argument, it runs the same steps over TLS (needs the broker with the `docker-compose.tls.yml` overlay, see the TLS section above):
 
 ```
 SmokeTest.exe --tls
 ```
 
-No Windows isso usa SChannel; para exercitar o backend OpenSSL, compile com `-dAMQP_OPENSSL` — o `SmokeTest.lpi` traz o build mode `openssl` pronto pra isso (no Linux, OpenSSL é a única opção de TLS).
+On Windows that uses SChannel; to exercise the OpenSSL backend, build with `-dAMQP_OPENSSL` — `SmokeTest.lpi` ships the `openssl` build mode ready for that (on Linux, OpenSSL is the only TLS option).
 
-Aceita também `--host <nome>` e `--port <n>`, para rodar contra **qualquer** broker. É assim que ele roda contra o broker embutido, sem que este sample passe a depender do sub-módulo servidor:
+It also accepts `--host <name>` and `--port <n>`, so it can run against **any** broker. That is how it runs against the embedded broker, without this sample taking a dependency on the server sub-module:
 
 ```
-tests\Acceptance\fpc\BrokerHostFpc.exe 5673        &:: sobe o broker embutido
+tests\Acceptance\fpc\BrokerHostFpc.exe 5673        &:: starts the embedded broker
 SmokeTest.exe --host 127.0.0.1 --port 5673
 ```
 
 ## Samples
 
-O fluxo que motivou a lib: o autorizador publica a resposta da NFe numa fila; a **retaguarda** consome essa fila e responde ao polling de **vários PDVs simultâneos**. O consumo com thread pool + ack manual atende isso diretamente — cada resposta é processada em paralelo, correlacionada pela chave da NFe (`CorrelationId` ou um header), e só é confirmada após o processamento. Os samples implementam esse fluxo (PDV → autorizador → retaguarda), cada par compilando do mesmo fonte nos dois compiladores:
+The flow that motivated the library: the authorizer publishes the response of an NFe (Brazilian electronic invoice) to a queue; the **back office** consumes that queue and answers the polling of **several simultaneous POS terminals**. Thread-pool consumption + manual ack serves that directly — each response is processed in parallel, correlated by the invoice key (`CorrelationId` or a header), and only confirmed after processing. The samples implement this flow (POS → authorizer → back office), each pair compiling from the same source on both compilers:
 
-- **`samples/AutorizadorSim`** / **`samples/Retaguarda`** (console) — o autorizador publica N retornos simulados de NFe; a retaguarda consome concorrentemente, com ack manual e um comando de status. Rode a `Retaguarda` e depois o `AutorizadorSim`: as linhas `[worker N] iniciando...` de notas diferentes aparecem intercaladas, confirmando o processamento em paralelo. Com `Retaguarda --dedicado`, o canal usa worker próprio (ver [opção 2](#como-obter-ordem-quando-ela-importa)) — as mesmas linhas aparecem em ordem, uma nota de cada vez.
-- **`samples/AutorizadorSimVcl`** / **`samples/RetaguardaVcl`** (GUI — VCL no Delphi, LCL no Lazarus, a partir do mesmo `.pas`/`.dfm`/`.lfm`) — mesma ideia com tela: conexão editável, publish sob demanda, e no `RetaguardaVcl` um modo de confirmação manual (aprovar/rejeitar nota pela lista) além do automático, e um checkbox "Thread dedicada" pra alternar entre os dois modos de despacho.
-- **`samples/ConsultaStatusVcl`** (GUI, mesmo esquema dual) — **RPC request/reply**, o padrão clássico com `ReplyTo` + `CorrelationId`: o cliente publica a consulta de status de uma nota com `ReplyTo` apontando para uma fila de respostas exclusiva/auto-delete da instância e `Expiration` = timeout (pedido que envelhecer na fila é descartado pelo broker); o servidor consome a fila de pedidos, simula a busca e responde ecoando a correlação. Uma janela faz os dois papéis (canais separados na mesma conexão) — rode duas instâncias para o cenário distribuído. Timeout no cliente via timer, e resposta que chega **depois** do timeout é descartada com aviso no log. A fila de respostas usa nome fixo por instância em vez de nome gerado pelo broker: o replay de topologia da reconexão reenviaria o declare e o broker geraria um nome novo, órfão do consumer gravado. Um checkbox **"Usar Direct Reply-to"** alterna o cliente para o pseudo-endereço `amq.rabbitmq.reply-to` — o padrão que [este README recomenda](#recupera%C3%A7%C3%A3o-de-filas-com-nome-gerado-pelo-servidor) para RPC: sem declarar fila nenhuma, o cliente só consome a pseudo-fila em no-ack (no mesmo canal do publish) e o broker roteia a resposta de volta por um caminho rápido; o lado servidor é idêntico. Ver os dois padrões lado a lado.
-- **`samples/EventosTopicVcl`** (GUI, mesmo esquema dual) — **pub/sub com exchange topic**: assinantes dinâmicos, cada um com fila exclusiva/auto-delete própria ligada ao exchange pela binding key (`*` casa uma palavra, `#` casa zero ou mais) — o mesmo evento chega a **todo** assinante que casar, diferente da fila de trabalho dos outros samples (uma mensagem, um consumidor). Publica com `mandatory` + `OnBasicReturn`: evento sem nenhum assinante casando é devolvido pelo broker e aparece no log em vez de sumir em silêncio. Remover um assinante desfaz na ordem `Cancel` → `UnbindQueue` → `DeleteQueue`, reconciliando a topologia de recovery (sem isso, uma reconexão replayaria um bind para fila inexistente). Junto do `EventosHeadersVcl`, exercita `DeclareExchange`/`BindQueue`/`UnbindQueue`.
-- **`samples/EventosHeadersVcl`** (GUI, mesmo esquema dual) — **pub/sub com exchange headers**, o contraponto do topic: o roteamento não usa routing key, e sim o **casamento de campos do header** da mensagem contra critérios de cada binding. Cada binding traz um argumento `x-match` — `all` (casa se **todos** os critérios baterem) ou `any` (casa se **qualquer** um bater) — mais os pares de critério (no exemplo `tipo` e `regiao`). Assinantes com `all, tipo=nfe, regiao=sul` vs `any, tipo=nfe, regiao=sul` recebem conjuntos de eventos bem diferentes do mesmo publish. Único sample que exercita **binding arguments** (a `TAMQPFieldTable` no `BindQueue` — diferente do `RetryDlqVcl`, que usa `Arguments` no *declare* da fila) e a propriedade **`Headers`** da mensagem (`SetHeaders` no publish, leitura na entrega). Como no topic, cada assinante tem fila própria e o mesmo evento chega a vários ou a nenhum (`mandatory` + `OnBasicReturn`); o `UnbindQueue` repete os **mesmos argumentos** do bind (no headers exchange é o argumento, não a routing key, que identifica o binding).
-- **`samples/RetryDlqVcl`** (GUI, mesmo esquema dual) — **dead-letter + retry com backoff + DLQ**, o padrão de reprocessamento montado só com argumentos de fila (`TAMQPFieldTable`): a fila de trabalho tem DLX apontando para uma fila de espera sem consumidor (`x-message-ttl` = backoff, DLX de volta), então `Nack` sem requeue "agenda" o retry no próprio broker; o consumidor lê a tentativa atual do header `x-death` e, ao esgotar o máximo configurado, move a mensagem para a DLQ (é o consumidor quem decide — o broker não conta tentativas sozinho). O backoff usa TTL **da fila** (TTL por mensagem só expira na cabeça da fila). Conectar recria a topologia do zero via `DeleteQueue` — redeclarar fila existente com argumentos diferentes é `PRECONDITION_FAILED`.
-- **`samples/PublicadorConfiavelVcl`** (GUI, mesmo esquema dual) — vitrine dos **publisher confirms**: o canal entra em confirm mode ao conectar e cada publish vira uma linha na lista, resolvida ao vivo pelo `OnConfirm` (ack/nack por seq-no). O lote é publicado com intervalo configurável por uma thread própria, de propósito: derrube o broker no meio (`docker stop` no container do RabbitMQ) e assista à sequência completa — falha de envio, reconexão automática, replay da topologia e, com "Reenviar não confirmadas na reconexão" marcado (`RepublishUnconfirmedOnReconnect`), o reenvio automático do que ficou pendente (com seq-nos novos, contados à parte). Tem ainda um botão de publish `mandatory` para rota inexistente (o broker **devolve** via `Basic.Return` e mesmo assim **confirma** — confirm é "assumi a responsabilidade", não "roteei") e um `WaitForConfirms` ao fim de cada lote, com o resultado no log.
-- **`samples/PrioridadeVcl`** (GUI, mesmo esquema dual) — **fila com prioridade**: a fila é declarada com o argumento `x-max-priority` e as mensagens carregam a propriedade `Priority` (`SetPriority`) — o broker entrega primeiro as de maior prioridade, furando a ordem de chegada das menores ainda na espera. Único sample que exercita a propriedade `Priority`. O roteiro na tela deixa o efeito visível: com o consumidor **parado**, publique um lote de prioridades misturadas (constrói o backlog) e só então inicie o consumidor **lento** — a saída vem em ordem decrescente de prioridade, não na de publicação. Duas condições são essenciais e estão no sample: `Qos(prefetch)` **baixo** (com prefetch alto o broker despeja um lote no cliente e a prioridade não reordena o que já saiu da fila — o campo Prefetch é editável para você ver isso quebrar) e um consumidor mais lento que o produtor (delay por mensagem + ack manual). Conectar recria a fila via `DeleteQueue` — redeclarar com `x-max-priority` diferente é `PRECONDITION_FAILED`.
-- **`samples/PostoAutomacao`** (GUI dual + smoke console) — **base para uma aplicação real**, e o único sample que usa o **broker embutido**: um servidor de automação de bombas de combustível hospeda o `TAMQPServer` e os PDVs da rede conectam nele. Difere dos demais por ter dois executáveis distintos (`ServidorPosto`, `PdvPosto`) e o estado autoritativo **no servidor** — o broker é transporte. Exercita, num fluxo só: broker embutido com autenticador próprio (`automacao` + `pdv-*`), **pub/sub** (topic `posto.eventos`, difusão de cada mudança a todos os PDVs) **+ RPC** (fila `posto.comandos`, `reply-to`/`correlation-id`) na mesma conexão; **late-join** por snapshot + replay de eventos bufferizados com detecção de salto de versão; **operação em contingência** (outbox no PDV, reconciliação na reconexão, conflito de venda dupla detectado e sinalizado); e a **observabilidade da Fase 4.1** (`Subscribe`/`IAMQPEventSink`) alimentando o painel do supervisor com a presença de cada PDV. Invariante do domínio: uma abastecida pertence a **uma venda só**, reversível por estorno/cancelamento ou liberação manual do supervisor. Desenho completo em [`samples/PostoAutomacao/ARQUITETURA.md`](samples/PostoAutomacao/ARQUITETURA.md); build e roteiro no [README do sample](samples/PostoAutomacao/README.md).
+- **`samples/AutorizadorSim`** / **`samples/Retaguarda`** (console) — the authorizer publishes N simulated invoice responses; the back office consumes concurrently, with manual ack and a status command. Run `Retaguarda` and then `AutorizadorSim`: the `[worker N] iniciando...` lines of different invoices show up interleaved, confirming parallel processing. With `Retaguarda --dedicado`, the channel uses its own worker (see [option 2](#how-to-get-ordering-when-it-matters)) — the same lines show up in order, one invoice at a time.
+- **`samples/AutorizadorSimVcl`** / **`samples/RetaguardaVcl`** (GUI — VCL on Delphi, LCL on Lazarus, from the same `.pas`/`.dfm`/`.lfm`) — same idea with a window: editable connection, publish on demand, and in `RetaguardaVcl` a manual confirmation mode (approve/reject an invoice from the list) besides the automatic one, and a "Thread dedicada" checkbox to switch between the two dispatch modes.
+- **`samples/ConsultaStatusVcl`** (GUI, same dual scheme) — **RPC request/reply**, the classic pattern with `ReplyTo` + `CorrelationId`: the client publishes an invoice status query with `ReplyTo` pointing to the instance's exclusive/auto-delete reply queue and `Expiration` = timeout (a request that grows stale in the queue is dropped by the broker); the server consumes the request queue, simulates the lookup and replies echoing the correlation id. One window plays both roles (separate channels on the same connection) — run two instances for the truly distributed scenario. Client-side timeout via a timer, and a reply arriving **after** the timeout is discarded with a log notice. The reply queue uses a fixed per-instance name instead of a broker-generated one: the reconnection topology replay would re-send the declare and the broker would generate a new name, orphaning the recorded consumer. A **"Usar Direct Reply-to"** checkbox switches the client to the `amq.rabbitmq.reply-to` pseudo-address — the pattern [this README recommends](#recovery-of-server-named-queues) for RPC: with no queue declared at all, the client just consumes the pseudo-queue in no-ack mode (on the same channel as the publish) and the broker routes the reply straight back over a fast path; the server side is identical. Shows both patterns side by side.
+- **`samples/EventosTopicVcl`** (GUI, same dual scheme) — **pub/sub with a topic exchange**: dynamic subscribers, each with its own exclusive/auto-delete queue bound to the exchange by a binding key (`*` matches one word, `#` matches zero or more) — the same event reaches **every** matching subscriber, unlike the work queues of the other samples (one message, one consumer). Publishing uses `mandatory` + `OnBasicReturn`: an event matching no subscriber is returned by the broker and shows up in the log instead of vanishing silently. Removing a subscriber undoes things in order — `Cancel` → `UnbindQueue` → `DeleteQueue` — reconciling the recovery topology (without that, a reconnection would replay a bind to a nonexistent queue). Together with `EventosHeadersVcl`, it exercises `DeclareExchange`/`BindQueue`/`UnbindQueue`.
+- **`samples/EventosHeadersVcl`** (GUI, same dual scheme) — **pub/sub with a headers exchange**, the counterpart to the topic one: routing does not use a routing key but the **matching of the message's header fields** against each binding's criteria. Every binding carries an `x-match` argument — `all` (matches if **all** criteria match) or `any` (matches if **any** one matches) — plus the criterion pairs (in the example `tipo` and `regiao`). Subscribers with `all, tipo=nfe, regiao=sul` vs `any, tipo=nfe, regiao=sul` receive very different sets of events from the same publish. The only sample exercising **binding arguments** (the `TAMQPFieldTable` on `BindQueue` — unlike `RetryDlqVcl`, which uses `Arguments` on the queue *declare*) and the message **`Headers`** property (`SetHeaders` on publish, read on delivery). As in the topic sample, each subscriber has its own queue and the same event reaches several or none (`mandatory` + `OnBasicReturn`); `UnbindQueue` repeats the **same arguments** as the bind (in a headers exchange it is the argument, not the routing key, that identifies the binding).
+- **`samples/RetryDlqVcl`** (GUI, same dual scheme) — **dead-letter + retry with backoff + DLQ**, the reprocessing pattern built with queue arguments alone (`TAMQPFieldTable`): the work queue has a DLX pointing to a consumer-less wait queue (`x-message-ttl` = backoff, DLX back), so a `Nack` without requeue "schedules" the retry inside the broker itself; the consumer reads the current attempt from the `x-death` header and, once the configured maximum is exhausted, moves the message to the DLQ (the consumer decides — the broker does not count attempts on its own). The backoff uses **queue** TTL (per-message TTL only expires at the head of the queue). Connecting recreates the topology from scratch via `DeleteQueue` — redeclaring an existing queue with different arguments is `PRECONDITION_FAILED`.
+- **`samples/PublicadorConfiavelVcl`** (GUI, same dual scheme) — a showcase of **publisher confirms**: the channel enters confirm mode on connect and every publish becomes a row in the list, resolved live by `OnConfirm` (ack/nack by seq-no). The batch is published with a configurable interval by its own thread, on purpose: stop the broker mid-batch (`docker stop` on the RabbitMQ container) and watch the whole story — send failure, automatic reconnection, topology replay and, with "Reenviar não confirmadas na reconexão" checked (`RepublishUnconfirmedOnReconnect`), the automatic republish of whatever was left pending (under new seq-nos, counted separately). It also has a `mandatory` publish button targeting a nonexistent route (the broker **returns** it via `Basic.Return` and still **confirms** it — a confirm means "I took responsibility", not "I routed it") and a `WaitForConfirms` at the end of each batch, with the outcome in the log.
+- **`samples/PrioridadeVcl`** (GUI, same dual scheme) — **priority queue**: the queue is declared with the `x-max-priority` argument and messages carry the `Priority` property (`SetPriority`) — the broker delivers higher-priority messages first, jumping ahead of lower-priority ones still waiting. The only sample exercising the `Priority` property. The on-screen script makes the effect visible: with the consumer **stopped**, publish a batch of mixed priorities (builds the backlog) and only then start the **slow** consumer — the output comes out in descending priority order, not publish order. Two conditions are essential and are in the sample: a **low** `Qos(prefetch)` (with a high prefetch the broker dumps a batch into the client and priority no longer reorders what already left the queue — the Prefetch field is editable so you can watch that break) and a consumer slower than the producer (per-message delay + manual ack). Connecting recreates the queue via `DeleteQueue` — redeclaring with a different `x-max-priority` is `PRECONDITION_FAILED`.
+- **`samples/PostoAutomacao`** (dual GUI + console smoke) — **a base for a real application**, and the only sample using the **embedded broker**: a fuel-pump automation server hosts the `TAMQPServer` and the store's POS terminals connect to it. Unlike the others it ships two distinct executables (`ServidorPosto`, `PdvPosto`) and keeps authoritative state **on the server** — the broker is transport. In a single flow it exercises: an embedded broker with its own authenticator (`automacao` + `pdv-*`), **pub/sub** (topic `posto.eventos`, broadcasting every state change to all terminals) **plus RPC** (queue `posto.comandos`, `reply-to`/`correlation-id`) on the same connection; **late-join** via snapshot + replay of buffered events with version-gap detection; **offline operation** (an outbox on the terminal, reconciliation on reconnect, double-sale conflicts detected and flagged); and **Phase 4.1 observability** (`Subscribe`/`IAMQPEventSink`) feeding the supervisor panel with each terminal's presence. Domain invariant: a fuel delivery belongs to **exactly one sale**, reversible by voiding/cancelling or a supervisor's manual release. Full design in [`samples/PostoAutomacao/ARCHITECTURE.md`](samples/PostoAutomacao/ARCHITECTURE.md); build and walkthrough in the [sample README](samples/PostoAutomacao/README.md).
 
-Suba o broker (`docker compose -f docker/docker-compose.yml up -d`) e abra o `.dproj`/`.lpi` correspondente — ou `AMQP.groupproj`/`AMQP.lpg` pra abrir todos juntos. O `PostoAutomacao` não precisa do broker do docker (ele hospeda o próprio).
+Start the broker (`docker compose -f docker/docker-compose.yml up -d`) and open the corresponding `.dproj`/`.lpi` — or `AMQP.groupproj`/`AMQP.lpg` to open them all together. `PostoAutomacao` does not need the docker broker (it hosts its own).
 
-## Testes
+## Tests
 
-- **Delphi (DUnitX)**: abra `AMQP.groupproj` no RAD Studio.
-- **FPC/Lazarus (FPCUnit)**: abra `AMQP.lpg` (Project Group — requer o pacote opcional `LazProjectGroups` instalado na IDE) ou cada `.lpi` individualmente.
+- **Delphi (DUnitX)**: open `AMQP.groupproj` in RAD Studio.
+- **FPC/Lazarus (FPCUnit)**: open `AMQP.lpg` (Project Group — requires the optional `LazProjectGroups` package installed in the IDE) or each `.lpi` individually.
 
-Em ambos:
+In both:
 
-| Suíte | Testes | Precisa de quê |
+| Suite | Tests | Requires |
 |---|---|---|
-| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 145 | nada — encode/decode de frames, métodos, content header, negociação de tune, injeção do `traceparent`, a fronteira das exceções do transporte |
-| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 48 | RabbitMQ no ar (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` apontam para outro endereço |
-| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 509 | nada — sobe o **broker embutido** in-process em porta efêmera (inclui os spans do cliente ponta a ponta, e o TLS com a PKI de teste da pascal-common-faa: no Windows, os dois backends e os cruzamentos; se o OpenSSL não carregar ali, as fixtures dele passam com um aviso) |
-| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 48 | nada — roda a **suíte de integração do cliente contra o broker embutido** |
-| `AMQP.OutboxTests` / `AMQPOutboxTestsFpc` | 8 | a pascal-db-faa (`external/pascal-db-faa`) e o SQLite: no FPC, a `sqlite3.dll` do sqlite.org ao lado do runner (Windows) ou `libsqlite3.so.0` (Linux); o FireDAC do Delphi linka o SQLite — ver [`docs/outbox.md`](docs/outbox.md) |
+| `AMQP.UnitTests` / `AMQPUnitTestsFpc` | 145 | nothing — frame/method/content-header encode/decode, tune negotiation, `traceparent` injection, the transport's exception boundary |
+| `AMQP.IntegrationTests` / `AMQPIntegrationTestsFpc` | 48 | RabbitMQ up (`docker compose -f docker/docker-compose.yml up -d`, TLS via `docker-compose.tls.yml`); `AMQP_TEST_HOST`/`AMQP_TEST_PORT` point it elsewhere |
+| `AMQP.ServerTests` / `AMQPServerTestsFpc` | 509 | nothing — starts the **embedded broker** in-process on an ephemeral port (includes the client's spans end to end, and TLS with pascal-common-faa's test PKI: on Windows, both backends and the crossings; if OpenSSL doesn't load there, its fixtures pass with a notice) |
+| `AMQP.Acceptance` / `AMQPAcceptanceFpc` | 48 | nothing — runs the **client's integration suite against the embedded broker** |
+| `AMQP.OutboxTests` / `AMQPOutboxTestsFpc` | 8 | pascal-db-faa (`external/pascal-db-faa`) and SQLite: on FPC, sqlite.org's `sqlite3.dll` next to the runner (Windows) or `libsqlite3.so.0` (Linux); Delphi's FireDAC links SQLite in — see [`docs/outbox.md`](docs/outbox.md) |
 
-A suíte de **aceitação** é a que mede se o broker se comporta como o RabbitMQ na prática: são as mesmas units de teste da integração, sem uma linha reescrita, só apontadas para o broker in-process. **Todos passam, sem nenhum ignorado por recurso faltante** — o último que faltava (`x-max-length` + `x-overflow: reject-publish`) entrou junto com o resto do ciclo de vida de mensagem. Os 5 testes de TLS (publish/busca, verify-peer, payload de 300KB, consumo concorrente e handshake contra a porta plain) se auto-ignoram se o broker TLS estiver fora do ar (desde a 0.6.0 o broker embutido sobe a porta TLS em todo build, com a PKI de teste da pascal-common-faa). No FPCUnit eles aparecem como ignorados de verdade (`Number of ignored tests: 5` no relatório); no DUnitX, que não tem *skip* em runtime, continuam contando como **Passed** — um resumo "N Passed / 0 Ignored" pode, portanto, esconder testes que nem tocaram no broker. Dois sinais desfazem a ambiguidade: a mensagem `IGNORADO: ...` no log de console, e o **tempo** — teste auto-ignorado sai em ~0.000s, e é por isso que os projetos DUnitX daqui registram um logger próprio (`tests\AMQP.TestTimeLogger.pas`) que imprime a duração de cada teste e marca com `~` os de tempo ~zero. O mesmo dado está no `dunitx-results.xml` (atributo `time`); o atributo `asserts` **não** serve para isso — vem 0 mesmo em teste que rodou de verdade.
+The **acceptance** suite is what measures whether the broker behaves like RabbitMQ in practice: the very same integration test units, without a line rewritten, just pointed at the in-process broker. **All of them pass, with nothing skipped for a missing feature** — the last hold-out (`x-max-length` + `x-overflow: reject-publish`) landed together with the rest of the message lifecycle. The 5 TLS tests (publish/fetch, verify-peer, 300KB payload, concurrent consume and handshake against the plain port) self-ignore if the TLS broker is down (since 0.6.0 the embedded broker opens its TLS port in every build, with pascal-common-faa's test PKI). On FPCUnit they show up as truly ignored (`Number of ignored tests: 5` in the report); on DUnitX, which has no runtime *skip*, they still count as **Passed** — so an "N Passed / 0 Ignored" summary can hide tests that never touched the broker. Two signals resolve the ambiguity: the `IGNORADO: ...` message in the console log, and the **time** — a self-ignored test comes out at ~0.000s, which is why the DUnitX projects here register their own logger (`tests\AMQP.TestTimeLogger.pas`) that prints each test's duration and marks near-zero ones with `~`. The same data is in `dunitx-results.xml` (the `time` attribute); the `asserts` attribute is **not** usable for this — it reads 0 even for tests that really ran.
 
-O runner FPCUnit decide sozinho pelo `ParamCount`: sem argumentos abre a GUI (árvore de testes + barra verde/vermelha); com argumentos (`--all --format=plain`) roda em modo console. Rodando pela IDE do Lazarus, o chaveamento é em `Run → Run Parameters → Command line parameters` — os `.lpi` vêm com `--all --format=plain` salvo (modo console); limpe o campo para o F9 abrir a GUI. No modo console via F9 a janela fecha ao terminar: ou marque *Use launching application* com `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, ou rode o executável direto num terminal.
+The FPCUnit runner decides by itself via `ParamCount`: with no arguments it opens the GUI (test tree + green/red bar); with arguments (`--all --format=plain`) it runs in console mode. Running from the Lazarus IDE, the switch is in `Run → Run Parameters → Command line parameters` — the `.lpi` files come with `--all --format=plain` saved (console mode); clear the field to make F9 open the GUI. In console mode via F9 the window closes when done: either check *Use launching application* with `C:\Windows\System32\cmd.exe /K $(TargetCmdLine)`, or run the executable directly in a terminal.
 
-## Limitações conhecidas
+## Known limitations
 
-- Transações (`tx.*`) **não implementadas — por decisão de design**, não por dificuldade técnica (o protocolo `tx.*` é trivial). Uma transação AMQP é *stateful e por canal* ("tudo que publiquei/dei ack desde o último commit"), o que casa mal com o modelo *concurrency-first* desta lib: várias threads publicando no mesmo canal cairiam todas na mesma transação, sem escopo por-thread. Além disso, `tx.*` é síncrono e lento, e a própria RabbitMQ recomenda **publisher confirms** no lugar — que já estão implementados (`ConfirmSelect`). Se surgir necessidade real de lote atômico, o subconjunto tratável é `Tx.Select/Commit/Rollback` para uso serial em canal dedicado.
-- Publisher confirms + reconexão: os publishes não confirmados antes da queda são reportados como **não confirmados**; o reenvio na reconexão é **opt-in** (`RepublishUnconfirmedOnReconnect`, at-least-once) — sem ele, reenvie na sua camada se precisar de garantia ponta a ponta. Ver [Publisher confirms em detalhe](#publisher-confirms-em-detalhe).
-- **Recuperação de topologia com filas de nome gerado pelo servidor** — ver a seção abaixo.
-- TLS: sem escolha manual de versão/cipher suite; certificado próprio é PEM no OpenSSL e PFX no SChannel (ver [TLS (amqps)](#tls-amqps)).
-- **Broker embutido**: durabilidade é **opt-in** por `DataDir` e não cobre paginação para disco nem fila `exclusive` — ver [Durabilidade](#durabilidade-opt-in) e [O que o broker ainda não faz](#o-que-o-broker-ainda-não-faz).
+- Transactions (`tx.*`) **not implemented — by design decision**, not technical difficulty (the `tx.*` protocol is trivial). An AMQP transaction is *stateful and per-channel* ("everything I published/acked since the last commit"), which fits poorly with this library's *concurrency-first* model: several threads publishing on the same channel would all fall into the same transaction, with no per-thread scope. Besides, `tx.*` is synchronous and slow, and RabbitMQ itself recommends **publisher confirms** instead — which are already implemented (`ConfirmSelect`). If a real need for atomic batches arises, the tractable subset is `Tx.Select/Commit/Rollback` for serial use on a dedicated channel.
+- Publisher confirms + reconnection: publishes unconfirmed before the drop are reported as **not confirmed**; republishing on reconnection is **opt-in** (`RepublishUnconfirmedOnReconnect`, at-least-once) — without it, resend at your layer if you need an end-to-end guarantee. See [Publisher confirms in detail](#publisher-confirms-in-detail).
+- **Topology recovery with server-named queues** — see the section below.
+- TLS: no manual version/cipher-suite selection; one's own certificate is PEM on OpenSSL and PFX on SChannel (see [TLS (amqps)](#tls-amqps)).
+- **Embedded broker**: durability is **opt-in** through `DataDir` and covers neither paging to disk nor `exclusive` queues — see [Durability](#durability-opt-in) and [What the broker does not do yet](#what-the-broker-does-not-do-yet).
 
-### Recuperação de filas com nome gerado pelo servidor
+### Recovery of server-named queues
 
-Ao declarar `QueueName = ''`, o servidor **gera** o nome (`amq.gen-XXXX`). A recuperação de topologia na reconexão **assume filas nomeadas**: ela guarda os payloads de `declare`/`bind`/`consume` já serializados e os re-executa. Como o redeclare com nome vazio gera um nome **novo** e os `bind`/`consume` gravados carregam o nome **antigo**, o replay quebra (`basic.consume` na fila inexistente → `404` → o servidor fecha o canal).
+When declaring `QueueName = ''`, the server **generates** the name (`amq.gen-XXXX`). Topology recovery on reconnection **assumes named queues**: it stores the already-serialized `declare`/`bind`/`consume` payloads and re-executes them. Since redeclaring with an empty name generates a **new** name and the recorded `bind`/`consume` carry the **old** one, the replay breaks (`basic.consume` on a nonexistent queue → `404` → the server closes the channel).
 
-**Workaround (recomendado):** se você precisa de fila temporária **e** de reconexão, **gere o nome no cliente** em vez de usar `''`:
+**Workaround (recommended):** if you need a temporary queue **and** reconnection, **generate the name on the client** instead of using `''`:
 
 ```pascal
 var
@@ -771,22 +771,22 @@ var
 begin
   CreateGUID(LGuid);
   LDecl.QueueName := 'reply-' + GUIDToString(LGuid);
-  LDecl.Exclusive := True;   // some quando a conexão fecha
+  LDecl.Exclusive := True;   // goes away when the connection closes
   LDecl.AutoDelete := True;
 end;
 ```
 
-Assim a fila é temporária com nome **estável e conhecido**, e a recuperação funciona como a de qualquer fila nomeada. Para RPC request/reply, prefira o **Direct Reply-to** (`amq.rabbitmq.reply-to`) — um nome-mágico fixo, sem declarar fila por requisição, que também não sofre desse problema. (Para quem for forkar e precisar de server-named real na recuperação, o caminho detalhado está documentado no README da [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa#recupera%C3%A7%C3%A3o-de-filas-com-nome-gerado-pelo-servidor) — o design é o mesmo.)
+That way the queue is temporary with a **stable, known name**, and recovery works like any named queue's. For request/reply RPC, prefer **Direct Reply-to** (`amq.rabbitmq.reply-to`) — a fixed magic name, no queue declared per request, which also doesn't suffer from this problem. (For anyone forking and needing real server-named recovery, the detailed path is documented in the [delphi-amqp-faa](https://github.com/fabianoallex/delphi-amqp-faa#recupera%C3%A7%C3%A3o-de-filas-com-nome-gerado-pelo-servidor) README — the design is the same.)
 
 ## Roadmap
 
-- ~~Validação em Linux~~ — concluída: x86_64 e ARM64, TLS/OpenSSL incluso, samples GUI validados em LCL/GTK2 (ver tabela de compatibilidade).
-- ~~Broker embutível — protocolo completo~~ e ~~engine de roteamento em memória~~ — concluídos: handshake, canais, todos os métodos com o `*-Ok` correto, TLS de servidor, roteamento nos quatro tipos de exchange, entrega com prefetch e ack, confirms, `mandatory`/`Return` e ciclo de vida (`exclusive`/`auto-delete`).
-- ~~Broker — ciclo de vida da mensagem~~ — concluído: `x-message-ttl` e `expiration`, dead-lettering com `x-death` completo, `x-max-priority`, `x-max-length`/`x-max-length-bytes`/`x-overflow`, `alternate-exchange` e `x-expires`.
-- ~~Broker — durabilidade~~ — concluída: WAL append-only com fsync por lote e group commit, topologia e mensagens persistentes recuperadas no `Start` (antes de o socket de escuta abrir), confirm assíncrono preso à marca d'água (colapsado com `multiple=true`), segmentos com compactação por reescrita a cada `Start` e teto de disco que recusa em vez de descartar. Opt-in por `DataDir`.
-- Validação do backend OpenSSL compilado pelo Delphi em Linux (a Community Edition não tem o target; o mesmo fonte é validado pelo FPC/Linux).
-- ~~TLS de servidor no backend SChannel~~ e ~~mTLS/client-cert~~ — concluídos na 0.6.0, com o transporte da pascal-common-faa.
+- ~~Linux validation~~ — done: x86_64 and ARM64, TLS/OpenSSL included, GUI samples validated on LCL/GTK2 (see the compatibility table).
+- ~~Embeddable broker — full protocol~~ and ~~in-memory routing engine~~ — done: handshake, channels, every client method answered with the correct `*-Ok`, server-side TLS, routing across the four exchange types, delivery with prefetch and ack, confirms, `mandatory`/`Return` and lifecycle (`exclusive`/`auto-delete`).
+- ~~Broker — message lifecycle~~ — done: `x-message-ttl` and `expiration`, dead-lettering with the full `x-death`, `x-max-priority`, `x-max-length`/`x-max-length-bytes`/`x-overflow`, `alternate-exchange` and `x-expires`.
+- ~~Broker — durability~~ — done: append-only WAL with batched fsync and group commit, durable topology and persistent messages recovered on `Start` (before the listening socket opens), asynchronous confirms held back by the watermark (collapsed with `multiple=true`), segments with rewrite compaction on every `Start`, and a disk cap that refuses rather than discards. Opt-in through `DataDir`.
+- Validation of the OpenSSL backend compiled by Delphi on Linux (the Community Edition doesn't have the target; the same source is the one validated by FPC/Linux).
+- ~~Server-side TLS on the SChannel backend~~ and ~~mTLS/client-cert~~ — done in 0.6.0, with pascal-common-faa's transport.
 
-## Licença
+## License
 
-MIT — ver [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

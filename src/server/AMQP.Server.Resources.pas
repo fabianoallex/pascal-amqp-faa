@@ -2,22 +2,23 @@
 
 {$I amqp.inc}
 
-{ Descritores dos recursos declarados (exchange/fila) -- sub-modulo broker,
-  WS1 da Fase 2.
+{ Descriptors of the declared resources (exchange/queue) -- broker
+  sub-module, Phase 2 WS1.
 
-  So' a estrutura de dados e as funcoes de comparacao/validacao entram aqui;
-  quem monta o registro de exchanges/filas por vhost em cima disso e' a WS2
-  (topologia). O uso mais direto de AmqpArgsEqual/EquivalentTo e' a base do
-  redeclare divergente (406 PRECONDITION_FAILED, spec): declarar de novo um
-  recurso existente com flags/argumentos diferentes e' erro; com os MESMOS
-  flags/argumentos e' idempotente.
+  Only the data structure and the comparison/validation functions go here;
+  the per-vhost registry of exchanges/queues built on top of it is WS2's
+  (topology). The most direct use of AmqpArgsEqual/EquivalentTo is the basis
+  of the divergent redeclare (406 PRECONDITION_FAILED, spec): declaring an
+  existing resource again with different flags/arguments is an error; with
+  the SAME flags/arguments it is idempotent.
 
-  Posse de Arguments: os descritores TOMAM POSSE da TAMQPFieldTable vinda do
-  decode de Exchange.Declare/Queue.Declare e a liberam no destrutor -- mesmo
-  espirito da decisao D1 (a mensagem carrega o payload cru em vez de clonar
-  TValue-em-TValue): clonar a tabela teria o mesmo problema de tabelas/arrays
-  aninhados que o AmqpUnwrapValue (AMQP.Wire) existe pra contornar, entao o
-  descritor vira o dono direto em vez de copiar. }
+  Ownership of Arguments: the descriptors TAKE OWNERSHIP of the
+  TAMQPFieldTable coming from the Exchange.Declare/Queue.Declare decode and
+  free it in the destructor -- same spirit as decision D1 (the message carries
+  the raw payload instead of cloning TValue-in-TValue): cloning the table
+  would have the same nested tables/arrays problem that AmqpUnwrapValue
+  (AMQP.Wire) exists to work around, so the descriptor becomes the direct
+  owner instead of copying. }
 
 interface
 
@@ -29,38 +30,38 @@ uses
   AMQP.Exchange.Methods;
 
 const
-  /// Teto de x-max-priority desta implementacao (decisao D12 da Fase 3). O
-  /// RabbitMQ aceita ate' 255 e recomenda <= 5; acima de 9 o custo de memoria
-  /// por fila (um balde de prontas por nivel) deixa de valer o que entrega.
-  /// Declarar acima disto e' 406, nao um clamp silencioso -- desvio deliberado,
-  /// documentado no CLAUDE.md.
+  /// This implementation's x-max-priority cap (Phase 3 decision D12).
+  /// RabbitMQ accepts up to 255 and recommends <= 5; above 9 the per-queue
+  /// memory cost (one ready bucket per level) is no longer worth what it gives.
+  /// Declaring above this is a 406, not a silent clamp -- a deliberate
+  /// deviation, documented in CLAUDE.md.
   AMQP_MAX_PRIORITY_LEVEL = 9;
 
 type
-  { Politica de x-overflow: o que fazer quando a fila bate o teto.
-    - amqovDropHead: descarta da cabeca (default da spec de fato do RabbitMQ);
-    - amqovRejectPublish: recusa o publish, que em confirm mode vira Basic.Nack.
-    'reject-publish-dlx' do RabbitMQ nao entra: dead-letter no overflow e' a
-    razao 'maxlen' da WS5, que ja' cobre o caso pelo caminho normal. }
+  { x-overflow policy: what to do when the queue hits its cap.
+    - amqovDropHead: drops from the head (RabbitMQ's de facto spec default);
+    - amqovRejectPublish: rejects the publish, which in confirm mode becomes Basic.Nack.
+    RabbitMQ's 'reject-publish-dlx' is not included: dead-lettering on overflow
+    is WS5's 'maxlen' reason, which already covers the case the normal way. }
   TAMQPOverflow = (amqovDropHead, amqovRejectPublish);
 
-  { Os x-arguments de uma fila, ja' decodificados e validados.
+  { A queue's x-arguments, already decoded and validated.
 
-    Escopo da WS2 (Fase 3): esta unit apenas LE e VALIDA. Nenhum campo daqui
-    tem efeito ainda -- TTL e prioridade sao a WS4, dead-letter a WS5, os tetos
-    a WS6, x-expires a WS8. Guardar a politica no descritor desde ja' evita que
-    cada frente reparseie a tabela do seu jeito.
+    WS2 scope (Phase 3): this unit only READS and VALIDATES. No field here has
+    any effect yet -- TTL and priority are WS4, dead-letter WS5, the caps WS6,
+    x-expires WS8. Keeping the policy in the descriptor from now on spares each
+    workstream from re-parsing the table its own way.
 
-    Ausencia e' -1 nos numericos (e nao 0, que e' um valor VALIDO e diferente:
-    x-max-length=0 significa "fila que nao guarda nada"). Nas strings, o par
-    Has* separa "ausente" de "presente e vazia" -- x-dead-letter-exchange=''
-    e' o exchange DEFAULT, nao a ausencia de DLX. }
+    Absence is -1 for the numerics (and not 0, which is a VALID and different
+    value: x-max-length=0 means "a queue that keeps nothing"). For strings, the
+    Has* pair separates "absent" from "present and empty" --
+    x-dead-letter-exchange='' is the DEFAULT exchange, not the absence of a DLX. }
   TAMQPQueuePolicy = record
-    MessageTtlMs: Int64;             // x-message-ttl        (-1 = ausente)
-    ExpiresMs: Int64;                // x-expires            (-1 = ausente)
-    MaxLength: Int64;                // x-max-length         (-1 = ausente)
-    MaxLengthBytes: Int64;           // x-max-length-bytes   (-1 = ausente)
-    MaxPriority: Integer;            // x-max-priority       (-1 = sem prioridade)
+    MessageTtlMs: Int64;             // x-message-ttl        (-1 = absent)
+    ExpiresMs: Int64;                // x-expires            (-1 = absent)
+    MaxLength: Int64;                // x-max-length         (-1 = absent)
+    MaxLengthBytes: Int64;           // x-max-length-bytes   (-1 = absent)
+    MaxPriority: Integer;            // x-max-priority       (-1 = no priority)
     Overflow: TAMQPOverflow;         // x-overflow           (default drop-head)
     DeadLetterExchange: string;      // x-dead-letter-exchange
     HasDeadLetterExchange: Boolean;
@@ -68,12 +69,12 @@ type
     HasDeadLetterRoutingKey: Boolean;
 
     class function Empty: TAMQPQueuePolicy; static;
-    /// True se a fila tem ao menos um argumento com efeito -- atalho para as
-    /// frentes seguintes pularem o caminho caro numa fila comum.
+    /// True if the queue has at least one argument with an effect -- a
+    /// shortcut for the later workstreams to skip the expensive path on a plain queue.
     function HasAny: Boolean;
   end;
 
-  { Descreve um exchange declarado. Dono de Arguments. }
+  { Describes a declared exchange. Owns Arguments. }
   TAMQPExchangeDef = class
   private
     FName: string;
@@ -85,16 +86,16 @@ type
     FAlternateExchange: string;
     FHasAlternateExchange: Boolean;
   public
-    /// AArguments: o descritor passa a ser dono (libera no destrutor); pode
-    /// ser nil.
+    /// AArguments: the descriptor becomes its owner (frees it in the
+    /// destructor); may be nil.
     constructor Create(const AName, AExchangeType: string;
       ADurable, AAutoDelete, AInternal: Boolean; AArguments: TAMQPFieldTable);
     destructor Destroy; override;
 
-    /// True se AOther descreve um exchange EQUIVALENTE (mesmo tipo, mesmos
-    /// flags, mesmos argumentos por AmqpArgsEqual) -- nao compara o Name, so'
-    /// o resto: quem chama ja sabe que o nome bate (e' o redeclare do mesmo
-    /// nome que esta' sendo validado).
+    /// True if AOther describes an EQUIVALENT exchange (same type, same
+    /// flags, same arguments by AmqpArgsEqual) -- does not compare Name, only
+    /// the rest: the caller already knows the name matches (it is the
+    /// redeclare of the same name that is being validated).
     function EquivalentTo(AOther: TAMQPExchangeDef): Boolean;
 
     property Name: string read FName;
@@ -103,14 +104,14 @@ type
     property AutoDelete: Boolean read FAutoDelete;
     property Internal: Boolean read FInternal;
     property Arguments: TAMQPFieldTable read FArguments;
-    /// 'alternate-exchange', derivado de Arguments na construcao. A WS7 da
-    /// Fase 3 roteia para ca' o que nao casou binding nenhum; ate' la' o
-    /// campo so' existe. Has* separa ausente de presente-e-vazio.
+    /// 'alternate-exchange', derived from Arguments at construction. Phase 3
+    /// WS7 routes here whatever matched no binding; until then the field
+    /// merely exists. Has* separates absent from present-and-empty.
     property AlternateExchange: string read FAlternateExchange;
     property HasAlternateExchange: Boolean read FHasAlternateExchange;
   end;
 
-  { Descreve uma fila declarada. Dono de Arguments. }
+  { Describes a declared queue. Owns Arguments. }
   TAMQPQueueDef = class
   private
     FName: string;
@@ -121,17 +122,18 @@ type
     FOwnerId: NativeUInt;
     FPolicy: TAMQPQueuePolicy;
   public
-    /// AArguments: o descritor passa a ser dono (libera no destrutor); pode
-    /// ser nil. AOwnerId: identidade da conexao dona (0 = fila nao-exclusiva,
-    /// ou dono ainda nao atribuido) -- ver o comentario da property OwnerId.
+    /// AArguments: the descriptor becomes its owner (frees it in the
+    /// destructor); may be nil. AOwnerId: identity of the owning connection
+    /// (0 = non-exclusive queue, or owner not assigned yet) -- see the comment
+    /// on the OwnerId property.
     constructor Create(const AName: string;
       ADurable, AExclusive, AAutoDelete: Boolean; AArguments: TAMQPFieldTable;
       AOwnerId: NativeUInt = 0);
     destructor Destroy; override;
 
-    /// True se AOther descreve uma fila EQUIVALENTE (mesmos flags, mesmos
-    /// argumentos por AmqpArgsEqual). OwnerId NAO entra na comparacao: dono
-    /// nao e' parte do que o redeclare valida (mesma semantica do RabbitMQ).
+    /// True if AOther describes an EQUIVALENT queue (same flags, same
+    /// arguments by AmqpArgsEqual). OwnerId is NOT part of the comparison: the
+    /// owner is not part of what a redeclare validates (same semantics as RabbitMQ).
     function EquivalentTo(AOther: TAMQPQueueDef): Boolean;
 
     property Name: string read FName;
@@ -139,88 +141,88 @@ type
     property Exclusive: Boolean read FExclusive;
     property AutoDelete: Boolean read FAutoDelete;
     property Arguments: TAMQPFieldTable read FArguments;
-    /// Dono da fila exclusiva. Escolha de tipo: NativeUInt guardando a
-    /// identidade da TAMQPServerConnection dona (ex.: NativeUInt(Connection)
-    /// ou um id sequencial que ela exponha) -- nao uma referencia direta ao
-    /// objeto, pra este unit nao precisar enxergar AMQP.Server.Connection (e
-    /// evitar um ciclo de units). 0 = nenhum dono. A WS3 (fila-ator) e a WS7
-    /// (ciclo de vida cruzado / teardown) usam isso pra negar acesso de outra
-    /// conexao e pra liberar a fila quando a dona cai.
+    /// Owner of an exclusive queue. Type choice: a NativeUInt holding the
+    /// identity of the owning TAMQPServerConnection (e.g. NativeUInt(Connection)
+    /// or a sequential id it exposes) -- not a direct reference to the object,
+    /// so this unit does not need to see AMQP.Server.Connection (and avoids a
+    /// unit cycle). 0 = no owner. WS3 (queue actor) and WS7 (cross lifecycle /
+    /// teardown) use it to deny access from another connection and to release
+    /// the queue when its owner goes down.
     property OwnerId: NativeUInt read FOwnerId write FOwnerId;
-    /// Os x-arguments ja' decodificados (WS2 da Fase 3). Derivada de Arguments
-    /// na construcao -- a tabela continua sendo a fonte da verdade (e' ela que
-    /// o EquivalentTo compara), a politica e' so' a leitura tipada dela.
-    /// Argumento invalido nao chega aqui: a FSM valida ANTES de declarar.
+    /// The x-arguments, already decoded (Phase 3 WS2). Derived from Arguments
+    /// at construction -- the table is still the source of truth (it is what
+    /// EquivalentTo compares), the policy is just its typed reading.
+    /// An invalid argument never gets here: the FSM validates BEFORE declaring.
     property Policy: TAMQPQueuePolicy read FPolicy;
   end;
 
-/// Compara duas field-tables SEMANTICAMENTE (nao por referencia):
-/// - nil e tabela vazia sao consideradas iguais;
-/// - precisam ter a mesma quantidade de chaves;
-/// - cada chave de A precisa existir em B com o MESMO valor;
-/// - tabela aninhada ('F') compara recursivamente por AmqpArgsEqual;
-/// - array ('A' e afins) compara elemento a elemento, com AmqpUnwrapValue
-///   (AMQP.Wire) em TODO GetArrayElement -- gotcha conhecido do TValue, no
-///   Delphi e no FPC (GetArrayElement sobre um array de field-values devolve
-///   o elemento re-embrulhado; ver CLAUDE.md).
-/// E' a base do 406 PRECONDITION_FAILED de um redeclare divergente.
+/// Compares two field-tables SEMANTICALLY (not by reference):
+/// - nil and an empty table are considered equal;
+/// - they must have the same number of keys;
+/// - each key of A must exist in B with the SAME value;
+/// - a nested table ('F') compares recursively by AmqpArgsEqual;
+/// - an array ('A' and the like) compares element by element, with
+///   AmqpUnwrapValue (AMQP.Wire) on EVERY GetArrayElement -- a known TValue
+///   gotcha, on Delphi and on FPC (GetArrayElement over an array of
+///   field-values returns the element re-wrapped; see CLAUDE.md).
+/// It is the basis of the 406 PRECONDITION_FAILED of a divergent redeclare.
 function AmqpArgsEqual(A, B: TAMQPFieldTable): Boolean;
 
-/// Prefixo reservado 'amq.' (spec 1.4: nomes de exchange/fila comecando com
-/// isso sao reservados ao servidor). A WS5 usa para negar declare/bind de um
-/// nome reservado vindo do cliente (403 ACCESS_REFUSED), exceto os exchanges
-/// predefinidos que o proprio broker semeia.
+/// Reserved prefix 'amq.' (spec 1.4: exchange/queue names starting with it
+/// are reserved for the server). WS5 uses it to deny a declare/bind of a
+/// reserved name coming from the client (403 ACCESS_REFUSED), except for the
+/// predefined exchanges the broker itself seeds.
 function AmqpIsReservedName(const AName: string): Boolean;
 
-/// True se AType e' um dos quatro tipos de exchange desta implementacao
-/// (direct/fanout/topic/headers). Comparacao EXATA, case-sensitive: o AMQP
-/// e' case-sensitive aqui (ao contrario, por exemplo, do SASL mechanism), e
-/// 'Direct'/'DIRECT' nao contam.
+/// True if AType is one of this implementation's four exchange types
+/// (direct/fanout/topic/headers). EXACT, case-sensitive comparison: AMQP is
+/// case-sensitive here (unlike, for example, the SASL mechanism), and
+/// 'Direct'/'DIRECT' do not count.
 function AmqpIsValidExchangeType(const AType: string): Boolean;
 
-/// Compara dois field-VALUES (um par chave/valor ja' desembrulhado de uma
-/// TAMQPFieldTable) semanticamente: mesmo Kind e' pre-requisito, tabela
-/// aninhada ('F') recorre por AmqpArgsEqual, array ('A') compara elemento a
-/// elemento com AmqpUnwrapValue (gotcha do FPC 3.2, ver AmqpArgsEqual acima),
-/// escalares comparam por AsBoolean/AsInteger/.../AsString conforme o Kind
-/// (TValue.AsVariant nao existe no FPC 3.2 -- nao ha atalho generico).
-/// Exportada (nao so' uso interno de AmqpArgsEqual) para a WS2 (AMQP.Server.
-/// Routing) reusar no casamento de headers exchange em vez de duplicar a
-/// logica de comparacao de TValue.
+/// Compares two field-VALUES (a key/value pair already unwrapped from a
+/// TAMQPFieldTable) semantically: the same Kind is a prerequisite, a nested
+/// table ('F') recurses through AmqpArgsEqual, an array ('A') compares
+/// element by element with AmqpUnwrapValue (FPC 3.2 gotcha, see AmqpArgsEqual
+/// above), scalars compare by AsBoolean/AsInteger/.../AsString according to
+/// the Kind (TValue.AsVariant does not exist in FPC 3.2 -- there is no generic
+/// shortcut). Exported (not only for AmqpArgsEqual's internal use) so that
+/// WS2 (AMQP.Server.Routing) reuses it for headers-exchange matching instead
+/// of duplicating the TValue comparison logic.
 function AmqpValuesEqual(const A, B: TValue): Boolean;
 
-/// Le e VALIDA os x-arguments de fila de AArgs (pode ser nil = tabela vazia).
+/// Reads and VALIDATES the queue x-arguments in AArgs (may be nil = empty table).
 ///
-/// False = algum argumento e' invalido, e AError traz a mensagem ja' no
-/// formato que vai para o reply-text do 406 PRECONDITION_FAILED, NOMEANDO o
-/// argumento ofensor (ex.: "invalid arg 'x-max-priority' for queue: must be
-/// an integer between 0 and 9"). Nomear e' o que separa um erro acionavel de
-/// um "precondition failed" que o usuario tem de adivinhar -- o RabbitMQ faz
-/// igual.
+/// False = some argument is invalid, and AError carries the message already in
+/// the format that goes into the reply-text of the 406 PRECONDITION_FAILED,
+/// NAMING the offending argument (e.g. "invalid arg 'x-max-priority' for
+/// queue: must be an integer between 0 and 9"). Naming it is what separates an
+/// actionable error from a "precondition failed" the user has to guess at --
+/// RabbitMQ does the same.
 ///
-/// Quem chama e' a FSM (AMQP.Server.Connection), ANTES de entregar a tabela
-/// a' engine: validacao produz reply-code, e a engine nao conhece reply-code
-/// nenhum (invariante da Fase 2). Chaves 'x-' desconhecidas sao IGNORADAS,
-/// nao recusadas -- e' o que o RabbitMQ faz, e recusar quebraria cliente que
-/// manda argumento de uma extensao que este broker nao tem.
+/// The caller is the FSM (AMQP.Server.Connection), BEFORE handing the table to
+/// the engine: validation produces a reply-code, and the engine knows no
+/// reply-code at all (a Phase 2 invariant). Unknown 'x-' keys are IGNORED, not
+/// rejected -- that is what RabbitMQ does, and rejecting would break a client
+/// that sends an argument from an extension this broker does not have.
 function AmqpParseQueuePolicy(AArgs: TAMQPFieldTable;
   out APolicy: TAMQPQueuePolicy; out AError: string): Boolean;
 
-/// Le e valida o argumento 'alternate-exchange' de um Exchange.Declare.
-/// ANome sai vazio e Result=True quando o argumento esta ausente (use
-/// AHas para distinguir de "presente e vazio"). Mesmo contrato de AError.
+/// Reads and validates the 'alternate-exchange' argument of an Exchange.Declare.
+/// AName comes out empty and Result=True when the argument is absent (use
+/// AHas to tell it from "present and empty"). Same AError contract.
 function AmqpParseAlternateExchange(AArgs: TAMQPFieldTable;
   out AName: string; out AHas: Boolean; out AError: string): Boolean;
 
-/// Le a propriedade 'expiration' do Basic: TTL da MENSAGEM em milissegundos,
-/// que a spec define como STRING decimal e nao como numero (por isso o
-/// TAMQPBasicProperties.Expiration e' string).
+/// Reads Basic's 'expiration' property: the MESSAGE TTL in milliseconds,
+/// which the spec defines as a decimal STRING and not as a number (that is
+/// why TAMQPBasicProperties.Expiration is a string).
 ///
-/// AValue vazio = ausente: devolve True com AMs = -1 (sem TTL proprio).
-/// Malformada (nao-digito, negativa, estouro) devolve False -- e a FSM
-/// transforma isso em 406, do mesmo jeito que faz com x-argument invalido.
-/// Ignorar em silencio seria pior que recusar: a mensagem que o cliente
-/// mandou expirar viveria para sempre, e ele nao teria como saber.
+/// Empty AValue = absent: returns True with AMs = -1 (no TTL of its own).
+/// Malformed (non-digit, negative, overflow) returns False -- and the FSM
+/// turns that into a 406, the same way it does with an invalid x-argument.
+/// Silently ignoring it would be worse than rejecting: the message the client
+/// asked to expire would live forever, and the client would have no way to know.
 function AmqpParseExpirationMs(const AValue: string; out AMs: Int64): Boolean;
 
 implementation
@@ -249,16 +251,17 @@ begin
     or HasDeadLetterExchange or HasDeadLetterRoutingKey;
 end;
 
-{ --- leitura tipada de um x-argument --------------------------------------
-  O decoder do wire nao produz um tipo unico para numero: FV_INT8/16/32 viram
-  tkInteger e FV_UINT32/INT64/TIMESTAMP viram tkInt64 (ver TAMQPReader.
-  ReadFieldValue). Um cliente que manda x-message-ttl como 'b' e outro que
-  manda como 'l' estao os dois certos, entao aceitar so' um Kind recusaria
-  cliente valido. Boolean fica de fora de proposito: no FPC ele tem Kind
-  proprio (tkBool) e no Delphi cai em tkEnumeration -- em nenhum dos dois e'
-  um numero, e aceitar True como 1 mascararia erro de tipo do cliente. }
+{ --- typed reading of an x-argument ---------------------------------------
+  The wire decoder does not produce a single type for numbers: FV_INT8/16/32
+  become tkInteger and FV_UINT32/INT64/TIMESTAMP become tkInt64 (see
+  TAMQPReader.ReadFieldValue). A client that sends x-message-ttl as 'b' and
+  another that sends it as 'l' are both right, so accepting only one Kind
+  would reject a valid client. Boolean is left out on purpose: in FPC it has
+  its own Kind (tkBool) and in Delphi it falls under tkEnumeration -- in
+  neither is it a number, and accepting True as 1 would mask a client type
+  error. }
 
-// True se a chave existe. AOk sai False quando existe mas nao e' numero.
+// True if the key exists. AOk comes out False when it exists but is not a number.
 function TryArgInt64(AArgs: TAMQPFieldTable; const AKey: string;
   out AValue: Int64; out AOk: Boolean): Boolean;
 var
@@ -266,8 +269,8 @@ var
 begin
   AValue := 0;
   AOk := False;
-  // O indexador encadeado (Tabela['k'].AsInt64) trava o FPC 3.2 com erro
-  // interno -- por isso o TValue vai para uma variavel local antes.
+  // The chained indexer (Table['k'].AsInt64) crashes FPC 3.2 with an internal
+  // error -- which is why the TValue goes into a local variable first.
   Result := (AArgs <> nil) and AArgs.TryGetValue(AKey, LVal);
   if not Result then
     Exit;
@@ -278,7 +281,7 @@ begin
   end;
 end;
 
-// True se a chave existe. AOk sai False quando existe mas nao e' string.
+// True if the key exists. AOk comes out False when it exists but is not a string.
 function TryArgString(AArgs: TAMQPFieldTable; const AKey: string;
   out AValue: string; out AOk: Boolean): Boolean;
 var
@@ -305,9 +308,9 @@ begin
   Result := Format('invalid arg ''%s'' for queue: %s', [AKey, ADetail]);
 end;
 
-// Le um numerico com piso. AMin e' o menor valor ACEITO (0 para os tetos e
-// para o TTL, 1 para x-expires -- uma fila que expira em 0 ms sumiria no
-// instante do declare, o que o RabbitMQ tambem recusa).
+// Reads a numeric with a floor. AMin is the smallest ACCEPTED value (0 for the
+// caps and the TTL, 1 for x-expires -- a queue that expires in 0 ms would
+// vanish the instant it is declared, which RabbitMQ also rejects).
 function ReadNumeric(AArgs: TAMQPFieldTable; const AKey: string; AMin: Int64;
   var ADestination: Int64; out AError: string): Boolean;
 var
@@ -317,7 +320,7 @@ begin
   AError := '';
   Result := True;
   if not TryArgInt64(AArgs, AKey, LVal, LOk) then
-    Exit; // ausente
+    Exit; // absent
   if not LOk then
   begin
     AError := ArgError(AKey, 'must be an integer');
@@ -351,7 +354,7 @@ begin
     AError) then
     Exit(False);
 
-  // x-max-priority: faixa fechada da D12, nao so' "nao-negativo".
+  // x-max-priority: D12's closed range, not just "non-negative".
   if TryArgInt64(AArgs, 'x-max-priority', LVal, LOk) then
   begin
     if (not LOk) or (LVal < 0) or (LVal > AMQP_MAX_PRIORITY_LEVEL) then
@@ -363,7 +366,7 @@ begin
     APolicy.MaxPriority := Integer(LVal);
   end;
 
-  // x-overflow: so' as duas politicas desta implementacao.
+  // x-overflow: only this implementation's two policies.
   if TryArgString(AArgs, 'x-overflow', LText, LOk) then
   begin
     if not LOk then
@@ -418,7 +421,7 @@ begin
   AError := '';
   Result := True;
   if not TryArgString(AArgs, 'alternate-exchange', AName, LOk) then
-    Exit; // ausente
+    Exit; // absent
   if not LOk then
   begin
     AName := '';
@@ -436,14 +439,14 @@ var
 begin
   AMs := -1;
   if AValue = '' then
-    Exit(True); // ausente
+    Exit(True); // absent
   LAcc := 0;
   for I := 1 to Length(AValue) do
   begin
     if (AValue[I] < '0') or (AValue[I] > '9') then
       Exit(False);
-    // Teto generoso mas finito: 'expiration' com 19 digitos e' erro do
-    // cliente, e deixar estourar o Int64 daria um prazo negativo silencioso.
+    // Generous but finite cap: an 'expiration' with 19 digits is a client
+    // error, and letting Int64 overflow would give a silent negative deadline.
     if LAcc > (High(Int64) - 9) div 10 then
       Exit(False);
     LAcc := LAcc * 10 + (Ord(AValue[I]) - Ord('0'));
@@ -457,11 +460,11 @@ var
   LKey: string;
   LValA, LValB: TValue;
 begin
-  // nil e tabela vazia sao equivalentes para fins de comparacao semantica.
+  // nil and an empty table are equivalent for semantic comparison.
   if (A = nil) or (A.Count = 0) then
     Exit((B = nil) or (B.Count = 0));
   if (B = nil) or (B.Count = 0) then
-    Exit(False); // A nao-vazia (early exit acima), B vazia/nil: divergem
+    Exit(False); // A non-empty (early exit above), B empty/nil: they differ
 
   if A.Count <> B.Count then
     Exit(False);
@@ -471,7 +474,7 @@ begin
   begin
     if not B.TryGetValue(LKey, LValB) then
       Exit(False);
-    LValA := A[LKey]; // indexador -> variavel local antes de usar (gotcha FPC)
+    LValA := A[LKey]; // indexer -> local variable before use (FPC gotcha)
     if not AmqpValuesEqual(LValA, LValB) then
       Exit(False);
   end;
@@ -486,8 +489,8 @@ begin
   if A.Kind <> B.Kind then
     Exit(False);
 
-  // 'V' (void): TValue.Empty dos dois lados -- kind ja bateu, nada mais a
-  // comparar.
+  // 'V' (void): TValue.Empty on both sides -- the kind already matched,
+  // nothing else to compare.
   if A.IsEmpty then
     Exit(True);
 
@@ -495,10 +498,10 @@ begin
   begin
     LObjA := A.AsObject;
     LObjB := B.AsObject;
-    // 'F' (tabela aninhada): unico objeto que um field-value carrega hoje.
+    // 'F' (nested table): the only object a field-value carries today.
     if (LObjA is TAMQPFieldTable) and (LObjB is TAMQPFieldTable) then
       Exit(AmqpArgsEqual(TAMQPFieldTable(LObjA), TAMQPFieldTable(LObjB)));
-    Exit(LObjA = LObjB); // fallback: mesma instancia
+    Exit(LObjA = LObjB); // fallback: same instance
   end;
 
   if A.IsArray then
@@ -508,17 +511,17 @@ begin
     LLen := A.GetArrayLength;
     if LLen <> B.GetArrayLength then
       Exit(False);
-    // 'A' (array de field-values): GetArrayElement devolve o elemento
-    // re-embrulhado num TValue, no Delphi e no FPC -- AmqpUnwrapValue desfaz.
-    // Aplicamos o unwrap em TODO elemento, de qualquer array: ele e'
-    // idempotente, e num array que nao seja de field-values (ex.: 'x' = TBytes)
-    // o elemento nao e' um TValue embrulhado, entao e' no-op.
+    // 'A' (array of field-values): GetArrayElement returns the element
+    // re-wrapped in a TValue, on Delphi and on FPC -- AmqpUnwrapValue undoes it.
+    // We unwrap EVERY element, of any array: it is idempotent, and in an
+    // array that is not of field-values (e.g. 'x' = TBytes) the element is
+    // not a wrapped TValue, so it is a no-op.
     //
-    // NAO testar aqui "TypeInfo = TypeInfo(TArray<TValue>)" para decidir se
-    // desembrulha: no FPC 3.2 essa especializacao ESCRITA INLINE nesta unit e'
-    // um tipo DIFERENTE do TAMQPValueArray que o AMQP.Wire produz ao decodar
-    // (medido: a comparacao da False), e o efeito seria comparar os elementos
-    // ainda embrulhados -- tabelas iguais dando "diferente".
+    // Do NOT test "TypeInfo = TypeInfo(TArray<TValue>)" here to decide whether
+    // to unwrap: in FPC 3.2 that specialization WRITTEN INLINE in this unit is
+    // a DIFFERENT type from the TAMQPValueArray that AMQP.Wire produces when
+    // decoding (measured: the comparison gives False), and the effect would be
+    // comparing still-wrapped elements -- equal tables coming out "different".
     for I := 0 to LLen - 1 do
     begin
       LElemA := AmqpUnwrapValue(A.GetArrayElement(I));
@@ -529,9 +532,9 @@ begin
     Exit(True);
   end;
 
-  // Escalares: os unicos Kinds que sobram sao os que WriteFieldValue sabe
-  // escrever (ver AMQP.Wire) -- TValue.AsVariant NAO existe no FPC 3.2, entao
-  // o dispatch e' por Kind, espelhando exatamente o case de WriteFieldValue.
+  // Scalars: the only Kinds left are the ones WriteFieldValue knows how to
+  // write (see AMQP.Wire) -- TValue.AsVariant does NOT exist in FPC 3.2, so
+  // the dispatch is by Kind, mirroring WriteFieldValue's case exactly.
   case A.Kind of
     {$IFDEF FPC}
     tkBool:
@@ -541,7 +544,7 @@ begin
       if A.TypeInfo = TypeInfo(Boolean) then
         Result := A.AsBoolean = B.AsBoolean
       else
-        Result := False; // enum nao-Boolean: nao esperado num field-value
+        Result := False; // non-Boolean enum: not expected in a field-value
     tkInteger:
       Result := A.AsInteger = B.AsInteger;
     tkInt64:
@@ -552,7 +555,7 @@ begin
     {$IFDEF FPC}, tkAString{$ENDIF}:
       Result := A.AsString = B.AsString;
   else
-    Result := False; // Kind nao suportado num field-value
+    Result := False; // Kind not supported in a field-value
   end;
 end;
 
@@ -583,7 +586,7 @@ begin
   FAutoDelete := AAutoDelete;
   FInternal := AInternal;
   FArguments := AArguments;
-  // Mesma politica do TAMQPQueueDef: nao levanta -- a FSM ja' validou.
+  // Same policy as TAMQPQueueDef: does not raise -- the FSM already validated.
   if not AmqpParseAlternateExchange(FArguments, FAlternateExchange,
     FHasAlternateExchange, LError) then
   begin
@@ -623,9 +626,10 @@ begin
   FAutoDelete := AAutoDelete;
   FArguments := AArguments;
   FOwnerId := AOwnerId;
-  // Nao levanta: a FSM ja' validou antes de chegar aqui, e um descritor que
-  // falha ao construir deixaria a topologia num estado pior que uma politica
-  // vazia. Se um dia falhar, e' bug nosso e aparece como argumento sem efeito.
+  // Does not raise: the FSM already validated before getting here, and a
+  // descriptor that fails to construct would leave the topology in a worse
+  // state than an empty policy. If it ever fails, it is our bug and shows up
+  // as an argument with no effect.
   if not AmqpParseQueuePolicy(FArguments, FPolicy, LError) then
     FPolicy := TAMQPQueuePolicy.Empty;
 end;

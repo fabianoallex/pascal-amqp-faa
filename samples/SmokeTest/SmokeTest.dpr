@@ -1,23 +1,23 @@
 ﻿program SmokeTest;
 
-{ Smoke test da pascal-amqp-faa contra um RabbitMQ real (docker/docker-compose.yml).
+{ Smoke test of pascal-amqp-faa against a real RabbitMQ (docker/docker-compose.yml).
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    fpc -Fu..\..\src -Fi..\..\src SmokeTest.dpr
     Delphi: dcc32 -NSSystem;Winapi -U..\..\src -I..\..\src SmokeTest.dpr
 
-  Exercita: conexao + handshake, canal, declare de exchange/fila/bind, publisher
-  confirms (publish + WaitForConfirm), BasicGet, Consume com ack manual (callback
-  despachado no thread pool), Cancel e teardown limpo. Sai com exit code 0 se
-  tudo passou; 1 se algo falhou.
+  Exercises: connection + handshake, channel, exchange/queue/bind declare, publisher
+  confirms (publish + WaitForConfirm), BasicGet, Consume with manual ack (callback
+  dispatched on the thread pool), Cancel and a clean teardown. Exits with exit
+  code 0 if everything passed; 1 if something failed.
 
-  Aceita --host <nome> e --port <n> para apontar para outro broker (é assim
-  que o WS9 o roda contra o broker embutido desta lib, sem que este sample
-  passe a depender do sub-módulo server).
+  Accepts --host <name> and --port <n> to point at another broker (that is how
+  WS9 runs it against this lib's embedded broker, without this sample
+  coming to depend on the server sub-module).
 
-  Com o argumento --tls, roda os mesmos passos sobre TLS (localhost:5671 do
-  docker-compose.tls.yml, cert self-signed): SChannel no Windows, OpenSSL
-  fora dele ou se compilado com -dAMQP_OPENSSL (o backend padrao). }
+  With the --tls argument, it runs the same steps over TLS (localhost:5671 from
+  docker-compose.tls.yml, self-signed cert): SChannel on Windows, OpenSSL
+  elsewhere or when compiled with -dAMQP_OPENSSL (the default backend). }
 
 {$IFDEF FPC}
   {$MODE DELPHI}
@@ -49,8 +49,8 @@ const
   QUEUE = 'pascal-amqp-faa.smoke.q';
   ROUTING_KEY = 'smoke';
   CONSUME_COUNT = 5;
-  // Fase 3: TTL+DLX e prioridade. Rodam contra o RabbitMQ E contra o broker
-  // embutido -- e' a prova dupla de que a semantica implementada e' a da spec.
+  // Phase 3: TTL+DLX and priority. They run against RabbitMQ AND against the
+  // embedded broker -- it is the double proof that the implemented semantics are the spec's.
   DLX = 'pascal-amqp-faa.smoke.dlx';
   QUEUE_ESPERA = 'pascal-amqp-faa.smoke.espera';
   QUEUE_MORTA = 'pascal-amqp-faa.smoke.morta';
@@ -61,7 +61,7 @@ type
   TSmoke = class
   private
     FExpected: Integer;
-    FReceived: Integer;      // atomico via lock simples do teste
+    FReceived: Integer;      // atomic through the test's simple lock
     FLock: TCriticalSection;
     FAllReceived: TEvent;
     FReconnected: TEvent;
@@ -70,8 +70,8 @@ type
     constructor Create(AExpected: Integer);
     destructor Destroy; override;
     procedure OnDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
-    /// Handler de OnReconnect: dispara APOS o recovery completo da topologia —
-    /// e' o sinal correto de "pode voltar a publicar" (IsOpen fica True antes).
+    /// OnReconnect handler: fires AFTER the full topology recovery;
+    /// it is the right signal for "you may publish again" (IsOpen turns True earlier).
     procedure OnReconnected(AConnection: TAMQPConnection);
     function WaitAll(ATimeoutMs: Cardinal): Boolean;
     function WaitReconnected(ATimeoutMs: Cardinal): Boolean;
@@ -124,35 +124,35 @@ begin
   Result := FAllReceived.WaitFor(ATimeoutMs) = wrSignaled;
 end;
 
-// Parâmetros do teste. Argumentos aceitos, em qualquer ordem:
-//   --tls          roda TUDO sobre TLS (localhost:5671, cert self-signed do
-//                  docker-compose.tls.yml; o backend padrao do build:
-//                  SChannel no Windows, OpenSSL fora dele ou com -dAMQP_OPENSSL)
-//   --host <nome>  aponta para outro host (default: o de Localhost)
-//   --port <n>     aponta para outra porta (default: 5672, ou 5671 com --tls)
+// Test parameters. Accepted arguments, in any order:
+//   --tls          runs EVERYTHING over TLS (localhost:5671, self-signed cert from
+//                  docker-compose.tls.yml; the build's default backend:
+//                  SChannel on Windows, OpenSSL elsewhere or with -dAMQP_OPENSSL)
+//   --host <name>  points at another host (default: the Localhost one)
+//   --port <n>     points at another port (default: 5672, or 5671 with --tls)
 //
-//   --durable-publish <n>  publica n mensagens PERSISTENTES numa fila durável
-//                          e sai. Não roda os 9 passos.
-//   --durable-verify <n>   confere que as n mensagens estão lá, na ordem, e
-//                          que a fila fica vazia depois. Não roda os 9 passos.
+//   --durable-publish <n>  publishes n PERSISTENT messages to a durable queue
+//                          and exits. Does not run the 9 steps.
+//   --durable-verify <n>   checks that the n messages are there, in order, and
+//                          that the queue is empty afterwards. Does not run the 9 steps.
 //
-// O par --durable-publish/--durable-verify é o passo de RESTART da Fase 4
-// (WS10). Ele não cabe num programa só porque o broker precisa MORRER no
-// meio: quem orquestra é tests\tools\smoke_restart.py, que sobe o
-// BrokerHostFpc com --datadir, chama o publish, MATA o host, sobe outro no
-// mesmo diretório e chama o verify.
+// The --durable-publish/--durable-verify pair is the RESTART step of Phase 4
+// (WS10). It does not fit in a single program because the broker has to DIE in
+// the middle: the orchestrator is tests\tools\smoke_restart.py, which brings up
+// BrokerHostFpc with --datadir, calls the publish, KILLS the host, brings up
+// another one on the same directory and calls the verify.
 //
-// Por que aqui, e não numa suíte: este é o único lugar do repositório onde a
-// durabilidade é observada por um cliente PURO, por cima de um socket, contra
-// um processo de broker que morreu de verdade. As suítes rodam broker e
-// cliente no mesmo processo — o que é ótimo para cobertura e inútil para esta
-// pergunta.
+// Why here and not in a suite: this is the only place in the repository where
+// durability is observed by a PURE client, over a socket, against
+// a broker process that really died. The suites run broker and
+// client in the same process, which is great for coverage and useless for this
+// question.
 //
-// --host/--port existem para o SmokeTest poder rodar contra QUALQUER broker --
-// inclusive o broker embutido desta própria lib, que o runner de aceitação
-// (tests\Acceptance\fpc\BrokerHostFpc) sobe numa porta fixa. É o passo do
-// WS9 que faltava sem transformar este sample num programa que depende do
-// sub-módulo server: ele continua sendo 100% cliente.
+// --host/--port exist so the SmokeTest can run against ANY broker --
+// including this lib's own embedded broker, which the acceptance runner
+// (tests\Acceptance\fpc\BrokerHostFpc) brings up on a fixed port. It is the
+// WS9 step that was missing, without turning this sample into a program that
+// depends on the server sub-module: it remains 100% client.
 function SmokeParams: TAMQPConnectionParams;
 var
   I: Integer;
@@ -181,7 +181,7 @@ begin
   end;
 end;
 
-// Le um argumento numerico de uma opcao, ou -1 se ela nao veio.
+// Reads a numeric argument of an option, or -1 if it was not given.
 function ArgNumerico(const AOpcao: string): Integer;
 var
   I: Integer;
@@ -200,9 +200,9 @@ begin
     raise Exception.Create('FALHOU: ' + AWhat);
 end;
 
-// Espera ate' ACount mensagens aparecerem na fila, ou desiste no prazo.
-// Sem isto seria Sleep fixo -- e o tempo de um TTL vencer mais o dead-letter
-// atravessar duas filas varia entre o RabbitMQ e o broker embutido.
+// Waits until ACount messages show up in the queue, or gives up at the deadline.
+// Without it this would be a fixed Sleep -- and the time for a TTL to expire plus
+// the dead-letter to cross two queues varies between RabbitMQ and the embedded broker.
 function EsperaContagem(AChan: TAMQPChannel; const AQueue: string;
   ACount: Cardinal; ATimeoutMs: Cardinal): Boolean;
 var
@@ -212,7 +212,7 @@ begin
   LFim := PcTickMs + ATimeoutMs;
   repeat
     LDecl := TAMQPQueueDeclare.Create(AQueue);
-    LDecl.Passive := True; // passive: so' consulta, nao redeclara
+    LDecl.Passive := True; // passive: only queries, does not redeclare
     if AChan.DeclareQueue(LDecl).MessageCount >= ACount then
       Exit(True);
     Sleep(25);
@@ -220,13 +220,13 @@ begin
   Result := False;
 end;
 
-// TTL + dead-letter: a mensagem vence na fila de espera e o broker a republica
-// no DLX, de onde ela cai na fila final. E' o padrao retry-com-espera do
-// sample RetryDlqVcl, reduzido ao essencial.
+// TTL + dead-letter: the message expires in the wait queue and the broker
+// republishes it to the DLX, from where it lands in the final queue. It is the
+// retry-with-wait pattern of the RetryDlqVcl sample, cut down to the essentials.
 //
-// Roda IGUAL contra o RabbitMQ e contra o broker embutido -- e' esse o ponto:
-// os mesmos passos contra os dois dizem que a semantica implementada e' a da
-// spec, e nao a nossa.
+// It runs the SAME against RabbitMQ and against the embedded broker -- that is
+// the point: the same steps against both say that the implemented semantics are
+// the spec's, not ours.
 procedure PassoTtlDlx(AChan: TAMQPChannel);
 var
   LArgs: TAMQPFieldTable;
@@ -237,28 +237,28 @@ var
   LVal: TValue;
 begin
   AChan.DeclareExchange(TAMQPExchangeDeclare.Create(DLX));
-  // Apagar antes: redeclarar com argumentos diferentes seria
-  // PRECONDITION_FAILED, e apagar fila inexistente e' no-op.
+  // Delete first: redeclaring with different arguments would be
+  // PRECONDITION_FAILED, and deleting a missing queue is a no-op.
   LDel := Default(TAMQPQueueDelete);
   LDel.QueueName := QUEUE_ESPERA;
   AChan.DeleteQueue(LDel);
   LDel.QueueName := QUEUE_MORTA;
   AChan.DeleteQueue(LDel);
 
-  // Fila final, ligada ao DLX.
+  // Final queue, bound to the DLX.
   AChan.DeclareQueue(TAMQPQueueDeclare.Create(QUEUE_MORTA));
   LBind := Default(TAMQPQueueBind);
   LBind.QueueName := QUEUE_MORTA;
   LBind.ExchangeName := DLX;
-  // A chave e' o NOME DA FILA DE ESPERA, e nao ROUTING_KEY: sem
-  // x-dead-letter-routing-key a mensagem morta mantem a chave ORIGINAL, e a
-  // dela e' o nome da fila (foi publicada no exchange default). Amarrar isso
-  // aqui e' o que faz este passo exercitar a regra de preservacao da chave,
-  // em vez de mascara-la com uma chave fixa dos dois lados.
+  // The key is the NAME OF THE WAIT QUEUE, not ROUTING_KEY: without
+  // x-dead-letter-routing-key the dead message keeps its ORIGINAL key, and its
+  // key is the queue name (it was published to the default exchange). Tying this
+  // down here is what makes this step exercise the key-preservation rule,
+  // instead of masking it with a fixed key on both sides.
   LBind.RoutingKey := QUEUE_ESPERA;
   AChan.BindQueue(LBind);
 
-  // Fila de espera: TTL curto + DLX. Sem consumidor -- e' o TTL que move.
+  // Wait queue: short TTL + DLX. No consumer -- the TTL is what moves it.
   LArgs := TAMQPFieldTable.Create;
   try
     LVal := TValue.From<Int64>(300);
@@ -269,7 +269,7 @@ begin
     LDecl.Arguments := LArgs;
     AChan.DeclareQueue(LDecl);
   finally
-    LArgs.Free; // o declare NAO libera: o dono e' o chamador
+    LArgs.Free; // the declare does NOT free it: the owner is the caller
   end;
 
   AChan.PublishText('', QUEUE_ESPERA, 'vai-morrer');
@@ -284,9 +284,9 @@ begin
     'header x-death presente');
 end;
 
-// Prioridade: com o consumidor parado, um lote de prioridades misturadas sai
-// em ordem DECRESCENTE. As duas condicoes que fazem isso valer estao aqui:
-// backlog formado ANTES de qualquer leitura, e leitura uma a uma por Get.
+// Priority: with the consumer stopped, a batch of mixed priorities comes out
+// in DESCENDING order. The two conditions that make this hold are here:
+// backlog built BEFORE any read, and reading one at a time through Get.
 procedure PassoPrioridade(AChan: TAMQPChannel);
 var
   LArgs: TAMQPFieldTable;
@@ -318,7 +318,7 @@ begin
   begin
     LProps := TAMQPBasicProperties.Empty;
     LProps.SetPriority(PRIOS[I]);
-    // PublishText nao leva propriedades: prioridade exige o Publish completo.
+    // PublishText takes no properties: priority requires the full Publish.
     LProps.SetContentType('text/plain');
     AChan.Publish('', QUEUE_PRIO,
       AmqpUtf8Encode('p' + IntToStr(PRIOS[I])), LProps);
@@ -342,8 +342,8 @@ begin
   Check(LOrdem = '9 8 7 5 2 1 ', 'drenou em ordem de prioridade: ' + LOrdem);
 end;
 
-// Derruba o socket no meio do consumo e verifica que a lib reconecta sozinha,
-// replaya a topologia (fila/bind/qos/confirm/consume) e volta a entregar.
+// Drops the socket in the middle of consumption and checks that the lib reconnects
+// on its own, replays the topology (queue/bind/qos/confirm/consume) and delivers again.
 procedure RunReconnectTest;
 var
   LParams: TAMQPConnectionParams;
@@ -372,13 +372,13 @@ begin
     LChan.ConfirmSelect;
     LChan.Consume(QUEUE, LSmoke.OnDelivery);
 
-    LConn.DropConnectionForTest; // queda abrupta simulada
+    LConn.DropConnectionForTest; // simulated abrupt drop
 
-    // Aguarda o OnReconnect (dispara apos handshake + recovery de topologia).
+    // Waits for OnReconnect (fires after handshake + topology recovery).
     Check(LSmoke.WaitReconnected(15000), 'reconectou e recuperou a topologia');
     Check(LConn.IsOpen, 'conexao aberta apos reconexao');
 
-    // O canal foi recuperado: publish confirmado e consumer re-armado entregam.
+    // The channel was recovered: confirmed publish and re-armed consumer deliver.
     LSeqNo := LChan.PublishText(EXCHANGE, ROUTING_KEY, 'pos-reconexao');
     Check(LChan.WaitForConfirm(LSeqNo, 5000), 'publish pos-reconexao confirmado');
     Check(LSmoke.WaitAll(10000), 'mensagem entregue ao consumer recuperado');
@@ -396,9 +396,9 @@ end;
 const
   FILA_DURAVEL = 'smoke.durable';
 
-// Publica AN mensagens persistentes numa fila duravel e confirma. O corpo de
-// cada uma e' o proprio numero: o verify checa ORDEM e INTEGRIDADE, nao so'
-// contagem.
+// Publishes AN persistent messages to a durable queue and confirms. The body of
+// each one is its own number: the verify checks ORDER and INTEGRITY, not just
+// the count.
 procedure DurablePublish(const AParams: TAMQPConnectionParams; AN: Integer);
 var
   LConn: TAMQPConnection;
@@ -415,7 +415,7 @@ begin
     LChan.DeclareQueue(LDecl);
     LChan.ConfirmSelect;
     for I := 1 to AN do
-      LChan.PublishText('', FILA_DURAVEL, IntToStr(I), True); // persistente
+      LChan.PublishText('', FILA_DURAVEL, IntToStr(I), True); // persistent
     Check(LChan.WaitForConfirms(30000), 'o broker confirmou as ' +
       IntToStr(AN) + ' persistentes');
     LConn.Close;
@@ -424,8 +424,8 @@ begin
   end;
 end;
 
-// Confere que as AN mensagens sobreviveram ao restart do BROKER, na ordem, e
-// que nao veio nada a mais.
+// Checks that the AN messages survived the BROKER restart, in order, and
+// that nothing extra came.
 procedure DurableVerify(const AParams: TAMQPConnectionParams; AN: Integer);
 var
   LConn: TAMQPConnection;
@@ -445,9 +445,9 @@ begin
       Check(LGet.BodyAsText = IntToStr(I),
         Format('mensagem %d na ordem e integra (veio "%s")',
           [I, LGet.BodyAsText]));
-      // A D27 em uma linha, vista pelo CLIENTE: toda entrada recuperada volta
-      // marcada como reentregue. Persistir o flag seria precisao falsa --
-      // depois de uma queda o broker nao sabe se alguem chegou a ver.
+      // D27 in one line, seen by the CLIENT: every recovered entry comes back
+      // marked as redelivered. Persisting the flag would be false precision --
+      // after a crash the broker does not know whether anyone got to see it.
       Check(LGet.Redelivered, Format('mensagem %d veio redelivered', [I]));
     end;
     LGet := LChan.BasicGet(FILA_DURAVEL, True);
@@ -470,8 +470,8 @@ var
 begin
   ExitCode := 1;
   LSmoke := nil;
-  // Os modos duraveis SUBSTITUEM os 9 passos: eles sao metade de um teste que
-  // so' faz sentido com um restart de broker no meio.
+  // The durable modes REPLACE the 9 steps: they are half of a test that
+  // only makes sense with a broker restart in the middle.
   if ArgNumerico('--durable-publish') >= 0 then
   begin
     try
@@ -509,7 +509,7 @@ begin
       LConn.Open;
       Check(LConn.IsOpen, 'conexao aberta');
       if SmokeParams.UseTls then
-        WriteLn('  tls: ', AmqpTlsBackendInfo); // motor carregado de fato
+        WriteLn('  tls: ', AmqpTlsBackendInfo); // engine actually loaded
 
       WriteLn('[2] canal + topologia');
       LChan := LConn.CreateChannel;
@@ -522,8 +522,8 @@ begin
       LChan.BindQueue(LBind);
       Check(LChan.IsOpen, 'canal aberto e topologia declarada');
 
-      // Fila limpa para o teste ser deterministico (drena sobras de rodadas
-      // anteriores; a lib nao expoe queue.purge no canal por enquanto).
+      // Clean queue so the test is deterministic (drains leftovers from earlier
+      // rounds; the lib does not expose queue.purge on the channel for now).
       repeat
         LGet := LChan.BasicGet(QUEUE, True);
       until not LGet.Found;

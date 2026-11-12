@@ -1,19 +1,19 @@
 ﻿unit AMQP.TlsIntegrationTests;
 
-{ Integração TLS (amqps://) — precisa de um RabbitMQ com listener TLS em
-  localhost:5671, cert self-signed. Sobe com:
+{ TLS integration (amqps://) — needs a RabbitMQ with a TLS listener on
+  localhost:5671, self-signed cert. Start it with:
     docker compose -f docker/docker-compose.yml -f docker/docker-compose.tls.yml up -d
-  (ver o cabeçalho de docker/docker-compose.tls.yml para gerar os certs).
+  (see the header of docker/docker-compose.tls.yml to generate the certs).
 
-  Se o broker TLS NÃO estiver no ar, o Setup não consegue conectar e os testes
-  se marcam como IGNORADOS (IgnoraTeste, de AMQP.TestSupport: no FPCUnit
-  aparecem no "Number of ignored tests" do relatório; no DUnitX, que não tem
-  ignorado em tempo de execução, saem como Passed com a mensagem
-  'IGNORADO: ...'), para não quebrar a suíte quando só o broker plain (5672)
-  está up. O mesmo caminho cobre builds sem backend TLS
-  (fora do Windows sem -dAMQP_OPENSSL): o Open levanta EAMQPConnection e os
-  testes se auto-ignoram. Para rodá-los de verdade fora do Windows, compile o
-  runner com -dAMQP_OPENSSL (precisa de libssl/libcrypto instaladas). }
+  If the TLS broker is NOT up, Setup cannot connect and the tests mark
+  themselves as IGNORED (IgnoraTeste, from AMQP.TestSupport: in FPCUnit they
+  show up in the report's "Number of ignored tests"; in DUnitX, which has no
+  runtime ignore, they come out as Passed with the message
+  'IGNORADO: ...'), so as not to break the suite when only the plain broker
+  (5672) is up. The same path covers builds without a TLS backend
+  (outside Windows without -dAMQP_OPENSSL): Open raises EAMQPConnection and the
+  tests ignore themselves. To really run them outside Windows, compile the
+  runner with -dAMQP_OPENSSL (needs libssl/libcrypto installed). }
 
 
 interface
@@ -26,7 +26,7 @@ uses
   PascalCommon.Threading,
   AMQP.Connection,
   AMQP.IntegrationConfig,
-  AMQP.Transport, // EAMQPTls (vale pra SChannel e OpenSSL)
+  AMQP.Transport, // EAMQPTls (applies to SChannel and OpenSSL)
   AMQP.Queue.Methods;
 
 type
@@ -35,12 +35,12 @@ type
   private
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
-    FAvailable: Boolean; // broker TLS acessível? (senão, testes são ignorados)
+    FAvailable: Boolean; // TLS broker reachable? (otherwise, tests are ignored)
     FVerifyPeerParams: TAMQPConnectionParams;
     FPlainPortParams: TAMQPConnectionParams;
-    FCount: Integer;      // mensagens processadas (atômico)
-    FCurrent: Integer;    // callbacks rodando agora (atômico)
-    FPeak: Integer;       // pico de concorrência observado (atômico)
+    FCount: Integer;      // messages processed (atomic)
+    FCurrent: Integer;    // callbacks running right now (atomic)
+    FPeak: Integer;       // observed concurrency peak (atomic)
     function TlsIndisponivel: Boolean;
     function DeclareTempQueue: string;
     function GetWithRetry(const AQueue: string): TAMQPGetResult;
@@ -67,14 +67,14 @@ begin
   FCount := 0;
   FCurrent := 0;
   FPeak := 0;
-  // TlsVerifyPeer=False: aceita o cert self-signed do broker de dev.
+  // TlsVerifyPeer=False: accepts the dev broker's self-signed cert.
   FConn := TAMQPConnection.Create(IntegrationTlsParams);
   try
     FConn.Open;
     FChan := FConn.CreateChannel;
     FAvailable := True;
   except
-    // Broker TLS indisponível (ou handshake falhou): ignora os testes.
+    // TLS broker unavailable (or the handshake failed): ignore the tests.
     FreeAndNil(FConn);
   end;
 end;
@@ -85,9 +85,9 @@ begin
   FConn.Free;
 end;
 
-// True = sem broker TLS (ou build sem backend): marca o teste como ignorado
-// (ver o cabeçalho). O Exit no chamador cobre o caso de IgnoraTeste não
-// interromper o teste.
+// True = no TLS broker (or a build without a backend): marks the test as
+// ignored (see the header). The Exit in the caller covers the case where
+// IgnoraTeste does not interrupt the test.
 function TAMQPTlsIntegrationTests.TlsIndisponivel: Boolean;
 begin
   Result := not FAvailable;
@@ -118,8 +118,8 @@ begin
   end;
 end;
 
-// Corpo determinístico só-ASCII (byte a byte igual à string): corrupção ou
-// reordenação de qualquer trecho quebra a comparação de igualdade.
+// Deterministic ASCII-only body (byte for byte equal to the string): corruption
+// or reordering of any part breaks the equality comparison.
 function TAMQPTlsIntegrationTests.BuildBigBody(ASize: Integer): string;
 var
   I: Integer;
@@ -147,17 +147,18 @@ var
   LCur, LOldPeak, LWaited: Integer;
 begin
   LCur := PcAtomicInc(FCurrent);
-  // atualiza o pico de concorrência (CAS)
+  // updates the concurrency peak (CAS)
   repeat
     LOldPeak := FPeak;
     if LCur <= LOldPeak then
       Break;
   until PcAtomicCompareExchange(FPeak, LCur, LOldPeak) = LOldPeak;
 
-  // Segura o callback até OBSERVAR outro rodando junto (ou timeout): prova a
-  // sobreposição sem depender de janela de timing (um sleep fixo flakeia
-  // quando os workers do pool demoram a subir sob carga). Se o pico >= 2 já
-  // foi registrado, a prova está feita e ninguém mais precisa esperar.
+  // Holds the callback until it OBSERVES another one running alongside (or a
+  // timeout): proves the overlap without depending on a timing window (a fixed
+  // sleep flakes when the pool workers are slow to start under load). If a
+  // peak >= 2 has already been recorded, the proof is done and nobody else
+  // needs to wait.
   LWaited := 0;
   while (PcAtomicGet(FCurrent) < 2) and (PcAtomicGet(FPeak) < 2) and
         (LWaited < 2000) do
@@ -189,9 +190,9 @@ end;
 
 procedure TAMQPTlsIntegrationTests.Tls_PayloadGrande_Integro;
 const
-  // Bem maior que um registro TLS (16KB) e que o frame_max negociado
-  // (128KB): exercita o chunking da escrita TLS, a remontagem na leitura
-  // através de vários registros e a fragmentação do corpo em frames AMQP.
+  // Much larger than a TLS record (16KB) and than the negotiated frame_max
+  // (128KB): exercises the chunking of the TLS write, the reassembly on read
+  // across several records and the splitting of the body into AMQP frames.
   BODY_SIZE = 300000;
 var
   LQueue, LBody: string;
@@ -207,7 +208,7 @@ begin
   LResult := GetWithRetry(LQueue);
   TAssert.AssertTrue('mensagem grande deveria ter sido entregue sobre TLS', LResult.Found);
   TAssert.AssertEquals('tamanho do corpo', BODY_SIZE, Length(LResult.BodyAsText));
-  // Igualdade direta (sem AssertEquals) pra não imprimir 300KB no relatório em falha.
+  // Direct equality (no AssertEquals) so as not to print 300KB in the report on failure.
   TAssert.AssertTrue('corpo deveria voltar íntegro, byte a byte', LResult.BodyAsText = LBody);
 end;
 
@@ -221,18 +222,18 @@ begin
   if TlsIndisponivel then
     Exit;
 
-  // Publishers + consumer na MESMA conexão TLS: estressa o leitor decifrando
-  // enquanto os escritores cifram (FLock/FSendLock do stream TLS).
+  // Publishers + consumer on the SAME TLS connection: stresses the reader
+  // decrypting while the writers encrypt (the TLS stream's FLock/FSendLock).
   LQueue := DeclareTempQueue;
   for I := 1 to N do
     FChan.PublishText('', LQueue, Format('tls-msg-%d', [I]));
 
-  // prefetch alto: deixa o servidor entregar todas, permitindo concorrência.
+  // high prefetch: lets the server deliver all of them, allowing concurrency.
   FChan.Qos(N);
   FChan.Consume(LQueue, HandleDeliveryConcurrent);
 
-  // Timeout > N × timeout do callback: execução serializada de verdade chega
-  // ao fim e falha na asserção de pico (a mensagem certa), não na contagem.
+  // Timeout > N × the callback's timeout: truly serialized execution reaches
+  // the end and fails on the peak assertion (the right message), not on the count.
   WaitCount(N, 30000);
 
   TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas sobre TLS',
@@ -247,7 +248,7 @@ var
 begin
   LConn := TAMQPConnection.Create(FPlainPortParams);
   try
-    LConn.Open; // deve levantar EAMQPTls (handshake contra porta sem TLS)
+    LConn.Open; // must raise EAMQPTls (handshake against a port without TLS)
   finally
     LConn.Free;
   end;
@@ -256,10 +257,10 @@ end;
 procedure TAMQPTlsIntegrationTests.Tls_ContraPortaPlain_LevantaEAMQPTls;
 begin
   if TlsIndisponivel then
-    Exit; // também garante que HÁ broker no ar (senão a falha seria de socket, não de TLS)
+    Exit; // also ensures there IS a broker up (otherwise the failure would be a socket one, not TLS)
 
-  // Handshake TLS contra a porta plain (5672): o broker responde com o header
-  // AMQP e fecha — deve virar EAMQPTls rápido, sem travar a suíte.
+  // TLS handshake against the plain port (5672): the broker replies with the
+  // AMQP header and closes — it must become EAMQPTls quickly, without hanging the suite.
   FPlainPortParams := IntegrationTlsParams;
   FPlainPortParams.Port := 5672;
 
@@ -273,7 +274,7 @@ var
 begin
   LConn := TAMQPConnection.Create(FVerifyPeerParams);
   try
-    LConn.Open; // deve levantar EAMQPTls (cert não confiável)
+    LConn.Open; // must raise EAMQPTls (untrusted cert)
   finally
     LConn.Free;
   end;
@@ -282,10 +283,10 @@ end;
 procedure TAMQPTlsIntegrationTests.Tls_VerifyPeerTrue_RejeitaCertSelfSigned;
 begin
   if TlsIndisponivel then
-    Exit; // sem broker TLS não dá para provar a validação
+    Exit; // without a TLS broker the validation cannot be proven
 
-  // Mesmo broker (cert self-signed), mas AGORA exigindo validação da cadeia +
-  // hostname: o handshake TLS deve FALHAR (prova que TlsVerifyPeer=True valida).
+  // Same broker (self-signed cert), but NOW requiring chain + hostname
+  // validation: the TLS handshake must FAIL (proves TlsVerifyPeer=True validates).
   FVerifyPeerParams := IntegrationTlsParams;
   FVerifyPeerParams.TlsVerifyPeer := True;
 

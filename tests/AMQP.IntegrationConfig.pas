@@ -1,19 +1,19 @@
 ﻿unit AMQP.IntegrationConfig;
 
-{ Para onde a suite de integracao aponta -- WS9 da Fase 2.
+{ Where the integration suite points -- WS9 of Phase 2.
 
-  Ate' aqui cada teste chamava TAMQPConnectionParams.Localhost direto, o que
-  amarrava a suite ao RabbitMQ de localhost:5672. A WS9 precisa rodar
-  EXATAMENTE OS MESMOS testes contra o broker embutido desta lib (decisao D8
-  do CLAUDE.md), entao o endereco virou uma indirecao de uma linha.
+  Until then every test called TAMQPConnectionParams.Localhost directly, which
+  tied the suite to the RabbitMQ on localhost:5672. WS9 needs to run
+  EXACTLY THE SAME tests against this lib's embedded broker (decision D8
+  in CLAUDE.md), so the address became a one-line indirection.
 
-  Sem ninguem configurar nada, o comportamento e' identico ao de antes:
-  localhost:5672 (e 5671 para TLS). O runner de aceitacao
-  (tests\Acceptance\fpc) sobe um TAMQPServer em porta efemera e chama
-  AmqpUseEmbeddedBroker antes de rodar os testes.
+  With nobody configuring anything, the behaviour is identical to before:
+  localhost:5672 (and 5671 for TLS). The acceptance runner
+  (tests\Acceptance\fpc) starts a TAMQPServer on an ephemeral port and calls
+  AmqpUseEmbeddedBroker before running the tests.
 
-  Uma copia so', compilada pelos runners Delphi e FPC (integracao e
-  aceitacao). }
+  A single copy, compiled by the Delphi and FPC runners (integration and
+  acceptance). }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -23,23 +23,23 @@ uses
   SysUtils,
   AMQP.Connection;
 
-/// Parametros de conexao PLAIN da suite. Default: TAMQPConnectionParams.
-/// Localhost (RabbitMQ de dev em localhost:5672). As variaveis de ambiente
-/// AMQP_TEST_HOST e AMQP_TEST_PORT trocam o default (o broker embutido da
-/// aceitacao vence as duas): numa maquina onde a 5672 e' de outro broker,
-/// aponte para um RabbitMQ proprio em outra porta.
+/// The suite's PLAIN connection parameters. Default: TAMQPConnectionParams.
+/// Localhost (dev RabbitMQ on localhost:5672). The environment variables
+/// AMQP_TEST_HOST and AMQP_TEST_PORT change the default (the acceptance
+/// embedded broker beats both): on a machine where 5672 belongs to another
+/// broker, point at a RabbitMQ of your own on another port.
 function IntegrationParams: TAMQPConnectionParams;
 
-/// Parametros de conexao TLS da suite. Default: TAMQPConnectionParams.
-/// LocalhostTls (porta 5671, verify-peer desligado -- cert self-signed de dev).
+/// The suite's TLS connection parameters. Default: TAMQPConnectionParams.
+/// LocalhostTls (port 5671, verify-peer off -- self-signed dev cert).
 function IntegrationTlsParams: TAMQPConnectionParams;
 
-/// Aponta a suite para um broker em 127.0.0.1 nas portas dadas (0 = a suite
-/// segue no default daquele protocolo). Chamar ANTES de rodar os testes.
+/// Points the suite at a broker on 127.0.0.1 on the given ports (0 = the suite
+/// keeps that protocol's default). Call BEFORE running the tests.
 procedure AmqpUseEmbeddedBroker(APlainPort, ATlsPort: Word);
 
-/// True se a suite esta apontada para o broker embutido -- alguns testes
-/// precisam saber (ver o uso em AMQP.HandshakeIntegrationTests).
+/// True if the suite points at the embedded broker -- some tests
+/// need to know (see the use in AMQP.HandshakeIntegrationTests).
 function AmqpUsingEmbeddedBroker: Boolean;
 
 implementation
@@ -83,12 +83,12 @@ begin
     Result.Port := GTlsPort;
   end
   else if GEmbedded then
-    // Modo embutido SEM porta TLS (build Default: o broker nao tem TLS).
-    // Apontar para uma porta onde nada escuta e' deliberado: sem isso a suite
-    // cairia de volta na 5671 do RabbitMQ e reportaria PASS de aceitacao para
-    // testes que nem tocaram no broker embutido -- um verde falso. Assim o
-    // Setup dos testes de TLS falha em conectar e eles se auto-ignoram, que e'
-    // o mesmo caminho de "broker TLS fora do ar".
+    // Embedded mode WITHOUT a TLS port (Default build: the broker has no TLS).
+    // Pointing at a port where nothing listens is deliberate: otherwise the suite
+    // would fall back to RabbitMQ's 5671 and report an acceptance PASS for
+    // tests that never touched the embedded broker -- a false green. This way
+    // the TLS tests' Setup fails to connect and they ignore themselves, which is
+    // the same path as "TLS broker down".
     Result.Port := 1;
 end;
 

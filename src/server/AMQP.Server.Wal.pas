@@ -2,90 +2,91 @@
 
 {$I amqp.inc}
 
-{ Camada de ARQUIVO do write-ahead log -- sub-modulo broker, WS1 da Fase 4
-  (durabilidade, ver CLAUDE.md, decisoes D19-D28).
+{ FILE layer of the write-ahead log -- broker sub-module, WS1 of Phase 4
+  (durability, see CLAUDE.md, decisions D19-D28).
 
-  ESCOPO: esta unit nao sabe o que e' uma fila, uma mensagem ou um confirm.
-  Ela sabe gravar registros numerados num arquivo append-only, devolver o maior
-  PREFIXO VALIDO deles e mandar ao disco o que foi escrito. O significado do
-  campo Kind e' das camadas de cima (D22: CONTENT, ENQ, DEQ, TOPO). Quem
-  orquestra lote e fsync e' a thread do journal (WS2); quem da' sentido aos
-  registros e' a recuperacao (WS6).
+  SCOPE: this unit does not know what a queue, a message or a confirm is.
+  It knows how to write numbered records to an append-only file, return the
+  longest VALID PREFIX of them and send what was written to disk. The meaning
+  of the Kind field belongs to the layers above (D22: CONTENT, ENQ, DEQ, TOPO).
+  Batching and fsync are orchestrated by the journal thread (WS2); the records
+  are given meaning by recovery (WS6).
 
-  O NOME. O plano dizia AMQP.Server.Journal.File; nao da': `File` e' palavra
-  reservada em Pascal e um segmento de nome de unit nao pode se chamar assim.
-  Ficou AMQP.Server.Wal (o formato e os arquivos); AMQP.Server.Journal fica
-  para a WS2 (a thread e a marca d'agua).
+  THE NAME. The plan said AMQP.Server.Journal.File; that does not work: `File`
+  is a reserved word in Pascal and a unit name segment cannot be called that.
+  It became AMQP.Server.Wal (the format and the files); AMQP.Server.Journal is
+  left for WS2 (the thread and the watermark).
 
-  DECISAO D23, QUE E' O CORACAO DESTA UNIT
-  ----------------------------------------
-  Nao ha marcador de transacao. Cada registro carrega o proprio comprimento e
-  um CRC32, e a leitura devolve o maior prefixo integro -- a cauda torta e'
-  descartada. Onde a atomicidade importa (o dead-letter, que aposenta um
-  registro e cria outro), quem resolve e' a ORDEM em que as camadas de cima
-  escrevem: o ENQ novo antes do DEQ antigo, de modo que falhar no meio produz
-  DUPLICATA e nao PERDA. Duplicata o contrato at-least-once ja' admite; perda
-  nao, e o cliente nao teria como descobrir.
+  DECISION D23, THE HEART OF THIS UNIT
+  ------------------------------------
+  There is no transaction marker. Each record carries its own length and a
+  CRC32, and reading returns the longest intact prefix -- the torn tail is
+  dropped. Where atomicity matters (dead-letter, which retires one record and
+  creates another), it is settled by the ORDER in which the layers above
+  write: the new ENQ before the old DEQ, so that failing halfway produces a
+  DUPLICATE and not a LOSS. The at-least-once contract already admits
+  duplicates; it does not admit loss, and the client would have no way to
+  find out.
 
-  Consequencia para quem le: ReadPrefix NUNCA levanta por arquivo corrompido.
-  Cauda torta e' o caso NORMAL depois de uma queda -- e' o que se espera
-  encontrar. O motivo da parada sai em TAMQPWalStop para quem quiser registrar,
-  e o unico erro de verdade e' o de I/O.
+  Consequence for the reader: ReadPrefix NEVER raises on a corrupted file.
+  A torn tail is the NORMAL case after a crash -- it is what you expect to
+  find. The reason the read stopped comes out in TAMQPWalStop for whoever wants
+  to log it, and the only real error is an I/O error.
 
-  O PONTO DE FSYNC E' TESTAVEL DE PROPOSITO
-  -----------------------------------------
-  A camada 2 da D28 exige provar que o fsync acontece na fronteira do lote e
-  que uma falha de I/O nao corrompe estado em memoria. Por isso o segmento nao
-  fala com o sistema de arquivos direto: fala com IAMQPWalFile. Em producao e'
-  TAMQPWalOsFile; nos testes e' um duble que conta sync e falha na hora
-  escolhida. A costura existe desde a WS1 porque enfia-la depois seria
-  reescrever esta unit.
+  THE FSYNC POINT IS TESTABLE ON PURPOSE
+  --------------------------------------
+  Layer 2 of D28 requires proving that fsync happens at the batch boundary and
+  that an I/O failure does not corrupt in-memory state. That is why the segment
+  does not talk to the file system directly: it talks to IAMQPWalFile. In
+  production it is TAMQPWalOsFile; in the tests it is a test double that counts
+  syncs and fails at the chosen moment. The seam exists since WS1 because
+  threading it in later would mean rewriting this unit.
 
-  PRIMITIVAS DE ARQUIVO -- O QUE A WS0 MEDIU
-  ------------------------------------------
-  - fsync: no FPC, SysUtils.FileFlush JA E' FlushFileBuffers no Windows e
-    fpfsync no Unix, medido indistinguivel do fpfsync chamado na mao. So o
-    Delphi precisa de codigo proprio, e por isso o unico condicional de
-    plataforma desta unit esta' em AmqpFileSync (mais o de FileTruncate).
-  - custo: FlushFileBuffers custa 329-674 us por chamada (Win64/NTFS), e a cada
-    100 registros cai para 530-1278 us POR LOTE -- de ~2.000 para ~100.000
-    registros/s. E' o numero que sustenta a D25 (group commit auto-ajustavel).
-    Esta unit nao decide QUANDO sincronizar; so' oferece a operacao.
-  - lock: UM lock para o DIRETORIO (TAMQPWalDirLock), nenhum para os segmentos.
-    FileOpen com fmShareExclusive da' exclusao real nos dois SOs -- share mode
-    no Windows, fpflock(LOCK_EX or LOCK_NB) no Unix. Travar tambem cada
-    segmento nao acrescentaria seguranca e atrapalharia quem quisesse olhar o
-    arquivo com o broker no ar.
+  FILE PRIMITIVES -- WHAT WS0 MEASURED
+  ------------------------------------
+  - fsync: on FPC, SysUtils.FileFlush ALREADY IS FlushFileBuffers on Windows
+    and fpfsync on Unix, measured indistinguishable from fpfsync called by
+    hand. Only Delphi needs its own code, and that is why the only platform
+    conditional of this unit is in AmqpFileSync (plus the one for FileTruncate).
+  - cost: FlushFileBuffers costs 329-674 us per call (Win64/NTFS), and every
+    100 records it drops to 530-1278 us PER BATCH -- from ~2,000 to ~100,000
+    records/s. That is the number behind D25 (self-tuning group commit).
+    This unit does not decide WHEN to sync; it only offers the operation.
+  - lock: ONE lock for the DIRECTORY (TAMQPWalDirLock), none for the segments.
+    FileOpen with fmShareExclusive gives real exclusion on both OSes -- share
+    mode on Windows, fpflock(LOCK_EX or LOCK_NB) on Unix. Locking each segment
+    as well would add no safety and would get in the way of anyone wanting to
+    look at the file with the broker running.
 
-  Nas chamadas de RTL, so' as formas de assinatura IDENTICA nos dois
-  compiladores: FileCreate de um argumento e FileOpen de dois. As sobrecargas
-  com share mode/rights divergem, e codigo Delphi nao compilado e' divida --
-  foi ela que rendeu os quatro defeitos do System.Net.Socket na Fase 1.
+  For RTL calls, only the forms whose signature is IDENTICAL on both
+  compilers: one-argument FileCreate and two-argument FileOpen. The overloads
+  with share mode/rights diverge, and uncompiled Delphi code is debt -- it is
+  what produced the four System.Net.Socket defects in Phase 1.
 
-  FORMATO
-  -------
-  Cabecalho do segmento, 16 bytes:
+  FORMAT
+  ------
+  Segment header, 16 bytes:
 
     magic    8   'AMQPWAL1'
     version  2   = 1
     reserved 2   = 0
-    segno    4   numero do segmento
+    segno    4   segment number
 
-  Registro, 18 bytes de moldura mais o payload:
+  Record, 18 bytes of framing plus the payload:
 
-    lsn      8   numero de sequencia, ESTRITAMENTE CRESCENTE no segmento
-    kind     1   significado do payload (das camadas de cima)
-    flags    1   reservado, = 0
-    len      4   tamanho do payload
+    lsn      8   sequence number, STRICTLY INCREASING within the segment
+    kind     1   meaning of the payload (from the layers above)
+    flags    1   reserved, = 0
+    len      4   payload size
     payload  len
-    crc32    4   sobre TUDO acima (lsn..payload), menos o proprio crc
+    crc32    4   over EVERYTHING above (lsn..payload), excluding the crc itself
 
-  Inteiros em LITTLE-ENDIAN, ao contrario do resto da lib. Isto nao e' dado de
-  fio: e' formato privado deste broker, escrito e lido pela mesma maquina, e as
-  duas plataformas-alvo sao little-endian -- a ordem de rede so' custaria bytes
-  trocados em todo registro. O magic e a versao existem para um arquivo de
-  outra origem (ou de um formato futuro) ser recusado na cara, em vez de virar
-  registros tortos. }
+  Integers in LITTLE-ENDIAN, unlike the rest of the lib. This is not wire
+  data: it is a private format of this broker, written and read by the same
+  machine, and both target platforms are little-endian -- network order would
+  only cost swapped bytes in every record. The magic and the version exist so
+  that a file from another origin (or from a future format) is rejected
+  outright, instead of turning into torn records. }
 
 interface
 
@@ -98,7 +99,7 @@ uses
   ;
 
 const
-  /// Assinatura do cabecalho de segmento. Muda junto com o formato.
+  /// Segment header signature. Changes together with the format.
   AMQP_WAL_MAGIC = 'AMQPWAL1';
   AMQP_WAL_VERSION = 1;
 
@@ -109,30 +110,30 @@ const
   AMQP_WAL_REC_TRAILER_SIZE = 4;
   AMQP_WAL_REC_OVERHEAD = AMQP_WAL_REC_HEADER_SIZE + AMQP_WAL_REC_TRAILER_SIZE;
 
-  /// Teto de payload de um registro. Existe para um `len` corrompido nao virar
-  /// uma alocacao gigante ANTES de o CRC poder desmenti-lo -- a checagem de
-  /// "cabe no que resta do arquivo" cobre quase tudo, este teto cobre o resto.
+  /// Payload cap of a record. It exists so that a corrupted `len` does not turn
+  /// into a giant allocation BEFORE the CRC can refute it -- the "fits in what
+  /// is left of the file" check covers almost everything, this cap covers the rest.
   AMQP_WAL_MAX_PAYLOAD = 64 * 1024 * 1024;
 
-  /// Tamanho alvo de um segmento fechado (D26). Nao e' imposto aqui -- quem
-  /// rola o segmento e' a WS7; a constante vive junto do formato.
+  /// Target size of a closed segment (D26). Not enforced here -- WS7 is what
+  /// rolls the segment; the constant lives next to the format.
   AMQP_WAL_SEGMENT_BYTES = 16 * 1024 * 1024;
 
   AMQP_WAL_SEGMENT_EXT = '.wal';
   AMQP_WAL_SEGMENT_PREFIX = 'seg-';
-  /// Quantos digitos o numero do segmento ocupa no nome do arquivo. DEZ, e
-  /// nao oito: com oito, um ASegNo acima de 99.999.999 produziria um nome com
-  /// digitos demais -- que o proprio AmqpWalParseSegmentName nao reconheceria
-  /// de volta, e o segmento sumiria da listagem em silencio. Dez cobrem TODO
-  /// o Cardinal, entao nao ha valor do tipo que gere nome irrecuperavel.
+  /// How many digits the segment number takes in the file name. TEN, not
+  /// eight: with eight, an ASegNo above 99,999,999 would produce a name with
+  /// too many digits -- which AmqpWalParseSegmentName itself would not
+  /// recognize back, and the segment would silently vanish from the listing.
+  /// Ten cover ALL of Cardinal, so no value of the type yields an unrecoverable name.
   AMQP_WAL_SEGMENT_DIGITS = 10;
-  /// Nome do arquivo de lock do diretorio de dados.
+  /// Name of the data directory's lock file.
   AMQP_WAL_LOCK_NAME = 'amqp.lock';
 
 type
   EAMQPWal = class(Exception);
 
-  /// Um registro do log. Kind e' opaco aqui de proposito (ver o cabecalho).
+  /// A log record. Kind is opaque here on purpose (see the header).
   TAMQPWalRecord = record
     Lsn: UInt64;
     Kind: Byte;
@@ -141,56 +142,56 @@ type
 
   TAMQPWalRecords = array of TAMQPWalRecord;
 
-  { Por que a leitura parou. Nenhum destes valores e' erro: num WAL, encontrar
-    a cauda torta e' o caso normal depois de uma queda. Existe para o log do
-    broker poder dizer O QUE achou, e para os testes distinguirem "acabou
-    inteiro" de "descartei 37 bytes". }
+  { Why reading stopped. None of these values is an error: in a WAL, finding
+    the torn tail is the normal case after a crash. It exists so the broker's
+    log can say WHAT it found, and so the tests can tell "ended intact" from
+    "dropped 37 bytes". }
   TAMQPWalStop = (
-    /// Chegou ao fim do arquivo com todos os registros integros.
+    /// Reached the end of the file with all records intact.
     awsEnd,
-    /// Faltavam bytes para completar a moldura ou o payload do ultimo.
+    /// Bytes were missing to complete the framing or the payload of the last one.
     awsTruncated,
-    /// O CRC do ultimo registro nao bateu -- escrita interrompida no meio.
+    /// The CRC of the last record did not match -- write interrupted halfway.
     awsCrc,
-    /// O `len` era maior que o teto (o caso de "maior que o que resta" e'
-    /// indistinguivel de cauda, e sai como awsCauda).
+    /// The `len` was larger than the cap (the "larger than what is left" case
+    /// is indistinguishable from a tail, and comes out as awsCauda).
     awsSize,
-    /// O LSN nao cresceu. So' acontece com lixo que passou pelo CRC (ou com
-    /// arquivo remontado a mao); o prefixo valido termina aqui.
+    /// The LSN did not increase. Only happens with garbage that passed the CRC
+    /// (or with a file reassembled by hand); the valid prefix ends here.
     awsLsn
   );
 
-  { Costura de arquivo -- ver "O ponto de fsync e' testavel de proposito".
+  { File seam -- see "The fsync point is testable on purpose".
 
-    Toda implementacao e' de UM arquivo ja' aberto, e a posse do descritor e'
-    dela: soltar a ultima referencia da interface fecha. Nunca segure a
-    implementacao por referencia de CLASSE -- e' refcontada. }
+    Every implementation is of ONE already open file, and it owns the
+    descriptor: releasing the last interface reference closes it. Never hold
+    the implementation by a CLASS reference -- it is refcounted. }
   IAMQPWalFile = interface
     ['{6D2A17C4-9B38-4E05-A17F-3C84E9D5B260}']
-    /// Acrescenta ao FIM e devolve o offset em que os bytes comecaram.
-    /// Escrita parcial e' tratada dentro (laco ate' o fim ou erro).
+    /// Appends at the END and returns the offset where the bytes started.
+    /// Partial writes are handled inside (loop until done or error).
     function Append(const ABytes: TBytes): Int64;
-    /// Le o arquivo inteiro. Segmentos sao pequenos por construcao (D26), e
-    /// ler de uma vez torna a varredura de prefixo -- e a varredura exaustiva
-    /// de truncamento da D28 -- simples e rapida.
+    /// Reads the whole file. Segments are small by construction (D26), and
+    /// reading at once makes the prefix scan -- and the exhaustive truncation
+    /// sweep of D28 -- simple and fast.
     function ReadAll: TBytes;
-    /// Manda ao dispositivo o que foi escrito. False = a chamada falhou, e
-    /// nesse caso NENHUM confirm que dependia deste lote pode ser liberado.
+    /// Sends what was written to the device. False = the call failed, and in
+    /// that case NO confirm that depended on this batch may be released.
     function Sync: Boolean;
     function Size: Int64;
-    /// Corta o arquivo em ASize bytes (descarte da cauda torta).
+    /// Cuts the file at ASize bytes (dropping the torn tail).
     procedure TruncateTo(ASize: Int64);
   end;
 
-  { A implementacao de verdade, sobre um descritor do sistema operacional. }
+  { The real implementation, over an operating system descriptor. }
   TAMQPWalOsFile = class(TInterfacedObject, IAMQPWalFile)
   private
     FHandle: THandle;
     FPath: string;
   public
-    /// ACreate = True cria (falhando se ja' existir), False abre um existente.
-    /// Sem share mode exclusivo: quem exclui outro dono e' o lock do
-    /// DIRETORIO (TAMQPWalDirLock).
+    /// ACreate = True creates (failing if it already exists), False opens an
+    /// existing one. No exclusive share mode: what excludes another owner is
+    /// the DIRECTORY lock (TAMQPWalDirLock).
     constructor Create(const APath: string; ACreate: Boolean);
     destructor Destroy; override;
 
@@ -203,13 +204,13 @@ type
     property Path: string read FPath;
   end;
 
-  { Um segmento do log: cabecalho + N registros, so' cresce no fim.
+  { A log segment: header + N records, only grows at the end.
 
-    Quem abre um segmento existente recebe o ponto de append ja' posicionado no
-    fim do PREFIXO VALIDO -- e, por default, com a cauda torta truncada. Nao e'
-    zelo: escrever depois de bytes que a leitura descarta produziria um
-    registro integro que a recuperacao nunca alcanca, o que e' pior que a queda
-    original. }
+    Whoever opens an existing segment gets the append point already positioned
+    at the end of the VALID PREFIX -- and, by default, with the torn tail
+    truncated. This is not overcaution: writing after bytes that reading drops
+    would produce an intact record that recovery never reaches, which is worse
+    than the original crash. }
   TAMQPWalSegment = class
   private
     FFile: IAMQPWalFile;
@@ -218,96 +219,96 @@ type
     FLastLsn: UInt64;
     FStop: TAMQPWalStop;
     FDiscarded: Int64;
-    /// Le o arquivo inteiro e valida o cabecalho. Levanta se nao for um
-    /// segmento deste formato -- e' a UNICA familia de erro que a leitura
-    /// levanta, porque um arquivo estranho no DataDir e' erro de operacao, nao
-    /// consequencia de queda.
+    /// Reads the whole file and validates the header. Raises if it is not a
+    /// segment of this format -- it is the ONLY error family reading raises,
+    /// because a foreign file in the DataDir is an operational error, not a
+    /// consequence of a crash.
     function ReadAndValidateHeader: TBytes;
     function Scan(const ABuf: TBytes; ACollect: Boolean;
       out ARecords: TAMQPWalRecords; out AStop: TAMQPWalStop;
       out AEndOffset: Int64; out ALastLsn: UInt64): Integer;
   public
-    /// Segmento novo: escreve o cabecalho e sincroniza (o cabecalho e' a unica
-    /// coisa do arquivo que nao pode ser reconstruida por replay).
+    /// New segment: writes the header and syncs (the header is the only thing
+    /// in the file that cannot be rebuilt by replay).
     constructor CreateNew(const AFile: IAMQPWalFile; ASegNo: Cardinal);
-    /// Segmento existente: valida o cabecalho, varre o prefixo valido e
-    /// posiciona o append. ATrim = True (default) trunca a cauda torta.
+    /// Existing segment: validates the header, scans the valid prefix and
+    /// positions the append. ATrim = True (default) truncates the torn tail.
     constructor OpenExisting(const AFile: IAMQPWalFile; ATrim: Boolean = True);
     destructor Destroy; override;
 
-    /// Acrescenta um registro. ALsn tem de ser MAIOR que o ultimo gravado --
-    /// e' a invariante que a leitura confere, e violar seria escrever um
-    /// arquivo que a propria recuperacao truncaria ali. Devolve o offset.
+    /// Appends a record. ALsn must be GREATER than the last one written --
+    /// it is the invariant reading checks, and violating it would write a file
+    /// that recovery itself would truncate there. Returns the offset.
     function Append(ALsn: UInt64; AKind: Byte; const APayload: TBytes): Int64;
-    /// fsync. False = a chamada falhou.
+    /// fsync. False = the call failed.
     function Sync: Boolean;
 
-    /// Le o maior prefixo valido. Nao levanta por cauda torta.
+    /// Reads the longest valid prefix. Does not raise on a torn tail.
     function ReadPrefix(out ARecords: TAMQPWalRecords;
       out AStop: TAMQPWalStop): Integer;
 
-    /// Numero do segmento, lido do cabecalho.
+    /// Segment number, read from the header.
     property SegNo: Cardinal read FSegNo;
-    /// Primeiro byte depois do ultimo registro integro -- onde o proximo
-    /// Append escreve.
+    /// First byte after the last intact record -- where the next Append
+    /// writes.
     property EndOffset: Int64 read FEndOffset;
-    /// LSN do ultimo registro integro (0 = segmento sem registros).
+    /// LSN of the last intact record (0 = segment with no records).
     property LastLsn: UInt64 read FLastLsn;
-    /// Por que a varredura de abertura parou.
+    /// Why the opening scan stopped.
     property Stop: TAMQPWalStop read FStop;
-    /// Quantos bytes de cauda torta a abertura encontrou (e truncou, se
-    /// ATrim). Zero e' o caso de um segmento fechado com saude.
+    /// How many bytes of torn tail the opening found (and truncated, if
+    /// ATrim). Zero is the case of a cleanly closed segment.
     property BytesDescartados: Int64 read FDiscarded;
   end;
 
-  { Um dono por diretorio de dados.
+  { One owner per data directory.
 
-    Dois brokers sobre o mesmo DataDir corromperiam o log em silencio: os dois
-    escreveriam LSNs proprios nos mesmos arquivos. O lock e' o amqp.lock aberto
-    com fmShareExclusive -- share mode no Windows, fpflock advisory no Unix, os
-    dois medidos na WS0. Liberado no destrutor, e pelo sistema operacional se o
-    processo morrer, que e' o caso que de fato importa. }
+    Two brokers on the same DataDir would silently corrupt the log: both would
+    write their own LSNs to the same files. The lock is amqp.lock opened with
+    fmShareExclusive -- share mode on Windows, advisory fpflock on Unix, both
+    measured in WS0. Released in the destructor, and by the operating system
+    if the process dies, which is the case that actually matters. }
   TAMQPWalDirLock = class
   private
     FHandle: THandle;
     FPath: string;
   public
-    /// Levanta EAMQPWal se ja' houver dono. Cria o diretorio se nao existir.
+    /// Raises EAMQPWal if there is already an owner. Creates the directory if missing.
     constructor Create(const ADir: string);
     destructor Destroy; override;
     property Path: string read FPath;
   end;
 
-/// CRC-32 (IEEE 802.3, o do zip/png/gzip): polinomio refletido $EDB88320,
-/// init $FFFFFFFF, xor final $FFFFFFFF. Escolhido por ser conferivel contra
-/// vetores publicos -- um checksum caseiro seria impossivel de validar.
+/// CRC-32 (IEEE 802.3, the zip/png/gzip one): reflected polynomial $EDB88320,
+/// init $FFFFFFFF, final xor $FFFFFFFF. Chosen because it can be checked
+/// against public vectors -- a home-made checksum would be impossible to validate.
 function AmqpCrc32(const ABytes: TBytes): Cardinal; overload;
-/// Forma incremental/parcial: sem o init nem o xor final, para quem calcula
-/// sobre um pedaco de buffer maior.
+/// Incremental/partial form: without the init or the final xor, for callers
+/// computing over a slice of a larger buffer.
 function AmqpCrc32(ACrc: Cardinal; const ABytes: TBytes;
   AOffset, ALen: Integer): Cardinal; overload;
 
-/// fsync portavel.
+/// Portable fsync.
 function AmqpFileSync(AHandle: THandle): Boolean;
 
-/// Codigo do ultimo erro do sistema operacional.
+/// Code of the last operating system error.
 ///
-/// GetLastOSError existe no FPC (nas duas plataformas) e NAO existe no Delphi:
-/// la' a System.SysUtils so' oferece RaiseLastOSError, que LEVANTA em vez de
-/// devolver e por isso nao serve para compor uma mensagem nossa. O equivalente
-/// e' o GetLastError do Win32.
+/// GetLastOSError exists on FPC (on both platforms) and does NOT exist on
+/// Delphi: there System.SysUtils only offers RaiseLastOSError, which RAISES
+/// instead of returning and so is no use for composing our own message. The
+/// equivalent is Win32's GetLastError.
 function AmqpLastOsError: Integer;
 
-/// Nome canonico de um segmento: seg-00000001.wal. Zeros a' esquerda para a
-/// ordem alfabetica do diretorio coincidir com a numerica.
+/// Canonical name of a segment: seg-00000001.wal. Leading zeros so that the
+/// directory's alphabetical order matches the numeric one.
 function AmqpWalSegmentName(ASegNo: Cardinal): string;
-/// Le o numero de volta. False se o nome nao for de um segmento.
+/// Reads the number back. False if the name is not a segment's.
 function AmqpWalParseSegmentName(const AName: string;
   out ASegNo: Cardinal): Boolean;
-/// Segmentos existentes em ADir, ORDENADOS por numero.
+/// Existing segments in ADir, SORTED by number.
 function AmqpWalListSegments(const ADir: string): TArray<Cardinal>;
 
-/// Quantos bytes um registro com este payload ocupa no arquivo.
+/// How many bytes a record with this payload takes in the file.
 function AmqpWalRecordSize(APayloadLen: Integer): Integer;
 
 implementation
@@ -353,8 +354,8 @@ end;
 function AmqpFileSync(AHandle: THandle): Boolean;
 begin
   {$IFDEF FPC}
-  // Medido na WS0: no FPC isto e' FlushFileBuffers no Windows e fpfsync no
-  // Unix, com tempos indistinguiveis das chamadas diretas.
+  // Measured in WS0: on FPC this is FlushFileBuffers on Windows and fpfsync on
+  // Unix, with timings indistinguishable from the direct calls.
   Result := FileFlush(AHandle);
   {$ELSE}
   Result := FlushFileBuffers(AHandle);
@@ -402,8 +403,8 @@ begin
     Exit;
   LNum := Copy(AName, Length(AMQP_WAL_SEGMENT_PREFIX) + 1,
     AMQP_WAL_SEGMENT_DIGITS);
-  // Digito a digito: StrToInt64Def sozinho aceitaria ' 12' e '+12', e um nome
-  // desses viraria um segmento fantasma com o numero de outro.
+  // Digit by digit: StrToInt64Def alone would accept ' 12' and '+12', and such
+  // a name would become a phantom segment with another one's number.
   for I := 1 to Length(LNum) do
     if (LNum[I] < '0') or (LNum[I] > '9') then
       Exit;
@@ -434,10 +435,10 @@ begin
               LList.Add(LNo);
         until FindNext(LRec) <> 0;
       finally
-        // QUALIFICADO: com a unit Windows em escopo (ramo Delphi), o
-        // Winapi.Windows.FindClose(THandle) sombreia o
-        // System.SysUtils.FindClose(var TSearchRec) e o erro so' aparece no
-        // dcc32. Mesma familia do DeleteFile.
+        // QUALIFIED: with the Windows unit in scope (Delphi branch),
+        // Winapi.Windows.FindClose(THandle) shadows
+        // System.SysUtils.FindClose(var TSearchRec) and the error only shows
+        // up in dcc32. Same family as DeleteFile.
         SysUtils.FindClose(LRec);
       end;
     end;
@@ -447,9 +448,9 @@ begin
   finally
     LList.Free;
   end;
-  // Ordenacao por insercao, na mao: TArray.Sort<T> nao existe no
-  // Generics.Collections do FPC 3.2 (tabela de proibidos do CLAUDE.md). Sao
-  // dezenas de segmentos, nao milhares.
+  // Insertion sort, by hand: TArray.Sort<T> does not exist in FPC 3.2's
+  // Generics.Collections (forbidden table in CLAUDE.md). There are tens of
+  // segments, not thousands.
   for I := 1 to High(Result) do
   begin
     LTmp := Result[I];
@@ -463,7 +464,7 @@ begin
   end;
 end;
 
-// --- empacotamento little-endian (ver "Formato" no cabecalho) --------------
+// --- little-endian packing (see "Format" in the header) --------------------
 
 procedure PoeU8(var ABuf: TBytes; AOffset: Integer; AValue: Byte);
 begin
@@ -516,10 +517,10 @@ var
   H: THandle;
 begin
   inherited Create;
-  // ANTES de qualquer coisa que possa levantar: um construtor que falha tem o
-  // destrutor chamado, e o campo zerado por construcao valeria 0 -- que no
-  // Unix e' um descritor legitimo (a entrada padrao). Fechar o fd 0 por
-  // engano e' o tipo de estrago que so' aparece muito depois.
+  // BEFORE anything that can raise: a constructor that fails has its
+  // destructor called, and the field zeroed by construction would be 0 --
+  // which on Unix is a legitimate descriptor (standard input). Closing fd 0 by
+  // mistake is the kind of damage that only shows up much later.
   FHandle := THandle(-1);
   FPath := APath;
   if ACreate then
@@ -556,7 +557,7 @@ function TAMQPWalOsFile.Append(const ABytes: TBytes): Int64;
 var
   LWritten, LTotal, LRemaining: Integer;
 begin
-  Result := FileSeek(FHandle, Int64(0), 2 { fim });
+  Result := FileSeek(FHandle, Int64(0), 2 { end });
   LTotal := 0;
   LRemaining := Length(ABytes);
   while LRemaining > 0 do
@@ -583,7 +584,7 @@ begin
     raise EAMQPWal.CreateFmt('segment too large to read at once: '
       + '%s (%d bytes)', [FPath, LSize]);
   SetLength(Result, Integer(LSize));
-  FileSeek(FHandle, Int64(0), 0 { inicio });
+  FileSeek(FHandle, Int64(0), 0 { start });
   LTotal := 0;
   LRemaining := Integer(LSize);
   while LRemaining > 0 do
@@ -591,8 +592,8 @@ begin
     LRead := FileRead(FHandle, Result[LTotal], LRemaining);
     if LRead <= 0 then
     begin
-      // Arquivo encolheu debaixo de nos -- nao deveria, ha um dono so'.
-      // Devolve o que deu; a varredura trata o resto como cauda.
+      // The file shrank under us -- it should not, there is a single owner.
+      // Return what we got; the scan treats the rest as tail.
       SetLength(Result, LTotal);
       Exit;
     end;
@@ -610,8 +611,8 @@ function TAMQPWalOsFile.Size: Int64;
 var
   LPos: Int64;
 begin
-  LPos := FileSeek(FHandle, Int64(0), 1 { atual });
-  Result := FileSeek(FHandle, Int64(0), 2 { fim });
+  LPos := FileSeek(FHandle, Int64(0), 1 { current });
+  Result := FileSeek(FHandle, Int64(0), 2 { end });
   FileSeek(FHandle, LPos, 0);
 end;
 
@@ -651,8 +652,8 @@ begin
   PoeU16(LBuf, 10, 0);
   PoeU32(LBuf, 12, FSegNo);
   FFile.Append(LBuf);
-  // O cabecalho e' a unica coisa do arquivo que nao pode ser reconstruida por
-  // replay: sem ele o segmento inteiro fica irreconhecivel. Vai ao disco ja'.
+  // The header is the only thing in the file that cannot be rebuilt by
+  // replay: without it the whole segment is unrecognizable. It goes to disk now.
   FFile.Sync;
 
   FEndOffset := AMQP_WAL_SEG_HEADER_SIZE;
@@ -742,8 +743,8 @@ begin
     LKind := ABuf[LPos + 8];
     LLen := PegaU32(ABuf, LPos + 10);
 
-    // Ordem das checagens: o tamanho e' validado ANTES de qualquer leitura ou
-    // alocacao guiada por ele, porque ele mesmo pode estar corrompido.
+    // Order of the checks: the size is validated BEFORE any read or
+    // allocation driven by it, because it may itself be corrupted.
     if LLen > AMQP_WAL_MAX_PAYLOAD then
     begin
       AStop := awsSize;
@@ -764,8 +765,8 @@ begin
       Break;
     end;
 
-    // So' depois do CRC: LSN fora de ordem num registro INTEGRO e' outra coisa
-    // (arquivo remontado, bug de quem escreveu), e vale distinguir de lixo.
+    // Only after the CRC: an out-of-order LSN in an INTACT record is something
+    // else (reassembled file, writer bug), and it is worth telling apart from garbage.
     if LLsn <= LLastLsn then
     begin
       AStop := awsLsn;
@@ -826,9 +827,9 @@ begin
   PoeU32(LBuf, AMQP_WAL_REC_HEADER_SIZE + LLen, LCrc);
 
   Result := FFile.Append(LBuf);
-  // O fim vem do offset que o PROPRIO arquivo devolveu, nao de um acumulador:
-  // assim o segmento nao tem como divergir do arquivo (o caso de abrir com
-  // ATrim=False e escrever em seguida deixaria de fechar a conta).
+  // The end comes from the offset the file ITSELF returned, not from an
+  // accumulator: that way the segment cannot diverge from the file (opening
+  // with ATrim=False and writing right after would otherwise not add up).
   FEndOffset := Result + Length(LBuf);
   FLastLsn := ALsn;
 end;
@@ -856,7 +857,7 @@ var
   H: THandle;
 begin
   inherited Create;
-  FHandle := THandle(-1); // ver a nota do TAMQPWalOsFile.Create
+  FHandle := THandle(-1); // see the note in TAMQPWalOsFile.Create
   if not ForceDirectories(ADir) then
     raise EAMQPWal.CreateFmt('failed to create data directory %s: %s',
       [ADir, SysErrorMessage(AmqpLastOsError)]);
@@ -869,8 +870,8 @@ begin
         [FPath, SysErrorMessage(AmqpLastOsError)]);
     FileClose(H);
   end;
-  // fmShareExclusive: share mode no Windows, fpflock advisory no Unix -- a WS0
-  // mediu os dois recusando o segundo dono e liberando no close.
+  // fmShareExclusive: share mode on Windows, advisory fpflock on Unix -- WS0
+  // measured both refusing the second owner and releasing on close.
   FHandle := FileOpen(FPath, fmOpenReadWrite or fmShareExclusive);
   if FHandle = THandle(-1) then
     raise EAMQPWal.CreateFmt('data directory %s is already owned'
@@ -888,11 +889,11 @@ begin
 end;
 
 initialization
-  // Na inicializacao da unit, e nao sob demanda com uma flag: o CRC e'
-  // calculado pela thread do publicador E pela do journal (D24), e montar a
-  // tabela em duas threads ao mesmo tempo faria uma ler entradas que a outra
-  // ainda nao escreveu -- um CRC errado gravado no disco, sem sintoma nenhum
-  // ate' a recuperacao descartar o registro.
+  // In the unit's initialization, not on demand behind a flag: the CRC is
+  // computed by the publisher thread AND by the journal thread (D24), and
+  // building the table on two threads at once would let one read entries the
+  // other has not written yet -- a wrong CRC written to disk, with no symptom
+  // at all until recovery drops the record.
   MontaTabelaCrc;
 
 end.

@@ -2,19 +2,20 @@
 
 {$I amqp.inc}
 
-{ Tipos compartilhados do sub-módulo broker (WS4).
+{ Shared types of the broker sub-module (WS4).
 
-  Vive abaixo de AMQP.Server.Connection e de AMQP.Server.Broker para os dois
-  enxergarem as mesmas peças sem ciclo de units:
+  Lives below AMQP.Server.Connection and AMQP.Server.Broker so both can see
+  the same pieces without a unit cycle:
 
-  - TAMQPVirtualHostRegistry — os vhosts que o broker aceita no Connection.Open
-    (estava em AMQP.Server.Broker no WS6; a FSM de handshake precisa consultá-lo,
-    e o broker não pode ser usado pela conexão, que ele próprio usa).
-  - TAMQPServerConnConfig — o que o broker entrega a cada conexão aceita
-    (autenticador, autorizador, vhosts e os limites propostos no Tune).
-  - As exceções que a FSM usa como controle de fluxo do modelo de erro do AMQP:
-    EAMQPChannelError (fecha só o canal), EAMQPConnectionError (fecha a conexão
-    com Connection.Close) e EAMQPServerAbort (derruba o socket sem Close). }
+  - TAMQPVirtualHostRegistry — the vhosts the broker accepts on Connection.Open
+    (it was in AMQP.Server.Broker in WS6; the handshake FSM needs to consult it,
+    and the broker cannot be used by the connection, which it uses itself).
+  - TAMQPServerConnConfig — what the broker hands each accepted connection
+    (authenticator, authorizer, vhosts and the limits proposed in Tune).
+  - The exceptions the FSM uses as flow control for the AMQP error model:
+    EAMQPChannelError (closes only the channel), EAMQPConnectionError (closes
+    the connection with Connection.Close) and EAMQPServerAbort (drops the
+    socket without Close). }
 
 interface
 
@@ -26,37 +27,37 @@ uses
   AMQP.Basic.Methods, // TAMQPBasicProperties
   AMQP.Server.Events, // IAMQPEventSink (TAMQPServerConnConfig.Events)
   AMQP.Server.Auth,
-  AMQP.Server.FrameIO; // TAMQPFrameWriter (o rastreador de confirms escreve
-                       // no canal do publicador)
+  AMQP.Server.FrameIO; // TAMQPFrameWriter (the confirm tracker writes to
+                       // the publisher's channel)
 
 const
-  /// Limites que o broker propõe no Connection.Tune. Iguais aos do RabbitMQ,
-  /// para os defaults do cliente (TAMQPConnectionParams.Localhost) casarem sem
-  /// negociação para baixo.
+  /// Limits the broker proposes in Connection.Tune. Same as RabbitMQ's, so
+  /// the client defaults (TAMQPConnectionParams.Localhost) match without
+  /// negotiating down.
   AMQP_SERVER_DEFAULT_CHANNEL_MAX = 2047;
   AMQP_SERVER_DEFAULT_FRAME_MAX   = 131072;
   AMQP_SERVER_DEFAULT_HEARTBEAT   = 60;
 
-  /// Quanto esperamos pelo Connection.Close-Ok depois de mandarmos um
-  /// Connection.Close antes de simplesmente derrubar o socket. Aplicado pela
-  /// thread monitora do broker via TAMQPServerConnection.EnforceCloseDeadline.
+  /// How long we wait for Connection.Close-Ok after sending a
+  /// Connection.Close before simply dropping the socket. Enforced by the
+  /// broker's monitor thread via TAMQPServerConnection.EnforceCloseDeadline.
   AMQP_SERVER_CLOSE_TIMEOUT_MS = 10000;
 
-  /// Período da thread monitora do broker (heartbeats, detecção de peer morto,
-  /// prazo do Close-Ok e reap das conexões mortas). Tem de ser bem menor que
-  /// metade do menor heartbeat útil — com 200 ms, um heartbeat negociado de
-  /// 1 s (usado nos testes) ainda é atendido com folga.
+  /// Period of the broker's monitor thread (heartbeats, dead-peer detection,
+  /// Close-Ok deadline and reaping of dead connections). It must be well below
+  /// half of the smallest useful heartbeat — at 200 ms, a negotiated heartbeat
+  /// of 1 s (used in the tests) is still served with room to spare.
   AMQP_SERVER_MONITOR_TICK_MS = 200;
 
 type
-  { Conjunto de virtual-hosts que o broker aceita no Connection.Open.
-    Fase 1: só a existência importa (sem isolamento de recursos, sem
-    permissões — ver desvios no CLAUDE.md). Default: só a raiz "/".
-    Thread-safe (várias conexões handshakeiam em paralelo). }
+  { Set of virtual hosts the broker accepts on Connection.Open.
+    Phase 1: only existence matters (no resource isolation, no
+    permissions — see the deviations in CLAUDE.md). Default: only the root "/".
+    Thread-safe (several connections handshake in parallel). }
   TAMQPVirtualHostRegistry = class
   private
     FLock: TCriticalSection;
-    FNames: TStringList; // CaseSensitive, Sorted, Duplicates ignorados
+    FNames: TStringList; // CaseSensitive, Sorted, Duplicates ignored
   public
     constructor Create;
     destructor Destroy; override;
@@ -66,127 +67,129 @@ type
     function ToArray: TArray<string>;
   end;
 
-  { Uma mensagem publicada, já com o conteúdo remontado (método Basic.Publish +
-    content-header + N body frames). }
+  { A published message, with its content already reassembled (Basic.Publish
+    method + content-header + N body frames). }
   TAMQPServerMessage = record
     Exchange: string;
     RoutingKey: string;
-    Mandatory: Boolean;   // sem rota => devolver com Basic.Return (Fase 2)
-    Immediate: Boolean;   // obsoleto no RabbitMQ; decodificado e ignorado
+    Mandatory: Boolean;   // no route => return it with Basic.Return (Phase 2)
+    Immediate: Boolean;   // obsolete in RabbitMQ; decoded and ignored
     Properties: TAMQPBasicProperties;
     Body: TBytes;
-    /// Usuário autenticado da conexão que publicou (para validar a propriedade
-    /// user-id e para auditoria na Fase 2).
+    /// Authenticated user of the publishing connection (to validate the
+    /// user-id property and for auditing in Phase 2).
     UserId: string;
-    /// Payload CRU do content-header (class-id/weight/body-size/flags e as
-    /// propriedades presentes), exatamente como veio no frame — decisão D1
-    /// da Fase 2 (CLAUDE.md): reemissão fiel ao consumidor sem redecodificar
-    /// e sem clonar TAMQPFieldTable (nada do TValue-em-TValue do FPC).
-    /// Preenchido pelo TAMQPServerChannel a partir dos bytes que a conexão
-    /// leu no frame de header (ver AMQP.Server.Channel.SetContentHeader).
+    /// RAW payload of the content-header (class-id/weight/body-size/flags and
+    /// the properties present), exactly as it came in the frame — decision D1
+    /// of Phase 2 (CLAUDE.md): faithful re-emission to the consumer without
+    /// re-decoding and without cloning TAMQPFieldTable (none of FPC's
+    /// TValue-in-TValue). Filled in by TAMQPServerChannel from the bytes the
+    /// connection read in the header frame (see AMQP.Server.Channel.SetContentHeader).
     HeaderPayload: TBytes;
   end;
 
-  { Destino de uma mensagem publicada. A Fase 1 usa TAMQPNullMessageSink (que
-    descarta); a engine de roteamento da Fase 2 entra aqui sem mudar a
-    assinatura de nenhum chamador.
+  { Destination of a published message. Phase 1 uses TAMQPNullMessageSink
+    (which drops); Phase 2's routing engine plugs in here without changing
+    any caller's signature.
 
-    IMPORTANTE: a mensagem e a tabela de Headers dentro de Properties pertencem
-    ao CANAL, que as libera assim que RouteMessage retorna. Uma implementação
-    que precise guardar a mensagem tem de copiar o que interessa. }
+    IMPORTANT: the message and the Headers table inside Properties belong to
+    the CHANNEL, which frees them as soon as RouteMessage returns. An
+    implementation that needs to keep the message must copy what it needs. }
   IAMQPMessageSink = interface
     ['{2A0F6E31-1C5D-4E8B-9F27-6D3B0A5C4E19}']
-    /// True se a mensagem foi roteada para ao menos uma fila. False com
-    /// Mandatory=True é o que dispara o Basic.Return na Fase 2.
+    /// True if the message was routed to at least one queue. False with
+    /// Mandatory=True is what triggers Basic.Return in Phase 2.
     ///
-    /// ARejeitada (WS6 da Fase 3) sai True quando ao menos uma fila de destino
-    /// estava cheia e declarada com `x-overflow: reject-publish` — nesse caso
-    /// o publish leva `Basic.Nack` em vez de `Basic.Ack`. É um resultado
-    /// SEPARADO de "não roteou": uma mensagem pode ter sido aceita por duas
-    /// filas e recusada pela terceira, e o publicador precisa saber disso.
+    /// ARejected (Phase 3 WS6) comes out True when at least one destination
+    /// queue was full and declared with `x-overflow: reject-publish` — in that
+    /// case the publish gets `Basic.Nack` instead of `Basic.Ack`. It is a
+    /// SEPARATE result from "not routed": a message may have been accepted by
+    /// two queues and rejected by the third, and the publisher needs to know.
     ///
-    /// ALsn (WS5 da Fase 4) sai com o MAIOR LSN que este publish escreveu no
-    /// journal, ou 0 quando ele nao escreveu nada (mensagem transiente, fila
-    /// transiente, ou broker sem DataDir). E' o numero que o confirm deste
-    /// seq-no tem de esperar ficar duravel -- a D24 em uma linha: quem roteou
-    /// e' quem sabe qual LSN amarra qual seq.
+    /// ALsn (Phase 4 WS5) comes out with the HIGHEST LSN this publish wrote to
+    /// the journal, or 0 when it wrote nothing (transient message, transient
+    /// queue, or broker without DataDir). It is the number this seq-no's
+    /// confirm must wait to become durable -- D24 in one line: whoever routed
+    /// is who knows which LSN ties to which seq.
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage;
       out ARejected: Boolean; out ALsn: UInt64): Boolean;
   end;
 
-  { Rastreador de confirms adiados de UM canal -- WS5 da Fase 4, a D24.
+  { Tracker of ONE channel's deferred confirms -- Phase 4 WS5, D24.
 
-    Enquanto o broker nao tem DataDir, ninguem cria um destes e o caminho do
-    confirm e' letra por letra o da Fase 3. Com durabilidade ligada, o publish
-    persistente NAO leva ack na hora: ele fica aqui, preso ao LSN que precisa
-    estar no disco, ate' a thread do journal avancar a marca d'agua.
+    While the broker has no DataDir, nobody creates one of these and the
+    confirm path is, letter for letter, Phase 3's. With durability on, the
+    persistent publish does NOT get an ack right away: it waits here, tied to
+    the LSN that must be on disk, until the journal thread advances the
+    watermark.
 
-    Mesmo padrao de ciclo de vida do TAMQPChannelDeliveryTarget, e pela mesma
-    razao: quem libera o pendente e' a thread do JOURNAL, e o canal pode ter
-    morrido no meio. Refcount mantem o objeto vivo, e Detach solta o writer sob
-    lock sem esperar I/O. }
+    Same lifecycle pattern as TAMQPChannelDeliveryTarget, and for the same
+    reason: the one releasing the pending confirm is the JOURNAL thread, and
+    the channel may have died meanwhile. The refcount keeps the object alive,
+    and Detach releases the writer under the lock without waiting for I/O. }
   IAMQPConfirmTracker = interface
     ['{7C4E1B85-93A0-4D62-B1F7-0E58C2A46D31}']
-    /// Registra o confirm de ASeq como ADIADO e devolve True; devolve False
-    /// quando nao ha nada a esperar e o chamador pode emitir na hora.
+    /// Records ASeq's confirm as DEFERRED and returns True; returns False when
+    /// there is nothing to wait for and the caller can emit right away.
     ///
-    /// Adia quando ALsn > 0 (este publish escreveu no disco) OU quando ja' ha
-    /// pendente neste canal -- o corolario (a) da D24: confirm sai em ordem de
-    /// seq POR CANAL, entao um publish transiente atras de um persistente
-    /// pendente espera e sai colapsado no mesmo multiple=true.
+    /// Defers when ALsn > 0 (this publish wrote to disk) OR when there is
+    /// already something pending on this channel -- corollary (a) of D24:
+    /// confirms go out in seq order PER CHANNEL, so a transient publish behind
+    /// a pending persistent one waits and goes out collapsed in the same
+    /// multiple=true.
     function TryDefer(ASeq, ALsn: UInt64; ANack: Boolean): Boolean;
-    /// Libera todo pendente com Lsn <= AMarca, colapsado por canal num unico
-    /// Basic.Ack(maiorSeq, multiple=true). Nunca bloqueia; o que a fila de
-    /// escrita recusar fica para a proxima rodada (forma da D3).
+    /// Releases every pending confirm with Lsn <= AMarca, collapsed per channel
+    /// into a single Basic.Ack(highestSeq, multiple=true). Never blocks; what
+    /// the write queue refuses waits for the next round (the shape of D3).
     procedure Release(AMarca: UInt64);
-    /// O journal falhou de vez: todo pendente vira Basic.Nack, porque a
-    /// promessa de durabilidade nao pode mais ser cumprida.
+    /// The journal failed for good: every pending confirm becomes Basic.Nack,
+    /// because the durability promise can no longer be kept.
     procedure FailAll;
-    /// O canal morreu: solta o writer e descarta o pendente.
+    /// The channel died: releases the writer and drops what is pending.
     procedure Detach;
-    /// Quantos confirms estao presos aqui (diagnostico e teste).
+    /// How many confirms are held here (diagnostics and tests).
     function PendingCount: Integer;
   end;
 
-  { Onde vivem todos os rastreadores do broker. E' o IAMQPDurabilitySink que a
-    thread do journal chama depois de cada fsync -- a unica peca que sabe que
-    "a marca andou" tem de virar "estes canais podem confirmar". }
+  { Where all the broker's trackers live. It is the IAMQPDurabilitySink the
+    journal thread calls after each fsync -- the only piece that knows that
+    "the watermark moved" must become "these channels may confirm". }
   IAMQPConfirmRegistry = interface
     ['{1F60A2D9-5E37-4C84-A0B6-83D915E7C42A}']
-    /// Cria e registra o rastreador do canal. O chamador guarda a interface e
-    /// chama Unregister quando o canal morre.
+    /// Creates and registers the channel's tracker. The caller keeps the
+    /// interface and calls Unregister when the channel dies.
     function CreateTracker(AWriter: TAMQPFrameWriter;
       AChannelNo: Word): IAMQPConfirmTracker;
     procedure Unregister(const ATracker: IAMQPConfirmTracker);
-    /// Tudo com LSN <= isto ja' esta' no disco.
+    /// Everything with LSN <= this is already on disk.
     function Watermark: UInt64;
-    /// Quantos canais tem rastreador registrado agora. Diagnostico -- e o
-    /// unico jeito de um teste de ponta a ponta ver que o canal REALMENTE
-    /// passou a adiar o confirm, em vez de emiti-lo inline como na Fase 3.
+    /// How many channels have a tracker registered right now. Diagnostics --
+    /// and the only way for an end-to-end test to see that the channel REALLY
+    /// started deferring the confirm, instead of emitting it inline as in Phase 3.
     function TrackerCount: Integer;
-    /// Recobra o que ficou preso por recusa da fila de escrita. Chamado pela
-    /// thread monitora: sem isso, um canal que estava com a saida cheia no
-    /// instante do fsync so' confirmaria no proximo avanco da marca -- que
-    /// pode nunca vir, se ninguem mais publicar.
+    /// Recovers what got stuck because the write queue refused it. Called by
+    /// the monitor thread: without it, a channel whose output was full at the
+    /// moment of the fsync would only confirm on the next watermark advance --
+    /// which may never come, if nobody publishes again.
     procedure RetryPending;
   end;
 
-  { Descarta tudo (broker "nulo" da Fase 1). Conta o que passou, para os testes
-    e para diagnóstico. }
+  { Drops everything (Phase 1's "null" broker). Counts what went through, for
+    the tests and for diagnostics. }
   TAMQPNullMessageSink = class(TInterfacedObject, IAMQPMessageSink)
   private
-    FCount: Integer; // atômico
+    FCount: Integer; // atomic
   public
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage;
       out ARejected: Boolean; out ALsn: UInt64): Boolean;
-    /// Quantas mensagens foram descartadas desde a criação.
+    /// How many messages were dropped since creation.
     function Count: Integer;
   end;
 
-  { Erro de canal (spec 1.4.2.2): o broker manda Channel.Close no canal
-    ofensor, o canal morre e a conexão segue viva. }
+  { Channel error (spec 1.4.2.2): the broker sends Channel.Close on the
+    offending channel, the channel dies and the connection stays alive. }
   EAMQPChannelError = class(Exception)
   private
     FChannel: Word;
@@ -196,17 +199,17 @@ type
   public
     constructor Create(AChannel, ACode: Word; const AText: string;
       AClassId: Word = 0; AMethodId: Word = 0); reintroduce;
-    /// Canal onde o erro ocorreu (nunca 0).
+    /// Channel where the error happened (never 0).
     property Channel: Word read FChannel;
-    /// reply-code (ver AMQP.Protocol: 403/404/405/406/311...).
+    /// reply-code (see AMQP.Protocol: 403/404/405/406/311...).
     property Code: Word read FCode;
-    /// Método que causou o erro (0/0 quando não se aplica).
+    /// Method that caused the error (0/0 when not applicable).
     property ClassId: Word read FClassId;
     property MethodId: Word read FMethodId;
   end;
 
-  { Erro de conexão (spec 1.4.2.3): o broker manda Connection.Close no canal 0,
-    espera o Close-Ok e encerra. }
+  { Connection error (spec 1.4.2.3): the broker sends Connection.Close on
+    channel 0, waits for Close-Ok and shuts down. }
   EAMQPConnectionError = class(Exception)
   private
     FCode: Word;
@@ -220,40 +223,41 @@ type
     property MethodId: Word read FMethodId;
   end;
 
-  { Encerra a conexão SEM Connection.Close: ou o transporte já morreu, ou a
-    spec manda fechar o socket direto (auth negada a um cliente que não
-    anunciou a capability 'authentication_failure_close'). }
+  { Ends the connection WITHOUT Connection.Close: either the transport is
+    already dead, or the spec says to close the socket directly (auth denied
+    to a client that did not announce the 'authentication_failure_close'
+    capability). }
   EAMQPServerAbort = class(Exception);
 
-  { O que o broker entrega a cada conexão aceita. A conexão NÃO é dona de
-    nada aqui (o broker vive mais que ela). }
+  { What the broker hands each accepted connection. The connection owns
+    NOTHING here (the broker outlives it). }
   TAMQPServerConnConfig = record
     Auth: IAMQPAuthenticator;
     Authorizer: IAMQPAuthorizer;
     VHosts: TAMQPVirtualHostRegistry;
-    /// Limites propostos no Connection.Tune (0 = sem limite).
+    /// Limits proposed in Connection.Tune (0 = no limit).
     ChannelMax: Word;
     FrameMax: Cardinal;
     Heartbeat: Word;
-    /// True => a conexão faz handshake TLS antes de qualquer byte de AMQP.
-    /// Também é repassado ao autenticador (que pode exigir canal cifrado).
+    /// True => the connection does a TLS handshake before any AMQP byte.
+    /// Also passed on to the authenticator (which may require an encrypted channel).
     /// The certificate lives in the broker's listener since 0.6.0 (loaded
     /// once at Start); the connection only runs the handshake.
     Tls: Boolean;
-    /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
+    /// How long to wait for Connection.Close-Ok before dropping the socket.
     CloseTimeoutMs: Cardinal;
-    /// Para onde vão as mensagens publicadas. Nunca nil nas conexões que o
-    /// broker cria (ele semeia com TAMQPNullMessageSink).
+    /// Where published messages go. Never nil on the connections the broker
+    /// creates (it seeds them with TAMQPNullMessageSink).
     Sink: IAMQPMessageSink;
-    /// Onde os canais registram confirms adiados. nil = sem durabilidade, e o
-    /// confirm sai inline como na Fase 3 (D19: o broker sem DataDir e' o
-    /// broker da Fase 3, inclusive aqui).
+    /// Where the channels register deferred confirms. nil = no durability, and
+    /// the confirm goes out inline as in Phase 3 (D19: the broker without
+    /// DataDir is the Phase 3 broker, here too).
     Confirms: IAMQPConfirmRegistry;
-    /// Para onde a conexao emite os eventos de observabilidade. nil =
-    /// desligado, e ai' o caminho quente nao paga nada (D29). Nunca nil nas
-    /// conexoes que o broker cria: ele semeia com o proprio TAMQPEventBus.
+    /// Where the connection emits the observability events. nil = off, and
+    /// then the hot path pays nothing (D29). Never nil on the connections the
+    /// broker creates: it seeds them with its own TAMQPEventBus.
     Events: IAMQPEventSink;
-    /// Config sem autenticador/vhosts (o broker preenche esses dois).
+    /// Config without authenticator/vhosts (the broker fills in those two).
     class function Defaults: TAMQPServerConnConfig; static;
   end;
 
@@ -373,11 +377,11 @@ function TAMQPNullMessageSink.RouteMessage(const AVHost: string;
   const AMessage: TAMQPServerMessage; out ARejected: Boolean;
   out ALsn: UInt64): Boolean;
 begin
-  ARejected := False; // sink nulo nunca recusa: nao ha fila para encher
-  ALsn := 0;           // e nao durou nada: nao ha journal
+  ARejected := False; // a null sink never rejects: there is no queue to fill
+  ALsn := 0;           // and nothing became durable: there is no journal
   PcAtomicInc(FCount);
-  // Fase 1: nenhuma fila existe, então nada foi roteado. Devolver False é o
-  // que a Fase 2 usará para disparar o Basic.Return de um publish mandatory.
+  // Phase 1: no queue exists, so nothing was routed. Returning False is what
+  // Phase 2 will use to trigger the Basic.Return of a mandatory publish.
   Result := False;
 end;
 

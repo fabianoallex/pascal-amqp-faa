@@ -2,42 +2,45 @@
 
 {$I amqp.inc}
 
-{ Transporte dos eventos de observabilidade (Fase 4.1, D30-D33, D35).
+{ Transport for the observability events (Phase 4.1, D30-D33, D35).
 
-  UM ring limitado e UMA thread notificadora, e TODO evento passa por aqui --
-  inclusive os que nascem na thread de leitura da conexão. A D30 rejeitou as
-  três alternativas, cada uma por um motivo próprio:
+  ONE bounded ring and ONE notifier thread, and EVERY event goes through here --
+  including the ones born on the connection's read thread. D30 rejected the
+  three alternatives, each for a reason of its own:
 
-  - worker de pool: o dos atores das filas (pool próprio do broker desde a
-    F8; antes era o global) faria um handler lento starvar o ator. Seria a D2
-    violada por via indireta, que é a pior forma -- a que não aparece no
-    código que a viola. E o PcPool é do processo inteiro, então o handler
-    disputaria worker com callbacks de outras libs;
-  - thread monitora: poria heartbeat, prazo de Close-Ok, varredura de TTL e
-    reap de conexão morta atrás de um handler de usuário;
-  - inline na thread de leitura: trava o processamento de frames daquela
-    conexão, HEARTBEAT INCLUSO, até o cliente derrubá-la por timeout.
+  - pool worker: the queue actors' pool (the broker's own pool since F8;
+    before that, the global one) would let a slow handler starve the actor.
+    That would be D2 violated indirectly, which is the worst form -- the one
+    that does not show in the code that violates it. And PcPool belongs to
+    the whole process, so the handler would compete for workers with other
+    libs' callbacks;
+  - monitor thread: would put heartbeat, the Close-Ok deadline, the TTL sweep
+    and the reaping of dead connections behind a user handler;
+  - inline on the read thread: stalls frame processing for that connection,
+    HEARTBEAT INCLUDED, until the client drops it on timeout.
 
-  A tentação era chamar os eventos de ciclo de vida inline (eles nascem na
-  thread de leitura, parecem baratos) e marshalar só os do ator. Não existe
-  metade segura: o que muda entre as três é o raio do estrago, não se há
-  estrago. Uniformizar dá um contrato, uma ordem e uma política de exceção --
-  e o record flat da D34 faz o assíncrono custar uma cópia por valor.
+  The temptation was to call the lifecycle events inline (they are born on
+  the read thread, they look cheap) and marshal only the actor's. There is no
+  safe half: what changes among the three is the blast radius, not whether
+  there is damage. Uniformity gives one contract, one ordering and one
+  exception policy -- and D34's flat record makes going async cost one copy
+  by value.
 
-  CONTRATO DE ENTREGA (D31), em três linhas:
+  DELIVERY CONTRACT (D31), in three lines:
 
-  - o emissor NUNCA bloqueia e NUNCA levanta. Ring cheio => descarta e conta;
-  - descarta o MAIS NOVO, não a cabeça. O que entrou no ring é entregue,
-    então o handler vê um PREFIXO CONTÍGUO da ordem de emissão com lacunas
-    contadas em DroppedCount. Descartar a cabeça reescreveria história em
-    silêncio -- e é justamente o que a D7 faz na memória, onde a mensagem
-    mais nova é a que importa. Aqui é o contrário;
-  - a ordem prometida é POR ORIGEM (por conexão, por fila). O consumidor
-    único dá de fato uma ordem total de aceitação no ring, mas entre duas
-    threads essa ordem não significa nada e não vira promessa de API.
+  - the emitter NEVER blocks and NEVER raises. Ring full => drop and count;
+  - drops the NEWEST, not the head. What entered the ring is delivered, so
+    the handler sees a CONTIGUOUS PREFIX of the emission order with the gaps
+    counted in DroppedCount. Dropping the head would rewrite history
+    silently -- and that is exactly what D7 does in memory, where the newest
+    message is the one that matters. Here it is the opposite;
+  - the promised ordering is PER ORIGIN (per connection, per queue). The
+    single consumer does give a total order of acceptance into the ring, but
+    between two threads that order means nothing and does not become an API
+    promise.
 
-  Fecha a trinca das três pressões desta codebase: memória descarta a cabeça
-  (D7), disco RECUSA (D26), evento descarta o mais novo. }
+  Completes the trio of the three pressures in this codebase: memory drops
+  the head (D7), disk REFUSES (D26), events drop the newest. }
 
 interface
 
@@ -54,8 +57,8 @@ uses
 type
   TAMQPEventBus = class;
 
-  { A notificadora. Mesma forma da TAMQPJournalThread e da
-    TAMQPMonitorThread: o laço vive no objeto dono, a thread só o repete. }
+  { The notifier. Same shape as TAMQPJournalThread and
+    TAMQPMonitorThread: the loop lives in the owning object, the thread only repeats it. }
   TAMQPEventNotifierThread = class(TThread)
   private
     FBus: TAMQPEventBus;
@@ -65,47 +68,47 @@ type
     constructor Create(ABus: TAMQPEventBus);
   end;
 
-  { Um assinante: o método e a máscara de tipos que ele pediu. }
+  { One subscriber: the method and the type mask it asked for. }
   TAMQPEventSubscription = record
     Handler: TAMQPServerEventHandler;
     Mask: Cardinal;
   end;
 
-  { O barramento. Dono: o TAMQPServer, que o cria no constructor (para o
-    Subscribe funcionar antes do Start) e o destrói no destructor.
+  { The bus. Owner: TAMQPServer, which creates it in the constructor (so that
+    Subscribe works before Start) and destroys it in the destructor.
 
-    Refcount da interface é no-op, como no TAMQPEngine -- e pela mesma razão:
-    quem manda no tempo de vida é o servidor, não a contagem. }
+    The interface refcount is a no-op, as in TAMQPEngine -- and for the same
+    reason: the server rules the lifetime, not the count. }
   TAMQPEventBus = class(TInterfacedObject, IAMQPEventSink)
   private
-    // --- ring + contadores (sob FMon) ---
+    // --- ring + counters (under FMon) ---
     FMon: TPcMonitor;
     FRing: array of TAMQPServerEvent;
     FCapacity: Integer;
-    FHead: Integer;       // próximo a sair
-    FTail: Integer;       // próximo a entrar
-    FCount: Integer;      // ocupação
+    FHead: Integer;       // next out
+    FTail: Integer;       // next in
+    FCount: Integer;      // occupancy
     FStopping: Boolean;
-    FDispatching: Boolean; // notificadora dentro de um handler
+    FDispatching: Boolean; // notifier inside a handler
     FEmitted: Int64;
     FDropped: Int64;
     FFailed: Int64;
     FLastFailure: string;
     FThread: TAMQPEventNotifierThread;
 
-    // --- assinantes (sob FSubsLock) ---
+    // --- subscribers (under FSubsLock) ---
     FSubsLock: TCriticalSection;
     FSubs: TList<TAMQPEventSubscription>;
-    FMask: Integer; // atômico: união das máscaras, lida sem lock por Wants
+    FMask: Integer; // atomic: union of the masks, read lock-free by Wants
 
     procedure RebuildMaskLocked;
     procedure SetCapacity(AValue: Integer);
     function TakeBatch(out ABatch: TArray<TAMQPServerEvent>): Boolean;
     procedure DispatchBatch(const ABatch: TArray<TAMQPServerEvent>);
   protected
-    // IAMQPEventSink -- refcount desligado (ver o cabeçalho da classe). A
-    // convenção de chamada do IInterface depende da PLATAFORMA no FPC:
-    // stdcall no Windows, cdecl no Unix (CLAUDE.md).
+    // IAMQPEventSink -- refcount disabled (see the class header). The
+    // IInterface calling convention depends on the PLATFORM in FPC:
+    // stdcall on Windows, cdecl on Unix (CLAUDE.md).
     function _AddRef: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
     function _Release: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
   public
@@ -113,56 +116,56 @@ type
     destructor Destroy; override;
 
     // --- IAMQPEventSink ---
-    /// True se ALGUM assinante quer este tipo. Leitura atômica de uma
-    /// máscara, sem lock: é o que faz o broker sem assinante não pagar nada.
+    /// True if ANY subscriber wants this type. Atomic read of a mask,
+    /// lock-free: it is what makes a broker with no subscriber pay nothing.
     function Wants(AType: TAMQPServerEventType): Boolean;
-    /// Enfileira. Nunca bloqueia, nunca levanta, pode descartar (D31).
+    /// Enqueues. Never blocks, never raises, may drop (D31).
     procedure Emit(const AEvent: TAMQPServerEvent);
 
-    // --- assinatura ---
-    /// Assina todos os tipos.
+    // --- subscription ---
+    /// Subscribes to all types.
     procedure Subscribe(AHandler: TAMQPServerEventHandler); overload;
-    /// Assina só os tipos pedidos. Assinar o mesmo método duas vezes
-    /// SUBSTITUI a máscara anterior em vez de duplicar a entrega.
+    /// Subscribes only to the requested types. Subscribing the same method
+    /// twice REPLACES the previous mask instead of duplicating delivery.
     procedure Subscribe(AHandler: TAMQPServerEventHandler;
       const ATypes: TAMQPServerEventTypes); overload;
-    /// Remove. É OBRIGATÓRIO chamar antes de destruir o objeto dono do
-    /// método (D33): um handler órfão vira AV dentro da notificadora, que a
-    /// conta em FailedCount e segue -- mas o evento se perde e o sintoma
-    /// aparece longe da causa.
+    /// Removes. It is MANDATORY to call it before destroying the object that
+    /// owns the method (D33): an orphan handler becomes an AV inside the
+    /// notifier, which counts it in FailedCount and moves on -- but the event
+    /// is lost and the symptom shows up far from the cause.
     procedure Unsubscribe(AHandler: TAMQPServerEventHandler);
     function SubscriberCount: Integer;
 
-    // --- ciclo de vida (chamados pelo TAMQPServer) ---
+    // --- lifecycle (called by TAMQPServer) ---
     procedure Start;
-    /// Para a notificadora DEPOIS de entregar o que já está no ring. Por isso
-    /// o servidor a derruba por último: os eventos de fechamento de conexão e
-    /// de canal nascem durante o teardown e ainda são entregues.
+    /// Stops the notifier AFTER delivering what is already in the ring. That
+    /// is why the server takes it down last: the connection and channel close
+    /// events are born during teardown and are still delivered.
     procedure Stop;
 
-    /// Espera o ring esvaziar E o handler corrente terminar. É a barreira da
-    /// D35 -- teste espera por ela, não por Sleep. False = estourou o prazo.
-    /// NÃO chamar de dentro de um handler (esperaria por si mesmo).
+    /// Waits for the ring to empty AND the current handler to finish. It is
+    /// D35's barrier -- tests wait on it, not on Sleep. False = timed out.
+    /// Do NOT call it from inside a handler (it would wait for itself).
     function Drain(ATimeoutMs: Cardinal): Boolean;
 
-    /// Quantos eventos entraram no ring.
+    /// How many events entered the ring.
     function EmittedCount: Int64;
-    /// Quantos foram descartados por ring cheio (D31). É a única forma de o
-    /// observador saber que perdeu alguma coisa.
+    /// How many were dropped because the ring was full (D31). It is the only
+    /// way for the observer to know it lost something.
     function DroppedCount: Int64;
-    /// Quantas exceções de handler foram capturadas (D33).
+    /// How many handler exceptions were caught (D33).
     function FailedCount: Int64;
-    /// Classe e mensagem da última exceção de handler ('' se nenhuma).
+    /// Class and message of the last handler exception ('' if none).
     function LastFailure: string;
 
-    /// Tamanho do ring, em eventos. Só pode mudar antes do Start.
+    /// Ring size, in events. Can only change before Start.
     property Capacity: Integer read FCapacity write SetCapacity;
   end;
 
 implementation
 
-{ Compara dois métodos de objeto. TList<T>.IndexOf exigiria um comparer para
-  record; o laço manual é mais curto que o comparer. }
+{ Compares two object methods. TList<T>.IndexOf would need a comparer for a
+  record; the manual loop is shorter than the comparer. }
 function SameHandler(const A, B: TAMQPServerEventHandler): Boolean;
 begin
   Result := (TMethod(A).Code = TMethod(B).Code)
@@ -173,8 +176,8 @@ end;
 
 constructor TAMQPEventNotifierThread.Create(ABus: TAMQPEventBus);
 begin
-  // O campo ANTES do inherited: com Create(False) a thread pode já estar
-  // rodando quando o constructor volta.
+  // The field BEFORE inherited: with Create(False) the thread may already be
+  // running when the constructor returns.
   FBus := ABus;
   inherited Create(False);
   {$IFDEF FPC}
@@ -220,7 +223,7 @@ end;
 
 function TAMQPEventBus._AddRef: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
 begin
-  Result := -1; // sem refcount: o dono e' o TAMQPServer
+  Result := -1; // no refcount: the owner is TAMQPServer
 end;
 
 function TAMQPEventBus._Release: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
@@ -242,7 +245,7 @@ begin
   FCount := 0;
 end;
 
-{ --- assinatura ---------------------------------------------------------- }
+{ --- subscription -------------------------------------------------------- }
 
 procedure TAMQPEventBus.RebuildMaskLocked;
 var
@@ -252,7 +255,7 @@ begin
   LMask := 0;
   for I := 0 to FSubs.Count - 1 do
     LMask := LMask or FSubs[I].Mask;
-  // Publicacao atomica: Wants le' sem lock nenhum, no caminho quente.
+  // Atomic publication: Wants reads with no lock at all, on the hot path.
   PcAtomicSet(FMask, Integer(LMask));
 end;
 
@@ -278,8 +281,8 @@ begin
     for I := 0 to FSubs.Count - 1 do
       if SameHandler(FSubs[I].Handler, AHandler) then
       begin
-        // Re-assinar SUBSTITUI a mascara. Duplicar a entrega seria a
-        // surpresa: o mesmo evento chegaria duas vezes ao mesmo metodo.
+        // Re-subscribing REPLACES the mask. Duplicating delivery would be the
+        // surprise: the same event would reach the same method twice.
         FSubs[I] := LSub;
         LFound := True;
         Break;
@@ -317,7 +320,7 @@ begin
   end;
 end;
 
-{ --- emissao ------------------------------------------------------------- }
+{ --- emission ------------------------------------------------------------ }
 
 function TAMQPEventBus.Wants(AType: TAMQPServerEventType): Boolean;
 begin
@@ -329,8 +332,8 @@ procedure TAMQPEventBus.Emit(const AEvent: TAMQPServerEvent);
 begin
   FMon.Enter;
   try
-    // Depois do Stop nao ha quem drene: aceitar seria vazar o evento (e as
-    // strings dele) ate' o destructor.
+    // After Stop there is nobody to drain: accepting would leak the event (and
+    // its strings) until the destructor.
     if FStopping then
     begin
       Inc(FDropped);
@@ -338,14 +341,14 @@ begin
     end;
     if FCount >= FCapacity then
     begin
-      // D31: descarta o MAIS NOVO. Este Exit e' o contrato inteiro -- o
-      // emissor volta na hora, sem bloquear e sem levantar, e a lacuna fica
-      // contada. Trocar por uma espera aqui poria o ator (ou a thread de
-      // leitura) atras de um handler de usuario, que e' a D2 pelo avesso.
+      // D31: drops the NEWEST. This Exit is the whole contract -- the
+      // emitter returns at once, without blocking and without raising, and
+      // the gap is counted. Turning it into a wait here would put the actor
+      // (or the read thread) behind a user handler, which is D2 inside out.
       Inc(FDropped);
       Exit;
     end;
-    FRing[FTail] := AEvent; // copia por valor; strings sobem o refcount
+    FRing[FTail] := AEvent; // copy by value; strings bump the refcount
     FTail := (FTail + 1) mod FCapacity;
     Inc(FCount);
     Inc(FEmitted);
@@ -355,7 +358,7 @@ begin
   end;
 end;
 
-{ --- consumo ------------------------------------------------------------- }
+{ --- consumption --------------------------------------------------------- }
 
 function TAMQPEventBus.TakeBatch(out ABatch: TArray<TAMQPServerEvent>): Boolean;
 var
@@ -371,29 +374,29 @@ begin
     LN := FCount;
     if LN = 0 then
     begin
-      // Ring vazio E parada pedida: unico caminho de saida da thread, e ele
-      // so' acontece depois de tudo que entrou ter saido. E' o que faz o
-      // Stop entregar os eventos de teardown em vez de descarta-los.
+      // Ring empty AND stop requested: the thread's only exit path, and it
+      // only happens after everything that came in has gone out. It is what
+      // makes Stop deliver the teardown events instead of dropping them.
       if FStopping then
         Exit(False);
       Exit(True);
     end;
 
-    // Tira TUDO de uma vez. O que chegar durante o despacho e' o proximo
-    // lote -- mesma forma do group commit do journal (D25), pelo mesmo
-    // motivo: o lote se ajusta a' carga sozinho, sem parametro nenhum.
+    // Takes EVERYTHING at once. Whatever arrives during dispatch is the next
+    // batch -- same shape as the journal's group commit (D25), for the same
+    // reason: the batch adapts to the load by itself, with no parameter.
     SetLength(ABatch, LN);
     for I := 0 to LN - 1 do
     begin
       ABatch[I] := FRing[FHead];
-      // Solta as strings do slot: sem isto o ring segura as ultimas
-      // FCapacity mensagens vivas para sempre.
+      // Releases the slot's strings: without this the ring keeps the last
+      // FCapacity messages alive forever.
       FRing[FHead] := Default(TAMQPServerEvent);
       FHead := (FHead + 1) mod FCapacity;
     end;
     FCount := 0;
     FDispatching := True;
-    FMon.PulseAll; // acorda quem esperava vaga ou dreno
+    FMon.PulseAll; // wakes whoever waited for room or for a drain
   finally
     FMon.Leave;
   end;
@@ -410,8 +413,8 @@ begin
   LFailed := 0;
   LLastFailure := '';
   try
-    // Snapshot sob lock, chamada FORA dele: o handler pode assinar,
-    // desassinar, ou demorar o quanto quiser.
+    // Snapshot under the lock, call OUTSIDE it: the handler may subscribe,
+    // unsubscribe, or take as long as it likes.
     FSubsLock.Enter;
     try
       SetLength(LSubs, FSubs.Count);
@@ -431,13 +434,13 @@ begin
         try
           LSubs[J].Handler(ABatch[I]);
         except
-          // D33: NUNCA "except end". A notificadora nao pode morrer por causa
-          // de um handler, e a exceção nao pode sumir. Conta, guarda a
-          // ultima, segue para o proximo handler e para o proximo evento.
+          // D33: NEVER "except end". The notifier must not die because of a
+          // handler, and the exception must not vanish. Count it, keep the
+          // last one, move on to the next handler and the next event.
           //
-          // Capturar Exception pega EAccessViolation nos dois compiladores --
-          // que e' o modo de falha REAL aqui: handler cujo dono foi destruido
-          // sem Unsubscribe. FailedCount e' como isso se descobre.
+          // Catching Exception catches EAccessViolation on both compilers --
+          // which is the REAL failure mode here: a handler whose owner was
+          // destroyed without Unsubscribe. FailedCount is how it is found.
           on E: Exception do
           begin
             Inc(LFailed);
@@ -447,8 +450,8 @@ begin
       end;
     end;
   finally
-    // O finally e' o que garante que FDispatching cai mesmo que algo acima
-    // escape -- senao o Drain esperaria para sempre.
+    // The finally is what guarantees FDispatching drops even if something
+    // above escapes -- otherwise Drain would wait forever.
     FMon.Enter;
     try
       FDispatching := False;
@@ -464,7 +467,7 @@ begin
   end;
 end;
 
-{ --- ciclo de vida ------------------------------------------------------- }
+{ --- lifecycle ----------------------------------------------------------- }
 
 procedure TAMQPEventBus.Start;
 begin
@@ -491,8 +494,8 @@ begin
     FMon.Leave;
   end;
   FThread.WaitFor;
-  // ANULAR logo apos o join: TThread.WaitFor NAO e' idempotente no FPC/Unix
-  // (pthread_join incondicional -- CLAUDE.md). FreeAndNil fecha essa porta.
+  // NIL it right after the join: TThread.WaitFor is NOT idempotent on FPC/Unix
+  // (unconditional pthread_join -- CLAUDE.md). FreeAndNil closes that door.
   FreeAndNil(FThread);
 end;
 
@@ -503,8 +506,8 @@ begin
   LDeadline := PcTickMs + ATimeoutMs;
   FMon.Enter;
   try
-    // Re-checa a condicao em laco com deadline: o TPcMonitor pode acordar
-    // espuriamente (contrato dele).
+    // Re-checks the condition in a loop with a deadline: TPcMonitor may wake
+    // spuriously (its contract).
     while ((FCount > 0) or FDispatching) and (PcTickMs < LDeadline) do
       FMon.Wait(20);
     Result := (FCount = 0) and (not FDispatching);
@@ -513,7 +516,7 @@ begin
   end;
 end;
 
-{ --- contadores ---------------------------------------------------------- }
+{ --- counters ------------------------------------------------------------ }
 
 function TAMQPEventBus.EmittedCount: Int64;
 begin

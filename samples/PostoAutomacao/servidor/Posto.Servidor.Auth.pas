@@ -2,15 +2,15 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Autenticador do posto (ARQUITETURA.md §6.1): SASL PLAIN, aceita
-  'automacao' (a conexao do proprio servidor) e qualquer 'pdv-*' com a senha
-  configurada. Sem pre-cadastro de caixa -- um PDV novo entra na rede e
-  conecta. O UserId autenticado e' o nome do PDV, e e' assim que o Vigia
-  mapeia conexao -> PDV.
+{ The station's authenticator (ARCHITECTURE.md §6.1): SASL PLAIN, accepts
+  'automacao' (the server's own connection) and any 'pdv-*' with the
+  configured password. No register pre-enrollment -- a new POS joins the network
+  and connects. The authenticated UserId is the POS name, and that is how Vigia
+  maps connection -> POS.
 
-  Desce de TInterfacedObject: _AddRef/_Release herdados (a convencao de
-  chamada deles varia por plataforma no FPC -- reimplementar exigiria o
-  IFDEF de convencao; nao reimplementamos). }
+  Descends from TInterfacedObject: _AddRef/_Release inherited (their calling
+  convention varies by platform on FPC -- reimplementing them would require the
+  calling-convention IFDEF; we do not reimplement them). }
 
 interface
 

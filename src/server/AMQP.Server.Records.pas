@@ -2,44 +2,44 @@
 
 {$I amqp.inc}
 
-{ O que cada registro do WAL carrega -- sub-modulo broker, WS3 da Fase 4
-  (durabilidade, ver CLAUDE.md, decisoes D19-D28).
+{ What each WAL record carries -- broker sub-module, WS3 of Phase 4
+  (durability, see CLAUDE.md, decisions D19-D28).
 
-  A WS1 (AMQP.Server.Wal) trata o payload de um registro como bytes opacos e o
-  campo Kind como um numero sem significado. E' aqui que os dois ganham sentido:
-  esta unit e' o dicionario entre "bytes num arquivo" e "um exchange duravel foi
-  declarado". Ela nao escreve nada e nao conhece journal nenhum -- so' codifica
-  e decodifica.
+  WS1 (AMQP.Server.Wal) treats a record's payload as opaque bytes and the
+  Kind field as a number with no meaning. This is where both gain meaning:
+  this unit is the dictionary between "bytes in a file" and "a durable exchange was
+  declared". It writes nothing and knows no journal -- it only encodes
+  and decodes.
 
-  POR QUE O CODEC E' O DA AMQP.WIRE, E NAO UM NOVO
-  ------------------------------------------------
-  Os campos de topologia sao os MESMOS que vem no fio: nomes sao shortstr e os
-  x-arguments sao um field-table. A AMQP.Wire ja sabe ler e escrever os dois, e
-  o field-table dela e' a parte da lib com mais teste em cima (121 assercoes
-  unitarias, incluindo o round-trip de tabelas aninhadas e arrays que a WS1 da
-  Fase 3 consertou). Inventar um segundo formato para o mesmo dado seria criar
-  uma segunda chance de errar, com metade da cobertura.
+  WHY THE CODEC IS AMQP.WIRE'S, AND NOT A NEW ONE
+  -----------------------------------------------
+  The topology fields are the SAME ones that come over the wire: names are shortstr and
+  the x-arguments are a field-table. AMQP.Wire already knows how to read and write both, and
+  its field-table is the part of the lib with the most tests on top (121 unit
+  assertions, including the round trip of nested tables and arrays that WS1 of
+  Phase 3 fixed). Inventing a second format for the same data would create
+  a second chance to get it wrong, with half the coverage.
 
-  A NUMERACAO DOS KINDS E' PERMANENTE
-  -----------------------------------
-  Um Kind gravado hoje sera' lido por uma versao futura do broker. Numero de
-  Kind NUNCA e' reaproveitado: se um registro sair de uso, o numero dele fica
-  aposentado. A faixa 10-19 e' topologia (WS3); 20-29 fica para conteudo e
-  colocacao (WS4, D22).
+  KIND NUMBERING IS PERMANENT
+  ---------------------------
+  A Kind written today will be read by a future version of the broker. A Kind
+  number is NEVER reused: if a record goes out of use, its number stays
+  retired. The 10-19 range is topology (WS3); 20-29 is for content and
+  placement (WS4, D22).
 
-  O QUE NAO ENTRA NO REGISTRO, DE PROPOSITO
-  -----------------------------------------
-  Fila EXCLUSIVA nao tem registro nenhum (D20): ela morre com a conexao dona, e
-  depois de um restart nao existe conexao dona. Repare que o registro de fila
-  nem CARREGA o flag `exclusive` -- assim o formato nao consegue expressar uma
-  coisa que nao deveria existir, e nao ha como um caminho futuro gravar isso por
-  descuido.
+  WHAT STAYS OUT OF THE RECORD, ON PURPOSE
+  ----------------------------------------
+  An EXCLUSIVE queue has no record at all (D20): it dies with its owning connection, and
+  after a restart there is no owning connection. Note that the queue record
+  does not even CARRY the `exclusive` flag -- so the format cannot express
+  something that should not exist, and there is no way for a future path to write it
+  by accident.
 
-  POSSE
-  -----
-  Decodificar CRIA a TAMQPFieldTable de Arguments (ou devolve nil se a tabela
-  estava vazia); quem chama e' o dono e tem de liberar. Codificar NAO toma posse
-  de nada. }
+  OWNERSHIP
+  ---------
+  Decoding CREATES the Arguments TAMQPFieldTable (or returns nil if the table
+  was empty); the caller owns it and must free it. Encoding takes ownership
+  of nothing. }
 
 interface
 
@@ -48,7 +48,7 @@ uses
   AMQP.Wire;
 
 const
-  // --- topologia (WS3) -- faixa 10-19 -------------------------------------
+  // --- topology (WS3) -- range 10-19 --------------------------------------
   AMQP_REC_EXCHANGE_DECLARE = 10;
   AMQP_REC_EXCHANGE_DELETE  = 11;
   AMQP_REC_QUEUE_DECLARE    = 12;
@@ -58,32 +58,32 @@ const
   AMQP_REC_EXCHANGE_BIND    = 16;
   AMQP_REC_EXCHANGE_UNBIND  = 17;
 
-  // --- conteudo e colocacao (WS4, decisao D22) -- faixa 20-29 -------------
-  /// O CORPO da mensagem, escrito UMA vez. N filas o compartilham.
+  // --- content and placement (WS4, decision D22) -- range 20-29 ----------
+  /// The message BODY, written ONCE. N queues share it.
   AMQP_REC_CONTENT = 20;
-  /// Uma COLOCACAO: esta mensagem, nesta fila, com este header.
+  /// A PLACEMENT: this message, in this queue, with this header.
   AMQP_REC_ENQUEUE = 21;
-  /// Aposenta uma colocacao (ack, teto, expiracao, purge, morte).
+  /// Retires a placement (ack, cap, expiry, purge, death).
   AMQP_REC_DEQUEUE = 22;
 
 type
   EAMQPRecords = class(Exception);
 
-  { Declare de exchange duravel. }
+  { Durable exchange declare. }
   TAMQPRecExchange = record
     VHost: string;
     Name: string;
     ExchangeType: string;
-    /// Hoje sempre True (so' o duravel e' gravado, D20). Guardado assim mesmo
-    /// para o arquivo ser legivel sem conhecer a regra de quem o escreveu.
+    /// Always True today (only the durable one is written, D20). Kept anyway
+    /// so the file is readable without knowing the writer's rule.
     Durable: Boolean;
     AutoDelete: Boolean;
     Internal: Boolean;
-    /// nil quando nao havia argumentos. O DECODE cria; o chamador libera.
+    /// nil when there were no arguments. The DECODE creates it; the caller frees it.
     Arguments: TAMQPFieldTable;
   end;
 
-  { Declare de fila duravel. Sem `exclusive`, de proposito -- ver o cabecalho. }
+  { Durable queue declare. No `exclusive`, on purpose -- see the header. }
   TAMQPRecQueue = record
     VHost: string;
     Name: string;
@@ -92,8 +92,8 @@ type
     Arguments: TAMQPFieldTable;
   end;
 
-  { Bind/unbind, de fila ou de exchange. Destination e' a fila ou o exchange de
-    destino; Source e' sempre o exchange de origem. }
+  { Bind/unbind, of a queue or of an exchange. Destination is the destination queue
+    or exchange; Source is always the source exchange. }
   TAMQPRecBinding = record
     VHost: string;
     Source: string;
@@ -102,31 +102,31 @@ type
     Arguments: TAMQPFieldTable;
   end;
 
-  { Delete: so' o nome. }
+  { Delete: only the name. }
   TAMQPRecName = record
     VHost: string;
     Name: string;
   end;
 
-  { O CORPO, escrito uma vez e compartilhado por N colocacoes (D22). Nada aqui
-    muda quando a mensagem e' republicada num dead-letter exchange -- e' por
-    isso que a parte cara nunca e' reescrita. }
+  { The BODY, written once and shared by N placements (D22). Nothing here
+    changes when the message is republished to a dead-letter exchange -- that is
+    why the expensive part is never rewritten. }
   TAMQPRecContent = record
     ContentId: UInt64;
-    /// Usuario autenticado de quem publicou. Sobrevive ao dead-letter.
+    /// Authenticated user of the publisher. Survives dead-lettering.
     UserId: string;
     Body: TBytes;
   end;
 
-  { UMA COLOCACAO: esta mensagem, nesta fila, com ESTE header.
+  { ONE PLACEMENT: this message, in this queue, with THIS header.
 
-    Exchange, RoutingKey e HeaderPayload vivem aqui, e nao no conteudo, porque
-    o dead-letter muda os tres -- ele deriva uma colocacao nova com o MESMO
+    Exchange, RoutingKey and HeaderPayload live here, not in the content, because
+    dead-lettering changes all three -- it derives a new placement with the SAME
     ContentId (D22/D10).
 
-    O tempo obedece a D21: nada de relogio monotonico. Grava-se o instante de
-    PAREDE do enfileiramento mais o TTL efetivo em ms, e a recuperacao
-    recompoe o prazo. }
+    Time follows D21: no monotonic clock. The WALL-clock instant of the
+    enqueue is written plus the effective TTL in ms, and recovery
+    rebuilds the deadline. }
   TAMQPRecEnqueue = record
     VHost: string;
     Queue: string;
@@ -135,16 +135,16 @@ type
     Exchange: string;
     RoutingKey: string;
     Priority: Byte;
-    /// ms desde a epoch, UTC (AmqpWallMs).
+    /// ms since the epoch, UTC (AmqpWallMs).
     EnqueuedAtWall: Int64;
-    /// TTL efetivo em ms; -1 = sem prazo.
+    /// Effective TTL in ms; -1 = no deadline.
     TtlMs: Int64;
-    /// Payload CRU do content-header (decisao D1).
+    /// RAW content-header payload (decision D1).
     HeaderPayload: TBytes;
   end;
 
-  { Aposenta uma colocacao. So' o par (fila, entrada) -- o resto ja' esta' no
-    ENQ correspondente. }
+  { Retires a placement. Only the (queue, entry) pair -- the rest is already in the
+    matching ENQ. }
   TAMQPRecDequeue = record
     VHost: string;
     Queue: string;
@@ -172,15 +172,15 @@ function AmqpDecodeRecEnqueue(const APayload: TBytes): TAMQPRecEnqueue;
 function AmqpEncodeRecDequeue(const ARec: TAMQPRecDequeue): TBytes;
 function AmqpDecodeRecDequeue(const APayload: TBytes): TAMQPRecDequeue;
 
-/// True se AKind e' registro de conteudo/colocacao (faixa 20-29). A
-/// recuperacao (WS6) usa junto com AmqpIsTopoRecord para separar os passes.
+/// True if AKind is a content/placement record (range 20-29).
+/// Recovery (WS6) uses it together with AmqpIsTopoRecord to separate the passes.
 function AmqpIsDataRecord(AKind: Byte): Boolean;
 
-/// True se AKind e' um dos registros de topologia desta unit. A recuperacao
-/// (WS6) usa para separar o passe de topologia do de entradas.
+/// True if AKind is one of this unit's topology records. Recovery
+/// (WS6) uses it to separate the topology pass from the entries pass.
 function AmqpIsTopoRecord(AKind: Byte): Boolean;
 
-/// Nome legivel do Kind, para mensagem de erro e diagnostico.
+/// Readable name of the Kind, for error messages and diagnostics.
 function AmqpRecordKindName(AKind: Byte): string;
 
 implementation
@@ -215,9 +215,9 @@ begin
   end;
 end;
 
-// A tabela vazia e' escrita como tabela vazia (quatro bytes de tamanho zero) e
-// volta como nil -- assim codificar nil e codificar uma tabela sem chaves dao
-// o MESMO byte, e nao ha dois jeitos de dizer "sem argumentos" no arquivo.
+// The empty table is written as an empty table (four bytes of zero size) and
+// comes back as nil -- so encoding nil and encoding a table with no keys give
+// the SAME bytes, and there are not two ways of saying "no arguments" in the file.
 procedure WriteArgs(AWriter: TAMQPWriter; ATable: TAMQPFieldTable);
 var
   LEmpty: TAMQPFieldTable;
@@ -381,11 +381,11 @@ begin
 end;
 
 
-{ blob binario: comprimento de 32 bits + bytes crus.
+{ binary blob: 32-bit length + raw bytes.
 
-  NAO da' para usar WriteLongStr aqui: ele trata o valor como TEXTO e passa por
-  AmqpUtf8Encode. Corpo de mensagem e content-header sao BINARIO -- qualquer
-  transcodificacao os destruiria em silencio. }
+  WriteLongStr can NOT be used here: it treats the value as TEXT and goes through
+  AmqpUtf8Encode. A message body and a content header are BINARY -- any
+  transcoding would silently destroy them. }
 procedure WriteBlob(AWriter: TAMQPWriter; const ABytes: TBytes);
 begin
   AWriter.WriteLongUInt(Cardinal(Length(ABytes)));
@@ -404,7 +404,7 @@ begin
   Result := AReader.ReadRaw(Integer(LLen));
 end;
 
-{ conteudo }
+{ content }
 
 function AmqpEncodeRecContent(const ARec: TAMQPRecContent): TBytes;
 var
@@ -435,7 +435,7 @@ begin
   end;
 end;
 
-{ colocacao }
+{ placement }
 
 function AmqpEncodeRecEnqueue(const ARec: TAMQPRecEnqueue): TBytes;
 var
@@ -480,7 +480,7 @@ begin
   end;
 end;
 
-{ aposentadoria }
+{ retirement }
 
 function AmqpEncodeRecDequeue(const ARec: TAMQPRecDequeue): TBytes;
 var

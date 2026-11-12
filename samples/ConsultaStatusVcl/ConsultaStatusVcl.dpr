@@ -1,20 +1,20 @@
 ﻿program ConsultaStatusVcl;
 
-{ RPC request/reply sobre AMQP (GUI): cliente pergunta o status de uma nota
-  com ReplyTo (fila de respostas exclusiva) + CorrelationId + Expiration, e o
-  servidor consome a fila de pedidos e responde ecoando a correlação. Timeout
-  no cliente via TTimer; resposta que chega após o timeout é descartada com
-  aviso. Uma janela faz os dois papéis — rode duas instâncias para o cenário
-  distribuído de verdade.
+{ RPC request/reply over AMQP (GUI): the client asks for an invoice's status
+  with ReplyTo (exclusive reply queue) + CorrelationId + Expiration, and the
+  server consumes the request queue and replies echoing the correlation. Client
+  timeout through a TTimer; a reply that arrives after the timeout is dropped
+  with a warning. One window plays both roles; run two instances for the truly
+  distributed scenario.
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    lazbuild ConsultaStatusVcl.lpi
-    Delphi: abrir ConsultaStatusVcl.dproj no IDE }
+    Delphi: open ConsultaStatusVcl.dproj in the IDE }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

@@ -6,8 +6,8 @@
   tests/Integration/AMQP.ChannelIntegrationTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
   master and run the script again. }
 
-{ Integração de canais/publish/get — precisa de RabbitMQ em localhost:5672.
-  Sobe com: docker compose -f docker/docker-compose.yml up -d }
+{ Channel/publish/get integration — needs RabbitMQ on localhost:5672.
+  Start it with: docker compose -f docker/docker-compose.yml up -d }
 
 
 interface
@@ -28,9 +28,9 @@ type
   private
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
-    // Estado capturado pelos callbacks (of object — a lib não aceita métodos
-    // anônimos aqui, ver CLAUDE.md); cada teste reseta o que usa antes de armar
-    // o callback correspondente. TInterlocked não existe no FPC -> PcAtomic*.
+    // State captured by the callbacks (of object — the library does not accept
+    // anonymous methods here, see CLAUDE.md); each test resets what it uses
+    // before arming the matching callback. TInterlocked does not exist in FPC -> PcAtomic*.
     FReturned: TAMQPReturnedMessage;
     FGotReturn: Integer;
     FConfirmedSeq: UInt64;
@@ -83,16 +83,16 @@ var
   LDecl: TAMQPQueueDeclare;
 begin
   LDecl := Default(TAMQPQueueDeclare);
-  LDecl.Exclusive := True;   // some no fechamento da conexão
+  LDecl.Exclusive := True;   // goes away when the connection closes
   LDecl.AutoDelete := True;
-  Result := FChan.DeclareQueue(LDecl).QueueName; // '' => nome gerado pelo servidor
+  Result := FChan.DeclareQueue(LDecl).QueueName; // '' => server-generated name
 end;
 
 function TAMQPChannelIntegrationTests.GetWithRetry(const AQueue: string): TAMQPGetResult;
 var
   I: Integer;
 begin
-  // A entrega após publish é assíncrona; tenta por até ~0,5s.
+  // Delivery after publish is asynchronous; tries for up to ~0.5s.
   for I := 1 to 20 do
   begin
     Result := FChan.BasicGet(AQueue, True);
@@ -140,7 +140,7 @@ begin
   LProps.SetCorrelationId('corr-99');
   LProps.SetMessageId('msg-77');
 
-  // Exchange padrão ('') roteia pela routing-key = nome da fila.
+  // The default exchange ('') routes by routing-key = queue name.
   FChan.Publish('', LQueue, TEncoding.UTF8.GetBytes('{"chave":"NFe123"}'), LProps);
 
   LResult := GetWithRetry(LQueue);
@@ -194,11 +194,12 @@ var
 begin
   LExchange := 'test-unbind-ex-' + TGUID.NewGuid.ToString;
   LRk := 'rota.teste';
-  // Exchange NÃO durável (some ao fechar a conexão) e NÃO auto-delete: se fosse
-  // auto-delete, o unbind removeria o último binding e o broker apagaria a
-  // exchange — o publish seguinte cairia numa exchange inexistente e o servidor
-  // fecharia o canal de forma assíncrona (corrida com o TearDown). Mantendo-a
-  // viva, o publish sem binding é simplesmente descartado (é o que queremos).
+  // NON-durable exchange (goes away when the connection closes) and NOT
+  // auto-delete: if it were auto-delete, the unbind would remove the last
+  // binding and the broker would delete the exchange — the next publish would
+  // land on a nonexistent exchange and the server would close the channel
+  // asynchronously (a race with TearDown). Keeping it alive, the publish
+  // without a binding is simply dropped (which is what we want).
   LEx := TAMQPExchangeDeclare.Create(LExchange, AMQP_EXCHANGE_TYPE_DIRECT, False);
   FChan.DeclareExchange(LEx);
 
@@ -210,22 +211,22 @@ begin
   LBind.RoutingKey := LRk;
   FChan.BindQueue(LBind);
 
-  // Com o bind, a mensagem chega à fila.
+  // With the bind, the message reaches the queue.
   FChan.PublishText(LExchange, LRk, 'antes-do-unbind');
   LResult := GetWithRetry(LQueue);
   TAssert.AssertTrue('com o bind, a mensagem deveria chegar', LResult.Found);
   TAssert.AssertEquals('antes-do-unbind', LResult.BodyAsText);
 
-  // Desfaz o binding.
+  // Removes the binding.
   LUnbind := Default(TAMQPQueueUnbind);
   LUnbind.QueueName := LQueue;
   LUnbind.ExchangeName := LExchange;
   LUnbind.RoutingKey := LRk;
   FChan.UnbindQueue(LUnbind);
 
-  // Sem o bind, a mesma publicação não é mais roteada para a fila.
+  // Without the bind, the same publication is no longer routed to the queue.
   FChan.PublishText(LExchange, LRk, 'depois-do-unbind');
-  TThread.Sleep(200); // dá tempo de o broker rotear (ou descartar)
+  TThread.Sleep(200); // gives the broker time to route (or drop)
   LResult := FChan.BasicGet(LQueue, True);
   TAssert.AssertFalse('após o unbind, a fila não deveria mais receber', LResult.Found);
 end;
@@ -238,10 +239,11 @@ var
   LEBind: TAMQPExchangeBinding;
   LResult: TAMQPGetResult;
 begin
-  // source (direct) --[rk]--> dest (fanout) --> fila. Exchanges auto-delete: como
-  // os bindings existem durante todo o teste, elas sobrevivem; no teardown a fila
-  // exclusiva some -> dest perde o binding -> some -> source perde o binding ->
-  // some (cascata limpa, sem lixo no broker e sem publicar em exchange apagada).
+  // source (direct) --[rk]--> dest (fanout) --> queue. Auto-delete exchanges: since
+  // the bindings exist throughout the test, they survive; on teardown the exclusive
+  // queue goes away -> dest loses its binding -> goes away -> source loses its
+  // binding -> goes away (a clean cascade, no garbage on the broker and no
+  // publishing to a deleted exchange).
   LRk := 'rota.ex';
   LSource := 'test-exsrc-' + TGUID.NewGuid.ToString;
   LDest := 'test-exdst-' + TGUID.NewGuid.ToString;
@@ -258,7 +260,7 @@ begin
   LQBind := Default(TAMQPQueueBind);
   LQBind.QueueName := LQueue;
   LQBind.ExchangeName := LDest;
-  LQBind.RoutingKey := ''; // fanout ignora a routing-key
+  LQBind.RoutingKey := ''; // fanout ignores the routing-key
   FChan.BindQueue(LQBind);
 
   LEBind := Default(TAMQPExchangeBinding);
@@ -267,7 +269,7 @@ begin
   LEBind.RoutingKey := LRk;
   FChan.BindExchange(LEBind);
 
-  // Publica na source com a routing-key do binding: source -> dest -> fila.
+  // Publishes to source with the binding's routing-key: source -> dest -> queue.
   FChan.PublishText(LSource, LRk, 'via-exchange-bind');
   LResult := GetWithRetry(LQueue);
   TAssert.AssertTrue('a mensagem deveria rotear source->dest->fila', LResult.Found);
@@ -280,7 +282,7 @@ var
 begin
   FChan.OnBasicReturn := HandleBasicReturn;
 
-  // Exchange padrão + routing-key sem fila nenhuma ligada: não roteável.
+  // Default exchange + a routing-key with no queue bound: unroutable.
   FChan.Publish('', 'rota.inexistente.' + TGUID.NewGuid.ToString,
     TEncoding.UTF8.GetBytes('sem destino'), TAMQPBasicProperties.Empty, True {mandatory});
 
@@ -305,7 +307,7 @@ begin
   FChan.OnConfirm := HandleConfirmSingle;
   FChan.ConfirmSelect;
 
-  // Exchange padrão + routing-key = nome da fila: roteável, o broker confirma.
+  // Default exchange + routing-key = queue name: routable, the broker confirms.
   LSeq := FChan.PublishText('', LQueue, 'confirma isso');
   TAssert.AssertTrue('primeiro publish em confirm mode deveria receber seq-no 1', UInt64(1) = LSeq);
   TAssert.AssertTrue('broker deveria confirmar (ack) o publish', FChan.WaitForConfirm(LSeq, 5000));
@@ -345,15 +347,15 @@ var
   LQueue: string;
   I: Integer;
 begin
-  // Fila que REJEITA publishes quando cheia: x-max-length=1 + x-overflow=reject-publish.
-  // Em confirm mode, o publish que estoura o limite volta como Basic.Nack.
+  // A queue that REJECTS publishes when full: x-max-length=1 + x-overflow=reject-publish.
+  // In confirm mode, the publish that exceeds the limit comes back as Basic.Nack.
   //
-  // Era o ÚNICO teste da suíte que dependia de recurso de Fase 3 (x-max-length
-  // por fila + x-overflow), e por isso se auto-ignorava contra o broker
-  // embutido desde a WS9 da Fase 2 — item de backlog, não teste pulado em
-  // silêncio. A WS6 da Fase 3 implementou os dois, e o auto-ignore SAIU: o
-  // teste agora roda igual contra o RabbitMQ e contra o broker embutido, que é
-  // o que a decisão D8 pedia desde o começo.
+  // It was the ONLY test in the suite that depended on a Phase 3 feature
+  // (per-queue x-max-length + x-overflow), and so it ignored itself against
+  // the embedded broker since WS9 of Phase 2 — a backlog item, not a test
+  // silently skipped. WS6 of Phase 3 implemented both, and the self-ignore
+  // was REMOVED: the test now runs the same against RabbitMQ and against the
+  // embedded broker, which is what decision D8 asked for from the start.
 
   LArgs := TAMQPFieldTable.Create;
   try
@@ -371,11 +373,11 @@ begin
   FChan.OnConfirm := HandleConfirmAckNack;
   FChan.ConfirmSelect;
 
-  FChan.PublishText('', LQueue, 'A'); // enche a fila -> ack
-  FChan.PublishText('', LQueue, 'B'); // estoura o limite -> nack
+  FChan.PublishText('', LQueue, 'A'); // fills the queue -> ack
+  FChan.PublishText('', LQueue, 'B'); // exceeds the limit -> nack
 
-  // Espera AMBOS resolverem ANTES de chamar WaitForConfirms — é justamente isso
-  // que expõe o achado #1: o nack já chegou quando WaitForConfirms é chamado.
+  // Waits for BOTH to resolve BEFORE calling WaitForConfirms — that is exactly
+  // what exposes finding #1: the nack has already arrived when WaitForConfirms is called.
   for I := 1 to 200 do
   begin
     if (PcAtomicGet(FAckCount) + PcAtomicGet(FNackCount)) >= 2 then
@@ -383,13 +385,13 @@ begin
     TThread.Sleep(25);
   end;
 
-  // Prova que o cenário funcionou (1 ack + 1 nack) — se o broker não nack-ar,
-  // esta asserção falha com mensagem clara, em vez de mascarar o teste real.
+  // Proves the scenario worked (1 ack + 1 nack) — if the broker does not nack,
+  // this assertion fails with a clear message, instead of masking the real test.
   TAssert.AssertEquals('o publish B deveria ter sido nack-ado (reject-publish)',
     1, PcAtomicGet(FNackCount));
 
-  // O achado #1: como um publish do lote foi nack-ado, WaitForConfirms deve
-  // retornar False — mesmo o nack tendo chegado ANTES da chamada.
+  // Finding #1: since a publish in the batch was nacked, WaitForConfirms must
+  // return False — even though the nack arrived BEFORE the call.
   TAssert.AssertFalse('WaitForConfirms deve reportar False quando um publish do lote foi nack-ado',
     FChan.WaitForConfirms(2000));
 end;

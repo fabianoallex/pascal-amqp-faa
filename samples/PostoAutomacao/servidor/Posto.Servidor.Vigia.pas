@@ -2,16 +2,17 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Presenca dos PDVs, para o painel do supervisor (ARQUITETURA.md §11, R3).
+{ POS presence, for the supervisor's panel (ARCHITECTURE.md §11, R3).
 
-  Assina a observabilidade do broker (Fase 4.1) e mantem uma tabela
-  usuario -> conectado/desde. NAO age sobre reservas -- so' informa, para
-  o supervisor decidir se um PDV so' caiu da rede ou esta' inoperante (R1/R2).
+  Subscribes to the broker's observability (Phase 4.1) and keeps a table
+  user -> connected/since. It does NOT act on reservations -- it only informs, so
+  the supervisor can decide whether a POS just dropped off the network or is
+  out of order (R1/R2).
 
-  O handler roda na thread notificadora do broker: rapido, so' atualiza a
-  tabela sob lock e chama OnMudou (que deve apenas marshalizar para a UI).
+  The handler runs on the broker's notifier thread: fast, it only updates the
+  table under lock and calls OnMudou (which must only marshal to the UI).
 
-  Contrato da Fase 4.1: Parar (Unsubscribe) ANTES de destruir este objeto. }
+  Phase 4.1 contract: Parar (Unsubscribe) BEFORE destroying this object. }
 
 interface
 
@@ -24,7 +25,7 @@ type
   TInfoPresenca = record
     Usuario: string;
     Conectado: Boolean;
-    DesdeMs: Int64;          // wall ms da ultima mudanca de estado
+    DesdeMs: Int64;          // wall ms of the last state change
     RemoteAddr: string;
   end;
 
@@ -93,7 +94,7 @@ var
   LInfo: TInfoPresenca;
 begin
   if (AUser = '') or (Copy(AUser, 1, Length(PREFIXO_USER_PDV)) <> PREFIXO_USER_PDV) then
-    Exit;   // so' PDVs; a conexao 'automacao' nao entra na tabela
+    Exit;   // POS terminals only; the 'automacao' connection is not in the table
 
   FLock.Enter;
   try

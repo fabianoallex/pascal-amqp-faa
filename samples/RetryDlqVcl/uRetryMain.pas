@@ -1,50 +1,52 @@
 ﻿unit uRetryMain;
 
-{ Dead-letter + retry com backoff: o padrão de reprocessamento mais usado no
-  RabbitMQ, montado só com argumentos de fila (TAMQPFieldTable) — nenhum
-  código de agendamento no cliente.
+{ Dead-letter + retry with backoff: the most used reprocessing pattern on
+  RabbitMQ, built only with queue arguments (TAMQPFieldTable), with no
+  scheduling code in the client.
 
-  Topologia (criada ao conectar, a partir da fila base configurada):
-    <fila>        fila de trabalho (durável), com dead-letter apontando para
-                  <fila>-retry via exchange default ('' + routing key = nome
-                  da fila destino — dispensa declarar exchange próprio);
-    <fila>-retry  fila de espera SEM consumidor: x-message-ttl = backoff e
-                  dead-letter de volta para <fila> — a mensagem "dorme" aqui
-                  e o broker a devolve sozinho quando o TTL vence;
-    <fila>-dlq    o destino final (dead-letter queue) de quem esgotou as
-                  tentativas.
+  Topology (created on connect, from the configured base queue):
+    <queue>       work queue (durable), with dead-letter pointing to
+                  <queue>-retry through the default exchange ('' + routing key = name
+                  of the target queue, so no exchange of its own needs declaring);
+    <queue>-retry wait queue WITHOUT a consumer: x-message-ttl = backoff and
+                  dead-letter back to <queue>; the message "sleeps" here
+                  and the broker hands it back on its own when the TTL expires;
+    <queue>-dlq   the final destination (dead-letter queue) for whoever ran out
+                  of attempts.
 
-  Ciclo: o consumidor lê a tentativa atual do header x-death (que o broker
-  incrementa a cada dead-letter; contamos as entradas reason='rejected' da
-  fila de trabalho) e simula o processamento — configurável para falhar as
-  primeiras N tentativas. Falhou e ainda há tentativas => Nack(requeue=False),
-  que o DLX da fila de trabalho manda para a retry (backoff). Falhou na
-  última tentativa => o próprio consumidor publica a mensagem na DLQ e dá
-  Ack (é o padrão: o broker não conta tentativas por si — quem decide "chega"
-  é o consumidor). Um segundo consumer (ack automático) observa a DLQ só para
-  marcar a chegada na tela — em produção a DLQ fica retida para inspeção.
+  Cycle: the consumer reads the current attempt from the x-death header (which the
+  broker increments on every dead-letter; we count the reason='rejected' entries
+  of the work queue) and simulates the processing, configurable to fail the
+  first N attempts. Failed with attempts left => Nack(requeue=False),
+  which the work queue's DLX sends to the retry queue (backoff). Failed on the
+  last attempt => the consumer itself publishes the message to the DLQ and
+  Acks it (that is the pattern: the broker does not count attempts by itself;
+  the consumer decides "enough"). A second consumer (automatic ack) watches the
+  DLQ only to mark the arrival on screen; in production the DLQ is kept for
+  inspection.
 
-  O backoff usa TTL DA FILA (x-message-ttl na retry), não Expiration por
-  mensagem: TTL por mensagem só expira na CABEÇA da fila (uma mensagem de TTL
-  longo segura as de TTL curto atrás dela). Com TTL único da fila, a ordem de
-  expiração é a de chegada — backoff fixo confiável. (Backoff exponencial =
-  N filas de retry com TTLs crescentes; fora do escopo deste sample.)
+  The backoff uses the QUEUE TTL (x-message-ttl on the retry queue), not a
+  per-message Expiration: a per-message TTL only expires at the HEAD of the queue
+  (a long-TTL message holds back the short-TTL ones behind it). With a single
+  queue TTL, the expiry order is the arrival order: a reliable fixed backoff.
+  (Exponential backoff = N retry queues with growing TTLs; out of scope for
+  this sample.)
 
-  Conectar recria a topologia do zero (DeleteQueue + declare): mudar o
-  backoff muda os argumentos da fila, e redeclarar fila existente com
-  argumentos diferentes é PRECONDITION_FAILED (fecha o canal). Apagar fila
-  inexistente é no-op no RabbitMQ, então o caminho é idempotente.
+  Connecting recreates the topology from scratch (DeleteQueue + declare):
+  changing the backoff changes the queue arguments, and redeclaring an existing
+  queue with different arguments is PRECONDITION_FAILED (it closes the channel).
+  Deleting a missing queue is a no-op on RabbitMQ, so the path is idempotent.
 
-  Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
-  callbacks nomeados ('of object'), marshals descartáveis + TThread.Queue
-  para a UI (ver RetaguardaVcl) e eventos de conexão saltando pelo PcPool
-  (gotcha do TThread.Queue descartado; ver TConexaoEventoWork e CLAUDE.md). }
+  Compiles in both worlds from the SAME source (GUI samples pattern):
+  named callbacks ('of object'), disposable marshals + TThread.Queue
+  for the UI (see RetaguardaVcl) and connection events hopping through PcPool
+  (the dropped TThread.Queue gotcha; see TConexaoEventoWork and CLAUDE.md). }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -109,10 +111,10 @@ type
     FFilaDlq: string;
     FBackoffMs: Integer;
     FMaxTentativas: Integer;
-    FFalharPrimeiras: Integer; // capturado ao iniciar o consumo
-    FTagConsumo: string;       // '' = consumo parado
+    FFalharPrimeiras: Integer; // captured when consumption starts
+    FTagConsumo: string;       // '' = consumption stopped
     FTagDlq: string;
-    // Linhas por chave; tocado SOMENTE na thread da UI (via marshals).
+    // Rows by key; touched ONLY on the UI thread (through marshals).
     FItens: TDictionary<string, TListItem>;
     FPublicadas: Integer;
     FProntas: Integer;
@@ -124,17 +126,17 @@ type
     function BuildParams: TAMQPConnectionParams;
     procedure AtualizarContadores;
     procedure CriarTopologia;
-    // Atualizações de UI (thread da UI, via marshals):
+    // UI updates (UI thread, through marshals):
     procedure NotaStatus(const AChave: string; ATentativa: Integer;
       const AStatus: string; APronta, ADlq: Boolean);
     procedure ConexaoCaiu;
     procedure ConexaoVoltou;
     procedure ConexaoFalhou;
-    // Marshalling (chamável de qualquer thread):
+    // Marshalling (callable from any thread):
     procedure QueueLog(const AMsg: string);
     procedure QueueStatus(const AChave: string; ATentativa: Integer;
       const AStatus: string; APronta: Boolean = False; ADlq: Boolean = False);
-    // Callbacks da lib (threads do pool / de reconexão):
+    // Lib callbacks (pool / reconnection threads):
     procedure OnNota(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnNotaDlq(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnDesconectado(AConnection: TAMQPConnection);
@@ -155,17 +157,17 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
-{ Soma no header x-death as rejeições (reason='rejected') vindas da fila de
-  trabalho — é o nº de tentativas já FALHADAS desta mensagem. O broker mantém
-  o x-death a cada dead-letter; a passagem pela retry aparece como
-  reason='expired' na fila -retry e é filtrada aqui. Campos TValue: o
-  resultado do indexador vai para uma variável local antes do accessor
-  (.AsString encadeado direto no indexador dá erro interno no FPC 3.2 —
-  gotcha no CLAUDE.md). }
+{ Sums in the x-death header the rejections (reason='rejected') coming from the
+  work queue: that is the number of attempts of this message that already FAILED.
+  The broker updates x-death on every dead-letter; the pass through the retry
+  queue shows up as reason='expired' on the -retry queue and is filtered out
+  here. TValue fields: the indexer's result goes into a local variable before
+  the accessor (.AsString chained straight on the indexer gives an internal
+  error on FPC 3.2; gotcha in CLAUDE.md). }
 function ContarRejeicoes(const AProps: TAMQPBasicProperties;
   const AFilaTrabalho: string): Integer;
 var
@@ -184,8 +186,8 @@ begin
     Exit;
   for I := 0 to LXDeath.GetArrayLength - 1 do
   begin
-    // AmqpUnwrapValue: o GetArrayElement devolve o elemento re-embrulhado
-    // num TValue tkRecord, no Delphi e no FPC (gotcha no CLAUDE.md).
+    // AmqpUnwrapValue: GetArrayElement returns the element re-wrapped
+    // in a tkRecord TValue, on Delphi and on FPC (gotcha in CLAUDE.md).
     LEntrada := AmqpUnwrapValue(LXDeath.GetArrayElement(I));
     if not (LEntrada.IsObject and (LEntrada.AsObject is TAMQPFieldTable)) then
       Continue;
@@ -204,10 +206,10 @@ begin
 end;
 
 type
-  // Um objeto por chamada: TThread.Queue no FPC so' aceita 'procedure of
-  // object' SEM PARAMETROS, entao os dados viajam num objeto descartavel
-  // (nao num campo compartilhado da form, que teria corrida entre callbacks
-  // concorrentes). Se autodestroi apos rodar. Ver RetaguardaVcl.
+  // One object per call: TThread.Queue on FPC only accepts a 'procedure of
+  // object' WITHOUT PARAMETERS, so the data travels in a disposable object
+  // (not in a shared field of the form, which would race between concurrent
+  // callbacks). It frees itself after running. See RetaguardaVcl.
   TLogMarshal = class
     Form: TfrmRetry;
     Texto: string;
@@ -231,10 +233,10 @@ type
     procedure Execute;
   end;
 
-  { Eventos de conexão rodam na thread de RECONEXÃO da lib, que morre logo
-    após o OnReconnect — no FPC um TThread.Queue postado por thread que morre
-    antes do bombeio é DESCARTADO (gotcha no CLAUDE.md). Salto por um worker
-    persistente do PcPool. }
+  { Connection events run on the lib's RECONNECTION thread, which dies right
+    after OnReconnect; on FPC a TThread.Queue posted by a thread that dies
+    before the pump is DROPPED (gotcha in CLAUDE.md). Hop through a persistent
+    PcPool worker. }
   TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmRetry;
@@ -288,8 +290,8 @@ end;
 procedure TfrmRetry.FormCreate(Sender: TObject);
 begin
   Randomize;
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   FItens := TDictionary<string, TListItem>.Create;
   SetConectado(False);
@@ -311,13 +313,13 @@ begin
       try FChannel.Cancel(FTagDlq); except end;
   end;
   FreeAndNil(FChannel);
-  // O Free acima drena os callbacks em voo; os marshals que eles postaram
-  // ainda estao na fila do TThread.Queue — bombear aqui os drena com a form
-  // ainda viva (ver RetaguardaVcl.FormClose).
+  // The Free above drains the callbacks in flight; the marshals they posted
+  // are still in the TThread.Queue queue, and pumping here drains them with the
+  // form still alive (see RetaguardaVcl.FormClose).
   Application.ProcessMessages;
   FreeAndNil(FConn);
-  // O Free da conexao encerra a thread de reconexao; um TConexaoEventoWork ja
-  // enfileirado no pool pode estar postando o ultimo marshal NESTE instante.
+  // Freeing the connection ends the reconnection thread; a TConexaoEventoWork
+  // already queued on the pool may be posting the last marshal RIGHT NOW.
   Sleep(100);
   Application.ProcessMessages;
 end;
@@ -330,7 +332,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -417,8 +419,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -460,20 +462,21 @@ begin
     [FPublicadas, FProntas, FNaDlq]);
 end;
 
-{ Recria a topologia do zero. Os argumentos de fila são o coração do padrão:
-  dead-letter via exchange default ('' + routing key = fila destino) e TTL de
-  fila na retry. Os Puts ficam em comandos separados (encadear terminando em
-  TValue.From<T> inline dá erro interno no FPC 3.2 — gotcha no CLAUDE.md); o
-  chamador é dono da tabela de Arguments e a libera após o declare. }
+{ Recreates the topology from scratch. The queue arguments are the heart of the
+  pattern: dead-letter through the default exchange ('' + routing key = target
+  queue) and a queue TTL on the retry queue. The Puts are separate statements
+  (chaining that ends in an inline TValue.From<T> gives an internal error on
+  FPC 3.2; gotcha in CLAUDE.md); the caller owns the Arguments table and frees
+  it after the declare. }
 procedure TfrmRetry.CriarTopologia;
 var
   LDel: TAMQPQueueDelete;
   LDecl: TAMQPQueueDeclare;
   LArgs: TAMQPFieldTable;
 begin
-  // DeleteQueue: apagar fila inexistente é no-op; fila existente com args
-  // antigos (backoff mudou) é removida — redeclarar com args diferentes
-  // seria PRECONDITION_FAILED.
+  // DeleteQueue: deleting a missing queue is a no-op; an existing queue with old
+  // args (the backoff changed) is removed, since redeclaring with different args
+  // would be PRECONDITION_FAILED.
   LDel := Default(TAMQPQueueDelete);
   LDel.QueueName := FFilaTrabalho;
   FChannel.DeleteQueue(LDel);
@@ -482,7 +485,7 @@ begin
   LDel.QueueName := FFilaDlq;
   FChannel.DeleteQueue(LDel);
 
-  // Fila de trabalho: rejeições (Nack sem requeue) caem na retry.
+  // Work queue: rejections (Nack without requeue) fall into the retry queue.
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-dead-letter-exchange', TValue.From<string>(''));
@@ -494,8 +497,8 @@ begin
     LArgs.Free;
   end;
 
-  // Retry: sem consumidor; TTL da fila = backoff, e o vencimento dead-lettera
-  // de volta para a fila de trabalho.
+  // Retry: no consumer; queue TTL = backoff, and the expiry dead-letters
+  // back to the work queue.
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-message-ttl', TValue.From<Integer>(FBackoffMs));
@@ -508,13 +511,13 @@ begin
     LArgs.Free;
   end;
 
-  // DLQ: fila comum; quem esgota as tentativas é publicado aqui pelo consumidor.
+  // DLQ: a plain queue; whoever runs out of attempts is published here by the consumer.
   FChannel.DeclareQueue(TAMQPQueueDeclare.Create(FFilaDlq, True));
 end;
 
-{ --- consumo ---------------------------------------------------------------- }
+{ --- consumption ------------------------------------------------------------ }
 
-// Roda numa thread do pool. Tentativa atual = rejeições anteriores (x-death) + 1.
+// Runs on a pool thread. Current attempt = previous rejections (x-death) + 1.
 procedure TfrmRetry.OnNota(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LChave, LStatusDlq: string;
@@ -525,11 +528,11 @@ begin
   LTentativa := ContarRejeicoes(ADelivery.Properties, FFilaTrabalho) + 1;
 
   QueueStatus(LChave, LTentativa, Format('Processando (tentativa %d)', [LTentativa]));
-  Sleep(200 + Random(300)); // processamento simulado
+  Sleep(200 + Random(300)); // simulated processing
 
   if LTentativa > FFalharPrimeiras then
   begin
-    // Sucesso: confirma e encerra o ciclo.
+    // Success: ack and end the cycle.
     AChannel.Ack(ADelivery.DeliveryTag);
     QueueStatus(LChave, LTentativa,
       Format('Pronta (tentativa %d)', [LTentativa]), True);
@@ -538,8 +541,8 @@ begin
 
   if LTentativa >= FMaxTentativas then
   begin
-    // Esgotou: o CONSUMIDOR decide parar (o broker não conta tentativas por
-    // conta própria) — publica na DLQ e confirma a original.
+    // Exhausted: the CONSUMER decides to stop (the broker does not count attempts
+    // on its own); it publishes to the DLQ and acks the original.
     LProps := TAMQPBasicProperties.Empty;
     LProps.SetContentType('text/plain');
     LProps.SetPersistent;
@@ -552,14 +555,14 @@ begin
     Exit;
   end;
 
-  // Falhou e ainda há tentativas: Nack SEM requeue => o DLX da fila de
-  // trabalho manda para a retry, que devolve após o backoff.
+  // Failed with attempts left: Nack WITHOUT requeue => the work queue's DLX
+  // sends it to the retry queue, which hands it back after the backoff.
   AChannel.Nack(ADelivery.DeliveryTag, False);
   QueueStatus(LChave, LTentativa,
     Format('Falhou (tentativa %d) — retry em %d ms', [LTentativa, FBackoffMs]));
 end;
 
-// Observador da DLQ (ack automático), só para marcar a chegada na tela.
+// DLQ watcher (automatic ack), only to mark the arrival on screen.
 procedure TfrmRetry.OnNotaDlq(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 begin
   QueueStatus(ADelivery.BodyAsText, 0, 'Na DLQ', False, True);
@@ -592,7 +595,7 @@ begin
     FFalharPrimeiras := 0;
   try
     FTagConsumo := FChannel.Consume(FFilaTrabalho, OnNota);
-    FTagDlq := FChannel.Consume(FFilaDlq, OnNotaDlq, True); // NoAck: só observa
+    FTagDlq := FChannel.Consume(FFilaDlq, OnNotaDlq, True); // NoAck: only watches
     Log(Format('Consumindo "%s" (falha simulada nas %d primeiras tentativas; ' +
       'máx %d; backoff %d ms).',
       [FFilaTrabalho, FFalharPrimeiras, FMaxTentativas, FBackoffMs]));
@@ -603,7 +606,7 @@ begin
   end;
 end;
 
-{ --- publicação ------------------------------------------------------------- }
+{ --- publishing ------------------------------------------------------------- }
 
 procedure TfrmRetry.btnPublicarClick(Sender: TObject);
 var
@@ -622,7 +625,7 @@ begin
   begin
     LChave := Format('NFE-%s-%.3d', [LExecucao, I]);
     try
-      FChannel.PublishText('', FFilaTrabalho, LChave); // persistente por padrão
+      FChannel.PublishText('', FFilaTrabalho, LChave); // persistent by default
     except
       on E: Exception do
       begin
@@ -645,7 +648,7 @@ begin
   Log(Format('%d nota(s) publicada(s) em "%s".', [LQtd, FFilaTrabalho]));
 end;
 
-{ --- atualizações de UI ------------------------------------------------------ }
+{ --- UI updates ------------------------------------------------------------- }
 
 procedure TfrmRetry.NotaStatus(const AChave: string; ATentativa: Integer;
   const AStatus: string; APronta, ADlq: Boolean);
@@ -693,8 +696,8 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo PcPool em vez de postar direto
-// (ver o comentário de TConexaoEventoWork).
+// The three connection events hop through PcPool instead of posting directly
+// (see the comment on TConexaoEventoWork).
 procedure TfrmRetry.OnDesconectado(AConnection: TAMQPConnection);
 begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
@@ -710,7 +713,7 @@ begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
-{ --- conexão ----------------------------------------------------------------- }
+{ --- connection ------------------------------------------------------------- }
 
 procedure TfrmRetry.btnConectarClick(Sender: TObject);
 var

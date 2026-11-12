@@ -1,19 +1,19 @@
 ﻿program AutorizadorSimVcl;
 
-{ Versão VCL do sample AutorizadorSim: mesma simulação (publica N retornos de
-  nota na fila "sefaz-respostas"), agora com os parâmetros de conexão
-  editáveis na tela e um log visual, pra dar uma dinâmica melhor de testar
-  junto com o RetaguardaVcl — basta abrir os dois executáveis lado a lado.
-  Companheiro do sample RetaguardaVcl (fluxo PDV -> autorizador -> retaguarda).
+{ VCL version of the AutorizadorSim sample: same simulation (publishes N invoice
+  replies to the "sefaz-respostas" queue), now with the connection parameters
+  editable on screen and a visual log, for a livelier way to test it
+  together with RetaguardaVcl: just open both executables side by side.
+  Companion of the RetaguardaVcl sample (flow POS -> authorizer -> back office).
 
-  Compila nos dois mundos a partir do MESMO fonte:
-    FPC:    fpc -Fu..\..\src -Fi..\..\src AutorizadorSimVcl.dpr (via lazbuild/pacote LCL)
+  Compiles in both worlds from the SAME source:
+    FPC:    fpc -Fu..\..\src -Fi..\..\src AutorizadorSimVcl.dpr (via lazbuild/LCL package)
     Delphi: dcc32 -NSSystem;Winapi;Vcl -U..\..\src -I..\..\src AutorizadorSimVcl.dpr }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

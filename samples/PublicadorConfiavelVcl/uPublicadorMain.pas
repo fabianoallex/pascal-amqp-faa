@@ -1,50 +1,50 @@
 ﻿unit uPublicadorMain;
 
-{ Publicador confiável: vitrine dos publisher confirms da lib numa tela só.
+{ Reliable publisher: a showcase of the lib's publisher confirms on one screen.
 
-  O canal é colocado em confirm mode (ConfirmSelect) logo após conectar; cada
-  Publish recebe um seq-no e vira uma linha na lista, que muda de status quando
-  o broker confirma (OnConfirm/ack), rejeita (nack) ou devolve um publish
-  `mandatory` sem rota (OnBasicReturn). O lote é publicado por uma thread
-  própria (TLoteThread), com intervalo configurável entre mensagens — assim dá
-  pra derrubar o broker NO MEIO do lote (docker stop/start no RabbitMQ) e
-  assistir a sequência completa: falha de envio, reconexão automática, replay
-  da topologia + confirm mode e, com "Reenviar não confirmadas na reconexão"
-  marcado (RepublishUnconfirmedOnReconnect), o reenvio automático do que ficou
-  sem confirmação. No fim do lote a thread chama WaitForConfirms e loga o
-  resultado (todas confirmadas ou não, e em quanto tempo).
+  The channel is put in confirm mode (ConfirmSelect) right after connecting; each
+  Publish gets a seq-no and becomes a row in the list, whose status changes when
+  the broker confirms (OnConfirm/ack), rejects (nack) or returns an unroutable
+  `mandatory` publish (OnBasicReturn). The batch is published by its own
+  thread (TLoteThread), with a configurable interval between messages, so you
+  can bring the broker down IN THE MIDDLE of the batch (docker stop/start on
+  RabbitMQ) and watch the whole sequence: send failure, automatic reconnection,
+  replay of the topology + confirm mode and, with "Reenviar não confirmadas na
+  reconexão" checked (RepublishUnconfirmedOnReconnect), the automatic resend of
+  what was left unconfirmed. At the end of the batch the thread calls
+  WaitForConfirms and logs the result (all confirmed or not, and how long it took).
 
-  Duas sutilezas de confirms que a tela deixa visíveis:
-  - Queda de conexão NÃO dispara OnConfirm: os publishes pendentes na queda
-    são marcados na lista pelo evento de reconexão ("Reenviada (novo nº)" com
-    reenvio ligado, "Perdida na queda" sem). O reenvio acontece com seq-nos
-    NOVOS atribuídos pela lib, então as confirmações desses reenvios chegam
-    sem linha correspondente — entram no contador "reenvios confirmados".
-  - Um publish mandatory sem rota é DEVOLVIDO (Basic.Return) e mesmo assim
-    CONFIRMADO (ack): confirm significa "o broker assumiu a responsabilidade",
-    não "chegou numa fila". A linha fica "Devolvida (sem rota)".
+  Two subtleties of confirms that the screen makes visible:
+  - A connection drop does NOT fire OnConfirm: the publishes pending at the drop
+    are marked in the list by the reconnection event ("Reenviada (novo nº)" with
+    resend on, "Perdida na queda" without). The resend happens with NEW
+    seq-nos assigned by the lib, so the confirms of those resends arrive
+    without a matching row; they go into the "reenvios confirmados" counter.
+  - An unroutable mandatory publish is RETURNED (Basic.Return) and still
+    CONFIRMED (ack): confirm means "the broker took responsibility",
+    not "it reached a queue". The row becomes "Devolvida (sem rota)".
 
-  Quando o envio de uma mensagem falha (socket caído), a thread do lote NÃO
-  re-publica por conta própria: o seq-no foi atribuído e o conteúdo entrou no
-  buffer de reenvio ANTES do envio, então republicar manualmente duplicaria a
-  mensagem. Ela só espera a reconexão (TEvent sinalizado pelo OnReconnect) e
-  segue para a PRÓXIMA mensagem do lote.
+  When sending a message fails (socket down), the batch thread does NOT
+  republish on its own: the seq-no was assigned and the content went into the
+  resend buffer BEFORE the send, so republishing by hand would duplicate the
+  message. It only waits for the reconnection (TEvent signaled by OnReconnect)
+  and moves on to the NEXT message of the batch.
 
-  Compila nos dois mundos a partir do MESMO fonte (mesmo padrão dos outros
-  samples GUI): uses sem prefixo de namespace, callbacks como métodos
-  nomeados ('of object', regra do FPC) e atualizações de UI vindas de outras
-  threads via objetos de "marshal" descartáveis + TThread.Queue — o FPC só
-  aceita TThreadMethod sem parâmetros, e um campo compartilhado na form teria
-  corrida entre callbacks concorrentes (ver RetaguardaVcl). Exceção: os
-  eventos de conexão NÃO podem postar TThread.Queue direto — eles rodam na
-  thread de reconexão da lib, que morre logo em seguida, e no FPC isso
-  descarta o post pendente; ver o comentário de TConexaoEventoWork. }
+  Compiles in both worlds from the SAME source (same pattern as the other
+  GUI samples): uses without a namespace prefix, callbacks as named
+  methods ('of object', FPC rule) and UI updates coming from other
+  threads through disposable "marshal" objects + TThread.Queue: FPC only
+  accepts a TThreadMethod without parameters, and a shared field on the form
+  would race between concurrent callbacks (see RetaguardaVcl). Exception: the
+  connection events can NOT post TThread.Queue directly; they run on the
+  lib's reconnection thread, which dies right afterwards, and on FPC that
+  drops the pending post; see the comment on TConexaoEventoWork. }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -59,8 +59,8 @@ uses
 type
   TfrmPublicador = class;
 
-  { Publica o lote fora da thread da UI, com pausa entre mensagens, para a
-    tela continuar viva e dar tempo de derrubar o broker no meio do lote. }
+  { Publishes the batch off the UI thread, with a pause between messages, so the
+    screen stays alive and there is time to bring the broker down mid-batch. }
   TLoteThread = class(TThread)
   private
     FForm: TfrmPublicador;
@@ -69,7 +69,7 @@ type
     FQtd: Integer;
     FIntervaloMs: Integer;
     FParar: Boolean;
-    FReconectado: TEvent; // sinalizado pelo OnReconnect da conexão
+    FReconectado: TEvent; // signaled by the connection's OnReconnect
     function AguardarReconexao: Boolean;
     function PausaInterrompivel(AMs: Integer): Boolean;
   protected
@@ -125,13 +125,13 @@ type
   private
     FConn: TAMQPConnection;
     FChannel: TAMQPChannel;
-    FFila: string;          // fila declarada na conexão (o lote publica nela)
-    FRepublicando: Boolean; // snapshot do checkbox no momento da conexão
+    FFila: string;          // queue declared on connect (the batch publishes to it)
+    FRepublicando: Boolean; // snapshot of the checkbox at connect time
     FLote: TLoteThread;
-    // Protege FLote entre a UI (cria/destrói) e a thread de reconexão
-    // (SinalizarReconexao). Nunca se faz WaitFor segurando este lock.
+    // Protects FLote between the UI (creates/destroys) and the reconnection thread
+    // (SinalizarReconexao). Never call WaitFor while holding this lock.
     FLoteLock: TCriticalSection;
-    // Mapas linha-da-lista; tocados SOMENTE na thread da UI (via marshals).
+    // Row maps of the list; touched ONLY on the UI thread (through marshals).
     FPorSeq: TDictionary<UInt64, TListItem>;
     FPorChave: TDictionary<string, TListItem>;
     FPublicadas: Integer;
@@ -145,11 +145,11 @@ type
     procedure SetLoteRodando(ARodando: Boolean);
     function BuildParams: TAMQPConnectionParams;
     procedure AtualizarContagem;
-    /// Encerra a thread do lote (se houver) aguardando ela sair. Chamado só na
-    /// thread da UI (desconectar/fechar). O clique em "Parar lote" NÃO usa
-    /// isto: só sinaliza e deixa o join para LoteConcluido, sem travar a UI.
+    /// Ends the batch thread (if any), waiting for it to exit. Called only on the
+    /// UI thread (disconnect/close). The "Parar lote" click does NOT use
+    /// this: it only signals and leaves the join to LoteConcluido, without freezing the UI.
     procedure PararLote;
-    // Atualizações de UI (rodam na thread da UI, chamadas pelos marshals):
+    // UI updates (run on the UI thread, called by the marshals):
     procedure MsgPublicada(ASeqNo: UInt64; const AChave: string);
     procedure MsgConfirmada(ASeqNo: UInt64; AAck: Boolean);
     procedure MsgDevolvida(const AChave, AMotivo: string);
@@ -157,11 +157,11 @@ type
     procedure ConexaoVoltou;
     procedure ConexaoFalhou;
     procedure LoteConcluido;
-    // Marshalling para a thread da UI (chamável de qualquer thread):
+    // Marshalling to the UI thread (callable from any thread):
     procedure QueueLog(const AMsg: string);
     procedure QueuePublicada(ASeqNo: UInt64; const AChave: string);
     procedure QueueLoteConcluido;
-    // Callbacks da lib (rodam em threads do pool / de reconexão):
+    // Lib callbacks (run on pool / reconnection threads):
     procedure OnConfirmado(AChannel: TAMQPChannel; ASeqNo: UInt64; AAck: Boolean);
     procedure OnDevolvida(AChannel: TAMQPChannel; const AReturned: TAMQPReturnedMessage);
     procedure OnDesconectado(AConnection: TAMQPConnection);
@@ -182,7 +182,7 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
@@ -194,8 +194,8 @@ const
   cStatusReenviada  = 'Reenviada (novo nº)';
   cStatusPerdida    = 'Perdida na queda (sem reenvio)';
 
-// Monta as propriedades e publica uma nota (corpo = a própria chave, como nos
-// outros samples). Usado pela thread do lote e pelo botão mandatory.
+// Builds the properties and publishes an invoice (body = the key itself, as in
+// the other samples). Used by the batch thread and by the mandatory button.
 function PublicarNota(ACanal: TAMQPChannel; const ARota, AChave: string;
   AMandatory: Boolean): UInt64;
 var
@@ -203,16 +203,16 @@ var
 begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
-  LProps.SetPersistent; // sobrevive a restart do broker (fila também é durável)
+  LProps.SetPersistent; // survives a broker restart (the queue is durable too)
   LProps.SetMessageId(AChave);
   Result := ACanal.Publish('', ARota, AmqpUtf8Encode(AChave), LProps, AMandatory);
 end;
 
 type
-  // Um objeto por chamada: TThread.Queue no FPC so' aceita 'procedure of
-  // object' SEM PARAMETROS, entao os dados viajam num objeto descartavel
-  // (nao num campo compartilhado da form, que teria corrida entre callbacks
-  // concorrentes). Se autodestroi apos rodar. Ver RetaguardaVcl.
+  // One object per call: TThread.Queue on FPC only accepts a 'procedure of
+  // object' WITHOUT PARAMETERS, so the data travels in a disposable object
+  // (not in a shared field of the form, which would race between concurrent
+  // callbacks). It frees itself after running. See RetaguardaVcl.
   TLogMarshal = class
     Form: TfrmPublicador;
     Texto: string;
@@ -293,17 +293,17 @@ begin
 end;
 
 type
-  { Os eventos de conexão (OnDisconnect/OnReconnect/OnReconnectFailed) rodam
-    na thread de RECONEXÃO da lib, que termina logo após o OnReconnect — e no
-    FPC um TThread.Queue postado por uma thread que morre antes de a thread
-    principal bombear a fila é DESCARTADO: TThread.Destroy chama
-    RemoveQueuedEvents(Self), que casa pelo ThreadID do postador (carimbado
-    pelo InternalQueue mesmo passando nil em AThread). No Delphi o descarte
-    casa só pelo campo Thread (que fica nil), então lá o post direto
-    funcionaria. Sintoma observado: o marshal do OnDisconnect chegava (a
-    thread de reconexão ainda vive durante os retries) e o do OnReconnect
-    sumia. O salto por um worker do PcPool — threads PERSISTENTES — garante
-    que o post à UI sobreviva nos dois compiladores. }
+  { The connection events (OnDisconnect/OnReconnect/OnReconnectFailed) run
+    on the lib's RECONNECTION thread, which ends right after OnReconnect, and on
+    FPC a TThread.Queue posted by a thread that dies before the main thread
+    pumps the queue is DROPPED: TThread.Destroy calls
+    RemoveQueuedEvents(Self), which matches by the poster's ThreadID (stamped
+    by InternalQueue even when nil is passed in AThread). On Delphi the removal
+    matches only by the Thread field (which stays nil), so there the direct post
+    would work. Observed symptom: the OnDisconnect marshal arrived (the
+    reconnection thread is still alive during the retries) and the OnReconnect one
+    vanished. Hopping through a PcPool worker (PERSISTENT threads) guarantees
+    that the post to the UI survives on both compilers. }
   TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmPublicador;
@@ -405,10 +405,10 @@ begin
     except
       on E: Exception do
       begin
-        // O seq-no foi atribuído e o conteúdo entrou no buffer de reenvio (se
-        // habilitado) ANTES do envio falhar — a lib re-publica sozinha após
-        // reconectar. Publicar de novo aqui DUPLICARIA a mensagem; só
-        // esperamos a conexão voltar e seguimos para a próxima.
+        // The seq-no was assigned and the content went into the resend buffer (if
+        // enabled) BEFORE the send failed; the lib republishes on its own after
+        // reconnecting. Publishing again here would DUPLICATE the message; we only
+        // wait for the connection to come back and move on to the next one.
         FForm.QueueLog(Format('Falha ao enviar %s: %s — aguardando reconexão.',
           [LChave, E.Message]));
         if not AguardarReconexao then
@@ -442,8 +442,8 @@ end;
 
 procedure TfrmPublicador.FormCreate(Sender: TObject);
 begin
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   FPorSeq := TDictionary<UInt64, TListItem>.Create;
   FPorChave := TDictionary<string, TListItem>.Create;
@@ -463,15 +463,15 @@ procedure TfrmPublicador.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
   PararLote;
   FreeAndNil(FChannel);
-  // O Free acima drena os callbacks em voo (OnConfirm/OnBasicReturn); os
-  // marshals que eles postaram ainda estao na fila do TThread.Queue — bombear
-  // aqui os drena com a form ainda viva (ver RetaguardaVcl.FormClose).
+  // The Free above drains the callbacks in flight (OnConfirm/OnBasicReturn); the
+  // marshals they posted are still in the TThread.Queue queue, and pumping
+  // here drains them with the form still alive (see RetaguardaVcl.FormClose).
   Application.ProcessMessages;
   FreeAndNil(FConn);
-  // O Free da conexao encerra a thread de reconexao — nao nascem mais eventos
-  // de conexao. Um TConexaoEventoWork ja enfileirado no pool pode estar
-  // postando o ultimo marshal NESTE instante: a espera curta + bombeio drenam
-  // esse retardatario com a form ainda viva.
+  // Freeing the connection ends the reconnection thread, so no more connection
+  // events are born. A TConexaoEventoWork already queued on the pool may be
+  // posting the last marshal RIGHT NOW: the short wait + pump drain
+  // that straggler with the form still alive.
   Sleep(100);
   Application.ProcessMessages;
 end;
@@ -484,7 +484,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -538,11 +538,11 @@ begin
   Result.Password := edtPassword.Text;
   Result.UseTls := chkUseTls.Checked;
   Result.TlsVerifyPeer := chkTlsVerifyPeer.Checked;
-  // O ponto do sample: reconexão automática sempre ligada, e o reenvio dos
-  // publishes não confirmados opt-in pelo checkbox.
+  // The point of the sample: automatic reconnection always on, and the resend of
+  // unconfirmed publishes opt-in through the checkbox.
   Result.AutoReconnect := True;
   Result.ReconnectDelayMs := 2000;
-  Result.MaxReconnectAttempts := 0; // insiste até voltar
+  Result.MaxReconnectAttempts := 0; // keeps trying until it comes back
   Result.RepublishUnconfirmedOnReconnect := chkRepublicar.Checked;
   Result.ConnectionName := 'PublicadorConfiavelVcl';
 end;
@@ -552,8 +552,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -616,7 +616,7 @@ begin
   SetLoteRodando(False);
 end;
 
-{ --- atualizações na thread da UI ---------------------------------------- }
+{ --- updates on the UI thread --------------------------------------------- }
 
 procedure TfrmPublicador.MsgPublicada(ASeqNo: UInt64; const AChave: string);
 var
@@ -644,8 +644,8 @@ var
 begin
   if not FPorSeq.TryGetValue(ASeqNo, LItem) then
   begin
-    // Seq-no sem linha: é a confirmação de um reenvio automático pós-queda
-    // (a lib reenvia com seq-nos novos; o mapeamento antigo->novo é interno).
+    // Seq-no without a row: it is the confirm of an automatic post-drop resend
+    // (the lib resends with new seq-nos; the old->new mapping is internal).
     if AAck then
     begin
       Inc(FReenviosConfirmados);
@@ -663,8 +663,8 @@ begin
   if AAck then
   begin
     Inc(FConfirmadas);
-    // Não rebaixa um status mais informativo (ex.: "Devolvida (sem rota)" —
-    // o broker devolve E confirma um mandatory sem rota).
+    // Does not downgrade a more informative status (e.g. "Devolvida (sem rota)":
+    // the broker returns AND confirms an unroutable mandatory).
     if LItem.SubItems[1] = cStatusPendente then
       LItem.SubItems[1] := cStatusConfirmada;
   end
@@ -712,8 +712,8 @@ begin
   SetConectado(True);
   Log('Reconectado: topologia e confirm mode restaurados' +
     IfThen(FRepublicando, '; reenvio automático disparado.', '.'));
-  // Linhas que ficaram pendentes na queda nunca receberão o confirm do seq-no
-  // antigo — marca o desfecho delas aqui.
+  // Rows left pending at the drop will never get the confirm for the old
+  // seq-no; mark their outcome here.
   for I := 0 to lvMensagens.Items.Count - 1 do
   begin
     LItem := lvMensagens.Items[I];
@@ -748,14 +748,14 @@ begin
   end;
   if LLote <> nil then
   begin
-    LLote.WaitFor; // a thread já postou este marshal no fim do Execute; join rápido
+    LLote.WaitFor; // the thread already posted this marshal at the end of Execute; quick join
     LLote.Free;
   end;
   SetLoteRodando(False);
   Log('Lote finalizado.');
 end;
 
-{ --- marshalling (chamável de qualquer thread) ---------------------------- }
+{ --- marshalling (callable from any thread) ------------------------------- }
 
 procedure TfrmPublicador.QueueLog(const AMsg: string);
 var
@@ -787,7 +787,7 @@ begin
   TThread.Queue(nil, LMarshal.Execute);
 end;
 
-{ --- callbacks da lib (threads do pool / reconexão) ------------------------ }
+{ --- lib callbacks (pool / reconnection threads) -------------------------- }
 
 procedure TfrmPublicador.OnConfirmado(AChannel: TAMQPChannel; ASeqNo: UInt64;
   AAck: Boolean);
@@ -813,9 +813,9 @@ begin
   TThread.Queue(nil, LMarshal.Execute);
 end;
 
-// Os três eventos de conexão saltam pelo PcPool em vez de postar direto:
-// a thread de reconexão morre logo após o OnReconnect e, no FPC, levaria o
-// post pendente junto (ver o comentário de TConexaoEventoWork).
+// The three connection events hop through PcPool instead of posting directly:
+// the reconnection thread dies right after OnReconnect and, on FPC, would take
+// the pending post with it (see the comment on TConexaoEventoWork).
 procedure TfrmPublicador.OnDesconectado(AConnection: TAMQPConnection);
 begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
@@ -823,8 +823,8 @@ end;
 
 procedure TfrmPublicador.OnReconectado(AConnection: TAMQPConnection);
 begin
-  // Acorda a thread do lote (se estiver esperando a conexão voltar). Sob o
-  // lock: a UI pode estar destruindo a thread neste exato momento.
+  // Wakes the batch thread (if it is waiting for the connection to come back). Under
+  // the lock: the UI may be destroying the thread at this very moment.
   FLoteLock.Enter;
   try
     if Assigned(FLote) then
@@ -840,7 +840,7 @@ begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
-{ --- ações ----------------------------------------------------------------- }
+{ --- actions ---------------------------------------------------------------- }
 
 procedure TfrmPublicador.btnConectarClick(Sender: TObject);
 var
@@ -849,7 +849,7 @@ begin
   if Assigned(FConn) then
   begin
     try
-      PararLote; // a thread do lote publica no canal que vamos fechar
+      PararLote; // the batch thread publishes on the channel we are about to close
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       Log('Desconectado.');
@@ -873,12 +873,12 @@ begin
     FChannel := FConn.CreateChannel;
     FChannel.OnConfirm := OnConfirmado;
     FChannel.OnBasicReturn := OnDevolvida;
-    FChannel.DeclareQueue(TAMQPQueueDeclare.Create(FFila, True)); // durável
+    FChannel.DeclareQueue(TAMQPQueueDeclare.Create(FFila, True)); // durable
     FChannel.ConfirmSelect;
 
     FRepublicando := chkRepublicar.Checked;
-    // Conexão nova = numeração de seq-no nova (recomeça em 1): limpa a lista
-    // para as linhas antigas não colidirem com os seq-nos novos.
+    // New connection = new seq-no numbering (restarts at 1): clears the list
+    // so the old rows do not collide with the new seq-nos.
     btnLimparListaClick(nil);
 
     Log(Format('Conectado a %s:%d%s. Confirm mode ativo na fila "%s"; ' +
@@ -907,8 +907,8 @@ begin
   try
     if Assigned(FLote) then
     begin
-      // Só sinaliza; o join fica para LoteConcluido (a thread pode estar num
-      // WaitForConfirms — um WaitFor aqui congelaria a UI por segundos).
+      // Only signals; the join is left to LoteConcluido (the thread may be in a
+      // WaitForConfirms; a WaitFor here would freeze the UI for seconds).
       FLote.Parar;
       btnPublicar.Enabled := False;
       btnPublicar.Caption := 'Parando...';
@@ -954,11 +954,11 @@ begin
   end;
   LChave := 'SEM-ROTA-' + FormatDateTime('hhnnsszzz', Now);
   try
-    // mandatory=True para uma rota que não existe: o broker devolve a
-    // mensagem (Basic.Return) e MESMO ASSIM a confirma (ack) — confirm
-    // significa "assumi a responsabilidade", não "roteei para uma fila".
+    // mandatory=True for a route that does not exist: the broker returns the
+    // message (Basic.Return) and STILL confirms it (ack); confirm
+    // means "I took responsibility", not "I routed it to a queue".
     LSeq := PublicarNota(FChannel, 'fila-inexistente-demo', LChave, True);
-    MsgPublicada(LSeq, LChave); // já estamos na thread da UI
+    MsgPublicada(LSeq, LChave); // we are already on the UI thread
     Log('Publicada "' + LChave + '" (mandatory) para rota inexistente — ' +
       'aguarde o Basic.Return.');
   except

@@ -2,19 +2,20 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Espelho local das abastecidas no PDV (ARQUITETURA.md §7).
+{ Local mirror of the fuelings on the POS (ARCHITECTURE.md §7).
 
-  Ao ligar (e a cada reconexao): assina os eventos e os BUFFERIZA, pede o
-  snapshot, aplica como baseline e reprocessa o buffer descartando o que ja'
-  veio na foto. Depois aplica ao vivo, com deteccao de salto de versao ->
-  re-snapshot (cura evento perdido por qualquer motivo).
+  On start (and on every reconnection): subscribes to the events and BUFFERS
+  them, asks for the snapshot, applies it as the baseline and reprocesses the
+  buffer, dropping what already came in the picture. After that it applies them
+  live, with version-gap detection -> re-snapshot (heals an event lost for any
+  reason).
 
-  O tipo do evento vem da ROUTING KEY (abastecida.nova/lancando/lancado/
-  disponivel/descartada), nao do formato do corpo.
+  The event type comes from the ROUTING KEY (abastecida.nova/lancando/lancado/
+  disponivel/descartada), not from the body format.
 
-  Tudo o que muta FMapa/FUltimaVersao passa por FLock. Os callbacks de evento
-  e a sincronizacao rodam em threads do pool; a UI so' le' (Pendentes,
-  TryEstado) e reage ao OnMudou marcando-se suja. }
+  Everything that mutates FMapa/FUltimaVersao goes through FLock. The event
+  callbacks and the sync run on pool threads; the UI only reads (Pendentes,
+  TryEstado) and reacts to OnMudou by marking itself dirty. }
 
 interface
 
@@ -32,7 +33,7 @@ type
     FCliente: TPostoPdvCliente;
     FLock: TCriticalSection;
     FMapa: TDictionary<string, TAbastecidaEstado>;
-    FBuffer: TStringList;         // "rota"#9"json" recebidos durante o snapshot
+    FBuffer: TStringList;         // "route"#9"json" received during the snapshot
     FUltimaVersao: Int64;
     FBufferando: Boolean;
     FSincronizado: Boolean;
@@ -46,11 +47,11 @@ type
     constructor Create(ACliente: TPostoPdvCliente);
     destructor Destroy; override;
 
-    { Assina os eventos e dispara a 1a sincronizacao (num worker do pool). }
+    { Subscribes to the events and fires the 1st sync (on a pool worker). }
     procedure Iniciar;
-    { Chamar no OnReconnect: re-buffer + re-snapshot. }
+    { Call on OnReconnect: re-buffer + re-snapshot. }
     procedure Ressincronizar;
-    { Roda a sincronizacao AGORA (bloqueante -- uso interno via worker). }
+    { Runs the sync NOW (blocking -- internal use through a worker). }
     procedure Sincronizar;
 
     function Pendentes: TArray<TAbastecida>;
@@ -62,7 +63,7 @@ type
 implementation
 
 type
-  { Worker do pool para rodar a sincronizacao fora da thread de callback. }
+  { Pool worker to run the sync off the callback thread. }
   TSyncWork = class(TPcWorkItem)
   private
     FAlvo: TPostoSincronia;
@@ -162,7 +163,7 @@ begin
   begin
     if LResp.Json <> nil then
       LResp.Json.Free;
-    Exit;   // sem servidor agora; a reconexao dispara de novo
+    Exit;   // no server right now; the reconnection fires it again
   end;
 
   LPend := TStringList.Create;

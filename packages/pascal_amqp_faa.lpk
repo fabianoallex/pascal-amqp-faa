@@ -13,7 +13,7 @@
         <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
     </CompilerOptions>
-    <Description Value="Cliente AMQP 0-9-1 (RabbitMQ) para FPC/Lazarus e Delphi, escrito do zero. Publish/consume com ack manual, publisher confirms, heartbeat, reconexao automatica com recuperacao de topologia e TLS (SChannel no Windows; OpenSSL opt-in via -dAMQP_OPENSSL em qualquer plataforma)."/>
+    <Description Value="AMQP 0-9-1 (RabbitMQ) client for FPC/Lazarus and Delphi, written from scratch. Publish/consume with manual ack, publisher confirms, heartbeat, automatic reconnection with topology recovery, and TLS (SChannel on Windows; OpenSSL opt-in via -dAMQP_OPENSSL on any platform)."/>
     <License Value="MIT"/>
     <Version Minor="6"/>
     <Files>
@@ -83,11 +83,11 @@
       </Item>
     </Files>
     <RequiredPkgs>
-      <!-- So' pelo nome, sem DefaultFilename: a aplicacao fornece a copia
-           unica da pascal-common-faa (um pascal_common_faa.lpk registrado).
-           Um DefaultFilename para external/ deixaria o Lazarus cair na copia
-           privada desta lib - o diamante que a pascal-common-faa proibe. Os
-           .lpi de testes/samples apontam para external/ com Prefer="True". -->
+      <!-- By name only, no DefaultFilename: the application provides the single
+           copy of pascal-common-faa (a registered pascal_common_faa.lpk).
+           A DefaultFilename pointing at external/ would make Lazarus fall back to
+           this library's private copy - the diamond pascal-common-faa forbids. The
+           test/sample .lpi files point at external/ with Prefer="True". -->
       <Item>
         <PackageName Value="pascal_common_faa"/>
         <MinVersion Major="1" Minor="27" Valid="True"/>

@@ -1,14 +1,14 @@
 ﻿unit uServidorMain;
 
-{ Painel da automacao (ARQUITETURA.md §11). Casca de UI sobre
-  TPostoServidorApp: a montagem (broker + registro + comandos + Vigia +
-  bombas) vive na App; aqui so' liga callbacks, desenha as listas e oferece
-  os botoes do supervisor (liberar forcado / descartar), que agem DIRETO no
-  Registro + Eventos (o painel e' parte do servidor).
+{ The automation panel (ARCHITECTURE.md §11). A UI shell over
+  TPostoServidorApp: the assembly (broker + registry + commands + Vigia +
+  pumps) lives in the App; here it only wires callbacks, draws the lists and
+  offers the supervisor's buttons (forced release / discard), which act DIRECTLY
+  on Registro + Eventos (the panel is part of the server).
 
-  A UI e' construida em codigo (ConstroiUI); os .dfm/.lfm sao cascas vazias.
-  Nenhuma thread toca a UI: a App sinaliza por callbacks (log com lock, flag
-  suja); um TTimer na thread da UI drena o log e reconstroi as listas. }
+  The UI is built in code (ConstroiUI); the .dfm/.lfm are empty shells.
+  No thread touches the UI: the App signals through callbacks (locked log, dirty
+  flag); a TTimer on the UI thread drains the log and rebuilds the lists. }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -354,7 +354,7 @@ begin
     Result := '';
 end;
 
-{ --------------------------------------------------------- ciclo de vida --- }
+{ ---------------------------------------------------------- life cycle --- }
 
 procedure TfrmPainel.SetRodando(AValor: Boolean);
 begin
@@ -362,7 +362,7 @@ begin
   btnParar.Enabled := AValor;
   edtPorta.Enabled := not AValor;
   edtSenhaPdv.Enabled := not AValor;
-  // chkBombas fica sempre habilitado: liga/desliga a geracao com o servidor no ar
+  // chkBombas stays always enabled: turns generation on/off with the server up
   if AValor then
   begin
     lblStatus.Caption := Format('No ar em 0.0.0.0:%d  (automacao ; PDVs pdv-* / %s)',
@@ -414,7 +414,7 @@ begin
   end;
 end;
 
-{ --------------------------------------------------- acoes do supervisor --- }
+{ ------------------------------------------------- supervisor actions --- }
 
 procedure TfrmPainel.btnLiberarClick(Sender: TObject);
 var

@@ -6,10 +6,10 @@
   tests/Server/AMQP.ServerSkeletonTests.pas (DUnitX). Do not edit by hand: edit the DUnitX
   master and run the script again. }
 
-{ Testes do esqueleto do broker (WS6): virtual-hosts, TAMQPFrameWriter,
-  o listener do broker e o ciclo accept/registro/reap do TAMQPServer. Os "clientes"
-  aqui são sockets crus: só o protocol-header e frames soltos, sem handshake.
-  A FSM de handshake é exercitada em AMQP.ServerHandshakeTests (WS4). }
+{ Tests for the broker skeleton (WS6): virtual hosts, TAMQPFrameWriter,
+  the broker's listener and TAMQPServer's accept/register/reap cycle. The "clients"
+  here are raw sockets: only the protocol header and loose frames, no handshake.
+  The handshake FSM is exercised in AMQP.ServerHandshakeTests (WS4). }
 
 
 interface
@@ -77,7 +77,7 @@ begin
   Result := TAMQPFrame.Create(AType, ACh, P);
 end;
 
-// Espera ACount conexões vivas por até ATimeoutMs.
+// Waits up to ATimeoutMs for ACount live connections.
 function WaitConnCount(AServer: TAMQPServer; ACount, ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
@@ -92,7 +92,7 @@ begin
   Result := AServer.ConnectionCount = ACount;
 end;
 
-// Espera o total de aceitas chegar a pelo menos AN.
+// Waits for the total accepted to reach at least AN.
 function WaitAccepted(AServer: TAMQPServer; AN, ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
@@ -107,7 +107,7 @@ begin
   Result := AServer.TotalAccepted >= AN;
 end;
 
-// Stream de teste que registra os bytes escritos.
+// Test stream that records the bytes written.
 type
   TRecStream = class(TStream)
   public
@@ -226,7 +226,7 @@ begin
   end;
 end;
 
-// Cliente cru: abre socket, manda o protocol-header (opcionalmente errado).
+// Raw client: opens a socket, sends the protocol header (optionally a wrong one).
 function RawConnect(APort: Word; ASendHeader: Boolean;
   ABadHeader: Boolean = False): TPcEndpoint;
 var
@@ -296,7 +296,7 @@ begin
     end;
     W.Stop;
     W.Free;
-    // cada frame: 7 header + 1 payload + 1 frame-end = 9 bytes; payload em +7
+    // each frame: 7 header + 1 payload + 1 frame-end = 9 bytes; payload at +7
     Seen := 0;
     Pos := 0;
     while Pos + 9 <= S.LogLen do
@@ -320,7 +320,7 @@ var
 begin
   S := TRecStream.Create;
   try
-    W := TAMQPFrameWriter.Create(S, 4); // fila rasa força backpressure
+    W := TAMQPFrameWriter.Create(S, 4); // shallow queue forces backpressure
     pA := TBatchProd.Create(True); pA.W := W; pA.Tag := 111; pA.Reps := 40;
     pB := TBatchProd.Create(True); pB.W := W; pB.Tag := 222; pB.Reps := 40;
     pA.Start; pB.Start;
@@ -328,8 +328,8 @@ begin
     pA.Free; pB.Free;
     W.Stop; W.Free;
 
-    // 80 trincas de 27 bytes; em cada trinca os 3 payloads (idx +7, +16, +25)
-    // têm de ser do MESMO tag.
+    // 80 triplets of 27 bytes; in each triplet the 3 payloads (idx +7, +16, +25)
+    // must belong to the SAME tag.
     Pos := 0;
     while Pos + 27 <= S.LogLen do
     begin
@@ -592,10 +592,10 @@ begin
     B.Port := 0;
     B.Start;
 
-    C := RawConnect(B.Port, True, True); // header errado
+    C := RawConnect(B.Port, True, True); // wrong header
     try
       TAssert.AssertTrue('conexao foi aceita', WaitAccepted(B, 1, 2000));
-      // o servidor fecha sozinho -> a conexao some do registro
+      // the server closes on its own -> the connection leaves the registry
       TAssert.AssertTrue('conexao fechada pelo servidor', WaitConnCount(B, 0, 2000));
     finally
       C.Free;
@@ -651,7 +651,7 @@ begin
     TAssert.AssertTrue(WaitConnCount(B, 5, 3000));
 
     LStart := PcTickMs;
-    B.Stop; // deve derrubar as 5 e voltar rapido
+    B.Stop; // must drop all 5 and return quickly
     TAssert.AssertTrue('Stop nao travou', PcTickMs - LStart < 5000);
     TAssert.AssertFalse(B.Running);
 
@@ -672,11 +672,11 @@ var
   Conns: TArray<TAMQPServerConnection>;
   Deadline: UInt64;
 begin
-  // Heartbeat NAO se ecoa (spec 4.2.7): cada lado emite pelo proprio timer.
-  // Receber um so conta como sinal de vida. Aqui a conexao nem chegou ao
-  // Tune-Ok, entao o broker tambem nao tem intervalo para emitir -- o teste
-  // verifica so que o frame e' aceito e nao derruba nada. A emissao de verdade
-  // esta em THeartbeatTests (AMQP.ServerHandshakeTests).
+  // A heartbeat is NOT echoed (spec 4.2.7): each side emits on its own timer.
+  // Receiving one only counts as a sign of life. Here the connection has not even
+  // reached Tune-Ok, so the broker has no interval to emit at either -- the test
+  // only checks that the frame is accepted and drops nothing. The real emission
+  // is in THeartbeatTests (AMQP.ServerHandshakeTests).
   B := TAMQPServer.Create;
   try
     B.BindAddress := '127.0.0.1';
@@ -687,15 +687,15 @@ begin
     try
       Strm := TAMQPEndpointStream.Create(C);
       try
-        // Desde o WS4 o broker manda Connection.Start assim que o
-        // protocol-header e' aceito: drena esse frame antes.
+        // Since WS4 the broker sends Connection.Start as soon as the
+        // protocol header is accepted: drain that frame first.
         Reply := TAMQPFrame.ReadFrom(Strm, 131072);
         TAssert.AssertTrue('primeiro frame e Connection.Start', Reply.IsMethod);
 
         HB := TAMQPFrame.Heartbeat;
         HB.WriteTo(Strm);
 
-        // O broker contabiliza o frame recebido e segue vivo.
+        // The broker counts the received frame and stays alive.
         Deadline := PcTickMs + 2000;
         Conns := B.Connections;
         while (Length(Conns) = 1) and (Conns[0].FramesRead < 1) and

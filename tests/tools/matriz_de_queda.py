@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Matriz de morte de processo do broker -- WS8 da Fase 4 (D28, camada 3).
+"""Broker process-death matrix -- WS8 of Phase 4 (D28, layer 3).
 
-O QUE ISTO PROVA -- E, ANTES, O QUE NAO PROVA
----------------------------------------------
-MATAR O PROCESSO NAO TESTA FSYNC. A cache do sistema operacional sobrevive a
-morte do processo; so' a queda da MAQUINA a perde. Esta frase esta na D28 e vai
-no README, e ela e o motivo de esta matriz existir com escopo declarado em vez
-de com um nome grandioso.
+WHAT THIS PROVES -- AND, FIRST, WHAT IT DOES NOT
+------------------------------------------------
+KILLING THE PROCESS DOES NOT TEST FSYNC. The operating system's cache survives
+the death of the process; only a crash of the MACHINE loses it. This sentence
+is in D28 and goes in the README, and it is the reason this matrix exists with
+a declared scope instead of a grandiose name.
 
-O que ela prova, e que vale por si:
+What it does prove, and is worth having on its own:
 
-  1. O QUE FOI CONFIRMADO VOLTA. O broker morre sem encerrar nada -- nenhum
-     destrutor, nenhum Stop, nenhum drain -- e o que ele ja' tinha confirmado
-     ao publicador esta' la' no boot seguinte.
+  1. WHAT WAS CONFIRMED COMES BACK. The broker dies without shutting anything
+     down -- no destructor, no Stop, no drain -- and what it had already
+     confirmed to the publisher is there on the next boot.
 
-  2. O QUE FOI CONSUMIDO NAO RESSUSCITA. Sem o DEQ do ack no disco, toda
-     mensagem ja' consumida voltaria a cada restart: o modo de falha que cresce
-     sem limite e ninguem percebe de imediato.
+  2. WHAT WAS CONSUMED DOES NOT COME BACK TO LIFE. Without the ack's DEQ on
+     disk, every message already consumed would return on each restart: the
+     failure mode that grows without bound and nobody notices right away.
 
-  3. A CAUDA TORTA NAO IMPEDE O BOOT. Morto NO MEIO da escrita, o log fica com
-     um registro pela metade -- que e' o caso NORMAL depois de uma queda, nao um
-     erro (D23). O broker tem de subir, e nao pode PERDER o que ja confirmou,
-     nem devolver nada corrompido ou fora de ordem.
+  3. A TORN TAIL DOES NOT PREVENT BOOT. Killed IN THE MIDDLE of a write, the
+     log ends with a half-written record -- which is the NORMAL case after a
+     crash, not an error (D23). The broker has to start, and must not LOSE what
+     it already confirmed, nor return anything corrupted or out of order.
 
-As outras duas camadas da D28 vivem na suite e nao aqui: a varredura exaustiva
-de truncamento (WS1) e o duble de arquivo que conta fsyncs e falha na hora
-escolhida (WS1/WS2/WS7).
+The other two layers of D28 live in the suite, not here: the exhaustive
+truncation sweep (WS1) and the file test double that counts fsyncs and fails
+at the chosen moment (WS1/WS2/WS7).
 
-USO
-    python tests/tools/matriz_de_queda.py [caminho-do-CrashHostFpc]
+USAGE
+    python tests/tools/matriz_de_queda.py [path-to-CrashHostFpc]
 
-Sai com codigo 1 se algum cenario falhar.
+Exits with code 1 if any scenario fails.
 """
 
 import os
@@ -49,7 +49,7 @@ HOST_PADRAO = os.path.join(RAIZ, 'tests', 'Acceptance', 'fpc',
                            'CrashHostFpc.exe' if os.name == 'nt'
                            else 'CrashHostFpc')
 
-TIMEOUT_MARCA = 60  # segundos esperando a marca aparecer na saida
+TIMEOUT_MARCA = 60  # seconds waiting for the marker to appear in the output
 
 
 class Falha(Exception):
@@ -57,11 +57,11 @@ class Falha(Exception):
 
 
 def mata(proc):
-    """Morte SEM AVISO -- o ponto do exercicio.
+    """Death WITHOUT WARNING -- the point of the exercise.
 
-    Nada de terminate() cortes: no Windows, TerminateProcess; no Unix, SIGKILL.
-    Um SIGTERM daria ao processo a chance de rodar finalizacao, e ai' o teste
-    mediria um shutdown, nao uma queda.
+    No polite terminate(): on Windows, TerminateProcess; on Unix, SIGKILL.
+    A SIGTERM would give the process a chance to run finalization, and then the
+    test would measure a shutdown, not a crash.
     """
     if proc.poll() is not None:
         return
@@ -77,9 +77,10 @@ def mata(proc):
 
 
 def roda_ate_marca(host, args, marca, timeout=TIMEOUT_MARCA):
-    """Sobe o host, espera a linha que comeca com `marca` e devolve (proc, linha).
+    """Starts the host, waits for the line starting with `marca` and returns
+    (proc, linha).
 
-    O processo fica VIVO: quem o mata e' o chamador.
+    The process stays ALIVE: the caller is the one who kills it.
     """
     proc = subprocess.Popen([host] + args, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -101,7 +102,7 @@ def roda_ate_marca(host, args, marca, timeout=TIMEOUT_MARCA):
 
 
 def confere(host, diretorio):
-    """Sobe o host em modo confere (ele encerra sozinho) e devolve a contagem."""
+    """Starts the host in confere mode (it exits by itself) and returns the count."""
     r = subprocess.run([host, 'confere', diretorio], capture_output=True,
                        text=True, timeout=120)
     saida = r.stdout + r.stderr
@@ -114,10 +115,10 @@ def confere(host, diretorio):
     return int(m.group(1))
 
 
-# --------------------------------------------------------------- cenarios ---
+# -------------------------------------------------------------- scenarios ---
 
 def cenario_confirmado_volta(host, d):
-    """(1) Morto depois do confirm: tudo o que foi confirmado tem de voltar."""
+    """(1) Killed after the confirm: everything that was confirmed must come back."""
     proc, _ = roda_ate_marca(host, ['publica', d, '200'], 'PUBLICADAS')
     mata(proc)
     n = confere(host, d)
@@ -127,7 +128,7 @@ def cenario_confirmado_volta(host, d):
 
 
 def cenario_consumido_nao_volta(host, d):
-    """(2) Morto depois do ack: o consumido nao pode ressuscitar."""
+    """(2) Killed after the ack: what was consumed must not come back to life."""
     proc, _ = roda_ate_marca(host, ['publica', d, '100'], 'PUBLICADAS')
     mata(proc)
     proc, _ = roda_ate_marca(host, ['consome', d, '40'], 'CONSUMIDAS')
@@ -139,17 +140,19 @@ def cenario_consumido_nao_volta(host, d):
 
 
 def cenario_morte_no_meio_da_escrita(host, d):
-    """(3) Morto NO MEIO da escrita: o boot sobrevive a cauda torta.
+    """(3) Killed IN THE MIDDLE of a write: the boot survives the torn tail.
 
-    O criterio nao e' "voltaram N": e' que o broker SOBE, que NAO PERDE o que
-    ja' tinha confirmado, e que nada volta corrompido ou fora de ordem.
+    The criterion is not "N came back": it is that the broker STARTS, that it
+    does NOT LOSE what it had already confirmed, and that nothing comes back
+    corrupted or out of order.
 
-    NAO HA LIMITE SUPERIOR CHECAVEL, e a primeira versao deste cenario errava
-    por tentar: o driver le' as marcas CONFIRMADA por um cano, e a leitura fica
-    para tras da escrita. Quando ele decide matar, o host ja' confirmou muito
-    mais do que o driver leu -- "voltaram 407 para 150 lidas" nao e' violacao
-    nenhuma, e' o cano atrasado. O que se pode afirmar de fora e' o piso: tudo
-    o que o driver VIU confirmado tem de estar la'.
+    THERE IS NO CHECKABLE UPPER BOUND, and the first version of this scenario
+    was wrong for trying: the driver reads the CONFIRMADA markers through a
+    pipe, and the reading lags behind the writing. When it decides to kill, the
+    host has already confirmed much more than the driver read -- "407 came
+    back for 150 read" is no violation at all, it is the lagging pipe. What can
+    be asserted from outside is the floor: everything the driver SAW confirmed
+    must be there.
     """
     proc = subprocess.Popen([host, 'despeja', d], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -171,7 +174,7 @@ def cenario_morte_no_meio_da_escrita(host, d):
             raise Falha('o despejo nao alcancou 150 confirmadas em %ds'
                         % TIMEOUT_MARCA)
     finally:
-        # Mata NO MEIO: a proxima escrita esta' em voo neste instante.
+        # Kill IN THE MIDDLE: the next write is in flight at this instant.
         mata(proc)
 
     n = confere(host, d)
@@ -183,19 +186,19 @@ def cenario_morte_no_meio_da_escrita(host, d):
 
 
 def cenario_restart_repetido(host, d):
-    """(4) Varias quedas seguidas no MESMO diretorio.
+    """(4) Several crashes in a row on the SAME directory.
 
-    Cada boot recupera, publica mais e morre. Prende duas coisas que uma queda
-    so' nao pega: que a recuperacao nao DUPLICA (o contador de ids continua
-    depois do maior do log) e que o log nao cresce uma copia por boot (o
-    journal fica mudo durante o replay).
+    Each boot recovers, publishes more and dies. Pins down two things that a
+    single crash does not catch: that recovery does not DUPLICATE (the id
+    counter continues after the largest one in the log) and that the log does
+    not grow by one copy per boot (the journal stays silent during the replay).
     """
     total = 0
     for _ in range(4):
-        # O `inicio` mantem a numeracao GLOBALMENTE crescente entre as rodadas:
-        # sem ele, cada queda recomecaria do 1 e o confere -- que checa ORDEM,
-        # nao so' contagem -- acusaria fora-de-ordem por um motivo que nao e' o
-        # do broker.
+        # `inicio` keeps the numbering GLOBALLY increasing across the rounds:
+        # without it, each crash would restart from 1 and confere -- which
+        # checks ORDER, not just count -- would report out-of-order for a
+        # reason that is not the broker's.
         proc, _ = roda_ate_marca(
             host, ['publica', d, '50', str(total + 1)], 'PUBLICADAS')
         mata(proc)
@@ -236,7 +239,7 @@ def main():
         except Falha as e:
             falhou = True
             print('    FALHA  %s' % e)
-        except Exception as e:  # noqa: BLE001 -- o driver nao pode derrubar tudo
+        except Exception as e:  # noqa: BLE001 -- the driver must not bring everything down
             falhou = True
             print('    ERRO  %s: %s' % (type(e).__name__, e))
         finally:

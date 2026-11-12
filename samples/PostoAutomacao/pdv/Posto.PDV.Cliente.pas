@@ -2,17 +2,17 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Conexao do PDV com o servidor de automacao e o RPC sincrono
-  (ARQUITETURA.md §5, §6.2).
+{ The POS connection to the automation server and the synchronous RPC
+  (ARCHITECTURE.md §5, §6.2).
 
-  Chamar() bloqueia ate' a resposta ou o timeout -- e' feito para rodar numa
-  thread de trabalho (PcPool), NUNCA na thread da UI. A fila de respostas
-  e' exclusiva, auto-delete, de nome fixo (sobrevive ao replay da reconexao,
-  ao contrario de um nome gerado pelo broker -- ver ConsultaStatusVcl).
+  Chamar() blocks until the reply or the timeout -- it is meant to run on a
+  worker thread (PcPool), NEVER on the UI thread. The reply queue
+  is exclusive, auto-delete, with a fixed name (it survives the reconnection
+  replay, unlike a broker-generated name -- see ConsultaStatusVcl).
 
-  A reconexao automatica da lib recria fila de eventos, binds e consumers; o
-  que o PDV faz DEPOIS da reconexao (re-snapshot, reconciliacao) e' com a
-  Sincronia e o Modelo. }
+  The lib's automatic reconnection recreates the event queue, binds and
+  consumers; what the POS does AFTER the reconnection (re-snapshot,
+  reconciliation) is up to Sincronia and Modelo. }
 
 interface
 
@@ -24,9 +24,9 @@ uses
 
 type
   TRespostaRpc = record
-    Chegou: Boolean;     // resposta chegou dentro do prazo
+    Chegou: Boolean;     // reply arrived within the deadline
     Timeout: Boolean;
-    Json: TJsonValue;    // dono: o chamador; nil se Timeout
+    Json: TJsonValue;    // owner: the caller; nil on Timeout
   end;
 
   TPostoPdvCliente = class
@@ -36,7 +36,7 @@ type
     FPdv: string;
     FSenha: string;
     FConn: TAMQPConnection;
-    FCanal: TAMQPChannel;      // publish de comandos + consumo das respostas
+    FCanal: TAMQPChannel;      // command publish + reply consumption
     FCanalEventos: TAMQPChannel;
     FFilaResp: string;
     FFilaEventos: string;
@@ -55,10 +55,10 @@ type
     procedure Desconectar;
     function Conectado: Boolean;
 
-    { Assina os eventos do posto. O callback roda numa thread do pool. }
+    { Subscribes to the station's events. The callback runs on a pool thread. }
     procedure AssinarEventos(const ACallback: TAMQPConsumerCallback);
 
-    { RPC sincrono. Bloqueia ate' a resposta ou ATimeoutMs. }
+    { Synchronous RPC. Blocks until the reply or ATimeoutMs. }
     function Chamar(const ABytes: TBytes; ATimeoutMs: Integer): TRespostaRpc;
 
     property Pdv: string read FPdv;
@@ -248,7 +248,7 @@ begin
 
   FPendLock.Enter;
   try
-    FPend.Remove(LCorr);   // TObjectDictionary libera o TEvent
+    FPend.Remove(LCorr);   // TObjectDictionary frees the TEvent
     FResp.Remove(LCorr);
   finally
     FPendLock.Leave;

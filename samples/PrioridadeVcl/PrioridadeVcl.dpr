@@ -1,18 +1,18 @@
 program PrioridadeVcl;
 
-{ Fila com prioridade (GUI): fila declarada com `x-max-priority`; publish com a
-  propriedade `Priority`; consumidor lento com prefetch baixo drena o backlog
-  em ordem decrescente de prioridade. Único sample que exercita a propriedade
-  Priority (SetPriority).
+{ Priority queue (GUI): queue declared with `x-max-priority`; publish with the
+  `Priority` property; a slow consumer with a low prefetch drains the backlog
+  in descending priority order. The only sample that exercises the
+  Priority property (SetPriority).
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    lazbuild PrioridadeVcl.lpi
-    Delphi: abrir PrioridadeVcl.dproj no IDE }
+    Delphi: open PrioridadeVcl.dproj in the IDE }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

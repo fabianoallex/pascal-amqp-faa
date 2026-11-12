@@ -2,52 +2,52 @@
 
 {$I amqp.inc}
 
-{ Confirms adiados pela marca d'agua de durabilidade -- sub-modulo broker,
-  WS5 da Fase 4. E' a D24 virando codigo.
+{ Confirms deferred by the durability watermark -- broker sub-module,
+  WS5 of Phase 4. This is D24 turned into code.
 
-  O problema
+  The problem
+  -----------
+  Up to Phase 3 a publish's Basic.Ack went out right after RouteMessage, and
+  that was RIGHT while everything was memory: enqueueing is synchronous,
+  so when RouteMessage returns the message is already where it must be.
+  With durability on, "where it must be" becomes the DISK, and the disk
+  only answers after the fsync -- which the journal thread does in batches (D25).
+  Confirming before that would be lying: the publisher would release the
+  publish state believing the message survives a crash, and it would not.
+
+  The design
   ----------
-  Ate' a Fase 3 o Basic.Ack de um publish saia logo depois do RouteMessage, e
-  isso estava CERTO enquanto tudo era memoria: o enfileiramento e' sincrono,
-  entao quando o RouteMessage volta a mensagem ja' esta' onde tem de estar.
-  Com durabilidade ligada, "onde tem de estar" passa a ser o DISCO, e o disco
-  so' responde depois do fsync -- que a thread do journal faz em lote (D25).
-  Confirmar antes disso seria mentir: o publicador liberaria o estado do
-  publish achando que a mensagem sobrevive a uma queda, e ela nao sobreviveria.
+  The publishing side writes the batch and keeps the LSN of the last record (that
+  is the engine, on the publisher thread -- see AMQP.Server.Engine.RouteMessage). The
+  channel registers the (seq, lsn) pair HERE and emits NOTHING. After each fsync,
+  the journal thread advances the watermark and calls Release on every registered
+  tracker; each one releases what is already durable and COLLAPSES it into a single
+  Basic.Ack(highestSeq, multiple=true) -- the letter of D9.
 
-  O desenho
-  ---------
-  Quem publica escreve o lote e guarda o LSN do ultimo registro (isso e' a
-  engine, na thread do publicador -- ver AMQP.Server.Engine.RouteMessage). O
-  canal registra AQUI o par (seq, lsn) e NAO emite nada. Depois de cada fsync,
-  a thread do journal avanca a marca d'agua e chama Release em todo rastreador
-  registrado; cada um solta o que ja' esta' duravel e COLAPSA num unico
-  Basic.Ack(maiorSeq, multiple=true) -- a letra da D9.
+  Three things the design forces, and that live in this file:
 
-  Tres coisas que o desenho obriga, e que estao neste arquivo:
+  1. SEQ ORDER PER CHANNEL (corollary (a) of D24). A transient publish that
+     arrives AFTER a persistent one still pending cannot jump ahead:
+     it is deferred too (with Lsn=0) and goes out collapsed in the same multiple=true.
+     That is why TryDefer defers when there is a pending one, not only when there is an LSN.
 
-  1. ORDEM DE SEQ POR CANAL (corolario (a) da D24). Um publish transiente que
-     chega DEPOIS de um persistente ainda pendente nao pode passar na frente:
-     ele tambem e' adiado (com Lsn=0) e sai colapsado no mesmo multiple=true.
-     Por isso TryDefer adia quando ha pendente, e nao so' quando ha LSN.
+  2. NEVER BLOCK THE JOURNAL THREAD. Release uses TryPostFrames, and whatever the
+     write queue refuses STAYS pending for the next round -- the shape of
+     D3 applied to the confirm. Since a channel with a full output could never again
+     see the watermark move (if nobody else published), the monitor thread calls
+     RetryPending on every tick.
 
-  2. NUNCA BLOQUEAR A THREAD DO JOURNAL. Release usa TryPostFrames, e o que a
-     fila de escrita recusar FICA pendente para a proxima rodada -- a forma da
-     D3 aplicada ao confirm. Como um canal com a saida cheia poderia nunca mais
-     ver a marca andar (se ninguem mais publicasse), a thread monitora chama
-     RetryPending a cada tique.
+  3. LIFECYCLE. The journal thread does the releasing; the channel may have
+     died in between. Same remedy as TAMQPChannelDeliveryTarget: the refcount
+     keeps the object alive while the registry holds it, and Detach clears the
+     writer UNDER LOCK, without waiting for I/O.
 
-  3. CICLO DE VIDA. Quem libera e' a thread do journal; o canal pode ter
-     morrido no meio. Mesmo remedio do TAMQPChannelDeliveryTarget: refcount
-     mantem o objeto vivo enquanto o registro o tiver na mao, e Detach zera o
-     writer SOB LOCK, sem esperar I/O.
-
-  Nack no meio da fila
-  --------------------
-  Um Basic.Nack nao pode ser colapsado com multiple=true junto de acks: ele
-  marca UM seq. Entao a liberacao emite o ack acumulado ATE' o seq anterior,
-  depois o nack sozinho, e recomeca a acumular. Nack nao espera disco (Lsn=0):
-  ele nao promete durabilidade nenhuma -- so' precisa respeitar a ordem. }
+  Nack in the middle of the queue
+  -------------------------------
+  A Basic.Nack cannot be collapsed with multiple=true together with acks: it
+  marks ONE seq. So the release emits the accumulated ack UP TO the previous seq,
+  then the nack alone, and starts accumulating again. A nack does not wait for the
+  disk (Lsn=0): it promises no durability at all -- it only has to respect the order. }
 
 interface
 
@@ -64,27 +64,27 @@ uses
   AMQP.Server.Journal;
 
 type
-  { Um confirm que ainda nao saiu. }
+  { A confirm that has not gone out yet. }
   TAMQPPendingConfirm = record
-    /// O seq-no que o cliente atribuiu a este publish.
+    /// The seq-no the client assigned to this publish.
     Seq: UInt64;
-    /// O LSN que precisa estar duravel para ele poder ser confirmado. Zero =
-    /// nada a esperar do disco (so' a ordem).
+    /// The LSN that must be durable before it can be confirmed. Zero =
+    /// nothing to wait for from the disk (only the order).
     Lsn: UInt64;
-    /// True => sai como Basic.Nack (fila cheia com reject-publish, ou journal
-    /// falho), e portanto sozinho, sem multiple.
+    /// True => goes out as Basic.Nack (full queue with reject-publish, or failed
+    /// journal), and therefore alone, without multiple.
     Nack: Boolean;
   end;
 
-  { Rastreador de UM canal. Criado pelo registro, referenciado pelo canal. }
+  { Tracker for ONE channel. Created by the registry, referenced by the channel. }
   TAMQPConfirmTracker = class(TInterfacedObject, IAMQPConfirmTracker)
   private
     FLock: TCriticalSection;
-    FWriter: TAMQPFrameWriter; // nil depois do Detach -- sempre sob FLock
+    FWriter: TAMQPFrameWriter; // nil after Detach -- always under FLock
     FChannelNo: Word;
-    // Pendentes em ordem CRESCENTE de seq. Como o seq-no e' monotonico por
-    // canal e so' a thread de leitura da conexao registra, inserir no fim ja'
-    // mantem ordenado -- nao ha ordenacao a fazer.
+    // Pending entries in ASCENDING seq order. Since the seq-no is monotonic per
+    // channel and only the connection's read thread registers, appending at the
+    // end already keeps it sorted -- there is no sorting to do.
     FPend: TList<TAMQPPendingConfirm>;
     function TryPost(const APayload: TBytes): Boolean;
   public
@@ -99,22 +99,22 @@ type
     function PendingCount: Integer;
   end;
 
-  { O registro do broker inteiro, e o sink que a thread do journal chama. }
+  { The registry for the whole broker, and the sink the journal thread calls. }
   TAMQPConfirmRegistry = class(TInterfacedObject, IAMQPConfirmRegistry,
     IAMQPDurabilitySink)
   private
     FLock: TCriticalSection;
     FTrackers: TList<IAMQPConfirmTracker>;
-    FMark: UInt64; // atomico (Read64/Write64) -- lido sem lock
-    /// Uma copia da lista, tomada sob lock, para percorrer FORA dele: a
-    /// liberacao chama TryPostFrames, e segurar o lock do registro enquanto
-    /// se escreve em N canais poria a thread do journal atras de todos eles.
+    FMark: UInt64; // atomic (Read64/Write64) -- read without lock
+    /// A copy of the list, taken under lock, to walk OUTSIDE it: the
+    /// release calls TryPostFrames, and holding the registry lock while
+    /// writing to N channels would put the journal thread behind all of them.
     function Snapshot: TArray<IAMQPConfirmTracker>;
-    /// Manda todo rastreador soltar o que ja' pode sair com a marca em ALsn.
-    /// Separado do Durable de proposito: o Durable AVANCA a marca (e so' a
-    /// thread do journal o chama), enquanto isto so' LIBERA -- e' o que a
-    /// thread monitora precisa, e escrever a marca de la' a faria andar para
-    /// TRAS quando as duas threads se cruzassem.
+    /// Tells every tracker to release what can already go out with the mark at ALsn.
+    /// Separate from Durable on purpose: Durable ADVANCES the mark (and only the
+    /// journal thread calls it), while this only RELEASES -- it is what the
+    /// monitor thread needs, and writing the mark from there would make it move
+    /// BACKWARDS when the two threads crossed.
     procedure ReleaseAll(ALsn: UInt64);
   public
     constructor Create;
@@ -128,7 +128,7 @@ type
     function TrackerCount: Integer;
     procedure RetryPending;
 
-    // --- IAMQPDurabilitySink (chamado pela thread do journal) ---
+    // --- IAMQPDurabilitySink (called by the journal thread) ---
     procedure Durable(ALsn: UInt64);
     procedure JournalFailed(const AMessage: string);
   end;
@@ -154,8 +154,8 @@ begin
   inherited;
 end;
 
-// Chamado SOB FLock. Nao bloqueia: o que a fila de escrita recusar volta como
-// False e o pendente fica onde esta'.
+// Called UNDER FLock. Does not block: whatever the write queue refuses comes back
+// as False and the pending entry stays where it is.
 function TAMQPConfirmTracker.TryPost(const APayload: TBytes): Boolean;
 begin
   Result := (FWriter <> nil)
@@ -172,12 +172,12 @@ begin
   try
     if FWriter = nil then
     begin
-      // Canal morto: nao adia nada. O chamador tambem nao vai conseguir
-      // emitir, e e' exatamente isso que tem de acontecer.
+      // Dead channel: defers nothing. The caller will not manage to emit
+      // either, and that is exactly what has to happen.
       Result := False;
       Exit;
     end;
-    // O corolario (a) da D24: com pendente na frente, ATE' o transiente espera.
+    // Corollary (a) of D24: with a pending one ahead, EVEN the transient waits.
     Result := (ALsn > 0) or (FPend.Count > 0);
     if not Result then
       Exit;
@@ -200,7 +200,7 @@ begin
   try
     if FWriter = nil then
     begin
-      FPend.Clear; // canal morto: ninguem mais espera estes acks
+      FPend.Clear; // dead channel: nobody waits for these acks anymore
       Exit;
     end;
     LDone := 0;
@@ -212,8 +212,8 @@ begin
     begin
       if FPend[I].Nack then
       begin
-        // O nack corta o colapso: o que estava acumulado sai primeiro, com o
-        // seq ANTERIOR, e o nack sai sozinho.
+        // The nack cuts the collapse: what was accumulated goes out first, with
+        // the PREVIOUS seq, and the nack goes out alone.
         if LHasAck then
         begin
           if not TryPost(BuildBasicAck(LLastAck, True)) then
@@ -227,15 +227,15 @@ begin
       end
       else
       begin
-        // Acumula: um unico Basic.Ack com multiple=true resolve todos.
+        // Accumulate: a single Basic.Ack with multiple=true settles them all.
         LHasAck := True;
         LLastAck := FPend[I].Seq;
         LIdxAck := I;
       end;
       Inc(I);
     end;
-    // Aninhado, e nao 'and': o Posta tem EFEITO, e depender de curto-circuito
-    // para nao o chamar seria depender de uma diretiva de compilacao.
+    // Nested, not 'and': the post has a SIDE EFFECT, and relying on short-circuit
+    // evaluation to skip it would mean relying on a compiler directive.
     if LHasAck then
       if TryPost(BuildBasicAck(LLastAck, True)) then
         LDone := LIdxAck + 1;
@@ -259,10 +259,10 @@ begin
       FPend.Clear;
       Exit;
     end;
-    // Journal falho: a promessa nao pode ser cumprida, entao TUDO que estava
-    // esperando disco vira nack -- inclusive o que ja' estaria duravel, porque
-    // a marca nao vai mais andar e o publicador ficaria pendurado. Nack e' o
-    // frame honesto aqui: "o broker nao conseguiu tratar a mensagem".
+    // Failed journal: the promise cannot be kept, so EVERYTHING that was
+    // waiting for the disk becomes a nack -- including what would already be durable,
+    // because the mark will not move anymore and the publisher would hang. Nack is the
+    // honest frame here: "the broker could not handle the message".
     LDone := 0;
     for I := 0 to FPend.Count - 1 do
     begin
@@ -384,11 +384,11 @@ end;
 
 procedure TAMQPConfirmRegistry.RetryPending;
 begin
-  // NAO passa pelo Durable: recobrar nao e' avancar a marca.
+  // Does NOT go through Durable: retrying is not advancing the mark.
   ReleaseAll(Watermark);
 end;
 
-// --- IAMQPDurabilitySink: roda na THREAD DO JOURNAL, depois de cada fsync ---
+// --- IAMQPDurabilitySink: runs on the JOURNAL THREAD, after each fsync ---
 
 procedure TAMQPConfirmRegistry.Durable(ALsn: UInt64);
 begin

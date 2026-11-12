@@ -2,7 +2,7 @@
 
 {$I amqp.inc}
 
-{ Métodos da classe Queue (50): declarar, ligar (bind), purgar e remover filas. }
+{ Methods of the Queue class (50): declare, bind, purge and delete queues. }
 
 interface
 
@@ -14,14 +14,14 @@ uses
 
 type
   TAMQPQueueDeclare = record
-    QueueName: string;   // '' => o servidor gera um nome (ver limitação de recovery no README)
-    Passive: Boolean;    // True => só verifica se a fila existe (erro 404 se não); não declara nem altera nada
-    Durable: Boolean;    // sobrevive a um restart do broker (a mensagem em si ainda depende de DeliveryMode=2)
-    Exclusive: Boolean;  // só esta conexão pode usá-la; some quando a conexão fecha
-    AutoDelete: Boolean; // apagada quando o último consumer se desconecta (nunca, se nunca teve consumer)
-    NoWait: Boolean;     // não aguarda Declare-Ok do broker (fire-and-forget; erros só aparecem como Channel.Close)
-    Arguments: TAMQPFieldTable; // pode ser nil; ex. x-dead-letter-exchange, x-message-ttl, x-max-priority
-    /// Fila durável, não exclusiva, não auto-delete.
+    QueueName: string;   // '' => the server generates a name (see the recovery limitation in the README)
+    Passive: Boolean;    // True => only checks that the queue exists (404 if not); declares or changes nothing
+    Durable: Boolean;    // survives a broker restart (the message itself still depends on DeliveryMode=2)
+    Exclusive: Boolean;  // only this connection may use it; goes away when the connection closes
+    AutoDelete: Boolean; // deleted when the last consumer disconnects (never, if it never had a consumer)
+    NoWait: Boolean;     // does not wait for the broker's Declare-Ok (fire-and-forget; errors only show up as Channel.Close)
+    Arguments: TAMQPFieldTable; // may be nil; e.g. x-dead-letter-exchange, x-message-ttl, x-max-priority
+    /// Durable, non-exclusive, non-auto-delete queue.
     class function Create(const AName: string;
       ADurable: Boolean = True): TAMQPQueueDeclare; static;
   end;
@@ -32,35 +32,35 @@ type
     ConsumerCount: Cardinal;
   end;
 
-  { Liga QueueName ao ExchangeName: mensagens roteadas pelo exchange casando
-    RoutingKey passam a ser entregues na fila. O significado de RoutingKey
-    depende do tipo do exchange: rota exata em 'direct', ignorada em
-    'fanout', padrão com '*'/'#' em 'topic'. }
+  { Binds QueueName to ExchangeName: messages routed by the exchange that match
+    RoutingKey start being delivered to the queue. The meaning of RoutingKey
+    depends on the exchange type: exact route in 'direct', ignored in
+    'fanout', pattern with '*'/'#' in 'topic'. }
   TAMQPQueueBind = record
     QueueName: string;
     ExchangeName: string;
     RoutingKey: string;
     NoWait: Boolean;
-    Arguments: TAMQPFieldTable; // pode ser nil
+    Arguments: TAMQPFieldTable; // may be nil
   end;
 
-  { Desfaz um binding fila->exchange. Diferente de queue.bind, queue.unbind NÃO
-    tem flag no-wait no AMQP 0-9-1 — sempre aguarda Unbind-Ok. }
+  { Undoes a queue->exchange binding. Unlike queue.bind, queue.unbind has NO
+    no-wait flag in AMQP 0-9-1 — it always waits for Unbind-Ok. }
   TAMQPQueueUnbind = record
     QueueName: string;
     ExchangeName: string;
     RoutingKey: string;
-    Arguments: TAMQPFieldTable; // pode ser nil (deve casar com o do bind)
+    Arguments: TAMQPFieldTable; // may be nil (must match the bind's)
   end;
 
   TAMQPQueueDelete = record
     QueueName: string;
-    IfUnused: Boolean; // True => aborta (erro) se a fila tiver algum consumer
-    IfEmpty: Boolean;  // True => aborta (erro) se a fila tiver mensagens
+    IfUnused: Boolean; // True => aborts (error) if the queue has any consumer
+    IfEmpty: Boolean;  // True => aborts (error) if the queue has messages
     NoWait: Boolean;
   end;
 
-  { Argumentos de Queue.Purge (cliente -> servidor). }
+  { Arguments of Queue.Purge (client -> server). }
   TAMQPQueuePurge = record
     QueueName: string;
     NoWait: Boolean;
@@ -81,14 +81,14 @@ function DecodeQueuePurgeOk(const AReader: TAMQPReader): Cardinal; // message-co
 function BuildQueueDelete(const ADelete: TAMQPQueueDelete): TBytes;
 function DecodeQueueDeleteOk(const AReader: TAMQPReader): Cardinal; // message-count
 
-// --- Lado servidor (sub-módulo broker) -----------------------------------
-// Decode dos métodos cliente->servidor e build dos *-Ok. Nos records
-// decodificados o campo Arguments é sempre uma tabela nova (mesmo vazia) e
-// pertence ao chamador (deve liberá-la).
+// --- Server side (broker sub-module) -------------------------------------
+// Decode of the client->server methods and build of the *-Ok ones. In the
+// decoded records the Arguments field is always a new table (even if empty) and
+// belongs to the caller (who must free it).
 
 function DecodeQueueDeclare(const AReader: TAMQPReader): TAMQPQueueDeclare;
-/// Queue.Declare-Ok (11): nome da fila (o gerado, se o cliente mandou '') +
-/// contagens atuais.
+/// Queue.Declare-Ok (11): queue name (the generated one, if the client sent '') +
+/// current counts.
 function BuildQueueDeclareOk(const AQueueName: string;
   AMessageCount, AConsumerCount: Cardinal): TBytes;
 
@@ -163,7 +163,7 @@ end;
 
 procedure DecodeQueueBindOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
 function BuildQueueUnbind(const AUnbind: TAMQPQueueUnbind): TBytes;
@@ -176,7 +176,7 @@ begin
     W.WriteShortStr(AUnbind.QueueName);
     W.WriteShortStr(AUnbind.ExchangeName);
     W.WriteShortStr(AUnbind.RoutingKey);
-    W.WriteFieldTable(AUnbind.Arguments); // sem no-wait: unbind sempre responde Ok
+    W.WriteFieldTable(AUnbind.Arguments); // no no-wait: unbind always replies Ok
     Result := W.ToBytes;
   finally
     W.Free;
@@ -185,7 +185,7 @@ end;
 
 procedure DecodeQueueUnbindOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
 function BuildQueuePurge(const AQueueName: string; ANoWait: Boolean): TBytes;
@@ -230,7 +230,7 @@ begin
   Result := AReader.ReadLongUInt; // message-count
 end;
 
-{ Lado servidor }
+{ Server side }
 
 function EmptyMethod(AMethodId: Word): TBytes;
 var
@@ -267,7 +267,7 @@ begin
   Result.Exclusive := AReader.ReadBit;
   Result.AutoDelete := AReader.ReadBit;
   Result.NoWait := AReader.ReadBit;
-  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+  Result.Arguments := AReader.ReadFieldTable; // owner: caller
 end;
 
 function BuildQueueDeclareOk(const AQueueName: string;
@@ -294,7 +294,7 @@ begin
   Result.ExchangeName := AReader.ReadShortStr;
   Result.RoutingKey := AReader.ReadShortStr;
   Result.NoWait := AReader.ReadBit;
-  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+  Result.Arguments := AReader.ReadFieldTable; // owner: caller
 end;
 
 function BuildQueueBindOk: TBytes;
@@ -309,8 +309,8 @@ begin
   Result.QueueName := AReader.ReadShortStr;
   Result.ExchangeName := AReader.ReadShortStr;
   Result.RoutingKey := AReader.ReadShortStr;
-  // queue.unbind não tem no-wait
-  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+  // queue.unbind has no no-wait
+  Result.Arguments := AReader.ReadFieldTable; // owner: caller
 end;
 
 function BuildQueueUnbindOk: TBytes;

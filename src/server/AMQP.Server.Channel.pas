@@ -2,22 +2,22 @@
 
 {$I amqp.inc}
 
-{ Um canal de uma conexão do broker (sub-módulo server).
+{ One channel of a broker connection (server sub-module).
 
-  Guarda o ciclo de vida do canal (WS4) e a montagem de conteúdo (WS5): no
-  AMQP 0-9-1 uma mensagem publicada chega em três partes NESTE canal, nesta
-  ordem exata (spec 2.3.5):
+  Holds the channel lifecycle (WS4) and content assembly (WS5): in
+  AMQP 0-9-1 a published message arrives in three parts ON THIS channel, in this
+  exact order (spec 2.3.5):
 
-    1) o método Basic.Publish        -> BeginContent
-    2) um content-header com o body-size e as propriedades  -> SetContentHeader
-    3) N frames de body até somar o body-size               -> AppendBody
+    1) the Basic.Publish method        -> BeginContent
+    2) a content header with the body-size and the properties  -> SetContentHeader
+    3) N body frames until they add up to the body-size        -> AppendBody
 
-  Entre a parte 1 e a última parte 3 nenhum outro frame pode aparecer NESTE
-  canal — é a "regra de interleave", e quem a aplica é a conexão (505
-  UNEXPECTED_FRAME). Canais diferentes podem intercalar à vontade: por isso o
-  estado de montagem vive aqui, por canal, e não na conexão.
+  Between part 1 and the last part 3 no other frame may appear ON THIS
+  channel — that is the "interleave rule", and the connection enforces it (505
+  UNEXPECTED_FRAME). Different channels may interleave freely: that is why the
+  assembly state lives here, per channel, and not in the connection.
 
-  Só a thread de leitura da conexão dona toca estes objetos. }
+  Only the read thread of the owning connection touches these objects. }
 
 interface
 
@@ -32,14 +32,14 @@ uses
   AMQP.Server.Delivery;
 
 type
-  { amqchOpen  — canal utilizável.
-    amqchClosing — o broker mandou Channel.Close e espera o Channel.Close-Ok;
-    todo frame que chegar no canal nesse meio-tempo é descartado (spec 1.4.2.2). }
+  { amqchOpen  — usable channel.
+    amqchClosing — the broker sent Channel.Close and waits for Channel.Close-Ok;
+    every frame arriving on the channel in the meantime is dropped (spec 1.4.2.2). }
   TAMQPServerChannelState = (amqchOpen, amqchClosing);
 
-  { amqasIdle    — nenhum conteúdo em montagem.
-    amqasHeader  — veio o Basic.Publish, falta o content-header.
-    amqasBody    — veio o header, faltam body frames para fechar o body-size. }
+  { amqasIdle    — no content being assembled.
+    amqasHeader  — Basic.Publish arrived, the content header is missing.
+    amqasBody    — the header arrived, body frames are missing to reach the body-size. }
   TAMQPChannelAsmState = (amqasIdle, amqasHeader, amqasBody);
 
   TAMQPServerChannel = class
@@ -50,32 +50,32 @@ type
     FConfirmMode: Boolean;
     FPublishSeq: UInt64;
     FPrefetchCount: Word;
-    // Alvo de entrega (WS4). O canal cria e DESTACA; as filas onde este canal
-    // tem consumidores seguram a interface, o que mantem o objeto vivo mesmo
-    // depois de o canal morrer -- ver AMQP.Server.Delivery.
+    // Delivery target (WS4). The channel creates and DETACHES it; the queues where
+    // this channel has consumers hold the interface, which keeps the object alive
+    // even after the channel dies -- see AMQP.Server.Delivery.
     FTargetObj: TAMQPChannelDeliveryTarget;
     FTarget: IAMQPDeliveryTarget;
-    // Identidade do alvo, guardada A PARTE porque ela precisa SOBREVIVER ao
-    // DetachDelivery: o teardown da conexao destaca os alvos antes de varrer
-    // os canais, e e' justamente nessa varredura que as filas precisam saber
-    // de qual canal soltar consumidores e nao-confirmadas.
+    // Target identity, kept SEPARATELY because it must SURVIVE
+    // DetachDelivery: connection teardown detaches the targets before sweeping
+    // the channels, and it is precisely in that sweep that the queues need to
+    // know which channel to release consumers and unacked deliveries from.
     FDeliveryId: NativeUInt;
-    // Rastreador de confirms adiados (WS5 da Fase 4). nil enquanto o broker
-    // nao tiver DataDir -- sem durabilidade o confirm sai inline, como na
-    // Fase 3. Quem cria e registra e' a conexao (so' ela conhece o registro
-    // do broker); o canal so' guarda e destaca, pelo mesmo motivo do alvo de
-    // entrega: quem libera o pendente e' a thread do JOURNAL.
+    // Deferred-confirm tracker (WS5 of Phase 4). nil while the broker
+    // has no DataDir -- without durability the confirm goes out inline, as in
+    // Phase 3. The connection creates and registers it (only it knows the
+    // broker's registry); the channel only holds and detaches it, for the same
+    // reason as the delivery target: the JOURNAL thread releases the pending one.
     FConfirms: IAMQPConfirmTracker;
-    // WS5: o canal e' quem sabe amarrar o que o cliente diz ao que a engine
-    // precisa. Duas amarracoes:
-    //  - consumer-tag -> nome da fila, para o Basic.Cancel e para o teardown;
-    //  - delivery-tag -> nome da fila, porque o Basic.Ack/Nack/Reject chega
-    //    com uma tag do CANAL e quem tem a nao-confirmada e' a FILA.
-    // Só a thread de leitura desta conexão mexe nestes mapas.
+    // WS5: the channel is what knows how to tie what the client says to what the
+    // engine needs. Two ties:
+    //  - consumer-tag -> queue name, for Basic.Cancel and for teardown;
+    //  - delivery-tag -> queue name, because Basic.Ack/Nack/Reject arrives
+    //    with a CHANNEL tag and the QUEUE holds the unacked delivery.
+    // Only this connection's read thread touches these maps.
     FLastQueue: string;
     FConsumers: TDictionary<string, string>;
     FUnacked: TDictionary<UInt64, string>;
-    // --- montagem de conteúdo ---
+    // --- content assembly ---
     FAsmState: TAMQPChannelAsmState;
     FPublish: TAMQPBasicPublish;
     FProps: TAMQPBasicProperties;
@@ -93,80 +93,80 @@ type
 
     function IsOpen: Boolean;
 
-    /// Cria o alvo de entrega deste canal sobre o writer da conexao.
-    /// AMaxPayload = quanto cabe no payload de um frame (frame-max negociado
-    /// menos o overhead). Chamar uma vez, ao abrir o canal.
+    /// Creates this channel's delivery target over the connection writer.
+    /// AMaxPayload = how much fits in a frame payload (negotiated frame-max
+    /// minus the overhead). Call once, when opening the channel.
     procedure AttachDelivery(AWriter: TAMQPFrameWriter; AMaxPayload: Cardinal);
-    /// Solta o alvo: a partir daqui toda entrega pendente falha em vez de
-    /// tocar no writer. OBRIGATORIO antes de liberar o canal ou o writer --
-    /// uma fila pode estar entregando neste exato instante, numa thread do
-    /// pool. Idempotente; o destrutor chama.
+    /// Releases the target: from here on every pending delivery fails instead of
+    /// touching the writer. MANDATORY before freeing the channel or the writer --
+    /// a queue may be delivering at this very instant, on a pool
+    /// thread. Idempotent; the destructor calls it.
     procedure DetachDelivery;
 
-    /// Chegou o Basic.Publish: começa a montagem, esperando o content-header.
-    /// Descarta qualquer montagem anterior inacabada.
+    /// Basic.Publish arrived: starts assembly, waiting for the content header.
+    /// Drops any previous unfinished assembly.
     procedure BeginContent(const APublish: TAMQPBasicPublish);
-    /// Chegou o content-header, já decodificado (AHeader) E o payload cru do
-    /// frame (AHeaderPayload — decisão D1 da Fase 2: a mensagem final carrega
-    /// esse payload para reemissão fiel, ver AMQP.Server.Message). Result =
-    /// conteúdo JÁ completo (body-size 0, mensagem sem corpo — caso legítimo
-    /// e comum em RPC).
+    /// The content header arrived, already decoded (AHeader) AND the frame's raw
+    /// payload (AHeaderPayload — decision D1 of Phase 2: the final message carries
+    /// that payload for faithful re-emission, see AMQP.Server.Message). Result =
+    /// content ALREADY complete (body-size 0, message with no body — a legitimate
+    /// case, common in RPC).
     function SetContentHeader(const AHeader: TAMQPContentHeader;
       const AHeaderPayload: TBytes): Boolean;
-    /// Acrescenta um frame de body. Result = conteúdo completo.
-    /// Levanta EAMQPConnectionError (505) se o corpo passar do body-size
-    /// declarado — o stream ficou fora de sincronia com o que o peer prometeu.
+    /// Appends a body frame. Result = content complete.
+    /// Raises EAMQPConnectionError (505) if the body exceeds the declared
+    /// body-size — the stream is out of sync with what the peer promised.
     function AppendBody(const AData: TBytes): Boolean;
-    /// Monta a mensagem pronta. Só faz sentido com a montagem completa; a
-    /// tabela de Headers segue pertencendo a ESTE canal (ver IAMQPMessageSink).
+    /// Builds the finished message. Only makes sense with assembly complete; the
+    /// Headers table still belongs to THIS channel (see IAMQPMessageSink).
     function CurrentMessage(const AUserId: string): TAMQPServerMessage;
-    /// Volta a amqasIdle liberando o que foi acumulado. Idempotente.
+    /// Returns to amqasIdle, freeing what was accumulated. Idempotent.
     procedure ResetContent;
 
-    // --- amarrações do WS5 ---
+    // --- WS5 ties ---
     procedure AddConsumerTag(const ATag, AQueue: string);
     function ConsumerQueue(const ATag: string; out AQueue: string): Boolean;
     procedure RemoveConsumerTag(const ATag: string);
-    /// Filas em que este canal tem consumidor ou entrega pendente — o
-    /// teardown precisa avisar cada uma.
+    /// Queues where this channel has a consumer or a pending delivery — the
+    /// teardown has to notify each one.
     function TouchedQueues: TArray<string>;
 
     property Id: Word read FId;
     property State: TAMQPServerChannelState read FState write FState;
-    /// Alvo de entrega para pendurar num consumidor de fila (nil antes do
-    /// AttachDelivery). E' interface: quem guardar mantem o objeto vivo.
+    /// Delivery target to hang on a queue consumer (nil before
+    /// AttachDelivery). It is an interface: whoever keeps it keeps the object alive.
     property DeliveryTarget: IAMQPDeliveryTarget read FTarget;
-    /// O mesmo alvo como objeto, para o que so' a conexao faz (delivery-tag
-    /// do Basic.Get, baixa de prefetch no ack). nil antes do AttachDelivery.
+    /// The same target as an object, for what only the connection does (Basic.Get
+    /// delivery-tag, lowering the prefetch on ack). nil before AttachDelivery.
     property Delivery: TAMQPChannelDeliveryTarget read FTargetObj;
-    /// Identidade do alvo deste canal. Continua valida depois do
-    /// DetachDelivery (ver o campo). 0 antes do AttachDelivery.
+    /// Identity of this channel's target. Stays valid after
+    /// DetachDelivery (see the field). 0 before AttachDelivery.
     property DeliveryId: NativeUInt read FDeliveryId;
-    /// Rastreador de confirms deste canal, ou nil (broker sem durabilidade).
+    /// This channel's confirm tracker, or nil (broker without durability).
     property Confirms: IAMQPConfirmTracker read FConfirms write FConfirms;
-    /// Channel.Flow: False = o peer pediu que paremos de entregar conteúdo
-    /// neste canal. A Fase 2 respeita na entrega.
+    /// Channel.Flow: False = the peer asked us to stop delivering content
+    /// on this channel. Phase 2 honors it on delivery.
     property Active: Boolean read FActive write SetActive;
-    /// Confirm.Select recebido (publisher confirms): cada publish passa a
-    /// gerar um Basic.Ack. Ligar zera a sequência de seq-no (spec 1.3.1 da
-    /// extensão: a contagem começa quando o modo é ligado).
+    /// Confirm.Select received (publisher confirms): every publish now
+    /// generates a Basic.Ack. Turning it on resets the seq-no sequence (spec 1.3.1
+    /// of the extension: counting starts when the mode is turned on).
     property ConfirmMode: Boolean read FConfirmMode write SetConfirmMode;
-    /// Consome e devolve o próximo seq-no de publicação deste canal. A
-    /// sequência começa em 1 e conta TODO publish enquanto o confirm mode
-    /// estiver ligado — roteado ou não, porque é assim que o cliente
-    /// correlaciona o ack com o publish que ele numerou.
+    /// Consumes and returns this channel's next publish seq-no. The
+    /// sequence starts at 1 and counts EVERY publish while confirm mode
+    /// is on — routed or not, because that is how the client
+    /// correlates the ack with the publish it numbered.
     function NextPublishSeq: UInt64;
-    /// Basic.Qos. A Fase 2 usa para limitar entregas não confirmadas.
+    /// Basic.Qos. Phase 2 uses it to limit unacknowledged deliveries.
     property PrefetchCount: Word read FPrefetchCount write SetPrefetchCount;
 
-    /// Última fila declarada NESTE canal. A spec deixa o cliente omitir o
-    /// nome da fila em Queue.Bind/Purge/Delete e Basic.Consume/Get, e nesse
-    /// caso vale a última declarada no canal (spec 1.7.2.1).
+    /// Last queue declared ON THIS channel. The spec lets the client omit the
+    /// queue name in Queue.Bind/Purge/Delete and Basic.Consume/Get, and in that
+    /// case the last one declared on the channel applies (spec 1.7.2.1).
     property LastQueue: string read FLastQueue write FLastQueue;
     property AsmState: TAMQPChannelAsmState read FAsmState;
-    /// Body-size declarado no content-header (válido em amqasBody).
+    /// Body-size declared in the content header (valid in amqasBody).
     property BodySize: UInt64 read FBodySize;
-    /// Quanto do corpo já chegou.
+    /// How much of the body has arrived.
     property BodyLen: Integer read FBodyLen;
   end;
 
@@ -185,8 +185,8 @@ end;
 
 destructor TAMQPServerChannel.Destroy;
 begin
-  DetachDelivery; // nunca liberar o canal deixando entrega viva apontando aqui
-  ResetContent; // um canal fechado no meio de um publish não pode vazar a tabela
+  DetachDelivery; // never free the channel leaving a live delivery pointing here
+  ResetContent; // a channel closed in the middle of a publish must not leak the table
   FConsumers.Free;
   inherited;
 end;
@@ -197,7 +197,7 @@ begin
   if FTarget <> nil then
     Exit;
   FTargetObj := TAMQPChannelDeliveryTarget.Create(AWriter, FId, AMaxPayload);
-  FTarget := FTargetObj; // a interface e' quem conta as referencias
+  FTarget := FTargetObj; // the interface is what counts the references
   FDeliveryId := FTargetObj.ChannelId;
   FTargetObj.SetActive(FActive);
   FTargetObj.SetPrefetch(FPrefetchCount);
@@ -207,16 +207,16 @@ procedure TAMQPServerChannel.DetachDelivery;
 begin
   if FTargetObj <> nil then
     FTargetObj.Detach;
-  // O rastreador de confirms morre junto, e pela mesma razao: a thread do
-  // journal pode estar dentro dele agora. Detach solta o writer sob lock.
-  // A referencia fica (o registro do broker ainda a tem ate' o Unregister).
+  // The confirm tracker dies along with it, for the same reason: the journal
+  // thread may be inside it right now. Detach releases the writer under lock.
+  // The reference stays (the broker's registry still holds it until Unregister).
   if FConfirms <> nil then
     FConfirms.Detach;
-  // A REFERENCIA continua aqui de proposito (so' o Detach acontece): o
-  // teardown da conexao destaca todos os alvos ANTES de varrer os canais, e
-  // essa varredura ainda precisa perguntar ao alvo em que filas este canal
-  // tem entrega em aberto. Quem libera o objeto e' o refcount da interface,
-  // quando o canal e as filas soltarem a ultima referencia.
+  // The REFERENCE stays here on purpose (only the Detach happens): the
+  // connection teardown detaches all targets BEFORE sweeping the channels, and
+  // that sweep still needs to ask the target in which queues this channel
+  // has open deliveries. The interface refcount frees the object
+  // when the channel and the queues release the last reference.
 end;
 
 procedure TAMQPServerChannel.AddConsumerTag(const ATag, AQueue: string);
@@ -256,7 +256,7 @@ end;
 procedure TAMQPServerChannel.SetConfirmMode(AValue: Boolean);
 begin
   if AValue and (not FConfirmMode) then
-    FPublishSeq := 0; // a sequência nasce com o modo
+    FPublishSeq := 0; // the sequence is born with the mode
   FConfirmMode := AValue;
 end;
 
@@ -287,8 +287,8 @@ end;
 
 procedure TAMQPServerChannel.FreeProps;
 begin
-  // DecodeContentHeader cria a tabela de headers quando a propriedade está
-  // presente; o dono é quem decodificou, ou seja, este canal.
+  // DecodeContentHeader creates the headers table when the property is
+  // present; the owner is whoever decoded it, that is, this channel.
   if FProps.Has(bpHeaders) and Assigned(FProps.Headers) then
     FProps.Headers.Free;
   FProps := TAMQPBasicProperties.Empty;
@@ -320,7 +320,7 @@ begin
   FBodySize := AHeader.BodySize;
   FBody := nil;
   FBodyLen := 0;
-  // Sem corpo: a mensagem já está completa e nenhum body frame virá.
+  // No body: the message is already complete and no body frame will come.
   if FBodySize = 0 then
   begin
     FAsmState := amqasIdle;
@@ -335,8 +335,8 @@ var
   LLen: Integer;
 begin
   LLen := Length(AData);
-  // Cresce conforme chega: nada de alocar o body-size declarado de uma vez,
-  // senão um peer hostil derruba o broker só anunciando um corpo gigante.
+  // Grows as it arrives: never allocate the declared body-size at once,
+  // or a hostile peer brings the broker down just by announcing a giant body.
   if UInt64(FBodyLen) + UInt64(LLen) > FBodySize then
     raise EAMQPConnectionError.Create(AMQP_UNEXPECTED_FRAME,
       Format('body exceeds declared body-size (%d): already %d + %d octets',
@@ -363,7 +363,7 @@ begin
   Result.Mandatory := FPublish.Mandatory;
   Result.Immediate := FPublish.Immediate;
   Result.Properties := FProps;
-  Result.Body := Copy(FBody, 0, FBodyLen); // FBody pode ter folga de alocação
+  Result.Body := Copy(FBody, 0, FBodyLen); // FBody may have allocation slack
   Result.UserId := AUserId;
   Result.HeaderPayload := FHeaderPayload;
 end;

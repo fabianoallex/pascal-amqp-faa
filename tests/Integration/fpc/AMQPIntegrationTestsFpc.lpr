@@ -1,23 +1,24 @@
 ﻿program AMQPIntegrationTestsFpc;
 
-{ Runner FPCUnit dos testes de integração (mesma cobertura do
-  tests/Integration/*.pas DUnitX/Delphi, portada para FPCUnit). Precisa de um
-  RabbitMQ real em localhost:5672 (docker compose -f docker/docker-compose.yml
-  up -d); para os testes TLS, soma docker-compose.tls.yml — sem o broker TLS
-  eles se auto-ignoram.
+{ FPCUnit runner of the integration tests (same coverage as the DUnitX/Delphi
+  tests/Integration/*.pas, ported to FPCUnit). Needs a real RabbitMQ on
+  localhost:5672 (docker compose -f docker/docker-compose.yml up -d); for the
+  TLS tests, add docker-compose.tls.yml — without the TLS broker they ignore
+  themselves.
 
-  Console (saida de texto), quando chamado com qualquer parametro:
+  Console (text output), when called with any parameter:
     .\AMQPIntegrationTestsFpc.exe --all --format=plain
-  GUI (janela com arvore de testes + barra verde/vermelha), sem parametros:
+  GUI (window with the test tree + green/red bar), without parameters:
     .\AMQPIntegrationTestsFpc.exe
-  Fora do Windows roda sempre em modo console (sem LCL/widgetset), com ou
-  sem parametros. AMQP.TlsIntegrationTests entra em toda plataforma: the
+  Outside Windows it always runs in console mode (no LCL/widgetset), with or
+  without parameters. AMQP.TlsIntegrationTests is included on every platform: the
   default backend is SChannel on Windows and OpenSSL elsewhere (the openssl
   build mode makes it OpenSSL on Windows too). Without a TLS broker on 5671
   the TLS tests ignore themselves.
 
-  Ver CLAUDE.md para os workarounds de erros internos do FPC 3.2.2 e o
-  TInterlocked que nao existe no FPC (usar PcAtomic* de PascalCommon.Threading). }
+  See CLAUDE.md for the workarounds for FPC 3.2.2 internal errors and for
+  TInterlocked, which does not exist in FPC (use PcAtomic* from
+  PascalCommon.Threading). }
 
 {$mode delphi}{$H+}
 
@@ -42,9 +43,9 @@ uses
 var
   ConsoleApp: TTestRunner;
 begin
-  // Console FPC puro (fora de app Lazarus): DefaultSystemCodePage nao e' UTF-8
-  // por padrao, entao strings acentuadas nos testes seriam transcodificadas
-  // errado. Ver CLAUDE.md.
+  // Plain FPC console (outside a Lazarus app): DefaultSystemCodePage is not
+  // UTF-8 by default, so accented strings in the tests would be transcoded
+  // wrongly. See CLAUDE.md.
   SetMultiByteConversionCodePage(CP_UTF8);
 
   {$IFDEF MSWINDOWS}

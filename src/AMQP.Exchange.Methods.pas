@@ -2,7 +2,7 @@
 
 {$I amqp.inc}
 
-{ Métodos da classe Exchange (40): declaração e remoção de exchange. }
+{ Methods of the Exchange class (40): exchange declaration and removal. }
 
 interface
 
@@ -21,14 +21,14 @@ const
 type
   TAMQPExchangeDeclare = record
     ExchangeName: string;
-    ExchangeType: string; // AMQP_EXCHANGE_TYPE_DIRECT/FANOUT/TOPIC/HEADERS (ou tipo custom instalado no broker)
-    Passive: Boolean;     // True => só verifica se o exchange existe (erro 404 se não); não declara nem altera nada
-    Durable: Boolean;     // sobrevive a um restart do broker
-    AutoDelete: Boolean;  // apagado quando o último bind é removido (nunca, se nunca teve bind)
-    Internal: Boolean;    // True => só recebe de outros exchanges (bind exchange->exchange); publish direto é recusado
-    NoWait: Boolean;      // não aguarda Declare-Ok do broker (fire-and-forget; erros só aparecem como Channel.Close)
-    Arguments: TAMQPFieldTable; // pode ser nil (tabela vazia)
-    /// Declaração padrão: exchange durável, não passiva, tipo 'direct'.
+    ExchangeType: string; // AMQP_EXCHANGE_TYPE_DIRECT/FANOUT/TOPIC/HEADERS (or a custom type installed on the broker)
+    Passive: Boolean;     // True => only checks that the exchange exists (404 if not); declares or changes nothing
+    Durable: Boolean;     // survives a broker restart
+    AutoDelete: Boolean;  // deleted when the last bind is removed (never, if it never had a bind)
+    Internal: Boolean;    // True => only receives from other exchanges (exchange->exchange bind); direct publish is refused
+    NoWait: Boolean;      // does not wait for the broker's Declare-Ok (fire-and-forget; errors only show up as Channel.Close)
+    Arguments: TAMQPFieldTable; // may be nil (empty table)
+    /// Default declaration: durable, non-passive exchange, type 'direct'.
     class function Create(const AName: string;
       const AType: string = AMQP_EXCHANGE_TYPE_DIRECT;
       ADurable: Boolean = True): TAMQPExchangeDeclare; static;
@@ -40,15 +40,15 @@ type
     NoWait: Boolean;
   end;
 
-  { Binding exchange->exchange (extensão RabbitMQ). Destination recebe as
-    mensagens roteadas de Source pela RoutingKey. Serve tanto para bind quanto
-    para unbind (mesmo layout de argumentos). }
+  { Exchange->exchange binding (RabbitMQ extension). Destination receives the
+    messages routed from Source by RoutingKey. Serves both bind and
+    unbind (same argument layout). }
   TAMQPExchangeBinding = record
-    Destination: string;         // exchange que recebe (destino)
-    Source: string;              // exchange de origem
+    Destination: string;         // receiving exchange (destination)
+    Source: string;              // source exchange
     RoutingKey: string;
     NoWait: Boolean;
-    Arguments: TAMQPFieldTable;  // pode ser nil
+    Arguments: TAMQPFieldTable;  // may be nil
   end;
 
 function BuildExchangeDeclare(const ADeclare: TAMQPExchangeDeclare): TBytes;
@@ -63,10 +63,10 @@ procedure DecodeExchangeBindOk(const AReader: TAMQPReader);
 function BuildExchangeUnbind(const AUnbind: TAMQPExchangeBinding): TBytes;
 procedure DecodeExchangeUnbindOk(const AReader: TAMQPReader);
 
-// --- Lado servidor (sub-módulo broker) -----------------------------------
-// Decode dos métodos cliente->servidor e build dos *-Ok. Nos records
-// decodificados o campo Arguments é sempre uma tabela nova (mesmo vazia) e
-// pertence ao chamador (deve liberá-la).
+// --- Server side (broker sub-module) -------------------------------------
+// Decode of the client->server methods and build of the *-Ok ones. In the
+// decoded records the Arguments field is always a new table (even if empty) and
+// belongs to the caller (who must free it).
 
 function DecodeExchangeDeclare(const AReader: TAMQPReader): TAMQPExchangeDeclare;
 function BuildExchangeDeclareOk: TBytes;
@@ -116,7 +116,7 @@ end;
 
 procedure DecodeExchangeDeclareOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
 function BuildExchangeDelete(const ADelete: TAMQPExchangeDelete): TBytes;
@@ -137,10 +137,10 @@ end;
 
 procedure DecodeExchangeDeleteOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
-// exchange.bind e exchange.unbind têm o MESMO layout de argumentos
+// exchange.bind and exchange.unbind have the SAME argument layout
 // (reserved-1, destination, source, routing-key, no-wait, arguments).
 function BuildExchangeBindLike(AMethodId: Word;
   const ABinding: TAMQPExchangeBinding): TBytes;
@@ -168,7 +168,7 @@ end;
 
 procedure DecodeExchangeBindOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
 function BuildExchangeUnbind(const AUnbind: TAMQPExchangeBinding): TBytes;
@@ -178,10 +178,10 @@ end;
 
 procedure DecodeExchangeUnbindOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
-{ Lado servidor }
+{ Server side }
 
 function EmptyMethod(AMethodId: Word): TBytes;
 var
@@ -206,7 +206,7 @@ begin
   Result.AutoDelete := AReader.ReadBit;
   Result.Internal := AReader.ReadBit;
   Result.NoWait := AReader.ReadBit;
-  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+  Result.Arguments := AReader.ReadFieldTable; // owner: caller
 end;
 
 function BuildExchangeDeclareOk: TBytes;
@@ -228,7 +228,7 @@ begin
   Result := EmptyMethod(AMQP_EXCHANGE_DELETE_OK);
 end;
 
-// bind e unbind: mesmo layout (reserved-1, destination, source, routing-key,
+// bind and unbind: same layout (reserved-1, destination, source, routing-key,
 // no-wait, arguments).
 function DecodeExchangeBindLike(const AReader: TAMQPReader): TAMQPExchangeBinding;
 begin
@@ -238,7 +238,7 @@ begin
   Result.Source := AReader.ReadShortStr;
   Result.RoutingKey := AReader.ReadShortStr;
   Result.NoWait := AReader.ReadBit;
-  Result.Arguments := AReader.ReadFieldTable; // dono: chamador
+  Result.Arguments := AReader.ReadFieldTable; // owner: caller
 end;
 
 function DecodeExchangeBind(const AReader: TAMQPReader): TAMQPExchangeBinding;
@@ -258,7 +258,7 @@ end;
 
 function BuildExchangeUnbindOk: TBytes;
 begin
-  // peculiaridade da spec estendida RabbitMQ: unbind-ok é 51, não 41.
+  // quirk of RabbitMQ's extended spec: unbind-ok is 51, not 41.
   Result := EmptyMethod(AMQP_EXCHANGE_UNBIND_OK);
 end;
 

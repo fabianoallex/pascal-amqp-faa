@@ -1,41 +1,41 @@
 ﻿unit AMQP.TestTimeLogger;
 
-{ Logger de console do DUnitX que imprime o TEMPO de cada teste.
+{ DUnitX console logger that prints the TIME of each test.
 
-  Por que existe
-  --------------
-  O TDUnitXConsoleLogger embutido não é configurável (só `quietMode` no
-  construtor) e nunca imprime duração. Isso importa nesta codebase por um
-  motivo concreto, descoberto na WS9 da Fase 2: o DUnitX **não tem balde de
-  "ignorado"** — o auto-ignore usado aqui (testes de TLS sem broker, testes que
-  dependem de recurso de Fase 3) é `Assert.Pass('IGNORADO: ...')`, que o
-  relatório conta como **Passed**. Um resumo "28 Passed / 0 Ignored" pode
-  esconder 5 testes que nem tocaram no alvo.
+  Why it exists
+  -------------
+  The built-in TDUnitXConsoleLogger is not configurable (only `quietMode` in
+  the constructor) and never prints duration. That matters in this codebase for a
+  concrete reason, discovered in WS9 of Phase 2: DUnitX **has no "ignored"
+  bucket** — the auto-ignore used here (TLS tests without a broker, tests that
+  depend on a Phase 3 feature) is `Assert.Pass('IGNORADO: ...')`, which the
+  report counts as **Passed**. A "28 Passed / 0 Ignored" summary can
+  hide 5 tests that never touched the target.
 
-  O que distingue os dois é a **mensagem**: o auto-ignore daqui sempre passa um
-  texto começando com `IGNORADO:` para o `Assert.Pass`, e é isso que este logger
-  marca com `~`. (Tempo *quase* servia — auto-ignorado sai em ~0.000s — mas é
-  heurística: contra o broker embutido há testes reais abaixo de 0,5 ms, e a
-  primeira versão deste logger produziu 3 falsos positivos em 28. O campo
-  `asserts` do XML também não serve: vem 0 mesmo em teste que rodou.)
+  What tells the two apart is the **message**: the auto-ignore here always passes
+  `Assert.Pass` a text starting with `IGNORADO:`, and that is what this logger
+  marks with `~`. (Time *almost* worked — auto-ignored finishes in ~0.000s — but it
+  is a heuristic: against the embedded broker there are real tests under 0.5 ms, and the
+  first version of this logger produced 3 false positives out of 28. The XML's
+  `asserts` field does not work either: it is 0 even for a test that ran.)
 
-  A duração vem de `ITestResult.Duration` (via `IResult`), exatamente a mesma
-  fonte que o logger XML usa para o `time=` — os dois números batem.
+  The duration comes from `ITestResult.Duration` (via `IResult`), exactly the same
+  source the XML logger uses for `time=` — the two numbers match.
 
-  Como usar
-  ---------
-  `runner.AddLogger(TAMQPTestTimeLogger.Create);` **antes** do logger de console.
-  A ordem importa: o runner percorre os loggers na ordem de registro, e o rodapé
-  ("Done testing / Tests Found: ...") sai do `OnTestingEnds` do logger de
-  console. Registrando este primeiro, a tabela de tempos aparece **entre** a
-  saída detalhada dos testes e esse rodapé.
+  How to use
+  ----------
+  `runner.AddLogger(TAMQPTestTimeLogger.Create);` **before** the console logger.
+  The order matters: the runner walks the loggers in registration order, and the footer
+  ("Done testing / Tests Found: ...") comes from the console logger's
+  `OnTestingEnds`. Registering this one first, the timing table appears **between** the
+  tests' detailed output and that footer.
 
-  Ele não imprime nada durante a execução: acumula em memória e despeja tudo de
-  uma vez no fim. Assim a saída padrão do DUnitX (Setup/Executing/Teardown de
-  cada teste) fica intacta, sem uma linha nossa intercalada a cada teste.
+  It prints nothing during the run: it accumulates in memory and dumps everything
+  at once at the end. This way DUnitX's standard output (Setup/Executing/Teardown of
+  each test) stays intact, without a line of ours interleaved with each test.
 
-  A suíte FPCUnit já imprime tempo por teste nativamente — isto alinha os dois
-  lados. }
+  The FPCUnit suite already prints time per test natively — this aligns both
+  sides. }
 
 interface
 
@@ -46,7 +46,7 @@ uses
   DUnitX.TestFramework;
 
 type
-  /// Uma linha da tabela: o que foi medido de um teste.
+  /// One row of the table: what was measured for a test.
   TAMQPTestTiming = record
     Nome: string;
     Segundos: Double;
@@ -56,12 +56,12 @@ type
 
   TAMQPTestTimeLogger = class(TInterfacedObject, ITestLogger)
   private
-    /// Prefixo que o auto-ignore desta codebase usa em `Assert.Pass` — é o
-    /// sinal EXATO de "este teste não exercitou o alvo". A versão anterior
-    /// deste logger deduzia isso do tempo (< 0,5 ms) e errava: contra o broker
-    /// embutido, testes que rodam de verdade terminam em menos que isso —
-    /// medido, 3 falsos positivos numa execução de 28. Tempo é heurística; a
-    /// mensagem é fato.
+    /// Prefix this codebase's auto-ignore uses in `Assert.Pass` — it is the
+    /// EXACT signal of "this test did not exercise the target". The previous version
+    /// of this logger inferred it from the time (< 0.5 ms) and got it wrong: against the
+    /// embedded broker, tests that really run finish in less than that —
+    /// measured, 3 false positives in a run of 28. Time is a heuristic; the
+    /// message is fact.
     const MARCA_IGNORADO = 'IGNORADO';
   private
     FLinhas: TList<TAMQPTestTiming>;
@@ -71,8 +71,8 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    // --- ITestLogger: só três destes fazem algo; o resto é obrigação da
-    //     interface (o DUnitX não tem uma classe base "adapter"). ---
+    // --- ITestLogger: only three of these do anything; the rest is required by
+    //     the interface (DUnitX has no "adapter" base class). ---
     procedure OnTestingStarts(const threadId: TThreadID;
       testCount, testActiveCount: Cardinal);
     procedure OnStartTestFixture(const threadId: TThreadID;
@@ -117,7 +117,7 @@ begin
   inherited;
 end;
 
-// Guarda; não imprime. Ver "Como usar" no cabeçalho da unit.
+// Stores; does not print. See "How to use" in the unit header.
 procedure TAMQPTestTimeLogger.Anota(const AResultado: string;
   const ATest: ITestResult);
 var
@@ -155,7 +155,7 @@ begin
   begin
     LLinha := FLinhas[I];
     LTotal := LTotal + LLinha.Segundos;
-    // '~' marca o teste que se auto-ignorou -- pela MENSAGEM, não pelo tempo.
+    // '~' marks the test that ignored itself -- by the MESSAGE, not by the time.
     if Pos(MARCA_IGNORADO, UpperCase(LLinha.Mensagem)) > 0 then
     begin
       LMarca := '~';
@@ -216,15 +216,15 @@ end;
 
 procedure TAMQPTestTimeLogger.OnTestingEnds(const RunResults: IRunResults);
 begin
-  // Este logger é registrado ANTES do de console, então isto sai antes do
-  // rodapé "Done testing / Tests Found: ..." -- que é exatamente onde a tabela
-  // é útil: logo acima do resumo que ela qualifica.
+  // This logger is registered BEFORE the console one, so this comes out before the
+  // "Done testing / Tests Found: ..." footer -- which is exactly where the table
+  // is useful: right above the summary it qualifies.
   Despeja;
   System.Writeln(Format('tempo total da execucao: %.3fs',
     [RunResults.Duration.TotalSeconds]));
 end;
 
-{ --- daqui para baixo: exigências da interface, sem saída --- }
+{ --- from here down: interface requirements, no output --- }
 
 procedure TAMQPTestTimeLogger.OnTestingStarts(const threadId: TThreadID;
   testCount, testActiveCount: Cardinal);
@@ -284,8 +284,8 @@ end;
 procedure TAMQPTestTimeLogger.OnEndTest(const threadId: TThreadID;
   const Test: ITestResult);
 begin
-  // A linha já saiu em OnTestSuccess/OnTestFailure/OnTestError/OnTestIgnored;
-  // imprimir aqui também duplicaria.
+  // The line already came out in OnTestSuccess/OnTestFailure/OnTestError/OnTestIgnored;
+  // printing here too would duplicate it.
 end;
 
 procedure TAMQPTestTimeLogger.OnTearDownFixture(const threadId: TThreadID;

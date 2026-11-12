@@ -2,38 +2,40 @@
 
 {$I amqp.inc}
 
-{ A engine -- sub-modulo broker, WS5 da Fase 2.
+{ The engine -- broker sub-module, WS5 of Phase 2.
 
-  Junta as tres pecas que as frentes anteriores construiram separadas:
-   - a TOPOLOGIA por vhost (WS2: exchanges, filas declaradas, bindings e o
-     roteamento direct/fanout/topic/headers, sob RWLock);
-   - as FILAS VIVAS (WS3: um ator por fila, com estoque, nao-confirmadas e
-     consumidores);
-   - a ENTREGA (WS4: o alvo por canal).
+  Joins the three pieces the earlier workstreams built separately:
+   - the per-vhost TOPOLOGY (WS2: exchanges, declared queues, bindings and
+     direct/fanout/topic/headers routing, under an RWLock);
+   - the LIVE QUEUES (WS3: one actor per queue, with stock, unacked messages
+     and consumers);
+   - DELIVERY (WS4: the per-channel target).
 
-  A FSM da conexao fala SO' com esta classe. Ela nao conhece numero de canal,
-  nao levanta excecao de protocolo e nao sabe reply-code nenhum: devolve
-  TAMQPEngineResult, e quem traduz para 403/404/405/406/540 -- e para "erro de
-  canal" ou "erro de conexao" -- e' a FSM, que e' quem tem o canal na mao.
+  The connection FSM talks ONLY to this class. It knows no channel number,
+  raises no protocol exception and knows no reply-code at all: it returns
+  TAMQPEngineResult, and the translation to 403/404/405/406/540 -- and to
+  "channel error" or "connection error" -- is done by the FSM, which is the
+  one holding the channel.
 
-  Descritor x fila viva
-  ---------------------
-  O TAMQPVHost (WS2) guarda TAMQPQueueDef -- o DESCRITOR (flags, argumentos,
-  dono). O objeto com estoque e consumidores e' o TAMQPServerQueue (WS3), que
-  vive aqui, indexado por 'vhost/nome'. Os dois nascem e morrem juntos, e e'
-  esta unit que garante isso: nao ha caminho que crie um sem o outro.
+  Descriptor x live queue
+  -----------------------
+  TAMQPVHost (WS2) keeps TAMQPQueueDef -- the DESCRIPTOR (flags, arguments,
+  owner). The object with stock and consumers is TAMQPServerQueue (WS3), which
+  lives here, indexed by 'vhost/name'. Both are born and die together, and this
+  unit is what guarantees it: there is no path that creates one without the
+  other.
 
-  Publicacao
+  Publishing
   ----------
-  TAMQPEngine implementa IAMQPMessageSink, entao o caminho de conteudo da
-  Fase 1 (canal remonta -> Sink.RouteMessage) continua identico: so' muda quem
-  esta' plugado. O match de bindings roda na thread do PUBLICADOR, sobre a
-  tabela de headers viva do canal ("Invariante nova" do CLAUDE.md); so' o
-  enqueue atravessa para o ator da fila.
+  TAMQPEngine implements IAMQPMessageSink, so Phase 1's content path (channel
+  reassembles -> Sink.RouteMessage) stays identical: only what is plugged in
+  changes. Binding matching runs on the PUBLISHER's thread, over the channel's
+  live headers table ("new invariant" in CLAUDE.md); only the enqueue crosses
+  over to the queue actor.
 
-  Refcount da interface: _AddRef/_Release sao no-op (-1) de proposito -- quem
-  e' dono da engine e' o TAMQPServer, e a referencia de interface guardada na
-  config das conexoes nao pode decidir o tempo de vida dela. }
+  Interface refcount: _AddRef/_Release are no-ops (-1) on purpose -- the
+  engine's owner is TAMQPServer, and the interface reference kept in the
+  connections' config must not decide its lifetime. }
 
 interface
 
@@ -60,44 +62,45 @@ uses
   AMQP.Server.Recovery;
 
 type
-  { O que aconteceu numa operacao da engine. A FSM (WS5) mapeia para
-    reply-code; a engine nao conhece nenhum. }
+  { What happened in an engine operation. The FSM (WS5) maps it to a
+    reply-code; the engine knows none. }
   TAMQPEngineResult = (
     amqerOk,
-    /// recurso citado nao existe -- 404 NOT_FOUND
+    /// referenced resource does not exist -- 404 NOT_FOUND
     amqerNotFound,
-    /// redeclare do mesmo nome com flags/argumentos diferentes -- 406
+    /// redeclare of the same name with different flags/arguments -- 406
     amqerPreconditionFailed,
-    /// tipo de exchange desconhecido, ou 'x-match' invalido -- 406
+    /// unknown exchange type, or invalid 'x-match' -- 406
     amqerCommandInvalid,
-    /// delete com if-unused e o recurso em uso -- 406
+    /// delete with if-unused and the resource in use -- 406
     amqerInUse,
-    /// delete com if-empty e a fila com mensagens -- 406
+    /// delete with if-empty and the queue holding messages -- 406
     amqerNotEmpty,
-    /// nome reservado ('amq.') vindo do cliente -- 403 ACCESS_REFUSED
+    /// reserved name ('amq.') coming from the client -- 403 ACCESS_REFUSED
     amqerAccessRefused,
-    /// fila exclusiva de OUTRA conexao -- 405 RESOURCE_LOCKED
+    /// exclusive queue of ANOTHER connection -- 405 RESOURCE_LOCKED
     amqerResourceLocked,
-    /// A operacao mexia em topologia DURAVEL e o journal nao conseguiu
-    /// registra-la (Fase 4, WS3). Vira 541 de CONEXAO, e nao erro de canal:
-    /// um broker que nao consegue mais persistir esta' quebrado como um todo,
-    /// e continuar aceitando declare duravel seria mentir sobre durabilidade.
+    /// The operation touched DURABLE topology and the journal could not
+    /// record it (Phase 4, WS3). Becomes a CONNECTION 541, not a channel
+    /// error: a broker that can no longer persist is broken as a whole, and
+    /// accepting durable declares would be lying about durability.
     amqerNoDurability
   );
 
   TAMQPEngine = class;
 
-  { Liga uma fila ao dead-lettering da engine.
+  { Connects a queue to the engine's dead-lettering.
 
-    Existe porque a IAMQPDeadLetterSink nao carrega vhost -- e nao deveria: a
-    fila nao sabe em que vhost mora, e alargar a interface so' para carregar um
-    dado que o ADAPTADOR pode fixar seria piorar o contrato para todo mundo.
-    Um adaptador por vhost fixa o nome e a interface fica com o que interessa.
+    It exists because IAMQPDeadLetterSink does not carry the vhost -- and it
+    should not: the queue does not know which vhost it lives in, and widening
+    the interface just to carry a value the ADAPTER can pin would make the
+    contract worse for everyone. One adapter per vhost pins the name and the
+    interface keeps what matters.
 
-    Tempo de vida: e' TInterfacedObject e a fila segura a referencia, entao o
-    adaptador vive enquanto a fila viver. O ponteiro para a engine e cru de
-    propriedade -- a engine e' dona das filas e as para no proprio destrutor,
-    entao nao ha janela em que uma fila viva veja uma engine morta. }
+    Lifetime: it is a TInterfacedObject and the queue holds the reference, so
+    the adapter lives as long as the queue. The pointer to the engine is raw
+    on purpose -- the engine owns the queues and stops them in its own
+    destructor, so there is no window in which a live queue sees a dead engine. }
   TAMQPDeadLetterAdapter = class(TInterfacedObject, IAMQPDeadLetterSink)
   private
     FEngine: TAMQPEngine;
@@ -112,41 +115,41 @@ type
   private
     FLock: TCriticalSection;
     FVHosts: TAMQPVHostSet;
-    // Filas vivas, chaveadas por 'vhost/nome'. O descritor equivalente vive
-    // no TAMQPVHost; os dois sao criados e destruidos juntos.
+    // Live queues, keyed by 'vhost/name'. The matching descriptor lives in
+    // TAMQPVHost; both are created and destroyed together.
     FQueues: TDictionary<string, TAMQPServerQueue>;
     FMaxQueueLength: Integer;
     FJournal: TAMQPJournal;
     FEvents: IAMQPEventSink;
     FNextId: UInt64;
-    /// True enquanto o Recupera esta aplicando o log. Enquanto for True o
-    /// journal fica MUDO: o que se declara e enfileira agora VEIO do log, e
-    /// regravar faria o WAL crescer uma copia por boot, para sempre.
+    /// True while Recupera is applying the log. While it is True the journal
+    /// is MUTED: what is declared and enqueued now CAME from the log, and
+    /// rewriting it would make the WAL grow one copy per boot, forever.
     FRecovering: Boolean;
     FPool: TPcThreadPool;
-    FRouted: Integer;   // atomico -- publicacoes com ao menos uma rota
-    FUnrouted: Integer; // atomico -- publicacoes sem rota
+    FRouted: Integer;   // atomic -- publishes with at least one route
+    FUnrouted: Integer; // atomic -- publishes with no route
     function Key(const AVHost, AName: string): string;
-    // Chamar SOB FLock.
+    // Call UNDER FLock.
     function FindQueueLocked(const AVHost, AName: string): TAMQPServerQueue;
     function CheckExclusive(ADef: TAMQPQueueDef;
       AOwnerId: NativeUInt): Boolean;
   protected
-    // IAMQPMessageSink -- refcount desligado (ver cabecalho).
-    // A CONVENCAO DE CHAMADA DO IInterface DEPENDE DA PLATAFORMA no FPC:
-    // stdcall no Windows, cdecl no Unix. Declarar stdcall fixo compila no
-    // Windows e falha no Linux com "No matching implementation for interface
-    // method _AddRef:LongInt; CDecl" -- e foi assim, desde a WS5 da Fase 2, ate'
-    // a WS3 da Fase 4 compilar o broker no container pela primeira vez. As
-    // validacoes Linux anteriores eram todas do CLIENTE.
+    // IAMQPMessageSink -- refcount turned off (see header).
+    // THE IInterface CALLING CONVENTION DEPENDS ON THE PLATFORM on FPC:
+    // stdcall on Windows, cdecl on Unix. Declaring a fixed stdcall compiles on
+    // Windows and fails on Linux with "No matching implementation for interface
+    // method _AddRef:LongInt; CDecl" -- and that is how it was, from WS5 of
+    // Phase 2 until WS3 of Phase 4 compiled the broker in the container for the
+    // first time. The earlier Linux validations were all of the CLIENT.
     function _AddRef: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
     function _Release: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
   public
     constructor Create;
     destructor Destroy; override;
 
-    /// Garante que o vhost existe na topologia (com os exchanges
-    /// predefinidos). Chamado quando uma conexao abre nele.
+    /// Ensures the vhost exists in the topology (with the predefined
+    /// exchanges). Called when a connection opens on it.
     procedure EnsureVHost(const AVHost: string);
 
     // --- exchanges ---
@@ -161,10 +164,10 @@ type
       ARoutingKey: string; AArguments: TAMQPFieldTable): TAMQPEngineResult;
     function ExchangeExists(const AVHost, AName: string): Boolean;
 
-    // --- filas ---
-    /// Declara (ou verifica, com APassive) uma fila. AOwnerId identifica a
-    /// conexao pedinte -- e' o que barra o uso de fila exclusiva alheia.
-    /// Devolve as contagens do Declare-Ok.
+    // --- queues ---
+    /// Declares (or checks, with APassive) a queue. AOwnerId identifies the
+    /// requesting connection -- it is what blocks use of someone else's
+    /// exclusive queue. Returns the Declare-Ok counts.
     function DeclareQueue(const AVHost, AName: string;
       APassive, ADurable, AExclusive, AAutoDelete: Boolean;
       AArguments: TAMQPFieldTable; AOwnerId: NativeUInt;
@@ -180,120 +183,122 @@ type
       AArguments: TAMQPFieldTable; AOwnerId: NativeUInt): TAMQPEngineResult;
     function QueueExists(const AVHost, AName: string): Boolean;
 
-    // --- consumo ---
+    // --- consuming ---
     function AddConsumer(const AVHost, AQueue, AConsumerTag: string;
       ANoAck, AExclusive: Boolean; const ATarget: IAMQPDeliveryTarget;
       AOwnerId: NativeUInt): TAMQPEngineResult;
     function RemoveConsumer(const AVHost, AQueue, AConsumerTag: string;
       AChannelId: NativeUInt): TAMQPEngineResult;
-    /// Basic.Get. AFound=False com resultado amqerOk significa fila vazia
-    /// (Get-Empty), nao erro. A referencia devolvida em AMessage e' do
-    /// CHAMADOR.
+    /// Basic.Get. AFound=False with result amqerOk means an empty queue
+    /// (Get-Empty), not an error. The reference returned in AMessage belongs
+    /// to the CALLER.
     function GetMessage(const AVHost, AQueue: string; ANoAck: Boolean;
       ADeliveryTag: UInt64; AChannelId: NativeUInt; AOwnerId: NativeUInt;
       out AFound: Boolean; out AMessage: TAMQPMessage;
       out ARedelivered: Boolean; out AMessageCount: Integer): TAMQPEngineResult;
 
-    // --- ciclo de vida automatico (WS7) ---
-    /// Apaga a fila se ela for `auto-delete`, JA TIVER TIDO consumidor e nao
-    /// tiver mais nenhum. Chamar DEPOIS de remover um consumidor -- e como o
-    /// Stats e' comando sincrono e a caixa da fila e' FIFO, a leitura aqui ja
-    /// enxerga a remocao que acabou de ser postada. No-op se a fila nao
-    /// existe ou nao e' auto-delete.
-    /// True se esta operacao tem de ir para o disco: ha journal (D19) e o
-    /// recurso e' duravel (D20). Exchange predefinido ('' e 'amq.*') NUNCA vai
-    /// -- o EnsureVHost o recria a cada boot, e grava-lo so' encheria o log de
-    /// registro que a recuperacao teria de ignorar.
+    // --- automatic lifecycle (WS7) ---
+    /// Deletes the queue if it is `auto-delete`, HAS EVER HAD a consumer and
+    /// has none left. Call AFTER removing a consumer -- and since Stats is a
+    /// synchronous command and the queue's mailbox is FIFO, the read here
+    /// already sees the removal just posted. No-op if the queue does not
+    /// exist or is not auto-delete.
+    /// True if this operation has to go to disk: there is a journal (D19) and
+    /// the resource is durable (D20). A predefined exchange ('' and 'amq.*')
+    /// NEVER goes -- EnsureVHost recreates it on every boot, and writing it
+    /// would only fill the log with records recovery would have to ignore.
     function PersistExchange(const AName: string; ADurable: Boolean): Boolean;
     function PersistQueue(ADurable, AExclusive: Boolean): Boolean;
-    /// Duravel de verdade: o descritor existe E esta' marcado duravel. Usado
-    /// nos bindings, que so' sao persistidos quando as DUAS pontas sao
-    /// duraveis -- um binding e' tao duravel quanto o mais fragil dos lados.
+    /// Really durable: the descriptor exists AND is marked durable. Used for
+    /// bindings, which are only persisted when BOTH ends are durable -- a
+    /// binding is as durable as the more fragile of its sides.
     function IsExchangeDurable(AVHost: TAMQPVHost; const AName: string): Boolean;
     function IsQueueDurable(AVHost: TAMQPVHost; const AName: string): Boolean;
-    /// Grava um registro de topologia e ESPERA ele ficar duravel. False = nao
-    /// deu, e o chamador devolve amqerSemDurabilidade.
+    /// Writes a topology record and WAITS for it to become durable. False =
+    /// it did not work, and the caller returns amqerSemDurabilidade.
     function WriteTopology(AKind: Byte; const APayload: TBytes): Boolean;
-    /// Proximo identificador de conteudo/colocacao. Monotonico e unico no
-    /// broker; sob o mesmo lock que ja' guarda as filas vivas. Escrito quando
-    /// nao havia incremento atomico de 64 bits portavel (a pascal-common-faa
-    /// tem PcAtomicInc64; o lock ficou porque quem chama ja' o segura), e um
-    /// contador de 32 bits daria a volta num broker de vida longa.
+    /// Next content/placement identifier. Monotonic and unique in the
+    /// broker; under the same lock that already guards the live queues.
+    /// Written when there was no portable 64-bit atomic increment
+    /// (pascal-common-faa has PcAtomicInc64; the lock stayed because the
+    /// caller already holds it), and a 32-bit counter would wrap around in a
+    /// long-lived broker.
     function NextId: UInt64;
     function WriteEnqueue(AQueue: TAMQPServerQueue; const AVHost: string;
       AMessage: TAMQPMessage; APriority: Byte; AMessageTtlMs: Int64;
       var AContentId: UInt64; AWaitVacancy: Boolean;
       out ALsn: UInt64): UInt64;
-    /// True se esta fila viva vai persistir alguma coisa (D20).
+    /// True if this live queue will persist anything (D20).
     function DoesQueuePersist(AQueue: TAMQPServerQueue): Boolean;
     procedure MaybeAutoDeleteQueue(const AVHost, AQueue: string);
-    /// Apaga o exchange se ele for `auto-delete` e nao for mais origem de
-    /// binding nenhum. Chamar depois de todo unbind (inclusive os implicitos,
-    /// como os que somem junto com uma fila apagada).
+    /// Deletes the exchange if it is `auto-delete` and is no longer the source
+    /// of any binding. Call after every unbind (including the implicit ones,
+    /// such as those that vanish together with a deleted queue).
     procedure MaybeAutoDeleteExchange(const AVHost, AExchange: string);
-    /// Varre os exchanges auto-delete e apaga os que ficaram sem binding.
-    /// Existe porque apagar uma FILA leva junto os bindings dela, e nao ha
-    /// como saber de fora quais exchanges ficaram orfaos -- exchange
-    /// auto-delete e' raro, entao a varredura e' mais barata que rastrear.
+    /// Sweeps the auto-delete exchanges and deletes those left without a
+    /// binding. It exists because deleting a QUEUE takes its bindings along,
+    /// and there is no way to know from outside which exchanges were orphaned
+    /// -- auto-delete exchanges are rare, so the sweep is cheaper than tracking.
     procedure SweepAutoDeleteExchanges(const AVHost: string);
-    /// Apaga TODAS as filas exclusivas de AOwnerId (a conexao dona caiu).
-    /// Devolve quantas foram.
+    /// Deletes ALL exclusive queues of AOwnerId (the owning connection
+    /// dropped). Returns how many.
     function DeleteExclusiveQueuesOf(const AVHost: string;
       AOwnerId: NativeUInt): Integer;
 
-    /// A fila viva de AName, ou nil. Usada pelo canal para encaminhar
-    /// ack/nack/reject e para o teardown -- o chamador NAO e' dono.
+    /// The live queue for AName, or nil. Used by the channel to forward
+    /// ack/nack/reject and for teardown -- the caller is NOT the owner.
     function FindQueue(const AVHost, AName: string): TAMQPServerQueue;
 
-    // --- publicacao (IAMQPMessageSink) ---
+    // --- publishing (IAMQPMessageSink) ---
     function RouteMessage(const AVHost: string;
       const AMessage: TAMQPServerMessage; out ARejected: Boolean;
       out ALsn: UInt64): Boolean;
 
-    /// Republica uma mensagem ja' montada (usada pelo dead-lettering). Roda na
-    /// thread do ATOR da fila de origem: le a topologia sob RWLock e posta na
-    /// caixa das filas de destino, sem I/O e sem espera (D17).
+    /// Republishes an already built message (used by dead-lettering). Runs on
+    /// the source queue's ACTOR thread: reads the topology under the RWLock
+    /// and posts to the destination queues' mailboxes, with no I/O and no
+    /// waiting (D17).
     procedure RepublishTo(const AVHost, AExchange, ARoutingKey: string;
       AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
 
-    /// Cutuca todas as filas (caso degradado da D3 -- ver
-    /// TAMQPServerQueue.PostDeliverTick). Chamado pela thread monitora.
+    /// Nudges all queues (D3's degraded case -- see
+    /// TAMQPServerQueue.PostDeliverTick). Called by the monitor thread.
     procedure DeliverTick;
 
-    /// Apaga as filas com x-expires que passaram do prazo SEM USO (WS8).
-    /// Chamado pela thread monitora, como o DeliverTick.
+    /// Deletes the queues with x-expires that went past their deadline UNUSED
+    /// (WS8). Called by the monitor thread, like DeliverTick.
     ///
-    /// Quem DETECTA e' esta varredura; quem EXECUTA e' o DeleteQueue de
-    /// sempre -- o mesmo caminho do Queue.Delete vindo do cliente, com o
-    /// mesmo cuidado de parar o ator antes de liberar. Duplicar o teardown
-    /// aqui seria a receita do double-free que a Fase 1 ja pagou uma vez.
+    /// This sweep DETECTS; the usual DeleteQueue EXECUTES -- the same path as
+    /// a Queue.Delete from the client, with the same care to stop the actor
+    /// before freeing. Duplicating the teardown here would be the recipe for
+    /// the double-free Phase 1 already paid for once.
     procedure ExpireIdleQueues;
 
-    /// Teto de mensagens prontas por fila (decisao D7). 0 = ilimitado. Vale
-    /// para as filas criadas DEPOIS de atribuido.
-    /// Journal de durabilidade (Fase 4). nil = broker sem DataDir, e entao
-    /// NADA de topologia vai para o disco (D19) -- o caminho fica identico ao
-    /// da Fase 3. Injetado pelo TAMQPServer no Start; a engine nao e' dona.
+    /// Cap of ready messages per queue (decision D7). 0 = unlimited. Applies
+    /// to queues created AFTER it is set.
+    /// Durability journal (Phase 4). nil = broker without DataDir, and then
+    /// NO topology goes to disk (D19) -- the path stays identical to Phase
+    /// 3's. Injected by TAMQPServer in Start; the engine does not own it.
     property Journal: TAMQPJournal read FJournal write FJournal;
-    /// Sink de observabilidade repassado a CADA fila nova (Fase 4.1, Inc. 2).
-    /// A engine nao emite nada por conta propria -- quem emite e' o ator.
+    /// Observability sink passed on to EACH new queue (Phase 4.1, Inc. 2).
+    /// The engine emits nothing on its own -- the actor is the emitter.
     property Events: IAMQPEventSink read FEvents write FEvents;
 
-    /// Aplica ao broker o estado que o replay leu. Roda DENTRO do Start,
-    /// antes de o socket de escuta abrir: ninguem pode falar com um broker
-    /// meio recuperado.
+    /// Applies to the broker the state the replay read. Runs INSIDE Start,
+    /// before the listening socket opens: nobody may talk to a half-recovered
+    /// broker.
     ///
-    /// Com o journal MUDO (ver FRecovering): o que se declara aqui veio do
-    /// log, e regravar faria o WAL crescer uma copia por boot.
+    /// With the journal MUTED (see FRecovering): what is declared here came
+    /// from the log, and rewriting it would make the WAL grow one copy per boot.
     procedure Recover(AState: TAMQPRecoveredState);
 
     property MaxQueueLength: Integer read FMaxQueueLength
       write FMaxQueueLength;
-    /// Pool onde os atores das filas sao agendados (nil = PcPool). O
-    /// TAMQPServer sempre passa o pool proprio dele; nil fica para a engine
-    /// solta dos testes.
+    /// Pool where the queue actors are scheduled (nil = PcPool). TAMQPServer
+    /// always passes its own pool; nil is left for the standalone engine of
+    /// the tests.
     property Pool: TPcThreadPool read FPool write FPool;
-    /// Publicacoes que acharam ao menos uma fila / que nao acharam nenhuma.
+    /// Publishes that found at least one queue / that found none.
     function RoutedCount: Integer;
     function UnroutedCount: Integer;
   end;
@@ -331,15 +336,15 @@ destructor TAMQPEngine.Destroy;
 var
   LQ: TAMQPServerQueue;
 begin
-  // Ordem: parar TODOS os atores antes de liberar qualquer coisa -- um ator
-  // vivo com a topologia ja liberada seria use-after-free.
+  // Order: stop ALL actors before freeing anything -- a live actor with the
+  // topology already freed would be use-after-free.
   for LQ in FQueues.Values do
   begin
     try
       LQ.Stop;
     except
       on E: Exception do
-        ; // ator preso: o proprio Stop ja decidiu nao liberar nada
+        ; // stuck actor: Stop itself already decided not to free anything
     end;
     LQ.Free;
   end;
@@ -351,7 +356,7 @@ end;
 
 function TAMQPEngine._AddRef: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
 begin
-  Result := -1; // sem refcount: o dono e' o TAMQPServer
+  Result := -1; // no refcount: the owner is TAMQPServer
 end;
 
 function TAMQPEngine._Release: Integer; {$IFDEF AMQP_WINDOWS}stdcall{$ELSE}cdecl{$ENDIF};
@@ -386,8 +391,8 @@ begin
   end;
 end;
 
-// True se AOwnerId pode usar a fila: ou ela nao e' exclusiva, ou o dono e'
-// exatamente esta conexao. AOwnerId=0 (chamador interno) sempre passa.
+// True if AOwnerId may use the queue: either it is not exclusive, or the owner
+// is exactly this connection. AOwnerId=0 (internal caller) always passes.
 function TAMQPEngine.CheckExclusive(ADef: TAMQPQueueDef;
   AOwnerId: NativeUInt): Boolean;
 begin
@@ -409,7 +414,7 @@ begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   if APassive then
   begin
-    // Passive so' verifica existencia; nao declara nem valida flags.
+    // Passive only checks existence; it neither declares nor validates flags.
     AArguments.Free;
     if LVHost.ExchangeExists(AName) then
       Result := amqerOk
@@ -419,7 +424,7 @@ begin
   end;
 
   LRes := LVHost.DeclareExchange(AName, AType, ADurable, AAutoDelete,
-    AInternal, AArguments); // o vhost toma posse dos argumentos
+    AInternal, AArguments); // the vhost takes ownership of the arguments
   case LRes of
     amqtrOk, amqtrEquivalent: Result := amqerOk;
     amqtrPreconditionFailed: Result := amqerPreconditionFailed;
@@ -428,16 +433,16 @@ begin
     Result := amqerNotFound;
   end;
 
-  // So' o declare que de fato CRIOU vai para o disco: amqtrEquivalente e'
-  // redeclare idempotente, e grava-lo encheria o log de registros que a
-  // recuperacao so' teria trabalho de reaplicar por cima de si mesmos.
+  // Only a declare that actually CREATED goes to disk: amqtrEquivalente is an
+  // idempotent redeclare, and writing it would fill the log with records that
+  // recovery would only have the trouble of reapplying over themselves.
   if (LRes = amqtrOk) and PersistExchange(AName, ADurable) then
   begin
     LDef := LVHost.ExchangeDef(AName);
     if LDef <> nil then
     begin
-      // Os argumentos vem do DESCRITOR, e nao de AArguments: a posse ja passou
-      // para o vhost, e o descritor e' a fonte da verdade.
+      // The arguments come from the DESCRIPTOR, not from AArguments: ownership
+      // has already passed to the vhost, and the descriptor is the source of truth.
       LRec.VHost := AVHost;
       LRec.Name := LDef.Name;
       LRec.ExchangeType := LDef.ExchangeType;
@@ -461,16 +466,16 @@ var
   LName: TAMQPRecName;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
-  // ANTES de apagar: depois o descritor nao existe mais e nao ha como saber se
-  // era duravel.
+  // BEFORE deleting: afterwards the descriptor no longer exists and there is no
+  // way to know whether it was durable.
   LWasDurable := (FJournal <> nil) and IsExchangeDurable(LVHost, AName);
   LRes := LVHost.DeleteExchange(AName, AIfUnused);
   case LRes of
     amqtrOk: Result := amqerOk;
     amqtrInUse: Result := amqerInUse;
-    // Idempotente pela mesma razao do DeleteQueue acima -- ver o comentario
-    // la'. Manter os dois iguais importa: um setup que apaga antes de
-    // redeclarar mexe nos dois.
+    // Idempotent for the same reason as DeleteQueue above -- see the comment
+    // there. Keeping both the same matters: a setup that deletes before
+    // redeclaring touches both.
     amqtrNotFound: Result := amqerOk;
   else
     Result := amqerOk;
@@ -495,8 +500,8 @@ var
   LRec: TAMQPRecBinding;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
-  // As DUAS pontas duraveis, e a codificacao feita ANTES do bind: depois o
-  // vhost e' dono de AArguments.
+  // BOTH ends durable, and the encoding done BEFORE the bind: afterwards the
+  // vhost owns AArguments.
   LPersist := (FJournal <> nil) and IsExchangeDurable(LVHost, ASource)
     and IsExchangeDurable(LVHost, ADestination);
   if LPersist then
@@ -558,7 +563,7 @@ begin
   Result := FVHosts.GetOrCreate(AVHost).ExchangeExists(AName);
 end;
 
-{ --- filas --- }
+{ --- queues --- }
 
 function TAMQPEngine.DeclareQueue(const AVHost, AName: string;
   APassive, ADurable, AExclusive, AAutoDelete: Boolean;
@@ -605,11 +610,12 @@ begin
       Exit(amqerNotFound);
     end;
 
-    // So' o declare que de fato CRIOU vai para o disco (redeclare idempotente
-    // nao gera registro). Repare que o resultado NAO sai por Exit aqui: a fila
-    // viva ainda tem de nascer abaixo, senao o descritor ficaria sem ator. Se
-    // o journal falhou, a conexao cai com 541 -- e a divergencia entre memoria
-    // e disco ate' o restart e' exatamente o que esse 541 comunica.
+    // Only a declare that actually CREATED goes to disk (an idempotent
+    // redeclare produces no record). Note the result does NOT leave via Exit
+    // here: the live queue still has to be born below, or the descriptor would
+    // have no actor. If the journal failed, the connection drops with 541 --
+    // and the divergence between memory and disk until restart is exactly what
+    // that 541 communicates.
     if (LRes = amqtrOk) and PersistQueue(ADurable, AExclusive) then
     begin
       LDef := LVHost.QueueDef(AName);
@@ -626,25 +632,26 @@ begin
     end;
   end;
 
-  // Fila viva: nasce junto com o descritor, some junto com ele.
+  // Live queue: born together with the descriptor, gone together with it.
   FLock.Enter;
   try
     LQueue := FindQueueLocked(AVHost, AName);
     if (LQueue = nil) and (not APassive) then
     begin
-      // A fila viva nasce com a MESMA politica do descritor (WS2/WS4): o
-      // descritor ja e' a fonte da verdade dos x-arguments, e re-parsear aqui
-      // abriria espaco para os dois divergirem.
+      // The live queue is born with the SAME policy as the descriptor
+      // (WS2/WS4): the descriptor is already the source of truth for the
+      // x-arguments, and re-parsing here would leave room for the two to diverge.
       LDef := LVHost.QueueDef(AName);
       if LDef <> nil then
         LQueue := TAMQPServerQueue.Create(AName, LDef.Policy, FMaxQueueLength,
           FPool)
       else
         LQueue := TAMQPServerQueue.Create(AName, FMaxQueueLength, FPool);
-      // Fase 4: a fila viva precisa saber ONDE mora e SE persiste. Durable e
-      // Exclusive vem do descritor, que ja' e' a fonte da verdade -- reler os
-      // flags do declare aqui abriria espaco para os dois divergirem (a mesma
-      // razao pela qual a politica vem de la').
+      // Phase 4: the live queue needs to know WHERE it lives and WHETHER it
+      // persists. Durable and Exclusive come from the descriptor, which is
+      // already the source of truth -- rereading the declare's flags here would
+      // leave room for the two to diverge (the same reason the policy comes
+      // from there).
       LQueue.VHostName := AVHost;
       LQueue.Journal := FJournal;
       LQueue.Events := FEvents;
@@ -652,15 +659,15 @@ begin
         LQueue.Durable := LDef.Durable and (not LDef.Exclusive)
       else
         LQueue.Durable := False;
-      // WS5: e' por aqui que a fila alcanca a topologia para republicar as
-      // mortas. Sem sink, uma morte vira simples descarte.
+      // WS5: this is how the queue reaches the topology to republish dead
+      // messages. Without a sink, a death becomes a plain drop.
       LQueue.DeadLetterSink := TAMQPDeadLetterAdapter.Create(Self, AVHost);
       FQueues.Add(Key(AVHost, AName), LQueue);
     end
     else if LQueue <> nil then
-      // WS8: REDECLARE conta como uso e reinicia o relogio do x-expires --
-      // e' um dos tres eventos da regra (os outros sao consumidor e
-      // Basic.Get; publicar nao conta).
+      // WS8: a REDECLARE counts as use and restarts the x-expires clock --
+      // it is one of the rule's three events (the others are a consumer and
+      // Basic.Get; publishing does not count).
       LQueue.PostTouch();
   finally
     FLock.Leave;
@@ -690,51 +697,52 @@ begin
   LVHost := FVHosts.GetOrCreate(AVHost);
   if not CheckExclusive(LVHost.QueueDef(AName), AOwnerId) then
     Exit(amqerResourceLocked);
-  // ANTES de apagar: depois o descritor nao existe e nao ha como saber se era
-  // duravel. Vale para o delete explicito E para o auto-delete, que chega aqui
-  // pelo MaybeAutoDeleteQueue -- uma fila auto-delete DURAVEL que sumiu tem de
-  // registrar o sumico, senao a recuperacao a ressuscita.
+  // BEFORE deleting: afterwards the descriptor does not exist and there is no
+  // way to know whether it was durable. Applies to the explicit delete AND to
+  // auto-delete, which arrives here through MaybeAutoDeleteQueue -- a DURABLE
+  // auto-delete queue that vanished has to record that, or recovery revives it.
   LWasDurable := (FJournal <> nil) and IsQueueDurable(LVHost, AName);
 
   FLock.Enter;
   try
     LQueue := FindQueueLocked(AVHost, AName);
     if LQueue = nil then
-      // DELETE E' IDEMPOTENTE: apagar fila que nao existe devolve Delete-Ok
-      // com contagem zero, e nao 404. A letra da spec manda levantar, mas o
-      // RabbitMQ deixou idempotente ha muito tempo e e' com isso que o
-      // ecossistema conta -- inclusive o sample RetryDlqVcl deste repo, que
-      // apaga antes de redeclarar com argumentos novos ("redeclarar com args
-      // diferentes seria PRECONDITION_FAILED").
+      // DELETE IS IDEMPOTENT: deleting a queue that does not exist returns
+      // Delete-Ok with a zero count, not 404. The letter of the spec says to
+      // raise, but RabbitMQ made it idempotent long ago and that is what the
+      // ecosystem relies on -- including this repo's RetryDlqVcl sample, which
+      // deletes before redeclaring with new arguments ("redeclaring with
+      // different args would be PRECONDITION_FAILED").
       //
-      // Achado pela WS10: o SmokeTest com os passos de TTL+DLX passava contra
-      // o RabbitMQ e batia 404 contra o broker embutido. E' exatamente o tipo
-      // de divergencia que rodar os MESMOS passos contra os dois brokers
-      // existe para pegar. Desvio deliberado da letra da spec, documentado.
+      // Found by WS10: the SmokeTest with the TTL+DLX steps passed against
+      // RabbitMQ and hit 404 against the embedded broker. That is exactly the
+      // kind of divergence that running the SAME steps against both brokers
+      // exists to catch. Deliberate deviation from the letter of the spec,
+      // documented.
       Exit(amqerOk);
 
-    // O ator decide: if-unused/if-empty sao estado DELE.
+    // The actor decides: if-unused/if-empty are ITS state.
     LDel := LQueue.Delete(AIfUnused, AIfEmpty, AMessageCount);
     case LDel of
       amqqdInUse: Exit(amqerInUse);
       amqqdNotEmpty: Exit(amqerNotEmpty);
     end;
-    // amqqdOk: o Delete ja parou o ator (e drenou o estoque).
+    // amqqdOk: Delete already stopped the actor (and drained the stock).
     FQueues.Remove(Key(AVHost, AName));
     LQueue.Free;
   finally
     FLock.Leave;
   end;
 
-  LVHost.DeleteQueue(AName); // tira o descritor e os bindings pendurados
-  // Os bindings que sumiram com a fila podem ter sido os ultimos de um
-  // exchange auto-delete.
+  LVHost.DeleteQueue(AName); // removes the descriptor and the bindings hanging on it
+  // The bindings that vanished with the queue may have been the last ones of
+  // an auto-delete exchange.
   SweepAutoDeleteExchanges(AVHost);
   Result := amqerOk;
 
-  // Um unico registro de delete: os bindings da fila somem junto com ela na
-  // recuperacao, do mesmo jeito que somem aqui, entao gravar um unbind para
-  // cada seria escrever o que ja' esta' implicito.
+  // A single delete record: the queue's bindings vanish together with it in
+  // recovery, just as they vanish here, so writing an unbind for each would
+  // be writing what is already implicit.
   if LWasDurable then
   begin
     LName.VHost := AVHost;
@@ -780,7 +788,7 @@ begin
     and IsQueueDurable(LVHost, AQueue);
   if LPersist then
   begin
-    // Codificado ANTES do bind: depois o vhost e' dono de AArguments.
+    // Encoded BEFORE the bind: afterwards the vhost owns AArguments.
     LRec.VHost := AVHost;
     LRec.Source := AExchange;
     LRec.Destination := AQueue;
@@ -842,7 +850,7 @@ begin
   Result := FVHosts.GetOrCreate(AVHost).QueueExists(AName);
 end;
 
-{ --- consumo --- }
+{ --- consuming --- }
 
 function TAMQPEngine.AddConsumer(const AVHost, AQueue, AConsumerTag: string;
   ANoAck, AExclusive: Boolean; const ATarget: IAMQPDeliveryTarget;
@@ -893,12 +901,12 @@ begin
 
   AFound := LQueue.Get(AChannelId, ADeliveryTag, ANoAck, AMessage,
     ARedelivered);
-  // message-count do Get-Ok: quantas SOBRARAM depois desta.
+  // Get-Ok's message-count: how many are LEFT after this one.
   AMessageCount := LQueue.Stats.MessageCount;
   Result := amqerOk;
 end;
 
-{ --- ciclo de vida automatico (WS7) --- }
+{ --- automatic lifecycle (WS7) --- }
 
 function TAMQPEngine.PersistExchange(const AName: string;
   ADurable: Boolean): Boolean;
@@ -909,8 +917,8 @@ end;
 
 function TAMQPEngine.PersistQueue(ADurable, AExclusive: Boolean): Boolean;
 begin
-  // D20: fila exclusiva NUNCA e' persistida -- ela morre com a conexao dona, e
-  // depois de um restart nao existe conexao dona.
+  // D20: an exclusive queue is NEVER persisted -- it dies with the owning
+  // connection, and after a restart there is no owning connection.
   Result := (FJournal <> nil) and ADurable and (not AExclusive);
 end;
 
@@ -933,12 +941,13 @@ begin
   Result := (LDef <> nil) and LDef.Durable and (not LDef.Exclusive);
 end;
 
-// Grava a colocacao (e, se pedido, o CONTEUDO junto no MESMO lote) e devolve
-// o identificador da colocacao. Zero = nada foi gravado.
+// Writes the placement (and, if asked, the CONTENT along with it in the SAME
+// batch) and returns the placement identifier. Zero = nothing was written.
 //
-// Roda na thread de QUEM PUBLICA -- a do publicador no publish, a do ator da
-// fila de origem no dead-letter. E' a D24: so' quem ja' roteou sabe quais
-// colocacoes precisam estar duraveis, e por isso e' quem escreve o lote.
+// Runs on the thread of WHOEVER PUBLISHES -- the publisher's on publish, the
+// source queue actor's on dead-letter. It is D24: only who already routed
+// knows which placements need to be durable, and so it is the one that writes
+// the batch.
 function TAMQPEngine.WriteEnqueue(AQueue: TAMQPServerQueue;
   const AVHost: string; AMessage: TAMQPMessage; APriority: Byte;
   AMessageTtlMs: Int64; var AContentId: UInt64; AWaitVacancy: Boolean;
@@ -951,8 +960,8 @@ var
 begin
   Result := 0;
   ALsn := 0;
-  // Mesma razao do GravaTopo: durante o replay a colocacao JA' esta' no log --
-  // regrava-la duplicaria a mensagem a cada boot.
+  // Same reason as GravaTopo: during replay the placement is ALREADY in the
+  // log -- rewriting it would duplicate the message on every boot.
   if FRecovering or (not DoesQueuePersist(AQueue)) then
     Exit;
 
@@ -960,9 +969,9 @@ begin
   SetLength(LRecs, 2);
   if AContentId = 0 then
   begin
-    // Primeira colocacao desta mensagem: o corpo vai UMA vez (D22). As demais
-    // -- outras filas do mesmo publish, ou a derivada do dead-letter --
-    // reaproveitam este identificador e nao reescrevem o corpo.
+    // First placement of this message: the body goes ONCE (D22). The others
+    // -- other queues of the same publish, or the dead-letter derivative --
+    // reuse this identifier and do not rewrite the body.
     AContentId := NextId;
     LContent.ContentId := AContentId;
     LContent.UserId := AMessage.UserId;
@@ -979,10 +988,10 @@ begin
   LEnq.ContentId := AContentId;
   LEnq.Exchange := AMessage.Exchange;
   LEnq.RoutingKey := AMessage.RoutingKey;
-  // Os numeros EFETIVOS, os mesmos que o ator vai guardar -- a fila e' quem os
-  // calcula, para nao haver duas copias da regra.
+  // The EFFECTIVE numbers, the same ones the actor will keep -- the queue is
+  // the one that computes them, so there are not two copies of the rule.
   LEnq.Priority := AQueue.EffectivePriority(APriority);
-  LEnq.EnqueuedAtWall := AmqpWallMs; // D21: parede no disco, nunca monotonico
+  LEnq.EnqueuedAtWall := AmqpWallMs; // D21: wall clock on disk, never monotonic
   LEnq.TtlMs := AQueue.EffectiveTtl(AMessageTtlMs);
   LEnq.HeaderPayload := AMessage.HeaderPayload;
   LRecs[LN].Kind := AMQP_REC_ENQUEUE;
@@ -991,16 +1000,16 @@ begin
 
   try
     if AWaitVacancy then
-      // Thread do publicador: PODE bloquear na contrapressao (D24, corolario c).
+      // Publisher thread: MAY block on backpressure (D24, corollary c).
       ALsn := FJournal.Submit(LRecs)
     else
-      // Thread do ATOR (dead-letter): a D2 proibe esperar I/O.
+      // ACTOR thread (dead-letter): D2 forbids waiting on I/O.
       ALsn := FJournal.SubmitNoWait(LRecs);
   except
     on E: EAMQPJournal do
     begin
-      // Journal em falha: nada foi gravado, entao a colocacao nao tem
-      // identidade e nenhuma aposentadoria sera escrita por ela depois.
+      // Journal failed: nothing was written, so the placement has no identity
+      // and no retirement will be written for it later.
       Result := 0;
       ALsn := 0;
     end;
@@ -1029,10 +1038,11 @@ var
   LLsn: UInt64;
 begin
   if FJournal = nil then
-    Exit(True); // sem journal nao ha o que gravar, e isso nao e' falha
-  // MUDO durante a recuperacao: o que estamos declarando agora VEIO do log.
-  // Sem isto, cada restart reescreveria a topologia inteira -- o WAL cresceria
-  // uma copia por boot, para sempre, e a compactacao da WS7 nunca alcancaria.
+    Exit(True); // without a journal there is nothing to write, and that is not a failure
+  // MUTED during recovery: what we are declaring now CAME from the log.
+  // Without this, each restart would rewrite the whole topology -- the WAL
+  // would grow one copy per boot, forever, and WS7's compaction would never
+  // catch up.
   if FRecovering then
     Exit(True);
   Result := False;
@@ -1040,10 +1050,10 @@ begin
   LRecs[0].Kind := AKind;
   LRecs[0].Payload := APayload;
   try
-    // ESPERA o fsync antes de o *-Ok sair. Operacao de topologia e' rara e
-    // fora do caminho quente, e um cliente que recebeu Declare-Ok de uma fila
-    // DURAVEL tem direito de supor que ela sobreviveu -- responder antes do
-    // fsync seria uma mentira de meio milissegundo que so' aparece no restart.
+    // WAITS for the fsync before the *-Ok goes out. Topology operations are
+    // rare and off the hot path, and a client that got Declare-Ok for a
+    // DURABLE queue is entitled to assume it survived -- answering before the
+    // fsync would be a half-millisecond lie that only shows up on restart.
     LLsn := FJournal.Submit(LRecs);
     Result := FJournal.WaitDurable(LLsn, AMQP_JOURNAL_SUBMIT_TIMEOUT_MS);
   except
@@ -1065,9 +1075,9 @@ begin
   LQueue := FindQueue(AVHost, AQueue);
   if LQueue = nil then
     Exit;
-  LStats := LQueue.Stats; // sincrono: barreira sobre a remocao ja postada
-  // Uma fila auto-delete que NUNCA teve consumidor nao some -- senao ela
-  // desapareceria entre o declare e o consume (mesma regra do RabbitMQ).
+  LStats := LQueue.Stats; // synchronous: barrier over the removal already posted
+  // An auto-delete queue that NEVER had a consumer does not vanish -- or it
+  // would disappear between the declare and the consume (same rule as RabbitMQ).
   if (not LStats.EverHadConsumer) or (LStats.ConsumerCount > 0) then
     Exit;
   DeleteQueue(AVHost, AQueue, False, False, 0, LCount);
@@ -1080,22 +1090,22 @@ var
   LDef: TAMQPExchangeDef;
 begin
   if AExchange = '' then
-    Exit; // o exchange default nunca some
+    Exit; // the default exchange never goes away
   LVHost := FVHosts.GetOrCreate(AVHost);
   LDef := LVHost.ExchangeDef(AExchange);
   if (LDef = nil) or (not LDef.AutoDelete) then
     Exit;
   if LVHost.HasBindingsFrom(AExchange) then
     Exit;
-  // Pelo metodo da ENGINE, e nao pelo do vhost: e' o da engine que grava o
-  // registro de delete (Fase 4, WS3). Um exchange auto-delete DURAVEL que
-  // sumiu tem de registrar o sumico, senao a recuperacao o ressuscita -- e
-  // chamar o vhost direto aqui era exatamente esse buraco.
+  // Through the ENGINE's method, not the vhost's: the engine's is the one that
+  // writes the delete record (Phase 4, WS3). A DURABLE auto-delete exchange
+  // that vanished has to record that, or recovery revives it -- and calling
+  // the vhost directly here was exactly that hole.
   //
-  // O resultado nao tem para onde ir (este caminho e' automatico, sem cliente
-  // esperando): se o journal estiver em falha, o exchange some da memoria e
-  // volta no restart. E' consequencia conhecida de journal quebrado, e o
-  // proximo declare duravel derruba a conexao com 541 de qualquer forma.
+  // The result has nowhere to go (this path is automatic, with no client
+  // waiting): if the journal has failed, the exchange vanishes from memory and
+  // comes back on restart. It is a known consequence of a broken journal, and
+  // the next durable declare drops the connection with 541 anyway.
   DeleteExchange(AVHost, AExchange, False);
 end;
 
@@ -1120,21 +1130,21 @@ begin
     Exit;
   LNames := FVHosts.GetOrCreate(AVHost).ExclusiveQueuesOf(AOwnerId);
   for I := 0 to High(LNames) do
-    // AOwnerId=0 no DeleteQueue: chamada interna, ja sabemos que o dono e'
-    // esta conexao (foi assim que a fila entrou na lista).
+    // AOwnerId=0 in DeleteQueue: internal call, we already know the owner is
+    // this connection (that is how the queue got into the list).
     if DeleteQueue(AVHost, LNames[I], False, False, 0, LCount) = amqerOk then
       Inc(Result);
 end;
 
-{ --- recuperacao (WS6 da Fase 4) --- }
+{ --- recovery (WS6 of Phase 4) --- }
 
-// Reconstroi o prazo pela D21: no disco vive PAREDE (instante do enfileiramento
-// + TTL efetivo em ms); na memoria, monotonico. A conversao acontece so' aqui e
-// na escrita -- e' o que faz um salto de NTP nao mexer em fila viva.
+// Rebuilds the deadline per D21: on disk lives WALL CLOCK (enqueue instant
+// + effective TTL in ms); in memory, monotonic. The conversion happens only
+// here and on write -- that is what keeps an NTP jump from touching a live queue.
 //
-// Devolve o TTL RESTANTE em ms, ou -1 para "sem prazo". Zero quer dizer "ja'
-// venceu": a mensagem entra e morre pelo caminho NORMAL de expiracao, com
-// dead-letter e tudo, no primeiro toque do ator.
+// Returns the REMAINING TTL in ms, or -1 for "no deadline". Zero means
+// "already expired": the message goes in and dies through the NORMAL
+// expiration path, dead-letter and all, on the actor's first touch.
 function TtlRestante(const AEnq: TAMQPRecEnqueue; ANowWall: Int64): Int64;
 var
   LElapsed: Int64;
@@ -1143,7 +1153,7 @@ begin
     Exit(-1);
   LElapsed := ANowWall - AEnq.EnqueuedAtWall;
   if LElapsed < 0 then
-    LElapsed := 0; // relogio andou para tras entre os dois boots
+    LElapsed := 0; // the clock went backwards between the two boots
   Result := AEnq.TtlMs - LElapsed;
   if Result < 0 then
     Result := 0;
@@ -1166,19 +1176,19 @@ begin
     Exit;
   FRecovering := True;
   try
-    // 1) TOPOLOGIA. Exchanges antes das filas, e os binds por ultimo: um bind
-    //    precisa das duas pontas de pe'.
+    // 1) TOPOLOGY. Exchanges before queues, and binds last: a bind needs both
+    //    ends up.
     for I := 0 to AState.Exchanges.Count - 1 do
     begin
       LEx := AState.Exchanges[I];
       EnsureVHost(LEx.VHost);
       DeclareExchange(LEx.VHost, LEx.Name, LEx.ExchangeType, False,
         LEx.Durable, LEx.AutoDelete, LEx.Internal, LEx.Arguments);
-      // A POSSE DOS ARGUMENTOS PASSOU. A engine libera AArguments em TODO
-      // caminho -- inclusive nos que recusam --, entao o estado nao pode
-      // libera-los de novo no destrutor dele. Anular item a item (e nao um
-      // flag no estado inteiro) mantem a conta exata mesmo se este laco
-      // parar no meio.
+      // OWNERSHIP OF THE ARGUMENTS HAS PASSED. The engine frees AArguments on
+      // EVERY path -- including the refusing ones --, so the state must not
+      // free them again in its destructor. Nil-ing item by item (rather than
+      // a flag on the whole state) keeps the count exact even if this loop
+      // stops halfway.
       LEx.Arguments := nil;
       AState.Exchanges[I] := LEx;
     end;
@@ -1187,14 +1197,14 @@ begin
     begin
       LQ := AState.Queues[I];
       EnsureVHost(LQ.VHost);
-      // AExclusive=False SEMPRE: fila exclusiva nunca foi persistida (D20), e
-      // uma recuperada nao tem dono vivo para ser exclusiva de quem.
-      // AOwnerId=0 pela mesma razao. E a fila nasce com EverHadConsumer=False,
-      // que e' o que impede o guard de auto-delete da Fase 2 de apaga-la no
-      // boot antes de alguem ter chance de consumir.
+      // AExclusive=False ALWAYS: an exclusive queue was never persisted (D20),
+      // and a recovered one has no live owner to be exclusive to.
+      // AOwnerId=0 for the same reason. And the queue is born with
+      // EverHadConsumer=False, which is what stops Phase 2's auto-delete guard
+      // from deleting it at boot before anyone gets a chance to consume.
       DeclareQueue(LQ.VHost, LQ.Name, False, LQ.Durable, False, LQ.AutoDelete,
         LQ.Arguments, 0, LMsgCount, LConsCount);
-      LQ.Arguments := nil; // a posse passou -- ver o comentario acima
+      LQ.Arguments := nil; // ownership has passed -- see the comment above
       AState.Queues[I] := LQ;
     end;
 
@@ -1207,13 +1217,14 @@ begin
       else
         BindQueue(LB.Binding.VHost, LB.Binding.Destination,
           LB.Binding.Source, LB.Binding.RoutingKey, LB.Binding.Arguments, 0);
-      LB.Binding.Arguments := nil; // a posse passou -- ver o comentario acima
+      LB.Binding.Arguments := nil; // ownership has passed -- see the comment above
       AState.Bindings[I] := LB;
     end;
 
-    // 2) O CONTADOR DE IDS continua DEPOIS do maior id que o log ja' usou.
-    //    Recomecar do zero faria uma colocacao nova colidir com uma recuperada,
-    //    e o DEQ de uma aposentaria a outra -- silencioso e fatal.
+    // 2) THE ID COUNTER continues AFTER the largest id the log already used.
+    //    Restarting from zero would make a new placement collide with a
+    //    recovered one, and the DEQ of one would retire the other -- silent
+    //    and fatal.
     FLock.Enter;
     try
       if AState.MaxId > FNextId then
@@ -1222,30 +1233,30 @@ begin
       FLock.Leave;
     end;
 
-    // 3) AS COLOCACOES, NA ORDEM DO LOG -- que e' a ordem de enfileiramento. O
-    //    balde de prioridade vem no registro, entao cada mensagem cai
-    //    exatamente onde o RequeueFront da D12 a poria. Nada a ordenar.
+    // 3) THE PLACEMENTS, IN LOG ORDER -- which is enqueue order. The priority
+    //    bucket comes in the record, so each message lands exactly where
+    //    D12's RequeueFront would put it. Nothing to sort.
     LNowWall := AmqpWallMs;
     for I := 0 to AState.Entries.Count - 1 do
     begin
       LEnq := AState.Entries[I];
       LQueue := FindQueue(LEnq.VHost, LEnq.Queue);
       if LQueue = nil then
-        Continue; // fila apagada no log; o replay ja' devia ter tirado
+        Continue; // queue deleted in the log; the replay should already have removed it
       if not AState.Contents.TryGetValue(LEnq.ContentId, LCount) then
         Continue;
       LMsg := TAMQPMessage.Create(LEnq.Exchange, LEnq.RoutingKey, LCount.UserId,
         LEnq.HeaderPayload, LCount.Body);
       try
-        // O TTL passa como RESTANTE, e nao como o efetivo gravado: o
-        // CalculaPrazo do ator aplica o "menor vence" de novo, e o restante e'
-        // por construcao <= o efetivo, entao o minimo devolve o restante. Uma
-        // regra, uma implementacao -- nao ha caminho de enfileiramento
-        // separado para a recuperacao.
+        // The TTL is passed as the REMAINING one, not the recorded effective
+        // one: the actor's CalculaPrazo applies "the smaller wins" again, and
+        // the remaining is by construction <= the effective, so the minimum
+        // returns the remaining. One rule, one implementation -- there is no
+        // separate enqueue path for recovery.
         LQueue.PostMessage(LMsg, LEnq.Priority, TtlRestante(LEnq, LNowWall),
-          LEnq.EntryId, LEnq.ContentId, True); // True = D27, volta redelivered
+          LEnq.EntryId, LEnq.ContentId, True); // True = D27, comes back redelivered
       finally
-        LMsg.Release; // a fila fez o proprio AddRef
+        LMsg.Release; // the queue did its own AddRef
       end;
     end;
   finally
@@ -1253,7 +1264,7 @@ begin
   end;
 end;
 
-{ --- publicacao --- }
+{ --- publishing --- }
 
 function TAMQPEngine.RouteMessage(const AVHost: string;
   const AMessage: TAMQPServerMessage; out ARejected: Boolean;
@@ -1273,8 +1284,8 @@ begin
   ARejected := False;
   ALsn := 0;
   LVHost := FVHosts.GetOrCreate(AVHost);
-  // Headers vivos do canal: o match roda AQUI, na thread do publicador
-  // (invariante da Fase 2), nao depois do enqueue.
+  // The channel's live headers: matching runs HERE, on the publisher's thread
+  // (Phase 2 invariant), not after the enqueue.
   LHeaders := nil;
   if AMessage.Properties.Has(bpHeaders) then
     LHeaders := AMessage.Properties.Headers;
@@ -1288,36 +1299,36 @@ begin
   end;
   PcAtomicInc(FRouted);
 
-  // UMA mensagem para N filas: corpo e header cru compartilhados sem copia,
-  // cada fila tirando a referencia dela (decisao de arquitetura da Fase 2).
-  // Prioridade e 'expiration' sao lidas AQUI, na thread do publicador, pelo
-  // mesmo motivo do match de headers: a TAMQPMessage guarda o header CRU
-  // (decisao D1) e quem ainda tem as propriedades decodificadas e' quem
-  // publicou. O ator recebe os dois numeros prontos.
+  // ONE message for N queues: body and raw header shared without copying,
+  // each queue taking its own reference (Phase 2 architecture decision).
+  // Priority and 'expiration' are read HERE, on the publisher's thread, for
+  // the same reason as headers matching: TAMQPMessage keeps the RAW header
+  // (decision D1) and whoever still has the decoded properties is the
+  // publisher. The actor gets both numbers ready.
   LPriority := 0;
   if AMessage.Properties.Has(bpPriority) then
     LPriority := AMessage.Properties.Priority;
   LTtlMs := -1;
   if AMessage.Properties.Has(bpExpiration) then
-    // Malformada nao chega aqui (a FSM recusa com 406 antes de rotear); o
-    // False so' aconteceria se este sink fosse chamado por outro caminho, e
-    // ai' "sem TTL" e' o comportamento seguro.
+    // A malformed one does not get here (the FSM rejects it with 406 before
+    // routing); False would only happen if this sink were called by another
+    // path, and then "no TTL" is the safe behavior.
     if not AmqpParseExpirationMs(AMessage.Properties.Expiration, LTtlMs) then
       LTtlMs := -1;
 
-  // D20: so' mensagem com delivery-mode 2 vai para o disco, e so' nas filas
-  // duraveis. Lido AQUI, na thread do publicador, pela mesma razao da
-  // prioridade e do 'expiration' (decisao D1): quem tem as propriedades
-  // decodificadas na mao e' quem publicou.
+  // D20: only a message with delivery-mode 2 goes to disk, and only in durable
+  // queues. Read HERE, on the publisher's thread, for the same reason as
+  // priority and 'expiration' (decision D1): whoever has the decoded
+  // properties in hand is the publisher.
   LPersistent := AMessage.Properties.Has(bpDeliveryMode)
-    and (AMessage.Properties.DeliveryMode = 2); // 2 = persistente (spec)
+    and (AMessage.Properties.DeliveryMode = 2); // 2 = persistent (spec)
 
-  // TETO DE DISCO (D26): estourou, o publish PERSISTENTE e' recusado -- e
-  // recusado ANTES de escrever ou postar coisa nenhuma, para nao existir
-  // publish pela metade. Teto de memoria descarta da cabeca (D7); teto de
-  // disco recusa, porque descartar aqui seria apagar dado que o broker ja'
-  // confirmou como duravel. Publish transiente nao e' afetado: ele nao toca o
-  // journal.
+  // DISK CAP (D26): when exceeded, the PERSISTENT publish is refused -- and
+  // refused BEFORE writing or posting anything, so there is no half-done
+  // publish. The memory cap drops from the head (D7); the disk cap refuses,
+  // because dropping here would mean deleting data the broker already
+  // confirmed as durable. A transient publish is not affected: it does not
+  // touch the journal.
   if LPersistent and (FJournal <> nil) and FJournal.IsFull then
   begin
     FJournal.IncrementRefused;
@@ -1338,15 +1349,15 @@ begin
       begin
         LEntryId := WriteEnqueue(LQueue, AVHost, LMsg, LPriority, LTtlMs,
           LContentId, True, LLsn);
-        // WS5/D24: o confirm deste publish espera o MAIOR LSN que ele
-        // escreveu. Como o journal atribui LSNs crescentes e o lote de cada
-        // fila e' indivisivel, o maior e' o da ultima fila que gravou -- mas
-        // comparar e' de graca e nao depende dessa ordem continuar valendo.
+        // WS5/D24: this publish's confirm waits for the LARGEST LSN it wrote.
+        // Since the journal assigns increasing LSNs and each queue's batch is
+        // indivisible, the largest is the last queue's that wrote -- but
+        // comparing is free and does not depend on that order staying true.
         if LLsn > ALsn then
           ALsn := LLsn;
       end;
-      // D15: so' a fila declarada com reject-publish paga o enqueue SINCRONO.
-      // As outras seguem pelo caminho assincrono de sempre.
+      // D15: only a queue declared with reject-publish pays for the
+      // SYNCHRONOUS enqueue. The others take the usual asynchronous path.
       if LQueue.Policy.Overflow = amqovRejectPublish then
       begin
         if not LQueue.TryPostMessage(LMsg, LPriority, LTtlMs, LEntryId,
@@ -1354,11 +1365,11 @@ begin
           ARejected := True;
       end
       else
-        // faz o proprio AddRef
+        // does its own AddRef
         LQueue.PostMessage(LMsg, LPriority, LTtlMs, LEntryId, LContentId);
     end;
   finally
-    LMsg.Release; // a referencia do publicador
+    LMsg.Release; // the publisher's reference
   end;
 end;
 
@@ -1375,16 +1386,16 @@ var
   I: Integer;
 begin
   LVHost := FVHosts.GetOrCreate(AVHost);
-  // Um DLX do tipo headers precisa da tabela decodificada para casar. Decodar
-  // aqui e' CPU na thread do ator, o que a D17 permite -- e' o caminho FRIO
-  // (uma mensagem morre uma vez), nao o do publish.
+  // A headers-type DLX needs the decoded table to match. Decoding here is CPU
+  // on the actor thread, which D17 allows -- it is the COLD path (a message
+  // dies once), not the publish one.
   LEd := nil;
   try
     try
       LEd := TAMQPHeaderEditor.Create(AMessage.HeaderPayload);
       LDestinations := LVHost.Route(AExchange, ARoutingKey, LEd.Headers);
     except
-      // Header ilegivel nao pode derrubar o ator da fila de origem.
+      // An unreadable header must not bring down the source queue's actor.
       on E: Exception do
         Exit;
     end;
@@ -1394,8 +1405,9 @@ begin
 
   if Length(LDestinations) = 0 then
   begin
-    // DLX sem rota: a mensagem morre de vez. E' o mesmo destino que teria sem
-    // DLX nenhum, e por isso nao e' erro -- so' nao ha para onde mandar.
+    // DLX with no route: the message dies for good. It is the same fate it
+    // would have with no DLX at all, so it is not an error -- there is just
+    // nowhere to send it.
     PcAtomicInc(FUnrouted);
     Exit;
   end;
@@ -1406,20 +1418,20 @@ begin
     LQueue := FindQueue(AVHost, LDestinations[I]);
     if LQueue = nil then
       Continue;
-    // D23: a colocacao NOVA e' escrita AQUI, e a velha so' e' aposentada
-    // depois, la' no MorreCom que nos chamou. Falhar no meio produz duplicata,
-    // nunca perda. O corpo NAO e' reescrito -- AContentId ja' identifica o que
-    // esta' no disco.
+    // D23: the NEW placement is written HERE, and the old one is only retired
+    // afterwards, in the MorreCom that called us. Failing halfway produces a
+    // duplicate, never a loss. The body is NOT rewritten -- AContentId already
+    // identifies what is on disk.
     LEntryId := 0;
     if AContentId <> 0 then
-      // O LSN e' descartado de proposito: dead-letter nao tem seq-no de
-      // publicador esperando por ele -- o publicador original ja' foi
-      // confirmado quando a mensagem entrou na fila de origem.
+      // The LSN is discarded on purpose: dead-letter has no publisher seq-no
+      // waiting for it -- the original publisher was already confirmed when
+      // the message entered the source queue.
       LEntryId := WriteEnqueue(LQueue, AVHost, AMessage, APriority, -1,
-        AContentId, False, LLsnIgn); // no ator: sem esperar vaga (D2)
-    // TTL da mensagem vai como -1: o 'expiration' original foi retirado pelo
-    // dead-lettering (senao ela morreria de novo no ato na DLQ), e o prazo
-    // que passa a valer e' o da fila de DESTINO.
+        AContentId, False, LLsnIgn); // in the actor: without waiting for room (D2)
+    // The message TTL goes as -1: the original 'expiration' was removed by
+    // dead-lettering (or it would die again on the spot in the DLQ), and the
+    // deadline that applies now is the DESTINATION queue's.
     LQueue.PostMessage(AMessage, APriority, -1, LEntryId, AContentId);
   end;
 end;
@@ -1434,10 +1446,10 @@ var
   LMsgs: Integer;
   LKey: string;
 begin
-  // Snapshot sob o lock, decisao FORA dele: ler Stats e' comando SINCRONO no
-  // ator, e segurar o lock da engine enquanto se espera um ator seria
-  // convidar um travamento (o ator pode estar republicando um dead-letter,
-  // que volta a pedir FindQueue).
+  // Snapshot under the lock, decision OUTSIDE it: reading Stats is a
+  // SYNCHRONOUS command on the actor, and holding the engine lock while
+  // waiting on an actor would invite a deadlock (the actor may be
+  // republishing a dead-letter, which asks for FindQueue again).
   FLock.Enter;
   try
     LPairs := FQueues.ToArray;
@@ -1449,20 +1461,20 @@ begin
   SetLength(LVHosts, 0);
   for I := 0 to High(LPairs) do
   begin
-    // So' fila que PEDIU x-expires paga o comando sincrono.
+    // Only a queue that ASKED for x-expires pays for the synchronous command.
     if LPairs[I].Value.Policy.ExpiresMs < 0 then
       Continue;
     try
       LStats := LPairs[I].Value.Stats;
     except
-      // Fila parando debaixo da varredura: nao e' erro, e' corrida normal.
+      // Queue stopping under the sweep: not an error, a normal race.
       Continue;
     end;
     if LStats.IdleMs < LPairs[I].Value.Policy.ExpiresMs then
       Continue;
 
-    // A chave e' 'vhost/nome'; o nome pode conter barra, o vhost nao comeca
-    // com uma, entao a PRIMEIRA barra e' o separador.
+    // The key is 'vhost/name'; the name may contain a slash, the vhost does
+    // not start with one, so the FIRST slash is the separator.
     LKey := LPairs[I].Key;
     LBarra := Pos('/', LKey);
     if LBarra <= 0 then
@@ -1476,12 +1488,12 @@ begin
 
   for I := 0 to High(LNames) do
     try
-      // AOwnerId=0: chamador interno, passa pelo CheckExclusive. Sem
-      // if-unused/if-empty: x-expires apaga mesmo com mensagem dentro, que e'
-      // o comportamento do RabbitMQ -- o argumento fala de USO, nao de vazio.
+      // AOwnerId=0: internal caller, passes CheckExclusive. No
+      // if-unused/if-empty: x-expires deletes even with messages inside, which
+      // is RabbitMQ's behavior -- the argument is about USE, not emptiness.
       DeleteQueue(LVHosts[I], LNames[I], False, False, 0, LMsgs);
     except
-      // Outra thread pode ter apagado a fila entre a decisao e a execucao.
+      // Another thread may have deleted the queue between decision and execution.
       ;
     end;
 end;

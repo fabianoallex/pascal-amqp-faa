@@ -2,13 +2,13 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Consumidor da fila posto.comandos (ARQUITETURA.md §6.2). Para cada
-  requisicao RPC: parseia o corpo, aplica a transicao no registro autoritativo,
-  publica o(s) evento(s) da mudanca e responde pelo reply-to ecoando o
-  correlation-id. Ack manual so' depois de responder.
+{ Consumer of the posto.comandos queue (ARCHITECTURE.md §6.2). For each
+  RPC request: parses the body, applies the transition to the authoritative
+  registry, publishes the change's event(s) and replies through reply-to echoing
+  the correlation-id. Manual ack only after replying.
 
-  prefetch 1 + consumidor unico => os comandos sao aplicados em serie, que e'
-  o que garante "uma abastecida em uma venda so'". }
+  prefetch 1 + single consumer => commands are applied serially, which is
+  what guarantees "a fueling in one sale only". }
 
 interface
 
@@ -63,7 +63,7 @@ end;
 procedure TPostoComandos.Iniciar;
 begin
   FCanal.Qos(1);
-  FTag := FCanal.Consume(FILA_COMANDOS, OnComando);   // ack manual
+  FTag := FCanal.Consume(FILA_COMANDOS, OnComando);   // manual ack
 end;
 
 procedure TPostoComandos.Parar;

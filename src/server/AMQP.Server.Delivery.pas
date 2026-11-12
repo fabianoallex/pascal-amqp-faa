@@ -2,53 +2,53 @@
 
 {$I amqp.inc}
 
-{ O alvo de entrega de um canal -- sub-modulo broker, WS4 da Fase 2.
+{ A channel's delivery target -- broker sub-module, WS4 of Phase 2.
 
-  E' a peca entre o ator da fila e a escrita da conexao: "o ator entrega; a
-  conexao escreve". A fila (AMQP.Server.Queue) so' conhece a interface
-  IAMQPDeliveryTarget; quem sabe montar Basic.Deliver + content-header + body
-  frames e enfia-los na fila de escrita e' esta unit.
+  It is the piece between the queue actor and the connection's writing: "the actor
+  delivers; the connection writes". The queue (AMQP.Server.Queue) only knows the
+  IAMQPDeliveryTarget interface; this unit is what knows how to build
+  Basic.Deliver + content header + body frames and push them into the write queue.
 
-  Por que existe uma CLASSE SEPARADA em vez de o proprio TAMQPServerChannel
-  implementar a interface
+  Why there is a SEPARATE CLASS instead of TAMQPServerChannel itself
+  implementing the interface
   ------------------------------------------------------------------------
-  Ciclo de vida. O canal e a conexao morrem quando o peer manda Channel.Close,
-  quando o socket cai ou quando o reaper do broker recolhe a conexao -- e o
-  ator da fila, que roda numa thread do pool, pode estar exatamente no meio de
-  uma entrega naquele instante. Se a fila guardasse um ponteiro para o canal,
-  isso seria use-after-free: e' o risco que o plano da Fase 2 marca como "o
-  ponto onde mora o use-after-free da fase".
+  Lifecycle. The channel and the connection die when the peer sends Channel.Close,
+  when the socket drops or when the broker's reaper collects the connection -- and the
+  queue actor, which runs on a pool thread, may be right in the middle of
+  a delivery at that instant. If the queue kept a pointer to the channel,
+  that would be use-after-free: it is the risk the Phase 2 plan marks as "the
+  spot where the phase's use-after-free lives".
 
-  A saida e' a dupla refcount + detach:
-   - o alvo e' um TInterfacedObject, entao cada fila que guarda um consumidor
-     segura uma referencia e o OBJETO nao morre enquanto alguem o tiver na
-     mao, mesmo que canal e conexao ja tenham sido liberados;
-   - Detach (chamado pelo canal/conexao ao morrer) zera a referencia ao
-     writer SOB O LOCK do alvo e marca-o como morto. Depois disso todo
-     TryDeliver devolve False sem tocar em nada liberado, e as filas descartam
-     o consumidor na proxima rodada de entrega (IsAlive = False).
-  Detach nunca espera I/O: TryDeliver so' faz trabalho nao-bloqueante, entao o
-  teardown nao trava atras de um consumidor lento.
+  The way out is the refcount + detach pair:
+   - the target is a TInterfacedObject, so every queue that keeps a consumer
+     holds a reference and the OBJECT does not die while anyone holds it,
+     even if the channel and the connection have already been freed;
+   - Detach (called by the channel/connection when dying) clears the reference to
+     the writer UNDER the target's LOCK and marks it as dead. After that every
+     TryDeliver returns False without touching anything freed, and the queues drop
+     the consumer on the next delivery round (IsAlive = False).
+  Detach never waits for I/O: TryDeliver only does non-blocking work, so
+  teardown does not get stuck behind a slow consumer.
 
-  Contabilidade das nao-confirmadas (e do prefetch)
-  -------------------------------------------------
-  A lista de entregas em aberto do canal vive AQUI, e nao no canal, por um
-  motivo de quem-sabe-o-que: a entrega acontece na thread do ATOR DA FILA, que
-  e' a unica que sabe o par (delivery-tag, fila de origem); a thread de leitura
-  da conexao, que ve o Basic.Ack do cliente, sabe a tag mas nao a fila. Sem
-  esse registro, um ack de consumidor nao chega a fila nenhuma e a mensagem
-  fica pendurada para sempre -- foi exatamente o bug que o teste
-  AckRemoveDeVez_NaoVoltaAposQueda pegou.
+  Accounting of unacked deliveries (and of the prefetch)
+  ------------------------------------------------------
+  The channel's list of open deliveries lives HERE, not in the channel, for a
+  who-knows-what reason: delivery happens on the QUEUE ACTOR's thread, which
+  is the only one that knows the (delivery-tag, source queue) pair; the connection's
+  read thread, which sees the client's Basic.Ack, knows the tag but not the queue.
+  Without this record, a consumer ack reaches no queue at all and the message
+  hangs forever -- that was exactly the bug the test
+  AckRemoveDeVez_NaoVoltaAposQueda caught.
 
-  Entao: quem REGISTRA e' a entrega (TryDeliver) e o Basic.Get da FSM
-  (NoteGet); quem RESOLVE e' a thread de leitura ao processar
-  Basic.Ack/Nack/Reject (NoteResolved), que devolve as entradas resolvidas
-  para o chamador encaminhar a baixa a cada fila.
+  So: the delivery (TryDeliver) and the FSM's Basic.Get (NoteGet) REGISTER;
+  the read thread RESOLVES when processing
+  Basic.Ack/Nack/Reject (NoteResolved), which returns the resolved entries
+  so the caller can forward the settlement to each queue.
 
-  Prefetch (Basic.Qos): so' as entradas marcadas Prefetch=True contam para o
-  limite. Entrega em no-ack nao gera entrada nenhuma (nunca sera confirmada);
-  Basic.Get gera entrada (precisa ser confirmado) mas NAO conta para o
-  prefetch, que pela spec limita entregas a CONSUMIDOR. }
+  Prefetch (Basic.Qos): only entries marked Prefetch=True count toward the
+  limit. A no-ack delivery creates no entry at all (it will never be acked);
+  Basic.Get creates an entry (it must be acked) but does NOT count toward the
+  prefetch, which by the spec limits deliveries to a CONSUMER. }
 
 interface
 
@@ -65,40 +65,40 @@ uses
   AMQP.Server.Queue;
 
 type
-  { Uma entrega em aberto neste canal: a tag, a fila que guarda a mensagem e
-    se ela conta para o limite do Basic.Qos. }
+  { An open delivery on this channel: the tag, the queue that holds the message and
+    whether it counts toward the Basic.Qos limit. }
   TAMQPOutstanding = record
     Tag: UInt64;
     Queue: string;
     Prefetch: Boolean;
   end;
 
-  { Alvo de entrega de UM canal. Criado pelo canal, referenciado pelas filas
-    onde ele tem consumidores. }
+  { Delivery target of ONE channel. Created by the channel, referenced by the queues
+    where it has consumers. }
   TAMQPChannelDeliveryTarget = class(TInterfacedObject, IAMQPDeliveryTarget)
   private
     FLock: TCriticalSection;
-    FWriter: TAMQPFrameWriter; // nil depois do Detach -- sempre sob FLock
+    FWriter: TAMQPFrameWriter; // nil after Detach -- always under FLock
     FChannelNo: Word;
     FMaxPayload: Cardinal;
     FIdentity: NativeUInt;
-    FNextTag: UInt64;   // sob FLock
-    FAttached: Integer; // atomico (1/0) -- espelha "FWriter <> nil"
-    FActive: Integer;   // atomico (1/0) -- Channel.Flow
-    FPrefetch: Integer; // atomico
-    // Entregas em aberto NESTE canal, em ordem crescente de tag (a sequencia
-    // e' monotonica, entao inserir no fim ja mantem ordenado). Lista e nao
-    // contador porque o Basic.Ack/Nack com multiple resolve TODAS as tags <=
-    // a informada -- e porque cada uma precisa lembrar de QUAL FILA veio.
-    // Sob FLock.
+    FNextTag: UInt64;   // under FLock
+    FAttached: Integer; // atomic (1/0) -- mirrors "FWriter <> nil"
+    FActive: Integer;   // atomic (1/0) -- Channel.Flow
+    FPrefetch: Integer; // atomic
+    // Open deliveries ON THIS channel, in ascending tag order (the sequence
+    // is monotonic, so appending at the end keeps it sorted). A list, not a
+    // counter, because Basic.Ack/Nack with multiple resolves ALL tags <=
+    // the given one -- and because each one must remember WHICH QUEUE it came from.
+    // Under FLock.
     FOutstanding: TList<TAMQPOutstanding>;
     function BuildFrames(const AConsumerTag: string; ADeliveryTag: UInt64;
       ARedelivered: Boolean; AMessage: TAMQPMessage): TArray<TAMQPFrame>;
     function PrefetchInFlight: Integer;
   public
-    /// AMaxPayload: quanto cabe no payload de UM frame para este peer (o
-    /// frame-max negociado menos o overhead de frame) -- 0 = sem limite.
-    /// O alvo NAO e' dono do writer.
+    /// AMaxPayload: how much fits in the payload of ONE frame for this peer (the
+    /// negotiated frame-max minus the frame overhead) -- 0 = no limit.
+    /// The target does NOT own the writer.
     constructor Create(AWriter: TAMQPFrameWriter; AChannelNo: Word;
       AMaxPayload: Cardinal);
     destructor Destroy; override;
@@ -111,45 +111,45 @@ type
       out ADeliveryTag: UInt64): Boolean;
     function TryCancel(const AConsumerTag: string): Boolean;
 
-    /// O canal/conexao morreu: solta o writer e marca o alvo como morto.
-    /// Idempotente e chamavel de qualquer thread.
+    /// The channel/connection died: releases the writer and marks the target as dead.
+    /// Idempotent and callable from any thread.
     procedure Detach;
 
-    /// Proxima delivery-tag da MESMA sequencia por canal usada pela entrega.
-    /// O Basic.Get precisa dela (a tag e' do canal, nao do consumidor).
+    /// Next delivery-tag from the SAME per-channel sequence the delivery uses.
+    /// Basic.Get needs it (the tag belongs to the channel, not the consumer).
     function NextDeliveryTag: UInt64;
-    /// O cliente confirmou (Basic.Ack/Nack/Reject) uma entrega deste canal.
-    /// AMultiple resolve todas as tags <= ADeliveryTag (e, com
-    /// ADeliveryTag=0, todas as pendentes -- spec). Devolve as entradas
-    /// resolvidas, COM A FILA DE ORIGEM de cada uma: e' o que permite ao
-    /// chamador encaminhar a baixa para a fila certa. Chamada pela thread de
-    /// leitura da conexao, que e' quem ve o metodo do cliente.
+    /// The client settled (Basic.Ack/Nack/Reject) a delivery of this channel.
+    /// AMultiple resolves all tags <= ADeliveryTag (and, with
+    /// ADeliveryTag=0, all pending ones -- spec). Returns the resolved
+    /// entries, WITH THE SOURCE QUEUE of each: that is what lets the
+    /// caller forward the settlement to the right queue. Called by the connection's
+    /// read thread, which is the one that sees the client's method.
     function NoteResolved(ADeliveryTag: UInt64;
       AMultiple: Boolean): TArray<TAMQPOutstanding>;
-    /// Registra uma entrega feita fora da entrega a consumidor (Basic.Get em
-    /// modo ack). Nao conta para o prefetch.
+    /// Registers a delivery made outside consumer delivery (Basic.Get in
+    /// ack mode). Does not count toward the prefetch.
     procedure NoteGet(ADeliveryTag: UInt64; const AQueue: string);
-    /// Filas com entrega em aberto neste canal (sem repetir). O teardown usa
-    /// para avisar cada uma.
+    /// Queues with an open delivery on this channel (no repeats). The teardown uses
+    /// it to notify each one.
     function PendingQueues: TArray<string>;
 
-    /// Channel.Flow. False = o peer pediu para pararmos de entregar conteudo.
+    /// Channel.Flow. False = the peer asked us to stop delivering content.
     procedure SetActive(AValue: Boolean);
-    /// Basic.Qos prefetch-count (0 = ilimitado).
+    /// Basic.Qos prefetch-count (0 = unlimited).
     procedure SetPrefetch(AValue: Word);
-    /// Entregas ainda nao confirmadas neste canal.
+    /// Deliveries not yet acked on this channel.
     function UnackedCount: Integer;
     property ChannelNo: Word read FChannelNo;
   end;
 
-/// Frames de CONTEUDO (content-header + N body) de uma mensagem, para o canal
-/// e o frame-max dados. Usado pela entrega (Basic.Deliver) e pelo Basic.Get
-/// da FSM -- os dois emitem method + header + body, mudando so' o method.
-/// AMaxPayload = 0: corpo num unico frame.
+/// CONTENT frames (content header + N body) of a message, for the given channel
+/// and frame-max. Used by delivery (Basic.Deliver) and by the FSM's Basic.Get
+/// -- both emit method + header + body, changing only the method.
+/// AMaxPayload = 0: body in a single frame.
 ///
-/// O header sai do payload CRU guardado na mensagem (decisao D1): reemissao
-/// byte a byte, sem redecodificar propriedades. So' quando nao ha payload cru
-/// (mensagem criada pela propria engine) um header minimo e' montado.
+/// The header comes from the RAW payload stored in the message (decision D1): byte
+/// by byte re-emission, without re-decoding properties. Only when there is no raw
+/// payload (message created by the engine itself) is a minimal header built.
 function AmqpBuildContentFrames(AChannelNo: Word; AMessage: TAMQPMessage;
   AMaxPayload: Cardinal): TArray<TAMQPFrame>;
 
@@ -176,10 +176,10 @@ begin
 end;
 
 var
-  // Identidade de canal para a fila chavear as nao-confirmadas. Contador
-  // global e monotonico em vez do endereco do objeto: endereco pode ser
-  // reusado por um alvo novo depois que o antigo morre, e uma nao-confirmada
-  // orfa casaria com o canal errado.
+  // Channel identity the queue keys unacked deliveries by. A global, monotonic
+  // counter instead of the object address: an address can be
+  // reused by a new target after the old one dies, and an orphaned unacked
+  // delivery would match the wrong channel.
   GIdentitySeq: Integer = 0;
 
 { TAMQPChannelDeliveryTarget }
@@ -194,7 +194,7 @@ begin
   FChannelNo := AChannelNo;
   FMaxPayload := AMaxPayload;
   FIdentity := NativeUInt(Cardinal(PcAtomicInc(GIdentitySeq)));
-  FNextTag := 1; // spec: a sequencia de delivery-tag de um canal comeca em 1
+  FNextTag := 1; // spec: a channel's delivery-tag sequence starts at 1
   FAttached := 1;
   FActive := 1;
 end;
@@ -213,9 +213,9 @@ end;
 
 function TAMQPChannelDeliveryTarget.IsAlive: Boolean;
 begin
-  // Sem lock de proposito: e' consultado para cada consumidor em cada rodada
-  // de entrega. O flag atomico basta -- quem chegar tarde cai no teste de
-  // FWriter=nil dentro do TryDeliver, esse sim sob o lock.
+  // No lock on purpose: it is queried for every consumer in every delivery
+  // round. The atomic flag is enough -- a late caller falls into the
+  // FWriter=nil test inside TryDeliver, which is under the lock.
   Result := PcAtomicGet(FAttached) = 1;
 end;
 
@@ -253,7 +253,7 @@ begin
   end;
 end;
 
-// Quantas das entregas em aberto contam para o Basic.Qos. Chamar SOB FLock.
+// How many of the open deliveries count toward Basic.Qos. Call UNDER FLock.
 function TAMQPChannelDeliveryTarget.PrefetchInFlight: Integer;
 var
   I: Integer;
@@ -271,7 +271,7 @@ var
 begin
   LEntry.Tag := ADeliveryTag;
   LEntry.Queue := AQueue;
-  LEntry.Prefetch := False; // Basic.Get nao entra no limite do Qos
+  LEntry.Prefetch := False; // Basic.Get does not count toward the Qos limit
   FLock.Enter;
   try
     FOutstanding.Add(LEntry);
@@ -316,8 +316,8 @@ begin
     try
       if AMultiple then
       begin
-        // A lista esta em ordem crescente: as resolvidas sao um PREFIXO dela.
-        // Tag 0 com multiple = todas as pendentes (spec 1.8.3.13).
+        // The list is in ascending order: the resolved ones are a PREFIX of it.
+        // Tag 0 with multiple = all pending ones (spec 1.8.3.13).
         while (FOutstanding.Count > 0)
           and ((ADeliveryTag = 0) or (FOutstanding[0].Tag <= ADeliveryTag)) do
         begin
@@ -334,8 +334,8 @@ begin
             FOutstanding.Delete(I);
             Break;
           end;
-        // Tag desconhecida nao e' erro AQUI: pode ser um ack duplicado. Quem
-        // trata ack invalido como erro de canal e' a FSM.
+        // An unknown tag is not an error HERE: it may be a duplicate ack. The FSM
+        // is what treats an invalid ack as a channel error.
       end;
     finally
       FLock.Leave;
@@ -357,7 +357,7 @@ begin
   end;
 end;
 
-// Monta o lote INDIVISIVEL de uma entrega: method + content-header + N body.
+// Builds the INDIVISIBLE batch of a delivery: method + content header + N body.
 function TAMQPChannelDeliveryTarget.BuildFrames(const AConsumerTag: string;
   ADeliveryTag: UInt64; ARedelivered: Boolean;
   AMessage: TAMQPMessage): TArray<TAMQPFrame>;
@@ -381,8 +381,8 @@ begin
     Result[1 + I] := LContent[I];
 end;
 
-// Basic.Cancel servidor -> cliente: a fila do consumidor sumiu. Um unico
-// frame de metodo, pelo mesmo caminho nao-bloqueante da entrega.
+// Server -> client Basic.Cancel: the consumer's queue is gone. A single
+// method frame, through the same non-blocking path as delivery.
 function TAMQPChannelDeliveryTarget.TryCancel(
   const AConsumerTag: string): Boolean;
 begin
@@ -390,7 +390,7 @@ begin
   FLock.Enter;
   try
     if FWriter = nil then
-      Exit; // canal ja morreu: nao ha a quem avisar
+      Exit; // channel already dead: nobody to notify
     Result := FWriter.TryPostFrames([TAMQPFrame.Create(AMQP_FRAME_METHOD,
       FChannelNo, BuildBasicCancel(AConsumerTag, True))]);
   finally
@@ -411,28 +411,28 @@ begin
   FLock.Enter;
   try
     if FWriter = nil then
-      Exit; // canal/conexao ja morreu (Detach)
+      Exit; // channel/connection already dead (Detach)
     if PcAtomicGet(FActive) = 0 then
-      Exit; // Channel.Flow desligado pelo peer
+      Exit; // Channel.Flow turned off by the peer
     if not ANoAck then
     begin
       LPrefetch := PcAtomicGet(FPrefetch);
       if (LPrefetch > 0) and (PrefetchInFlight >= LPrefetch) then
-        Exit; // prefetch estourado: o canal ja tem o que aguenta
+        Exit; // prefetch exceeded: the channel already has all it can take
     end;
 
-    // A tag so' e' CONSUMIDA se o lote for aceito -- uma recusa nao pode
-    // abrir buraco na sequencia do canal.
+    // The tag is only CONSUMED if the batch is accepted -- a refusal must not
+    // open a gap in the channel's sequence.
     LTag := FNextTag;
     if not FWriter.TryPostFrames(BuildFrames(AConsumerTag, LTag, ARedelivered,
       AMessage)) then
-      Exit; // fila de escrita cheia: D3, o consumidor sai do rodizio da rodada
+      Exit; // write queue full: D3, the consumer leaves this round's round-robin
 
     FNextTag := LTag + 1;
     if not ANoAck then
     begin
-      // A fila de origem fica registrada aqui porque so' ESTA chamada a
-      // conhece -- ver o cabecalho da unit.
+      // The source queue is registered here because only THIS call
+      // knows it -- see the unit header.
       LEntry.Tag := LTag;
       LEntry.Queue := AQueueName;
       LEntry.Prefetch := True;

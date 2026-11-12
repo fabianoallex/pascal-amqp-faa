@@ -1,20 +1,20 @@
 ﻿unit uAutorizadorMain;
 
-{ Tela única: campos de conexão (host/porta/vhost/usuário/senha/TLS) editáveis,
-  botão Conectar/Desconectar, e um botão Publicar que dispara N publishes na
-  fila configurada — mesmo corpo de mensagem do sample console (chave estilo
-  NFE-<execução>-<sequência>). O publish roda direto na thread da UI (é rápido
-  e não-concorrente aqui, ao contrário do consumo do RetaguardaVcl).
+{ Single screen: editable connection fields (host/port/vhost/user/password/TLS),
+  a Connect/Disconnect button, and a Publish button that fires N publishes to
+  the configured queue, with the same message body as the console sample (key in
+  the form NFE-<run>-<sequence>). The publish runs straight on the UI thread (it
+  is fast and not concurrent here, unlike the consumption in RetaguardaVcl).
 
-  Compila nos dois mundos a partir do MESMO fonte (mesmo padrão dos samples
-  console): uses sem prefixo de namespace (resolvido via unit scope names no
-  Delphi), condicional so' onde o recurso realmente difere (lfm vs dfm). }
+  Compiles in both worlds from the SAME source (same pattern as the console
+  samples): uses without a namespace prefix (resolved through unit scope names
+  in Delphi), conditional only where the feature really differs (lfm vs dfm). }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -77,15 +77,15 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
 procedure TfrmAutorizador.FormCreate(Sender: TObject);
 begin
   Randomize;
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   SetConectado(False);
 end;
@@ -104,7 +104,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AMemo.Handle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteúdo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -152,8 +152,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else

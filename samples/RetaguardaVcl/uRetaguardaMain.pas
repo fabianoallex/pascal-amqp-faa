@@ -1,49 +1,49 @@
 ﻿unit uRetaguardaMain;
 
-{ Tela unica: campos de conexao editaveis + fila/prefetch, botao
-  Conectar/Desconectar que declara a fila, seta o Qos e chama Channel.Consume.
-  O callback do consumer roda no thread pool (despacho nativo da lib) e so
-  toca a ListView/label via TThread.Queue - o dicionario FItems so e acessado
-  a partir do procedimento marshalled na thread principal, entao nao precisa
-  de lock proprio. Mesmo "processamento" simulado do sample console (Sleep
-  aleatorio fazendo o papel de busca do XML).
+{ Single screen: editable connection fields + queue/prefetch, a
+  Connect/Disconnect button that declares the queue, sets the Qos and calls
+  Channel.Consume. The consumer callback runs on the thread pool (the lib's
+  native dispatch) and only touches the ListView/label through TThread.Queue -
+  the FItems dictionary is only accessed from the marshalled procedure on the
+  main thread, so it needs no lock of its own. Same simulated "processing" as
+  the console sample (a random Sleep playing the part of fetching the XML).
 
-  Modo "Confirmacao manual": em vez do Sleep+ack automatico, a thread do
-  consumer fica bloqueada num TEvent por mensagem (FPending, protegido por
-  FPendingLock) ate o usuario clicar Aceitar/Rejeitar na tela para a nota
-  selecionada na ListView. Ao desconectar/fechar, CancelarPendencias libera
-  qualquer thread ainda bloqueada (como nack+requeue) antes de cancelar o
-  consumer e fechar o canal.
+  "Confirmacao manual" mode: instead of Sleep+automatic ack, the consumer
+  thread stays blocked on a TEvent per message (FPending, protected by
+  FPendingLock) until the user clicks Aceitar/Rejeitar on the screen for the
+  invoice selected in the ListView. On disconnect/close, CancelarPendencias
+  releases any thread still blocked (as nack+requeue) before cancelling the
+  consumer and closing the channel.
 
-  FEncerrando fecha uma corrida do encerramento: o nack+requeue disparado por
-  CancelarPendencias pode fazer o broker reentregar a mensagem ao consumer
-  (ainda ativo ate o Cancel-Ok), e esse callback novo estacionaria num TEvent
-  que ninguem mais vai sinalizar - enquanto o Destroy do canal espera, na
-  thread principal, todos os callbacks terminarem (deadlock: UI congelada).
-  Com o flag (setado sob FPendingLock antes de acordar os eventos), qualquer
-  entrega que chegue depois do inicio do encerramento sai sem ack/nack - o
-  fechamento do canal devolve a mensagem a fila.
+  FEncerrando closes a shutdown race: the nack+requeue fired by
+  CancelarPendencias can make the broker redeliver the message to the consumer
+  (still active until Cancel-Ok), and that new callback would park on a TEvent
+  that nobody will signal anymore - while the channel's Destroy waits, on the
+  main thread, for every callback to finish (deadlock: frozen UI).
+  With the flag (set under FPendingLock before waking the events), any
+  delivery that arrives after shutdown has begun leaves without ack/nack - the
+  channel close returns the message to the queue.
 
-  Compila nos dois mundos a partir do MESMO fonte (mesmo padrao dos outros
-  samples): uses sem prefixo de namespace, condicional so' onde o recurso
-  realmente difere (lfm vs dfm).
+  Compiles in both worlds from the SAME source (same pattern as the other
+  samples): uses without a namespace prefix, conditional only where the feature
+  really differs (lfm vs dfm).
 
-  Duas adaptacoes em relacao a versao Delphi-only: TAMQPConsumerCallback e'
-  'of object' nesta lib (nao aceita metodo anonimo - ver CLAUDE.md), entao o
-  callback do Consume virou o metodo OnDelivery abaixo. E o FPC so' aceita
-  TThread.Queue com um metodo 'of object' SEM PARAMETROS (TThreadMethod) -
-  nao existe o overload com closure anonima do Delphi - entao cada
-  TThread.Queue(nil, procedure ... end) virou uma chamada a QueueNotaRecebida/
-  QueueNotaStatus, que empacota os dados por chamada num objeto de "marshal"
-  descartavel (TRecebidaMarshal/TStatusMarshal). Um campo compartilhado na
-  form NAO serviria aqui: varios workers do pool chamam isso concorrentemente,
-  e o valor seria sobrescrito antes do metodo enfileirado rodar na UI. }
+  Two adaptations relative to the Delphi-only version: TAMQPConsumerCallback is
+  'of object' in this lib (it does not accept an anonymous method; see CLAUDE.md),
+  so the Consume callback became the OnDelivery method below. And FPC only
+  accepts TThread.Queue with an 'of object' method WITHOUT PARAMETERS
+  (TThreadMethod) - there is no overload with Delphi's anonymous closure - so
+  each TThread.Queue(nil, procedure ... end) became a call to QueueNotaRecebida/
+  QueueNotaStatus, which packs the data per call into a disposable "marshal"
+  object (TRecebidaMarshal/TStatusMarshal). A shared field on the
+  form would NOT work here: several pool workers call this concurrently,
+  and the value would be overwritten before the queued method ran on the UI. }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -113,7 +113,7 @@ type
     FManualMode: Boolean;
     FPending: TDictionary<string, TPendingApproval>;
     FPendingLock: TCriticalSection;
-    FEncerrando: Boolean; // protegido por FPendingLock
+    FEncerrando: Boolean; // protected by FPendingLock
     function ScrollAtBottom(AHandle: HWND): Boolean;
     procedure Log(const AMsg: string);
     procedure SetConectado(AConectado: Boolean);
@@ -121,7 +121,7 @@ type
     procedure AtualizarContagem;
     procedure NotaRecebida(const AChave, AWorker: string);
     procedure NotaStatus(const AChave, AStatus: string);
-    // Marshalling para a thread da UI (ver nota no topo do arquivo).
+    // Marshalling to the UI thread (see the note at the top of the file).
     procedure QueueNotaRecebida(const AChave, AWorker: string);
     procedure QueueNotaStatus(const AChave, AStatus: string);
     procedure ResolverSelecionada(AAceitar, ARequeue: Boolean);
@@ -142,15 +142,15 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
 type
-  // Um por chamada de QueueNotaRecebida/QueueNotaStatus: TThread.Queue no FPC
-  // so' aceita 'procedure of object' SEM PARAMETROS, entao os dados de cada
-  // chamada viajam num objeto proprio (nao num campo compartilhado da form,
-  // que teria corrida entre workers concorrentes). Se autodestroi apos rodar.
+  // One per call of QueueNotaRecebida/QueueNotaStatus: TThread.Queue on FPC
+  // only accepts a 'procedure of object' WITHOUT PARAMETERS, so each call's
+  // data travels in its own object (not in a shared field of the form,
+  // which would race between concurrent workers). It frees itself after running.
   TRecebidaMarshal = class
     Form: TfrmRetaguarda;
     Chave, Worker: string;
@@ -178,8 +178,8 @@ end;
 procedure TfrmRetaguarda.FormCreate(Sender: TObject);
 begin
   Randomize;
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   FItems := TDictionary<string, TListItem>.Create;
   FPending := TDictionary<string, TPendingApproval>.Create;
@@ -203,12 +203,12 @@ begin
     except
     end;
   FreeAndNil(FChannel);
-  // DrainInFlight (dentro do Free acima) bloqueia esta thread num Sleep ate o
-  // callback em andamento terminar - o loop de mensagens fica parado nesse
-  // meio-tempo, entao qualquer TThread.Queue postado pelo callback (marshal
-  // de status/recebida) fica preso na fila e vazaria se a aplicacao fechasse
-  // sem nunca voltar ao loop de mensagens. Bombear aqui drena esse pendente
-  // com seguranca, pois a form e seus controles ainda estao vivos.
+  // DrainInFlight (inside the Free above) blocks this thread in a Sleep until the
+  // running callback finishes - the message loop is stalled in the
+  // meantime, so any TThread.Queue posted by the callback (status/received
+  // marshal) is stuck in the queue and would leak if the application closed
+  // without ever returning to the message loop. Pumping here drains that pending
+  // one safely, because the form and its controls are still alive.
   Application.ProcessMessages;
   FreeAndNil(FConn);
 end;
@@ -221,7 +221,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -311,7 +311,7 @@ var
 begin
   FPendingLock.Enter;
   try
-    FEncerrando := True; // entregas daqui em diante nao estacionam no TEvent
+    FEncerrando := True; // deliveries from here on do not park on the TEvent
     for LApproval in FPending.Values do
     begin
       LApproval.Aceitar := False;
@@ -328,8 +328,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -425,8 +425,8 @@ begin
   TThread.Queue(nil, LMarshal.Execute);
 end;
 
-// ANoAck=False (padrao do Consume): so' confirmamos apos processar - garantia
-// "pelo menos uma vez" de fabrica, sem passo extra.
+// ANoAck=False (the Consume default): we only ack after processing - an
+// "at least once" guarantee out of the box, with no extra step.
 procedure TfrmRetaguarda.OnDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LChave, LWorker: string;
@@ -443,7 +443,7 @@ begin
     FPendingLock.Enter;
     try
       if FEncerrando then
-        LApproval := nil // CancelarPendencias ja passou; ninguem acordaria o TEvent
+        LApproval := nil // CancelarPendencias already ran; nobody would wake the TEvent
       else
       begin
         LApproval := TPendingApproval.Create;
@@ -456,8 +456,8 @@ begin
 
     if LApproval = nil then
     begin
-      // Sai sem ack/nack: o fechamento do canal devolve a mensagem a fila.
-      // Nack aqui reiniciaria o ciclo de redelivery imediato.
+      // Leaves without ack/nack: closing the channel returns the message to the queue.
+      // A Nack here would restart the immediate redelivery cycle.
       QueueNotaStatus(LChave, 'Devolvida (desconexão)');
       Exit;
     end;
@@ -544,7 +544,7 @@ begin
     FChannel.DeclareQueue(TAMQPQueueDeclare.Create(LQueue, True));
     FChannel.Qos(LPrefetch);
     FManualMode := chkManual.Checked;
-    // Sem lock: nenhum callback vivo aqui (o canal anterior foi drenado no Free).
+    // No lock: no callback is alive here (the previous channel was drained in Free).
     FEncerrando := False;
 
     FConsumerTag := FChannel.Consume(LQueue, OnDelivery);

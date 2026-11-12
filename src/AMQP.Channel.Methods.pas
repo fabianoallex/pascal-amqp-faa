@@ -2,11 +2,11 @@
 
 {$I amqp.inc}
 
-{ Métodos da classe Channel (20): abertura e fechamento de canal.
+{ Methods of the Channel class (20): channel open and close.
 
-  Convenção igual à de AMQP.Connection.Methods: Build* devolve o payload
-  completo do método (cabeçalho + args); Decode* recebe um TAMQPReader já
-  posicionado após o cabeçalho do método. }
+  Same convention as AMQP.Connection.Methods: Build* returns the complete
+  method payload (header + args); Decode* takes a TAMQPReader already
+  positioned after the method header. }
 
 interface
 
@@ -17,7 +17,7 @@ uses
   AMQP.Method;
 
 type
-  { Argumentos de Channel.Close / Connection.Close (mesma forma). }
+  { Arguments of Channel.Close / Connection.Close (same shape). }
   TAMQPCloseInfo = record
     ReplyCode: Word;
     ReplyText: string;
@@ -32,23 +32,23 @@ function BuildChannelClose(const AClose: TAMQPCloseInfo): TBytes;
 function BuildChannelCloseOk: TBytes;
 function DecodeChannelClose(const AReader: TAMQPReader): TAMQPCloseInfo;
 
-// --- Lado servidor (sub-módulo broker) -----------------------------------
-// Build dos métodos servidor->cliente e decode dos cliente->servidor.
-// Channel.Close / DecodeChannelClose acima já servem aos dois sentidos.
+// --- Server side (broker sub-module) -------------------------------------
+// Build of the server->client methods and decode of the client->server ones.
+// Channel.Close / DecodeChannelClose above already serve both directions.
 
-/// Channel.Open-Ok (11) — só um longstr reservado (channel-id), vazio.
+/// Channel.Open-Ok (11) — just one reserved longstr (channel-id), empty.
 function BuildChannelOpenOk: TBytes;
 
-/// Channel.Open (10) — consome o shortstr reservado e descarta.
+/// Channel.Open (10) — consumes the reserved shortstr and discards it.
 procedure DecodeChannelOpen(const AReader: TAMQPReader);
 
-/// Channel.Close-Ok (41) — sem argumentos.
+/// Channel.Close-Ok (41) — no arguments.
 procedure DecodeChannelCloseOk(const AReader: TAMQPReader);
 
-/// Channel.Flow (20) / Flow-Ok (21) — pausa/retoma o fluxo no canal.
-/// active=False pede ao par que pare de mandar conteúdo; o par confirma com
-/// Flow-Ok ecoando o mesmo active. (O RabbitMQ usa TCP backpressure e
-/// connection.blocked no lugar disto, mas o codec fica completo.)
+/// Channel.Flow (20) / Flow-Ok (21) — pauses/resumes flow on the channel.
+/// active=False asks the peer to stop sending content; the peer confirms with
+/// Flow-Ok echoing the same active. (RabbitMQ uses TCP backpressure and
+/// connection.blocked instead, but the codec stays complete.)
 function BuildChannelFlow(AActive: Boolean): TBytes;
 function BuildChannelFlowOk(AActive: Boolean): TBytes;
 function DecodeChannelFlow(const AReader: TAMQPReader): Boolean;   // active
@@ -62,7 +62,7 @@ var
 begin
   W := BeginMethod(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN);
   try
-    W.WriteShortStr(''); // reserved-1 (obsoleto)
+    W.WriteShortStr(''); // reserved-1 (obsolete)
     Result := W.ToBytes;
   finally
     W.Free;
@@ -71,7 +71,7 @@ end;
 
 procedure DecodeChannelOpenOk(const AReader: TAMQPReader);
 begin
-  AReader.ReadLongStr; // reserved-1 — descartado
+  AReader.ReadLongStr; // reserved-1 — discarded
 end;
 
 function BuildChannelClose(const AClose: TAMQPCloseInfo): TBytes;
@@ -110,7 +110,7 @@ begin
   Result.MethodId := AReader.ReadShortUInt;
 end;
 
-{ Lado servidor }
+{ Server side }
 
 function BuildChannelOpenOk: TBytes;
 var
@@ -118,7 +118,7 @@ var
 begin
   W := BeginMethod(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_OPEN_OK);
   try
-    W.WriteLongStr(''); // reserved-1 (channel-id) — obsoleto
+    W.WriteLongStr(''); // reserved-1 (channel-id) — obsolete
     Result := W.ToBytes;
   finally
     W.Free;
@@ -127,12 +127,12 @@ end;
 
 procedure DecodeChannelOpen(const AReader: TAMQPReader);
 begin
-  AReader.ReadShortStr; // reserved-1 — descartado
+  AReader.ReadShortStr; // reserved-1 — discarded
 end;
 
 procedure DecodeChannelCloseOk(const AReader: TAMQPReader);
 begin
-  // sem argumentos
+  // no arguments
 end;
 
 function BuildChannelFlow(AActive: Boolean): TBytes;

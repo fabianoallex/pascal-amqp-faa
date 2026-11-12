@@ -2,34 +2,34 @@
 
 {$I amqp.inc}
 
-{ Conexão AMQP 0-9-1 sobre socket TCP, com thread de leitura dedicada.
+{ AMQP 0-9-1 connection over a TCP socket, with a dedicated read thread.
 
-  Arquitetura de concorrência (item 3 do roadmap):
-  - O handshake (Open) é feito de forma síncrona, lendo o socket inline, ANTES
-    de qualquer thread existir.
-  - Depois do Open-Ok, uma única thread de leitura (TAMQPReaderThread) passa a
-    ser a ÚNICA que lê o socket. Ela só faz: ler frame -> demultiplexar por canal
-    -> entregar. Nunca roda código do usuário nem bloqueia.
-  - TODAS as escritas no socket passam por FWriteLock (uma TCriticalSection), de
-    modo que RPCs, publishes, acks e as respostas da própria thread de leitura
-    (Close-Ok) não se embaralham.
-  - RPC (declare/bind/get/close/...) é feito por evento: o chamador registra o
-    que espera, envia o método e aguarda um TEvent que a thread de leitura sinaliza
-    ao entregar a resposta.
+  Concurrency architecture (roadmap item 3):
+  - The handshake (Open) is done synchronously, reading the socket inline, BEFORE
+    any thread exists.
+  - After Open-Ok, a single read thread (TAMQPReaderThread) becomes
+    the ONLY one that reads the socket. All it does: read frame -> demultiplex by channel
+    -> deliver. It never runs user code nor blocks.
+  - ALL writes to the socket go through FWriteLock (a TCriticalSection), so
+    that RPCs, publishes, acks and the read thread's own replies
+    (Close-Ok) do not interleave.
+  - RPC (declare/bind/get/close/...) is event-driven: the caller registers what
+    it expects, sends the method and waits on a TEvent that the read thread signals
+    when delivering the reply.
 
-  Invariantes (para não introduzir corrida/deadlock):
-  - Só a thread de leitura lê o socket depois do handshake.
-  - Ordem de locks sempre "de fora pra dentro": FChannelsLock -> FWriteLock e
-    FRpcLock -> FWriteLock. FWriteLock nunca envolve FChannelsLock/FRpcLock.
-  - O monitor de confirms (FConfirmMon, publisher confirms) é o lock MAIS interno:
-    é adquirido sozinho (WaitForConfirm) ou dentro do FWriteLock (Publish) ou
-    dentro do FChannelsLock (ao resolver acks na thread de leitura); nunca se
-    adquire outro lock segurando-o.
-  - A thread de leitura escreve o slot de RPC e chama SetEvent; o chamador só lê
-    o slot depois de WaitFor retornar (o evento é a barreira de sincronização).
+  Invariants (so as not to introduce a race/deadlock):
+  - Only the read thread reads the socket after the handshake.
+  - Lock order always "outside in": FChannelsLock -> FWriteLock and
+    FRpcLock -> FWriteLock. FWriteLock never wraps FChannelsLock/FRpcLock.
+  - The confirms monitor (FConfirmMon, publisher confirms) is the INNERMOST lock:
+    it is acquired alone (WaitForConfirm) or inside FWriteLock (Publish) or
+    inside FChannelsLock (when resolving acks on the read thread); no other lock
+    is ever acquired while holding it.
+  - The read thread writes the RPC slot and calls SetEvent; the caller only reads
+    the slot after WaitFor returns (the event is the synchronization barrier).
 
-  Consumo (Basic.Consume + despacho para thread pool) e heartbeat vêm nos
-  próximos incrementos. }
+  Consumption (Basic.Consume + dispatch to the thread pool) and heartbeat come in the
+  next increments. }
 
 interface
 
@@ -53,15 +53,15 @@ uses
   AMQP.Basic.Methods;
 
 type
-  /// Erro ao nível da conexão: handshake, Open/Close, ou uso indevido
-  /// (publish/CreateChannel com a conexão fechada ou reconectando). Uma
-  /// EAMQPConnection não fecha o canal nem a conexão sozinha — quem decide
-  /// o que fazer (retry, desistir) é o chamador.
+  /// Connection-level error: handshake, Open/Close, or misuse
+  /// (publish/CreateChannel with the connection closed or reconnecting). An
+  /// EAMQPConnection does not close the channel or the connection by itself — the
+  /// caller decides what to do (retry, give up).
   EAMQPConnection = class(Exception);
-  /// Erro ao nível do canal: RPC (declare/bind/get/consume/close) que
-  /// recebeu Channel.Close do broker, deu timeout, ou foi chamado com o
-  /// canal já fechado — ou uso indevido (WaitForConfirm fora de confirm
-  /// mode). Ver também EAMQPConnection (erros da conexão como um todo).
+  /// Channel-level error: an RPC (declare/bind/get/consume/close) that
+  /// received Channel.Close from the broker, timed out, or was called with the
+  /// channel already closed — or misuse (WaitForConfirm outside confirm
+  /// mode). See also EAMQPConnection (errors of the connection as a whole).
   EAMQPChannel = class(Exception);
 
   TAMQPConnectionParams = record
@@ -70,27 +70,27 @@ type
     VirtualHost: string;
     User: string;
     Password: string;
-    // Preferências de tune do cliente (0 = sem limite; ver NegotiateTune).
+    // Client tune preferences (0 = no limit; see NegotiateTune).
     ChannelMax: Word;
     FrameMax: Cardinal;
     Heartbeat: Word;
-    // Reconexão automática (opt-in).
+    // Automatic reconnection (opt-in).
     AutoReconnect: Boolean;
-    ReconnectDelayMs: Cardinal;    // espera entre tentativas (padrão 2000)
-    MaxReconnectAttempts: Integer; // 0 = infinitas
-    ConnectionName: string;        // opcional; vai em client-properties
-    // Reenvio automático (opt-in): em confirm mode, publishes deixados sem
-    // confirmação por uma queda são re-publicados na reconexão (novos seq-nos).
-    // At-least-once — pode duplicar. Custo: guarda o corpo até confirmar.
+    ReconnectDelayMs: Cardinal;    // wait between attempts (default 2000)
+    MaxReconnectAttempts: Integer; // 0 = infinite
+    ConnectionName: string;        // optional; goes in client-properties
+    // Automatic resend (opt-in): in confirm mode, publishes left
+    // unconfirmed by a drop are republished on reconnection (new seq-nos).
+    // At-least-once — may duplicate. Cost: keeps the body until confirmed.
     RepublishUnconfirmedOnReconnect: Boolean;
     /// Budget for the TCP connect (every address of the name included), in
     /// ms. 0 = pascal-common-faa's default, 10 s. Before 0.6.0 there was no
     /// budget of our own (the OS's: ~21 s on Windows, minutes on Linux).
     ConnectTimeoutMs: Cardinal;
     // TLS (amqps://). Opt-in.
-    UseTls: Boolean;               // True => faz handshake TLS antes do AMQP
-    TlsVerifyPeer: Boolean;        // True (padrão): valida cadeia + hostname
-    TlsServerName: string;         // '' => usa Host (SNI / nome para validação)
+    UseTls: Boolean;               // True => does a TLS handshake before AMQP
+    TlsVerifyPeer: Boolean;        // True (default): validates chain + hostname
+    TlsServerName: string;         // '' => uses Host (SNI / name for validation)
     /// Private CA (PEM, both backends): trust THIS CA for the server instead
     /// of the system store. '' = the system store.
     TlsCaFile: string;
@@ -104,15 +104,15 @@ type
     /// Windows (OpenSSL with -dAMQP_OPENSSL), OpenSSL elsewhere; see
     /// AmqpDefaultTlsBackend. tbSChannel off Windows fails with EAMQPTls.
     TlsBackend: TPcTlsBackend;
-    /// Parâmetros padrão: localhost:5672, vhost '/', guest/guest (sem TLS).
+    /// Default parameters: localhost:5672, vhost '/', guest/guest (no TLS).
     class function Localhost: TAMQPConnectionParams; static;
-    /// Como Localhost, mas TLS na porta 5671 com validação DESLIGADA
-    /// (TlsVerifyPeer=False) — conveniência para broker de dev com cert self-signed.
+    /// Like Localhost, but TLS on port 5671 with validation OFF
+    /// (TlsVerifyPeer=False) — a convenience for a dev broker with a self-signed cert.
     class function LocalhostTls: TAMQPConnectionParams; static;
   end;
 
-  { Resultado de Basic.Get. Se Found=False, a fila estava vazia. Se
-    Properties tiver Headers, o chamador é dono dessa tabela (liberar). }
+  { Result of Basic.Get. If Found=False, the queue was empty. If
+    Properties has Headers, the caller owns that table (free it). }
   TAMQPGetResult = record
     Found: Boolean;
     DeliveryTag: UInt64;
@@ -128,27 +128,27 @@ type
   TAMQPConnection = class;
   TAMQPChannel = class;
 
-  { Callback de eventos de conexão (desconexão / reconexão). Roda numa thread
-    interna; mantenha-o curto e não bloqueante. }
+  { Callback for connection events (disconnect / reconnect). Runs on an internal
+    thread; keep it short and non-blocking. }
   TAMQPConnectionEvent = procedure(AConnection: TAMQPConnection) of object;
 
-  { Callback de tentativa de reconexão que falhou: AAttempt conta desde 1 na
-    queda corrente e AError é a mensagem da exceção (ex.: o 404 de um
-    basic.consume numa fila que ninguém redeclarou). Roda na thread de
-    reconexão, como OnDisconnect/OnReconnect; a próxima tentativa vem depois de
+  { Callback for a failed reconnection attempt: AAttempt counts from 1 within the
+    current drop and AError is the exception message (e.g. the 404 of a
+    basic.consume on a queue nobody redeclared). Runs on the reconnect
+    thread, like OnDisconnect/OnReconnect; the next attempt comes after
     ReconnectDelayMs. }
   TAMQPReconnectErrorEvent = procedure(AConnection: TAMQPConnection;
     AAttempt: Integer; const AError: string) of object;
 
-  { Callback de Connection.Blocked (extensão RabbitMQ): o broker entrou em
-    resource alarm (memória/disco) e parou de aceitar publishes; AReason traz o
-    motivo. Despachado num thread do pool (não bloqueia a thread de leitura). O
-    par Unblocked usa TAMQPConnectionEvent. }
+  { Callback for Connection.Blocked (RabbitMQ extension): the broker entered a
+    resource alarm (memory/disk) and stopped accepting publishes; AReason carries the
+    reason. Dispatched on a pool thread (does not block the read thread). The
+    Unblocked counterpart uses TAMQPConnectionEvent. }
   TAMQPConnectionBlockedEvent = procedure(AConnection: TAMQPConnection;
     const AReason: string) of object;
 
-  { Mensagem entregue a um consumer (Basic.Deliver). Se Properties tiver
-    Headers, a tabela é liberada automaticamente após o callback retornar. }
+  { Message delivered to a consumer (Basic.Deliver). If Properties has
+    Headers, the table is freed automatically after the callback returns. }
   TAMQPDelivery = record
     ConsumerTag: string;
     DeliveryTag: UInt64;
@@ -160,46 +160,46 @@ type
     function BodyAsText: string;
   end;
 
-  { Callback de consumer. Roda numa thread do pool, então NÃO bloqueia a
-    thread de leitura. Use AChannel.Ack(ADelivery.DeliveryTag) para confirmar.
-    Se ele levantar, a exceção vai para AChannel.OnConsumerError e a entrega
-    ainda não confirmada leva Nack sem requeue (ver TAMQPConsumerErrorAction). }
+  { Consumer callback. Runs on a pool thread, so it does NOT block the
+    read thread. Use AChannel.Ack(ADelivery.DeliveryTag) to acknowledge.
+    If it raises, the exception goes to AChannel.OnConsumerError and the delivery
+    not yet acknowledged gets a Nack without requeue (see TAMQPConsumerErrorAction). }
   TAMQPConsumerCallback = procedure(AChannel: TAMQPChannel;
     const ADelivery: TAMQPDelivery) of object;
 
-  { O que a lib faz com uma entrega cujo callback levantou exceção. Só é
-    aplicada se a entrega ainda não foi confirmada (por Ack/Nack no callback ou
-    no próprio OnConsumerError). Se a conexão caiu durante o callback, o Nack
-    falha em silêncio: o broker já devolveu a entrega à fila, e ela volta
-    com Redelivered=True depois da reconexão. }
+  { What the lib does with a delivery whose callback raised an exception. Only
+    applied if the delivery has not been acknowledged yet (by Ack/Nack in the callback or
+    in OnConsumerError itself). If the connection dropped during the callback, the Nack
+    fails silently: the broker already returned the delivery to the queue, and it comes
+    back with Redelivered=True after reconnection. }
   TAMQPConsumerErrorAction = (
-    ceaReject,  // Nack sem requeue: vai para a dead-letter exchange da fila, se houver; senão o broker descarta
-    ceaRequeue, // Nack com requeue: volta para a fila (cuidado com mensagem que sempre falha: loop)
-    ceaNone);   // a lib não confirma (o aplicativo confirma depois, ou nada há a confirmar)
+    ceaReject,  // Nack without requeue: goes to the queue's dead-letter exchange, if any; otherwise the broker drops it
+    ceaRequeue, // Nack with requeue: goes back to the queue (beware of a message that always fails: loop)
+    ceaNone);   // the lib does not acknowledge (the application acknowledges later, or there is nothing to acknowledge)
 
-  { Callback de exceção levantada pelo callback de consumer. Roda na mesma
-    thread do pool, logo depois da exceção, com o span 'process' da mensagem
-    ainda corrente (com o tracing ligado: o log escrito aqui leva o trace id
-    dela; o span termina depois, com o erro do callback). AAction chega como ceaReject se a
-    entrega ainda está pendente, ou ceaNone se já foi confirmada ou se o
-    consumer é no-ack; mude-a para decidir. A exceção é da lib: não a libere
-    nem a relance. Uma exceção levantada pelo próprio handler é ignorada e
-    AAction vale como estava. }
+  { Callback for an exception raised by the consumer callback. Runs on the same
+    pool thread, right after the exception, with the message's 'process' span
+    still current (with tracing on: the log written here carries its trace id;
+    the span ends afterwards, with the callback's error). AAction arrives as ceaReject if the
+    delivery is still pending, or ceaNone if it was already acknowledged or the
+    consumer is no-ack; change it to decide. The exception belongs to the lib: do not free it
+    or re-raise it. An exception raised by the handler itself is ignored and
+    AAction stands as it was. }
   TAMQPConsumerErrorEvent = procedure(AChannel: TAMQPChannel;
     const ADelivery: TAMQPDelivery; AError: Exception;
     var AAction: TAMQPConsumerErrorAction) of object;
 
-  { Consumer registrado no canal: a fila (para o nome do span 'process
-    <fila>'; o Basic.Deliver não a traz) e o modo no-ack (entrega no-ack não
-    tem o que confirmar quando o callback levanta). }
+  { Consumer registered on the channel: the queue (for the span name 'process
+    <queue>'; Basic.Deliver does not carry it) and the no-ack mode (a no-ack delivery
+    has nothing to acknowledge when the callback raises). }
   TAMQPConsumerInfo = record
     Queue: string;
     NoAck: Boolean;
   end;
 
-  { Mensagem devolvida pelo broker (Basic.Return): um publish `mandatory` que
-    não pôde ser roteado a nenhuma fila. Se Properties tiver Headers, a tabela
-    é liberada automaticamente após o callback retornar. }
+  { Message returned by the broker (Basic.Return): a `mandatory` publish that
+    could not be routed to any queue. If Properties has Headers, the table
+    is freed automatically after the callback returns. }
   TAMQPReturnedMessage = record
     ReplyCode: Word;
     ReplyText: string;
@@ -210,35 +210,35 @@ type
     function BodyAsText: string;
   end;
 
-  { Callback de Basic.Return. Roda numa thread do pool (TTask), assim como o
-    callback de consumer — não bloqueia a thread de leitura. }
+  { Basic.Return callback. Runs on a pool thread (TTask), like the
+    consumer callback — does not block the read thread. }
   TAMQPBasicReturnCallback = procedure(AChannel: TAMQPChannel;
     const AReturned: TAMQPReturnedMessage) of object;
 
-  { Callback de publisher confirm: o broker (a)ck-ou ou (n)ack-ou o publish de
-    número ASeqNo (o valor devolvido por Publish). Roda numa thread do pool,
-    como os demais callbacks — não bloqueia a thread de leitura. Dispara só em
-    confirmações reais do broker; queda de conexão NÃO dispara OnConfirm (o
-    publish pendente é reportado como não confirmado via WaitForConfirm). }
+  { Publisher confirm callback: the broker ack'ed or nack'ed the publish
+    numbered ASeqNo (the value returned by Publish). Runs on a pool thread,
+    like the other callbacks — does not block the read thread. Fires only on
+    real confirms from the broker; a connection drop does NOT fire OnConfirm (the
+    pending publish is reported as unconfirmed via WaitForConfirm). }
   TAMQPConfirmCallback = procedure(AChannel: TAMQPChannel;
     ASeqNo: UInt64; AAck: Boolean) of object;
 
-  { Fase do replay em que uma ação gravada entra. A reconexão replaya a
-    conexão INTEIRA fase a fase, não canal a canal: toda exchange de todo
-    canal, depois toda fila, depois todo bind, por fim todo consumer. Canal a
-    canal, um consumer num canal que só consome rodava antes do declare feito
-    noutro canal e levava 404 (fila não durável, que o restart do broker
-    apagou) — e a tentativa falhava igual para sempre. Dentro de uma fase, a
-    ordem é a dos canais (ChannelId) e, em cada canal, a da gravação. }
+  { Replay phase a recorded action belongs to. Reconnection replays the
+    WHOLE connection phase by phase, not channel by channel: every exchange of every
+    channel, then every queue, then every bind, finally every consumer. Channel by
+    channel, a consumer on a consume-only channel ran before the declare made
+    on another channel and got a 404 (non-durable queue, which the broker restart
+    deleted) — and the attempt failed the same way forever. Within a phase, the
+    order is that of the channels (ChannelId) and, within each channel, the recording order. }
   TAMQPRecoveryPhase = (rpChannel, rpExchange, rpQueue, rpBind, rpConsume);
 
-  { Ação de topologia gravada para replay após reconexão. Guardamos o payload
-    já serializado do método (qos/declare/bind/consume) — assim argumentos e
-    flags vêm de graça. Consumers guardam também o tag e o callback. }
+  { Topology action recorded for replay after reconnection. We keep the
+    already serialized method payload (qos/declare/bind/consume) — so arguments and
+    flags come for free. Consumers also keep the tag and the callback. }
   TAMQPRecoveryAction = record
     Payload: TBytes;
-    AwaitReply: Boolean;    // True: espera o -Ok (CallRpc); False: só envia
-    Phase: TAMQPRecoveryPhase; // derivada do método do payload (AddRecovery)
+    AwaitReply: Boolean;    // True: waits for the -Ok (CallRpc); False: only sends
+    Phase: TAMQPRecoveryPhase; // derived from the payload's method (AddRecovery)
     IsConsume: Boolean;
     ConsumerTag: string;
     Callback: TAMQPConsumerCallback;
@@ -246,44 +246,44 @@ type
 
   TAMQPRpcKind = (rkNone, rkMethod, rkMessage, rkError);
 
-  // Estado da montagem de conteúdo (método + content header + body frames).
-  // Tipo nomeado (não anônimo inline) por compatibilidade com o FPC.
+  // Content assembly state (method + content header + body frames).
+  // Named type (not inline anonymous) for FPC compatibility.
   TAMQPAsmState = (asIdle, asHeader, asBody);
 
-  { Frames já serializados de um publish, guardados para reenvio após reconexão
-    (uso interno; ver RepublishUnconfirmedOnReconnect). Method/Header são os
-    payloads dos frames; Body é o corpo completo (refatiado no reenvio). }
+  { Already serialized frames of a publish, kept for resending after reconnection
+    (internal use; see RepublishUnconfirmedOnReconnect). Method/Header are the
+    frame payloads; Body is the whole body (re-sliced on resend). }
   TAMQPRawPublish = record
     Method: TBytes;
     Header: TBytes;
     Body: TBytes;
   end;
 
-  { Canal de dados. Criado via TAMQPConnection.CreateChannel (que já o abre).
-    O chamador é dono do canal e deve liberá-lo (Free). }
+  { Data channel. Created via TAMQPConnection.CreateChannel (which already opens it).
+    The caller owns the channel and must free it (Free). }
   TAMQPChannel = class
   private
     FConnection: TAMQPConnection;
     FChannelId: Word;
     FIsOpen: Boolean;
     FClosed: Boolean;
-    // Canal fechando ou fechado (v0.4.2): ligado pelo Close antes do
-    // Channel.Close e pela thread de leitura antes do Close-Ok de um
-    // fechamento do broker. Sob FAckLock, que Ack/Nack seguram do teste até o
-    // frame sair: todo Ack aceito vai para o fio ANTES do Channel.Close(-Ok),
-    // e nenhum sai depois — um Basic.Ack num canal fechado é erro de CONEXÃO
-    // (504) e derrubaria todos os canais. Ordem: FAckLock por fora de
-    // FSettleLock e de FWriteLock; nada os adquire na ordem inversa.
+    // Channel closing or closed (v0.4.2): set by Close before
+    // Channel.Close and by the read thread before the Close-Ok of a
+    // broker-initiated close. Under FAckLock, which Ack/Nack hold from the check until the
+    // frame goes out: every accepted Ack goes on the wire BEFORE Channel.Close(-Ok),
+    // and none goes out after — a Basic.Ack on a closed channel is a CONNECTION error
+    // (504) and would bring down every channel. Order: FAckLock outside
+    // FSettleLock and FWriteLock; nothing acquires them in the reverse order.
     FClosing: Boolean;
     FAckLock: TCriticalSection;
-    // --- RPC (uma chamada por vez neste canal) ---
+    // --- RPC (one call at a time on this channel) ---
     FRpcLock: TCriticalSection;
     FRpcEvent: TEvent;
     FRpcKind: TAMQPRpcKind;
     FRpcMethodPayload: TBytes;
     FRpcMessage: TAMQPGetResult;
     FRpcError: string;
-    // --- montagem de conteúdo (escrita só pela thread de leitura) ---
+    // --- content assembly (written only by the read thread) ---
     FAsmState: TAMQPAsmState;
     FAsmMethodId: TAMQPMethodId;
     FAsmGetOk: TAMQPBasicGetOk;
@@ -294,127 +294,127 @@ type
     FAsmRemaining: UInt64;
     // --- consumers ---
     FConsumers: TDictionary<string, TAMQPConsumerCallback>;
-    // consumer-tag -> fila e no-ack (ver TAMQPConsumerInfo). Sob
-    // FConsumersLock; a reconexão não limpa: os consumers voltam com o mesmo
-    // tag, a mesma fila e o mesmo modo.
+    // consumer-tag -> queue and no-ack (see TAMQPConsumerInfo). Under
+    // FConsumersLock; reconnection does not clear it: the consumers come back with the same
+    // tag, the same queue and the same mode.
     FConsumerInfo: TDictionary<string, TAMQPConsumerInfo>;
     FConsumersLock: TCriticalSection;
     FConsumerCounter: Integer;
-    // --- entregas ainda não confirmadas (para OnConsumerError) ---
-    // Delivery-tags de consumers com ack manual, do despacho (thread de
-    // leitura, ANTES de enfileirar: um Ack nunca chega antes do registro) até
-    // Ack/Nack ou o fim do callback. Uma entrega de antes de uma reconexão
-    // nunca é confirmada com o tag de outra: a reconexão drena todo callback
-    // antigo (DrainAllChannels) antes de reabrir o canal, e o Nack de um
-    // callback antigo cai no socket morto. FSettleLock só protege o conjunto;
-    // nunca se adquire outro lock com ele.
+    // --- deliveries not yet acknowledged (for OnConsumerError) ---
+    // Delivery-tags of manual-ack consumers, from dispatch (read
+    // thread, BEFORE queueing: an Ack never arrives before the registration) until
+    // Ack/Nack or the end of the callback. A delivery from before a reconnection
+    // is never acknowledged with another one's tag: reconnection drains every old
+    // callback (DrainAllChannels) before reopening the channel, and the Nack of an
+    // old callback falls on the dead socket. FSettleLock only protects the set;
+    // no other lock is ever acquired with it.
     FUnsettled: TDictionary<UInt64, Boolean>;
     FSettleLock: TCriticalSection;
     FOnConsumerError: TAMQPConsumerErrorEvent;
     FOnBasicReturn: TAMQPBasicReturnCallback;
-    FInFlight: Integer; // callbacks em execução no pool (atômico)
-    // Pool privado (1 worker) quando o canal usa thread dedicada; nil => usa
-    // o PcPool global (comportamento padrão). Ver CreateChannel.
+    FInFlight: Integer; // callbacks running on the pool (atomic)
+    // Private pool (1 worker) when the channel uses a dedicated thread; nil => uses
+    // the global PcPool (default behavior). See CreateChannel.
     FDispatchPool: TPcThreadPool;
     // --- publisher confirms ---
-    // FConfirmMon é lock + variável de condição (TPcMonitor) que protege
-    // FUnconfirmed/FNacked/FPublishSeqNo/FConfirmBase e acorda WaitForConfirm(s).
-    // Ordem de locks: é o lock MAIS interno — só se adquire sozinho ou dentro do
-    // FWriteLock (Publish); nunca se adquire outro lock segurando-o.
+    // FConfirmMon is lock + condition variable (TPcMonitor) protecting
+    // FUnconfirmed/FNacked/FPublishSeqNo/FConfirmBase and waking WaitForConfirm(s).
+    // Lock order: it is the INNERMOST lock — acquired only alone or inside
+    // FWriteLock (Publish); no other lock is ever acquired while holding it.
     FConfirmMode: Boolean;
-    FPublishSeqNo: UInt64;   // seq-no do usuário, monotônico (NÃO reseta na reconexão)
-    FConfirmBase: UInt64;    // offset da sessão: userSeqNo = FConfirmBase + wireTag do broker
+    FPublishSeqNo: UInt64;   // user seq-no, monotonic (NOT reset on reconnection)
+    FConfirmBase: UInt64;    // session offset: userSeqNo = FConfirmBase + broker's wireTag
     FConfirmMon: TPcMonitor;
-    FUnconfirmed: TDictionary<UInt64, Boolean>; // seq-nos aguardando confirmação
-    FNacked: TDictionary<UInt64, Boolean>;      // seq-nos nack-ados (ou perdidos na queda)
+    FUnconfirmed: TDictionary<UInt64, Boolean>; // seq-nos awaiting confirm
+    FNacked: TDictionary<UInt64, Boolean>;      // nack'ed seq-nos (or lost in the drop)
     FOnConfirm: TAMQPConfirmCallback;
-    // Reenvio automático (opt-in via params): buffer do conteúdo dos publishes
-    // pendentes, por seq-no, para re-publicar após reconexão. Protegido pelo
-    // FConfirmMon, como FUnconfirmed.
+    // Automatic resend (opt-in via params): buffer of the content of pending
+    // publishes, by seq-no, to republish after reconnection. Protected by
+    // FConfirmMon, like FUnconfirmed.
     FRepublish: Boolean;
     FResendBuffer: TDictionary<UInt64, TAMQPRawPublish>;
-    // --- topologia gravada para reconexão ---
+    // --- topology recorded for reconnection ---
     FRecovery: TList<TAMQPRecoveryAction>;
     FRecoveryLock: TCriticalSection;
     procedure AddRecovery(const APayload: TBytes; AAwaitReply: Boolean;
       AIsConsume: Boolean = False; const AConsumerTag: string = '';
       const ACallback: TAMQPConsumerCallback = nil);
-    /// Remove a gravação de recovery de um consumer (ao cancelá-lo).
+    /// Removes a consumer's recovery record (when cancelling it).
     procedure RemoveConsumerRecovery(const AConsumerTag: string);
-    /// Remove da topologia gravada o bind equivalente a (fila, exchange, rota),
-    /// para que um unbind não seja desfeito por uma reconexão. Casa binds sem
-    /// Arguments (o caso comum), nas duas variantes de no-wait.
+    /// Removes from the recorded topology the bind equivalent to (queue, exchange, route),
+    /// so that an unbind is not undone by a reconnection. Matches binds without
+    /// Arguments (the common case), in both no-wait variants.
     procedure RemoveBindRecovery(const AQueue, AExchange, ARoutingKey: string);
-    /// Idem para bindings exchange->exchange (ver UnbindExchange).
+    /// Same for exchange->exchange bindings (see UnbindExchange).
     procedure RemoveExchangeBindRecovery(const ADestination, ASource, ARoutingKey: string);
-    /// Remove da topologia gravada os queue.declare da fila AQueue (chamado por
-    /// DeleteQueue), para uma reconexão não recriar a fila apagada. Decodifica o
-    /// cabeçalho de cada payload gravado — independe de flags/Arguments do declare.
+    /// Removes from the recorded topology the queue.declare of queue AQueue (called by
+    /// DeleteQueue), so a reconnection does not recreate the deleted queue. Decodes the
+    /// header of each recorded payload — independent of the declare's flags/Arguments.
     procedure RemoveQueueDeclareRecovery(const AQueue: string);
-    /// Remove do recovery toda ação cujo payload coincida com um dos candidatos.
+    /// Removes from recovery every action whose payload matches one of the candidates.
     procedure RemoveRecoveryMatching(const ACandidates: array of TBytes);
-    /// Reconexão, em três passos chamados pela conexão (RecoverAllChannels):
-    /// BeginRecover pega o FRpcLock (RPCs do usuário esperam o replay), reabre
-    /// o canal e replaya a fase rpChannel (qos, confirm.select); ReplayRecovery
-    /// replaya uma fase de topologia (e, depois da última, a conexão chama
-    /// ResendUnconfirmed); EndRecover solta o lock, com sucesso ou não. Se
-    /// BeginRecover levanta, o lock já foi solto e EndRecover não é chamado.
+    /// Reconnection, in three steps called by the connection (RecoverAllChannels):
+    /// BeginRecover takes FRpcLock (user RPCs wait for the replay), reopens
+    /// the channel and replays the rpChannel phase (qos, confirm.select); ReplayRecovery
+    /// replays one topology phase (and, after the last one, the connection calls
+    /// ResendUnconfirmed); EndRecover releases the lock, on success or not. If
+    /// BeginRecover raises, the lock has already been released and EndRecover is not called.
     procedure BeginRecover;
     procedure ReplayRecovery(APhase: TAMQPRecoveryPhase);
     procedure EndRecover;
     procedure Open;
-    /// Envia um método e aguarda a resposta (payload do método de resposta).
+    /// Sends a method and waits for the reply (payload of the reply method).
     function CallRpc(const ARequest: TBytes): TBytes;
-    // sinalizadores chamados pela thread de leitura:
+    // signalers called by the read thread:
     procedure SignalMethod(const APayload: TBytes);
     procedure SignalMessage(const AMessage: TAMQPGetResult);
     procedure SignalError(const AMessage: string);
     procedure CompleteContent;
-    /// Enfileira um work item no pool dedicado do canal (se houver) ou no
-    /// PcPool global. Não chamar de "Dispatch": colidiria com o
-    /// TObject.Dispatch usado no mecanismo de message dispatch.
+    /// Queues a work item on the channel's dedicated pool (if any) or on the
+    /// global PcPool. Do not call it "Dispatch": it would collide with
+    /// TObject.Dispatch used by the message dispatch mechanism.
     procedure DispatchToPool(AItem: TPcWorkItem);
-    /// Despacha uma entrega para o callback do consumer, no thread pool.
+    /// Dispatches a delivery to the consumer callback, on the thread pool.
     procedure DispatchDelivery(const ADeliver: TAMQPBasicDeliver;
       const AProps: TAMQPBasicProperties; const ABody: TBytes);
-    /// Despacha um Basic.Return para OnBasicReturn, no thread pool.
+    /// Dispatches a Basic.Return to OnBasicReturn, on the thread pool.
     procedure DispatchReturn(const AReturn: TAMQPBasicReturn;
       const AProps: TAMQPBasicProperties; const ABody: TBytes);
-    /// Despacha um confirm (ack/nack do broker) para OnConfirm, no thread pool.
+    /// Dispatches a confirm (broker ack/nack) to OnConfirm, on the thread pool.
     procedure DispatchConfirm(ASeqNo: UInt64; AAck: Boolean);
-    /// Resolve os seq-nos pendentes cobertos por (tag, multiple); devolve a lista
-    /// resolvida (para despachar OnConfirm fora do lock). Roda na thread de leitura.
+    /// Resolves the pending seq-nos covered by (tag, multiple); returns the resolved
+    /// list (to dispatch OnConfirm outside the lock). Runs on the read thread.
     function ResolveConfirms(ATag: UInt64; AMultiple, AAck: Boolean): TArray<UInt64>;
-    /// Marca todos os publishes pendentes como não confirmados (queda de conexão).
+    /// Marks every pending publish as unconfirmed (connection drop).
     procedure FailAllUnconfirmed;
-    /// Envia os frames de um publish sob FWriteLock, atribuindo o seq-no (em
-    /// confirm mode) e bufferizando para reenvio (se habilitado). Base de Publish
-    /// e do reenvio pós-reconexão. Devolve o seq-no (0 fora do confirm mode).
+    /// Sends a publish's frames under FWriteLock, assigning the seq-no (in
+    /// confirm mode) and buffering for resend (if enabled). Basis of Publish
+    /// and of the post-reconnection resend. Returns the seq-no (0 outside confirm mode).
     function DoSendPublish(const AMethod, AHeader, ABody: TBytes): UInt64;
-    /// Re-publica os publishes que ficaram sem confirmação (chamado no Recover,
-    /// se RepublishUnconfirmedOnReconnect). Reenvia na ordem original, com seq-nos
-    /// novos; os antigos já foram reportados como não confirmados.
+    /// Republishes the publishes left unconfirmed (called in Recover,
+    /// if RepublishUnconfirmedOnReconnect). Resends in the original order, with new
+    /// seq-nos; the old ones were already reported as unconfirmed.
     procedure ResendUnconfirmed;
-    /// O Basic.Get sem span (BasicGet abre o span em volta dele).
+    /// The Basic.Get without a span (BasicGet opens the span around it).
     function DoBasicGet(const AQueue: string; ANoAck: Boolean): TAMQPGetResult;
-    /// Retira do conjunto de pendentes o tag (ou, com AMultiple, todo tag até
-    /// ele). Chamado por Ack/Nack, antes de enviar.
+    /// Removes the tag from the pending set (or, with AMultiple, every tag up to
+    /// it). Called by Ack/Nack, before sending.
     procedure SettleDeliveries(ADeliveryTag: UInt64; AMultiple: Boolean);
-    /// Liga FClosing sob FAckLock: Ack/Nack deixam de sair para o fio.
+    /// Sets FClosing under FAckLock: Ack/Nack stop going out on the wire.
     procedure MarkClosing;
-    /// Retira o tag do conjunto; True se ele estava lá (a entrega continua
-    /// sem confirmação). Atômico: é o que impede a lib de confirmar uma
-    /// entrega que o aplicativo já confirmou.
+    /// Removes the tag from the set; True if it was there (the delivery is still
+    /// unacknowledged). Atomic: it is what keeps the lib from acknowledging a
+    /// delivery the application already acknowledged.
     function TakeUnsettled(ADeliveryTag: UInt64): Boolean;
-    /// Só consulta (sem retirar); usado para a ação inicial do OnConsumerError.
+    /// Only checks (without removing); used for the initial action of OnConsumerError.
     function IsUnsettled(ADeliveryTag: UInt64): Boolean;
-    /// Trata a exceção levantada por um callback de consumer: OnConsumerError
-    /// e, se a entrega continua pendente, o Nack da ação escolhida.
+    /// Handles the exception raised by a consumer callback: OnConsumerError
+    /// and, if the delivery is still pending, the Nack of the chosen action.
     procedure HandleConsumerError(const ADelivery: TAMQPDelivery;
       AError: Exception);
-    /// Aguarda os callbacks em voo terminarem (usado ao fechar o canal).
+    /// Waits for the in-flight callbacks to finish (used when closing the channel).
     procedure DrainInFlight;
-    /// Trata um frame entregue pela thread de leitura (roda NA thread de leitura).
+    /// Handles a frame delivered by the read thread (runs ON the read thread).
     procedure HandleFrame(const AFrame: TAMQPFrame);
   public
     constructor Create(AConnection: TAMQPConnection; AChannelId: Word);
@@ -423,107 +423,107 @@ type
     procedure DeclareExchange(const ADeclare: TAMQPExchangeDeclare);
     function DeclareQueue(const ADeclare: TAMQPQueueDeclare): TAMQPQueueDeclareOk;
     procedure BindQueue(const ABind: TAMQPQueueBind);
-    /// Desfaz um binding fila->exchange (queue.unbind). Sempre aguarda Unbind-Ok.
-    /// Também remove o bind equivalente da topologia gravada para reconexão, para
-    /// não ser recriado numa eventual reconexão (ver AddRecovery/Recover). Binds
-    /// com Arguments não-triviais não são reconciliados automaticamente.
+    /// Undoes a queue->exchange binding (queue.unbind). Always waits for Unbind-Ok.
+    /// Also removes the equivalent bind from the topology recorded for reconnection, so
+    /// it is not recreated on an eventual reconnection (see AddRecovery/Recover). Binds
+    /// with non-trivial Arguments are not reconciled automatically.
     procedure UnbindQueue(const AUnbind: TAMQPQueueUnbind);
-    /// Liga uma exchange a outra (binding exchange->exchange, extensão RabbitMQ):
-    /// Destination passa a receber o que for roteado de Source pela RoutingKey.
+    /// Binds one exchange to another (exchange->exchange binding, RabbitMQ extension):
+    /// Destination starts receiving what is routed from Source by RoutingKey.
     procedure BindExchange(const ABind: TAMQPExchangeBinding);
-    /// Desfaz um binding exchange->exchange e remove o bind equivalente da
-    /// topologia de recovery (mesma reconciliação de UnbindQueue).
+    /// Undoes an exchange->exchange binding and removes the equivalent bind from the
+    /// recovery topology (same reconciliation as UnbindQueue).
     procedure UnbindExchange(const AUnbind: TAMQPExchangeBinding);
-    /// Apaga uma fila (queue.delete). Devolve o nº de mensagens descartadas
-    /// (0 com NoWait). No RabbitMQ, apagar fila inexistente é um no-op que
-    /// devolve 0 — dá pra usar para recriar topologia do zero. Também remove
-    /// os declares desta fila da topologia gravada para reconexão.
+    /// Deletes a queue (queue.delete). Returns the number of dropped messages
+    /// (0 with NoWait). In RabbitMQ, deleting a nonexistent queue is a no-op that
+    /// returns 0 — usable to recreate topology from scratch. Also removes
+    /// this queue's declares from the topology recorded for reconnection.
     function DeleteQueue(const ADelete: TAMQPQueueDelete): Cardinal;
 
-    /// Coloca o canal em modo publisher confirms (confirm.select). A partir daí
-    /// cada Publish recebe um seq-no e o broker o confirma via Basic.Ack/Nack —
-    /// use OnConfirm (assíncrono) e/ou WaitForConfirm/WaitForConfirms. Idempotente.
+    /// Puts the channel in publisher confirms mode (confirm.select). From then on
+    /// each Publish gets a seq-no and the broker confirms it via Basic.Ack/Nack —
+    /// use OnConfirm (asynchronous) and/or WaitForConfirm/WaitForConfirms. Idempotent.
     procedure ConfirmSelect;
 
-    /// Publica ABody com as propriedades AProps. Sem confirm mode: fire-and-forget
-    /// e retorna 0. Em confirm mode: retorna o seq-no atribuído (1, 2, 3, ...),
-    /// que identifica este publish em OnConfirm/WaitForConfirm.
+    /// Publishes ABody with properties AProps. Without confirm mode: fire-and-forget
+    /// and returns 0. In confirm mode: returns the assigned seq-no (1, 2, 3, ...),
+    /// which identifies this publish in OnConfirm/WaitForConfirm.
     function Publish(const AExchange, ARoutingKey: string; const ABody: TBytes;
       const AProps: TAMQPBasicProperties; AMandatory: Boolean = False): UInt64;
-    /// Conveniência: publica um texto UTF-8 como content-type text/plain.
-    /// Retorna o seq-no como Publish (0 fora do confirm mode).
+    /// Convenience: publishes a UTF-8 text as content-type text/plain.
+    /// Returns the seq-no like Publish (0 outside confirm mode).
     function PublishText(const AExchange, ARoutingKey, AText: string;
       APersistent: Boolean = True): UInt64;
 
-    /// Bloqueia até o broker confirmar o publish ASeqNo. Result=True se ack-ado;
-    /// False se nack-ado, se a conexão caiu antes da confirmação, ou timeout.
-    /// Requer confirm mode. ASeqNo deve ser um valor devolvido por Publish.
+    /// Blocks until the broker confirms publish ASeqNo. Result=True if ack'ed;
+    /// False if nack'ed, if the connection dropped before the confirm, or on timeout.
+    /// Requires confirm mode. ASeqNo must be a value returned by Publish.
     function WaitForConfirm(ASeqNo: UInt64; ATimeoutMs: Cardinal = 5000): Boolean;
-    /// Bloqueia até todos os publishes pendentes serem confirmados. Result=True
-    /// se todos foram ack-ados dentro do timeout; False se algum foi nack-ado (ou
-    /// perdido numa queda) ou se estourou o timeout. Requer confirm mode.
-    /// Consome o estado de nacks do lote — não misture com WaitForConfirm(seqno)
-    /// para os mesmos publishes (use um ou outro por lote).
+    /// Blocks until every pending publish is confirmed. Result=True
+    /// if all were ack'ed within the timeout; False if any was nack'ed (or
+    /// lost in a drop) or the timeout expired. Requires confirm mode.
+    /// Consumes the batch's nack state — do not mix with WaitForConfirm(seqno)
+    /// for the same publishes (use one or the other per batch).
     function WaitForConfirms(ATimeoutMs: Cardinal = 5000): Boolean;
 
-    /// Busca uma mensagem da fila. Result.Found=False se estava vazia.
+    /// Fetches a message from the queue. Result.Found=False if it was empty.
     function BasicGet(const AQueue: string; ANoAck: Boolean = True): TAMQPGetResult;
     procedure Ack(ADeliveryTag: UInt64; AMultiple: Boolean = False);
     procedure Nack(ADeliveryTag: UInt64; ARequeue: Boolean = True;
       AMultiple: Boolean = False);
 
-    /// Limita quantas mensagens não confirmadas o servidor entrega por vez
-    /// (prefetch). Útil para dividir a carga entre os callbacks concorrentes.
+    /// Limits how many unacknowledged messages the server delivers at a time
+    /// (prefetch). Useful to split the load among concurrent callbacks.
     procedure Qos(APrefetchCount: Word; AGlobal: Boolean = False);
-    /// Inicia o consumo da fila. Cada mensagem chega em ACallback, despachado
-    /// num thread do pool. Devolve o consumer-tag (use em Cancel). Com
-    /// ANoAck=False (padrão), confirme com AChannel.Ack no callback.
+    /// Starts consuming the queue. Each message arrives in ACallback, dispatched
+    /// on a pool thread. Returns the consumer-tag (use it in Cancel). With
+    /// ANoAck=False (default), acknowledge with AChannel.Ack in the callback.
     function Consume(const AQueue: string; const ACallback: TAMQPConsumerCallback;
       ANoAck: Boolean = False; AExclusive: Boolean = False): string;
-    /// Cancela um consumer pelo tag.
+    /// Cancels a consumer by tag.
     procedure Cancel(const AConsumerTag: string);
 
-    /// Fecha o canal (Channel.Close + espera o Close-Ok).
+    /// Closes the channel (Channel.Close + waits for Close-Ok).
     ///
-    /// Com consumers ativos (v0.4.2): primeiro cancela cada um (Basic.Cancel
-    /// + Cancel-Ok — o broker para de entregar), depois espera os callbacks
-    /// já despachados terminarem com o canal ainda aberto (o Ack/Nack deles
-    /// vale), e só então manda o Channel.Close. Ack/Nack depois disso — de um
-    /// callback atrasado ou de outra thread — são ignorados: o broker já
-    /// devolveu à fila o que ficou sem ack. O mesmo vale quando é o BROKER
-    /// quem fecha o canal. Não chame Close de dentro de um callback do
-    /// próprio canal: ele espera os callbacks, inclusive o que o chamou.
+    /// With active consumers (v0.4.2): first cancels each one (Basic.Cancel
+    /// + Cancel-Ok — the broker stops delivering), then waits for the callbacks
+    /// already dispatched to finish with the channel still open (their Ack/Nack
+    /// counts), and only then sends Channel.Close. Ack/Nack after that — from a
+    /// late callback or from another thread — are ignored: the broker has already
+    /// returned to the queue whatever was left unacked. The same holds when it is the BROKER
+    /// that closes the channel. Do not call Close from inside a callback of the
+    /// channel itself: it waits for the callbacks, including the one that called it.
     ///
-    /// ATENÇÃO à posse: o canal continua sendo SEU depois do Close — libere-o.
-    /// Fechar DESREGISTRA o canal da conexão (é o que faz um frame atrasado do
-    /// servidor ser descartado em vez de cair num canal já fechado), e o
-    /// destrutor da conexão só recolhe os canais que ainda estão registrados.
-    /// Ou seja: esquecer o Free de um canal que você NUNCA fechou é perdoado
-    /// pelo destrutor da conexão; esquecer o Free depois de um Close vaza o
-    /// objeto. O par correto é sempre `Ch.Close; Ch.Free;` (ou só `Ch.Free`,
-    /// que fecha antes de liberar).
+    /// MIND the ownership: the channel is still YOURS after Close — free it.
+    /// Closing UNREGISTERS the channel from the connection (that is what makes a late
+    /// server frame be discarded instead of landing on an already closed channel), and the
+    /// connection's destructor only collects the channels that are still registered.
+    /// In other words: forgetting the Free of a channel you NEVER closed is forgiven
+    /// by the connection's destructor; forgetting the Free after a Close leaks the
+    /// object. The right pair is always `Ch.Close; Ch.Free;` (or just `Ch.Free`,
+    /// which closes before freeing).
     ///
-    /// Close e Free esperam, sem prazo, os callbacks deste canal contados desde
-    /// o ENFILEIRAMENTO — inclusive os que ainda estão na fila do pool. Num
-    /// canal comum o pool é o PcPool, do processo inteiro: se outra lib o
-    /// saturar, fechar espera a fila dele andar. CreateChannel(True) não
-    /// depende dele (ver DrainInFlight).
+    /// Close and Free wait, with no deadline, for this channel's callbacks counted from
+    /// QUEUEING — including those still in the pool's queue. On a
+    /// regular channel the pool is PcPool, the whole process's: if another lib
+    /// saturates it, closing waits for its queue to move. CreateChannel(True) does not
+    /// depend on it (see DrainInFlight).
     procedure Close(AReplyCode: Word = 200; const AReplyText: string = 'OK');
 
     property ChannelId: Word read FChannelId;
     property IsOpen: Boolean read FIsOpen;
-    /// Disparado quando o broker devolve um publish `mandatory` não roteável
-    /// (Basic.Return). Roda numa thread do pool (não bloqueia a leitura).
+    /// Fired when the broker returns an unroutable `mandatory` publish
+    /// (Basic.Return). Runs on a pool thread (does not block reading).
     property OnBasicReturn: TAMQPBasicReturnCallback read FOnBasicReturn write FOnBasicReturn;
-    /// Disparado quando o broker confirma (ack/nack) um publish em confirm mode.
-    /// Roda numa thread do pool. Configure antes de publicar. Opcional — dá para
-    /// usar só WaitForConfirm/WaitForConfirms.
+    /// Fired when the broker confirms (ack/nack) a publish in confirm mode.
+    /// Runs on a pool thread. Set it before publishing. Optional — you can
+    /// use only WaitForConfirm/WaitForConfirms.
     property OnConfirm: TAMQPConfirmCallback read FOnConfirm write FOnConfirm;
-    /// Disparado quando um callback de consumer deste canal levanta exceção
-    /// (ver TAMQPConsumerErrorEvent). Sem handler, ou se ele não mudar a
-    /// ação, uma entrega ainda não confirmada leva Nack SEM requeue — vai para
-    /// a dead-letter exchange da fila, se houver. Nunca confirma duas vezes:
-    /// se o callback já deu Ack/Nack antes de levantar, a lib não faz nada.
+    /// Fired when a consumer callback of this channel raises an exception
+    /// (see TAMQPConsumerErrorEvent). Without a handler, or if it does not change the
+    /// action, a delivery not yet acknowledged gets a Nack WITHOUT requeue — it goes to
+    /// the queue's dead-letter exchange, if any. Never acknowledges twice:
+    /// if the callback already did Ack/Nack before raising, the lib does nothing.
     property OnConsumerError: TAMQPConsumerErrorEvent read FOnConsumerError write FOnConsumerError;
   end;
 
@@ -536,9 +536,9 @@ type
     constructor Create(AConnection: TAMQPConnection);
   end;
 
-  { Thread de heartbeat: acorda periodicamente (espera interrompível via TEvent,
-    NÃO TTimer) para enviar heartbeat quando o envio está ocioso e para detectar
-    conexão morta (nenhum frame recebido em 2x o intervalo negociado). }
+  { Heartbeat thread: wakes up periodically (interruptible wait via TEvent,
+    NOT TTimer) to send a heartbeat when sending is idle and to detect a
+    dead connection (no frame received in 2x the negotiated interval). }
   TAMQPHeartbeatThread = class(TThread)
   private
     FConnection: TAMQPConnection;
@@ -564,16 +564,16 @@ type
     // --- heartbeat ---
     FHeartbeatThread: TAMQPHeartbeatThread;
     FHbStopEvent: TEvent;
-    FLastWriteTick: UInt64; // atualizado a cada frame enviado
-    FLastReadTick: UInt64;  // atualizado a cada frame recebido
-    // --- reconexão ---
-    FDeliberateClose: Boolean; // True quando o usuário fechou (não reconectar)
+    FLastWriteTick: UInt64; // updated on every frame sent
+    FLastReadTick: UInt64;  // updated on every frame received
+    // --- reconnection ---
+    FDeliberateClose: Boolean; // True when the user closed (do not reconnect)
     FReconnecting: Boolean;
-    // Thread da reconexão em curso (ou da última, já terminada), unida no Close
-    // ou antes de criar a próxima. Protegida por FReconnectLock, que também
-    // torna atômicos "decidir reconectar" (thread de leitura) e "fechar de
-    // propósito" (Close). FReconnectWake é sinalizado pelo Close e acorda a
-    // espera entre tentativas na hora.
+    // Thread of the reconnection in progress (or of the last one, already finished), joined in Close
+    // or before creating the next one. Protected by FReconnectLock, which also
+    // makes "decide to reconnect" (read thread) and "close on
+    // purpose" (Close) atomic. FReconnectWake is signaled by Close and wakes the
+    // wait between attempts immediately.
     FReconnectLock: TCriticalSection;
     FReconnectWake: TEvent;
     FReconnectThread: TThread;
@@ -581,25 +581,25 @@ type
     FOnReconnect: TAMQPConnectionEvent;
     FOnReconnectFailed: TAMQPConnectionEvent;
     FOnReconnectError: TAMQPReconnectErrorEvent;
-    // --- estado de escrita e motivos (para a exceção do publish dizer POR QUÊ) ---
-    // FWritable (0/1, atômico, sem lock): 1 só entre o fim do handshake e a
-    // queda/fechamento. Fora disso, SendFrameNoLock levanta EAMQPConnection sem
-    // tocar o stream — antes, um publish numa conexão morta escrevia no stream
-    // e vazava o EWriteError da RTL. FLostReason (por que a conexão caiu) e
-    // FLastReconnectError (por que a última tentativa falhou) ficam sob
-    // FStateLock, o lock mais interno de todos: só protege as duas strings.
+    // --- write state and reasons (so the publish exception says WHY) ---
+    // FWritable (0/1, atomic, lock-free): 1 only between the end of the handshake and the
+    // drop/close. Outside that, SendFrameNoLock raises EAMQPConnection without
+    // touching the stream — before, a publish on a dead connection wrote to the stream
+    // and leaked the RTL's EWriteError. FLostReason (why the connection dropped) and
+    // FLastReconnectError (why the last attempt failed) live under
+    // FStateLock, the innermost lock of all: it only protects the two strings.
     FWritable: Integer;
     FStateLock: TCriticalSection;
     FLostReason: string;
-    FServerCloseReason: string; // Connection.Close do broker; só a thread de leitura
+    FServerCloseReason: string; // the broker's Connection.Close; read thread only
     FLastReconnectError: string;
-    // --- Connection.Blocked/Unblocked (resource alarm do broker) ---
+    // --- Connection.Blocked/Unblocked (broker resource alarm) ---
     FOnBlocked: TAMQPConnectionBlockedEvent;
     FOnUnblocked: TAMQPConnectionEvent;
-    FInFlightConn: Integer; // callbacks de conexão em execução no pool (atômico)
-    // --- envio (serializado por FWriteLock) ---
-    /// Escreve o frame sem olhar FWritable (o handshake escreve antes de a
-    /// conexão ficar gravável). Falha de escrita vira EAMQPConnection.
+    FInFlightConn: Integer; // connection callbacks running on the pool (atomic)
+    // --- sending (serialized by FWriteLock) ---
+    /// Writes the frame without looking at FWritable (the handshake writes before the
+    /// connection becomes writable). A write failure becomes EAMQPConnection.
     procedure WriteFrameNoLock(AFrameType: Byte; AChannel: Word; const APayload: TBytes);
     procedure SendFrameNoLock(AFrameType: Byte; AChannel: Word; const APayload: TBytes);
     procedure SendFrame(AFrameType: Byte; AChannel: Word; const APayload: TBytes);
@@ -607,7 +607,7 @@ type
     procedure SendHandshakeMethod(const APayload: TBytes);
     function UnavailableMessage: string;
     function GetLastReconnectError: string;
-    // --- leitura síncrona, só durante o handshake ---
+    // --- synchronous reading, only during the handshake ---
     function NextFrame: TAMQPFrame;
     function NextMethodOn(AExpectChannel: Word; out AId: TAMQPMethodId): TAMQPReader;
     function ExpectMethod(AExpectChannel, AClassId, AMethodId: Word): TAMQPReader;
@@ -623,14 +623,14 @@ type
     procedure HeartbeatTick;
     procedure DispatchFrame(const AFrame: TAMQPFrame);
     procedure HandleConnectionFrame(const AFrame: TAMQPFrame);
-    /// Despacha Connection.Blocked/Unblocked para o pool (não bloqueia a leitura).
+    /// Dispatches Connection.Blocked/Unblocked to the pool (does not block reading).
     procedure DispatchBlocked(const AReason: string);
     procedure DispatchUnblocked;
-    /// Aguarda callbacks de conexão em voo terminarem (usado ao destruir).
+    /// Waits for in-flight connection callbacks to finish (used when destroying).
     procedure DrainConnCallbacks;
     procedure ReadThreadFinished(const AError: string);
     procedure UnregisterChannel(AChannelId: Word);
-    // --- reconexão ---
+    // --- reconnection ---
     procedure RunReconnect;
     procedure RecoverAllChannels;
     procedure DrainAllChannels;
@@ -639,50 +639,50 @@ type
     constructor Create(const AParams: TAMQPConnectionParams);
     destructor Destroy; override;
 
-    /// Conecta o socket e executa o handshake. Levanta EAMQPConnection em falha.
+    /// Connects the socket and runs the handshake. Raises EAMQPConnection on failure.
     procedure Open;
-    /// Abre um novo canal (já aberto). O chamador é dono e deve liberá-lo
-    /// (ver a nota de posse em TAMQPChannel.Close: fechar não libera, e tira
-    /// o canal da rede de segurança do destrutor da conexão).
-    /// ADedicatedConsumerThread: se True, as entregas/returns/confirms deste
-    /// canal são despachados para uma única thread própria do canal (ordem
-    /// garantida, nunca concorrente) em vez do pool global compartilhado — e
-    /// fechar/liberar o canal não depende de o PcPool estar livre.
+    /// Opens a new channel (already open). The caller owns it and must free it
+    /// (see the ownership note in TAMQPChannel.Close: closing does not free it, and takes
+    /// the channel out of the connection destructor's safety net).
+    /// ADedicatedConsumerThread: if True, this channel's deliveries/returns/confirms
+    /// are dispatched to a single thread of the channel's own (guaranteed
+    /// order, never concurrent) instead of the shared global pool — and
+    /// closing/freeing the channel does not depend on PcPool being free.
     function CreateChannel(ADedicatedConsumerThread: Boolean = False): TAMQPChannel;
-    /// Envia Connection.Close, aguarda Close-Ok e fecha o socket.
+    /// Sends Connection.Close, waits for Close-Ok and closes the socket.
     procedure Close(AReplyCode: Word = 200; const AReplyText: string = 'Goodbye');
-    /// Fecha o socket abruptamente para simular queda de rede (uso em testes).
+    /// Closes the socket abruptly to simulate a network drop (for tests).
     procedure DropConnectionForTest;
 
     property IsOpen: Boolean read FIsOpen;
     property NegotiatedTune: TAMQPConnectionTune read FNegotiated;
-    /// Disparado (em thread interna) quando a conexão cai e a reconexão inicia.
+    /// Fired (on an internal thread) when the connection drops and reconnection starts.
     property OnDisconnect: TAMQPConnectionEvent read FOnDisconnect write FOnDisconnect;
-    /// Disparado após reconectar e restaurar a topologia com sucesso.
+    /// Fired after reconnecting and restoring the topology successfully.
     property OnReconnect: TAMQPConnectionEvent read FOnReconnect write FOnReconnect;
-    /// Disparado quando a reconexão esgota as tentativas.
+    /// Fired when reconnection runs out of attempts.
     property OnReconnectFailed: TAMQPConnectionEvent read FOnReconnectFailed write FOnReconnectFailed;
-    /// Disparado a cada tentativa de reconexão que falha, com o motivo (broker
-    /// ainda fora do ar, 404 no replay da topologia...). Com
-    /// MaxReconnectAttempts = 0 a reconexão tenta para sempre: é por aqui (ou
-    /// por LastReconnectError) que se descobre que ela não está andando.
+    /// Fired on each failed reconnection attempt, with the reason (broker
+    /// still down, 404 in the topology replay...). With
+    /// MaxReconnectAttempts = 0 reconnection tries forever: this (or
+    /// LastReconnectError) is how you find out it is not making progress.
     property OnReconnectError: TAMQPReconnectErrorEvent read FOnReconnectError write FOnReconnectError;
-    /// Mensagem da última tentativa de reconexão que falhou; '' depois de uma
-    /// reconexão bem-sucedida. É também o que a EAMQPConnection de um publish
-    /// feito durante a reconexão traz no texto.
+    /// Message of the last failed reconnection attempt; '' after a
+    /// successful reconnection. It is also what the EAMQPConnection of a publish
+    /// made during reconnection carries in its text.
     property LastReconnectError: string read GetLastReconnectError;
-    /// Disparado quando o broker sinaliza Connection.Blocked (resource alarm:
-    /// memória/disco cheios) e para de aceitar publishes. Roda num thread do pool.
-    /// Típico: setar uma flag atômica para pausar o publish até o OnUnblocked.
+    /// Fired when the broker signals Connection.Blocked (resource alarm:
+    /// memory/disk full) and stops accepting publishes. Runs on a pool thread.
+    /// Typical: set an atomic flag to pause publishing until OnUnblocked.
     property OnBlocked: TAMQPConnectionBlockedEvent read FOnBlocked write FOnBlocked;
-    /// Disparado quando o broker sai do resource alarm (Connection.Unblocked) e
-    /// volta a aceitar publishes. Roda num thread do pool.
+    /// Fired when the broker leaves the resource alarm (Connection.Unblocked) and
+    /// accepts publishes again. Runs on a pool thread.
     property OnUnblocked: TAMQPConnectionEvent read FOnUnblocked write FOnUnblocked;
   end;
 
-/// Quantas threads de reconexão existem no processo agora (uso em testes):
-/// cai a zero só quando a última sai do Execute, depois do último acesso à
-/// conexão. É o que prova que Close/Destroy esperam a reconexão sair de fato.
+/// How many reconnect threads exist in the process right now (for tests):
+/// drops to zero only when the last one leaves Execute, after its last access to the
+/// connection. It is what proves that Close/Destroy wait for reconnection to actually exit.
 function AmqpReconnectThreadsAlive: Integer;
 
 /// The TLS options the client uses for AParams: CA, client certificate,
@@ -701,13 +701,13 @@ uses
   PascalCommon.Transport.Tls;
 
 const
-  AMQP_RPC_TIMEOUT_MS = 30000; // tempo máximo aguardando resposta de RPC
+  AMQP_RPC_TIMEOUT_MS = 30000; // maximum time waiting for an RPC reply
 
 type
-  { Thread dedicada da reconexão (substitui TThread.CreateAnonymousThread,
-    que não existe com method pointers / no FPC). NÃO se auto-libera: a conexão
-    guarda a referência e a une (StopReconnect, ReadThreadFinished) — é assim
-    que o Close sabe que ela saiu de fato. }
+  { Dedicated reconnection thread (replaces TThread.CreateAnonymousThread,
+    which does not exist with method pointers / in FPC). It does NOT free itself: the connection
+    keeps the reference and joins it (StopReconnect, ReadThreadFinished) — that is how
+    Close knows it actually exited. }
   TAMQPReconnectThread = class(TThread)
   private
     FConnection: TAMQPConnection;
@@ -717,11 +717,11 @@ type
     constructor Create(AConnection: TAMQPConnection);
   end;
 
-  { Itens de trabalho despachados para o pool (PcPool, da pascal-common-faa,
-    ou o pool proprio do canal). Substituem os
-    closures de TTask.Run: cada item carrega os dados capturados em campos e o
-    contador de "em voo" é decrementado no finally do Execute — o mesmo
-    contrato dos closures originais. O pool libera o item após Execute. }
+  { Work items dispatched to the pool (PcPool, from pascal-common-faa,
+    or the channel's own pool). They replace the
+    TTask.Run closures: each item carries the captured data in fields and the
+    "in flight" counter is decremented in the finally of Execute — the same
+    contract as the original closures. The pool frees the item after Execute. }
   TAMQPDeliveryWork = class(TPcWorkItem)
   private
     FChannel: TAMQPChannel;
@@ -805,7 +805,7 @@ constructor TAMQPReconnectThread.Create(AConnection: TAMQPConnection);
 begin
   FConnection := AConnection;
   FreeOnTerminate := False;
-  PcAtomicInc(GReconnectThreadsAlive); // antes de a thread poder partir
+  PcAtomicInc(GReconnectThreadsAlive); // before the thread can start
   inherited Create(False);
 end;
 
@@ -836,9 +836,9 @@ var
   LSpan: IPcSpan;
 begin
   try
-    // Span 'process <fila>' filho do traceparent da mensagem (nil com o
-    // tracer desligado). Corrente durante o callback; nasce e termina aqui,
-    // na thread do pool.
+    // 'process <queue>' span, child of the message's traceparent (nil with the
+    // tracer off). Current during the callback; it is born and ends here,
+    // on the pool thread.
     LSpan := AmqpStartProcessSpan(FQueue, FDelivery.Properties,
       FDelivery.RoutingKey, Length(FDelivery.Body), FDelivery.DeliveryTag,
       FDelivery.Redelivered, FChannel.FConnection.FParams.Host,
@@ -848,12 +848,12 @@ begin
     except
       on E: Exception do
       begin
-        // Não relança: o pool engoliria a exceção em silêncio, e a entrega
-        // ficaria sem ack até a conexão cair (com Qos baixo, o consumer
-        // inteiro parava). Aqui ela vira OnConsumerError + Nack — com o
-        // 'process' ainda corrente, para o log do handler sair com o trace
-        // id da mensagem (até a 0.4.0 o span fechava antes). O span termina
-        // depois, com o erro do callback.
+        // Does not re-raise: the pool would swallow the exception silently, and the delivery
+        // would stay unacked until the connection dropped (with a low Qos, the whole
+        // consumer stopped). Here it becomes OnConsumerError + Nack — with
+        // 'process' still current, so the handler's log comes out with the message's
+        // trace id (up to 0.4.0 the span closed before). The span ends
+        // afterwards, with the callback's error.
         try
           FChannel.HandleConsumerError(FDelivery, E);
         finally
@@ -862,12 +862,12 @@ begin
         end;
       end;
     end;
-    AmqpFinishSpan(LSpan, nil); // nil-safe: no caminho da exceção já fechou
+    AmqpFinishSpan(LSpan, nil); // nil-safe: on the exception path it is already closed
     LSpan := nil;
   finally
-    // Callback que voltou sem confirmar (ack adiado pelo aplicativo) sai do
-    // conjunto aqui: o conjunto só serve enquanto o callback roda. (Os tags
-    // são do canal, no-ack ou não: retirar um que nunca entrou é inócuo.)
+    // A callback that returned without acknowledging (ack deferred by the application) leaves the
+    // set here: the set only matters while the callback runs. (The tags
+    // belong to the channel, no-ack or not: removing one that never went in is harmless.)
     FChannel.TakeUnsettled(FDelivery.DeliveryTag);
     if FDelivery.Properties.Has(bpHeaders) and Assigned(FDelivery.Properties.Headers) then
       FDelivery.Properties.Headers.Free;
@@ -993,7 +993,7 @@ begin
   Result.Heartbeat := 60;
   Result.AutoReconnect := False;
   Result.ReconnectDelayMs := 2000;
-  Result.MaxReconnectAttempts := 0; // infinitas
+  Result.MaxReconnectAttempts := 0; // infinite
   Result.ConnectionName := '';
   Result.RepublishUnconfirmedOnReconnect := False;
   Result.ConnectTimeoutMs := 0;
@@ -1012,7 +1012,7 @@ begin
   Result := Localhost;
   Result.Port := 5671;
   Result.UseTls := True;
-  Result.TlsVerifyPeer := False; // dev: aceita cert self-signed
+  Result.TlsVerifyPeer := False; // dev: accepts a self-signed cert
 end;
 
 { TAMQPReaderThread }
@@ -1032,14 +1032,14 @@ begin
     while not Terminated do
     begin
       LFrame := TAMQPFrame.ReadFrom(FConnection.FStream);
-      // atômico p/ a thread de heartbeat
+      // atomic, for the heartbeat thread
       PcAtomicWrite64(FConnection.FLastReadTick, PcTickMs);
       FConnection.DispatchFrame(LFrame);
     end;
     FConnection.ReadThreadFinished('');
   except
     on E: Exception do
-      // fim de stream (socket fechado) ou erro de protocolo: encerra a thread.
+      // end of stream (socket closed) or protocol error: ends the thread.
       FConnection.ReadThreadFinished(E.Message);
   end;
 end;
@@ -1057,15 +1057,15 @@ procedure TAMQPHeartbeatThread.Execute;
 var
   LWaitMs: Cardinal;
 begin
-  // Acorda a cada metade do intervalo (mínimo 1s); a espera é interrompível
-  // via FHbStopEvent (não usamos TTimer).
+  // Wakes up every half interval (minimum 1s); the wait is interruptible
+  // via FHbStopEvent (we do not use TTimer).
   LWaitMs := (Cardinal(FConnection.FNegotiated.Heartbeat) * 1000) div 2;
   if LWaitMs < 1000 then
     LWaitMs := 1000;
   while not Terminated do
   begin
     if FConnection.FHbStopEvent.WaitFor(LWaitMs) = wrSignaled then
-      Break; // parada solicitada
+      Break; // stop requested
     if Terminated then
       Break;
     FConnection.HeartbeatTick;
@@ -1092,14 +1092,14 @@ destructor TAMQPConnection.Destroy;
 var
   LChan: TAMQPChannel;
 begin
-  // Close é idempotente: aborta reconexão, para threads e fecha o socket.
+  // Close is idempotent: aborts reconnection, stops threads and closes the socket.
   try
     Close;
   except
   end;
-  DrainConnCallbacks; // callbacks Blocked/Unblocked em voo capturaram Self
-  // Libera canais que o usuário não liberou (cada Free chama UnregisterChannel,
-  // que remove do dicionário; por isso iteramos sobre uma cópia).
+  DrainConnCallbacks; // in-flight Blocked/Unblocked callbacks captured Self
+  // Frees channels the user did not free (each Free calls UnregisterChannel,
+  // which removes it from the dictionary; that is why we iterate over a copy).
   if Assigned(FChannels) then
   begin
     for LChan in FChannels.Values.ToArray do
@@ -1131,7 +1131,7 @@ begin
     Result := 'connection was closed by the application'
   else if FParams.AutoReconnect and (LLost <> '') then
   begin
-    // O começo do texto é o de antes: há quem case por ele.
+    // The start of the text is the old one: some code matches on it.
     Result := 'connection unavailable right now (reconnecting; ' + LLost;
     if LAttempt <> '' then
       Result := Result + '; last attempt failed: ' + LAttempt;
@@ -1164,24 +1164,24 @@ begin
   try
     LFrame.WriteTo(FStream);
   except
-    // A queda ainda não percebida pela thread de leitura chega aqui como erro
-    // do stream (EWriteError da RTL, EAMQPTransport, EAMQPTls...), diferente em
-    // cada compilador e backend. Para quem chama é sempre a mesma coisa.
+    // A drop not yet noticed by the read thread arrives here as a stream
+    // error (the RTL's EWriteError, EAMQPTransport, EAMQPTls...), different on
+    // each compiler and backend. For the caller it is always the same thing.
     on E: EAMQPConnection do
       raise;
     on E: Exception do
       raise EAMQPConnection.CreateFmt('connection write failed (%s: %s)',
         [E.ClassName, E.Message]);
   end;
-  // Atômico: lido pela thread de heartbeat; no Win32 um store de 64 bits não é
-  // atômico e poderia ser "torn" (ver PcAtomicRead64 em HeartbeatTick).
+  // Atomic: read by the heartbeat thread; on Win32 a 64-bit store is not
+  // atomic and could be "torn" (see PcAtomicRead64 in HeartbeatTick).
   PcAtomicWrite64(FLastWriteTick, PcTickMs);
 end;
 
 procedure TAMQPConnection.SendFrameNoLock(AFrameType: Byte; AChannel: Word;
   const APayload: TBytes);
 begin
-  // Assume FWriteLock já adquirido (envio de grupo de frames, ex.: Publish).
+  // Assumes FWriteLock already acquired (sending a group of frames, e.g. Publish).
   if PcAtomicGet(FWritable) = 0 then
     raise EAMQPConnection.Create(UnavailableMessage);
   WriteFrameNoLock(AFrameType, AChannel, APayload);
@@ -1213,7 +1213,7 @@ begin
   SendFrame(AMQP_FRAME_METHOD, AChannel, APayload);
 end;
 
-{ --- Leitura síncrona (só no handshake) --- }
+{ --- Synchronous reading (handshake only) --- }
 
 function TAMQPConnection.NextFrame: TAMQPFrame;
 begin
@@ -1332,8 +1332,8 @@ procedure TAMQPConnection.EstablishConnection;
 var
   LTarget: string;
 begin
-  // Cria socket, faz o handshake (síncrono, inline) e sobe as threads.
-  // Usado tanto no Open inicial quanto na reconexão.
+  // Creates the socket, does the handshake (synchronous, inline) and starts the threads.
+  // Used both by the initial Open and by reconnection.
   try
     if FParams.UseTls then
     begin
@@ -1359,13 +1359,13 @@ begin
   end;
   FStream := TAMQPEndpointStream.Create(FEndpoint);
 
-  Handshake; // antes de qualquer thread (agora sobre TLS, se habilitado)
+  Handshake; // before any thread (now over TLS, if enabled)
 
   FLastWriteTick := PcTickMs;
   FLastReadTick := FLastWriteTick;
   FServerCloseReason := '';
-  PcAtomicSet(FWritable, 1); // antes da thread de leitura: ela responde Close-Ok
-  StartReadThread;     // a partir daqui, só a thread lê o socket
+  PcAtomicSet(FWritable, 1); // before the read thread: it replies Close-Ok
+  StartReadThread;     // from here on, only the thread reads the socket
   StartHeartbeatThread;
   FIsOpen := True;
 end;
@@ -1386,8 +1386,8 @@ procedure TAMQPConnection.Open;
 begin
   if FIsOpen then
     raise EAMQPConnection.Create('connection is already open');
-  // Antes de a conexão existir: uma queda logo depois do Open grava o motivo
-  // dela, que não pode ser apagado aqui.
+  // Before the connection exists: a drop right after Open records its
+  // reason, which must not be erased here.
   FStateLock.Enter;
   try
     FLostReason := '';
@@ -1401,12 +1401,12 @@ procedure TAMQPConnection.DropConnectionForTest;
 begin
   if Assigned(FEndpoint) then
     try
-      FEndpoint.CloseAbort; // a thread de leitura vai perceber e disparar a reconexão
+      FEndpoint.CloseAbort; // the read thread will notice and trigger reconnection
     except
     end;
 end;
 
-{ --- Thread de leitura --- }
+{ --- Read thread --- }
 
 procedure TAMQPConnection.StartReadThread;
 begin
@@ -1420,7 +1420,7 @@ begin
     FReadThread.Terminate;
     if Assigned(FEndpoint) then
       try
-        FEndpoint.CloseAbort; // desbloqueia o ReadFrom da thread
+        FEndpoint.CloseAbort; // unblocks the thread's ReadFrom
       except
       end;
     FReadThread.WaitFor;
@@ -1428,12 +1428,12 @@ begin
   end;
 end;
 
-{ --- Thread de heartbeat --- }
+{ --- Heartbeat thread --- }
 
 procedure TAMQPConnection.StartHeartbeatThread;
 begin
   if FNegotiated.Heartbeat = 0 then
-    Exit; // heartbeat desabilitado na negociação
+    Exit; // heartbeat disabled in the negotiation
   FHbStopEvent.ResetEvent;
   FHeartbeatThread := TAMQPHeartbeatThread.Create(Self);
 end;
@@ -1443,7 +1443,7 @@ begin
   if Assigned(FHeartbeatThread) then
   begin
     FHeartbeatThread.Terminate;
-    FHbStopEvent.SetEvent; // interrompe a espera imediatamente
+    FHbStopEvent.SetEvent; // interrupts the wait immediately
     FHeartbeatThread.WaitFor;
     FreeAndNil(FHeartbeatThread);
   end;
@@ -1458,13 +1458,13 @@ begin
   if LIntervalMs = 0 then
     Exit;
   LNow := PcTickMs;
-  // Leituras atômicas (os ticks são escritos por outras threads; no Win32 um
-  // load de 64 bits pode ser "torn" e produzir um delta absurdo).
+  // Atomic reads (the ticks are written by other threads; on Win32 a
+  // 64-bit load can be "torn" and produce an absurd delta).
   LLastRead := PcAtomicRead64(FLastReadTick);
   LLastWrite := PcAtomicRead64(FLastWriteTick);
 
-  // Conexão morta: nenhum frame recebido em 2x o intervalo (o servidor também
-  // manda heartbeats). Fecha o socket para desbloquear a thread de leitura.
+  // Dead connection: no frame received in 2x the interval (the server also
+  // sends heartbeats). Closes the socket to unblock the read thread.
   if (LNow - LLastRead) > (2 * LIntervalMs) then
   begin
     if Assigned(FEndpoint) then
@@ -1475,12 +1475,12 @@ begin
     Exit;
   end;
 
-  // Envio ocioso há >= metade do intervalo: manda um heartbeat.
+  // Sending idle for >= half the interval: send a heartbeat.
   if (LNow - LLastWrite) >= (LIntervalMs div 2) then
     try
       SendFrame(AMQP_FRAME_HEARTBEAT, AMQP_CHANNEL_CONNECTION, nil);
     except
-      // erro de escrita: a thread de leitura vai perceber o socket caído
+      // write error: the read thread will notice the dropped socket
     end;
 end;
 
@@ -1496,11 +1496,11 @@ begin
     LMsg := 'connection closed: ' + AError
   else
     LMsg := 'connection closed';
-  // O motivo ANTES das flags: quem vê IsOpen = False ou FWritable = 0 tem de
-  // achar o motivo já gravado (a ordem inversa deu, no Linux, um publish com
-  // "connection is not open" logo depois de IsOpen cair). Durante a
-  // reconexão, quem para esta thread é a própria reconexão desmontando uma
-  // tentativa que falhou: o motivo que interessa continua o da queda original.
+  // The reason BEFORE the flags: whoever sees IsOpen = False or FWritable = 0 must
+  // find the reason already recorded (the reverse order gave, on Linux, a publish with
+  // "connection is not open" right after IsOpen dropped). During
+  // reconnection, whoever stops this thread is the reconnection itself tearing down an
+  // attempt that failed: the reason that matters is still the original drop's.
   FStateLock.Enter;
   try
     if (not FReconnecting) or (FLostReason = '') then
@@ -1508,9 +1508,9 @@ begin
   finally
     FStateLock.Leave;
   end;
-  PcAtomicSet(FWritable, 0); // daqui em diante, publish levanta com o motivo acima
+  PcAtomicSet(FWritable, 0); // from here on, publish raises with the reason above
   FIsOpen := False;
-  // Acorda quem estiver esperando Close-Ok e qualquer RPC pendente nos canais.
+  // Wakes whoever is waiting for Close-Ok and any pending RPC on the channels.
   FCloseOkEvent.SetEvent;
   FChannelsLock.Enter;
   try
@@ -1521,16 +1521,16 @@ begin
   for LChan in LChannels do
     LChan.SignalError(LMsg);
 
-  // Queda inesperada: dispara a reconexão (numa thread própria, pois esta é a
-  // thread de leitura que está terminando). Sob FReconnectLock: ou o Close já
-  // marcou FDeliberateClose e nada é criado, ou a thread nasce antes e o Close
-  // a encontra para unir.
+  // Unexpected drop: triggers reconnection (on a thread of its own, since this is the
+  // read thread that is finishing). Under FReconnectLock: either Close already
+  // set FDeliberateClose and nothing is created, or the thread is born first and Close
+  // finds it to join.
   FReconnectLock.Enter;
   try
     if FParams.AutoReconnect and (not FDeliberateClose) and (not FReconnecting) then
     begin
-      // A thread da reconexão anterior (bem-sucedida) já zerou FReconnecting,
-      // que é a última coisa que ela faz: está saindo, e o join é curto.
+      // The thread of the previous (successful) reconnection already cleared FReconnecting,
+      // which is the last thing it does: it is exiting, and the join is short.
       if Assigned(FReconnectThread) then
       begin
         FReconnectThread.WaitFor;
@@ -1572,9 +1572,9 @@ begin
   finally
     FChannelsLock.Leave;
   end;
-  // Ordem de criação (ChannelId), não a do dicionário, que é a do hash —
-  // medido: com os canais 1, 2 e 3 o TDictionary entregava o 3 primeiro.
-  // Insertion sort: TArray.Sort<T> não existe no FPC, e são poucos canais.
+  // Creation order (ChannelId), not the dictionary's, which is the hash's —
+  // measured: with channels 1, 2 and 3 the TDictionary returned 3 first.
+  // Insertion sort: TArray.Sort<T> does not exist in FPC, and there are few channels.
   for I := 1 to High(LChannels) do
   begin
     LChan := LChannels[I];
@@ -1587,11 +1587,11 @@ begin
     LChannels[J + 1] := LChan;
   end;
 
-  // Fase a fase sobre a conexão inteira (ver TAMQPRecoveryPhase): o declare de
-  // um canal precisa existir antes do bind/consume de outro. Cada canal segura
-  // o próprio FRpcLock do BeginRecover ao EndRecover; só esta thread segura
-  // mais de um, sempre em ordem de ChannelId, e quem usa um canal pega só o
-  // dele — não há ciclo.
+  // Phase by phase over the whole connection (see TAMQPRecoveryPhase): the declare of
+  // one channel must exist before the bind/consume of another. Each channel holds
+  // its own FRpcLock from BeginRecover to EndRecover; only this thread holds
+  // more than one, always in ChannelId order, and whoever uses a channel takes only
+  // that one — there is no cycle.
   LEntered := 0;
   try
     for I := 0 to High(LChannels) do
@@ -1602,8 +1602,8 @@ begin
     for LPhase := rpExchange to rpConsume do
       for I := 0 to High(LChannels) do
         LChannels[I].ReplayRecovery(LPhase);
-    // Topologia restaurada e confirm mode re-armado: re-publica o que ficou
-    // sem confirmação na queda (se habilitado).
+    // Topology restored and confirm mode re-armed: republishes what was left
+    // unconfirmed by the drop (if enabled).
     for I := 0 to High(LChannels) do
       LChannels[I].ResendUnconfirmed;
   finally
@@ -1616,25 +1616,25 @@ procedure TAMQPConnection.StopReconnect;
 var
   LThread: TThread;
 begin
-  // Marca o fechamento deliberado, acorda a espera entre tentativas e UNE a
-  // thread de reconexão: só volta quando ela saiu de fato, porque depois disto
-  // o Close mexe no socket e o Destroy libera o objeto que ela usa. Sem prazo
-  // de propósito: a espera entre tentativas termina na hora (FReconnectWake);
-  // o que pode demorar é uma tentativa já em curso (connect/handshake/replay),
-  // limitada pelos timeouts dela. Desistir antes seria use-after-free.
+  // Marks the deliberate close, wakes the wait between attempts and JOINS the
+  // reconnect thread: returns only when it has actually exited, because after this
+  // Close touches the socket and Destroy frees the object it uses. No deadline
+  // on purpose: the wait between attempts ends immediately (FReconnectWake);
+  // what can take time is an attempt already in progress (connect/handshake/replay),
+  // bounded by its own timeouts. Giving up earlier would be a use-after-free.
   FReconnectLock.Enter;
   try
     FDeliberateClose := True;
     FReconnectWake.SetEvent;
     LThread := FReconnectThread;
-    // Close chamado de um callback que roda NA thread de reconexão
-    // (OnDisconnect, OnReconnect, OnReconnectFailed): ela não pode unir a si
-    // mesma. Fica para o Close/Destroy seguinte, de outra thread; o laço da
-    // reconexão vê FDeliberateClose e sai.
+    // Close called from a callback running ON the reconnect thread
+    // (OnDisconnect, OnReconnect, OnReconnectFailed): it cannot join
+    // itself. That is left to the next Close/Destroy, from another thread; the
+    // reconnection loop sees FDeliberateClose and exits.
     if Assigned(LThread) and (LThread.ThreadID = TThread.CurrentThread.ThreadID) then
       LThread := nil
     else
-      FReconnectThread := nil; // o join abaixo é o único (no Unix não é idempotente)
+      FReconnectThread := nil; // the join below is the only one (on Unix it is not idempotent)
   finally
     FReconnectLock.Leave;
   end;
@@ -1650,11 +1650,11 @@ var
   LAttempt: Integer;
   LDelay: Cardinal;
 begin
-  // Roda na TAMQPReconnectThread; FReconnecting já está True.
+  // Runs on TAMQPReconnectThread; FReconnecting is already True.
   try
     StopHeartbeatThread;
-    StopReadThread;    // aguarda a thread de leitura antiga terminar
-    DrainAllChannels;  // callbacks antigos terminam (acks falham no socket morto)
+    StopReadThread;    // waits for the old read thread to finish
+    DrainAllChannels;  // old callbacks finish (acks fail on the dead socket)
     CloseSocketStream;
 
     if Assigned(FOnDisconnect) then
@@ -1667,16 +1667,16 @@ begin
     LAttempt := 0;
     while not FDeliberateClose do
     begin
-      // Não é Sleep: o Close sinaliza FReconnectWake e a espera acaba na hora.
+      // Not a Sleep: Close signals FReconnectWake and the wait ends immediately.
       FReconnectWake.WaitFor(LDelay);
       if FDeliberateClose then
         Break;
       Inc(LAttempt);
       try
-        EstablishConnection; // novo socket + handshake + threads (FIsOpen := True)
-        RecoverAllChannels;  // reabre canais e replaya a topologia gravada
-        // FLostReason fica: só é lido com a conexão não gravável, e a próxima
-        // queda grava o dela antes de a conexão deixar de ser.
+        EstablishConnection; // new socket + handshake + threads (FIsOpen := True)
+        RecoverAllChannels;  // reopens channels and replays the recorded topology
+        // FLostReason stays: it is only read with the connection not writable, and the next
+        // drop records its own before the connection stops being writable.
         FStateLock.Enter;
         try
           FLastReconnectError := '';
@@ -1685,14 +1685,14 @@ begin
         end;
         if Assigned(FOnReconnect) then
           try FOnReconnect(Self); except end;
-        Exit; // sucesso
+        Exit; // success
       except
         on E: Exception do
         begin
-          // Tentativa falhou: limpa o estado parcial, conta o motivo e tenta
-          // de novo. O motivo NÃO é engolido: vai para LastReconnectError,
-          // para o texto da EAMQPConnection do publish e para OnReconnectError
-          // — antes, um 404 no replay se repetia para sempre sem sinal nenhum.
+          // Attempt failed: clears the partial state, records the reason and tries
+          // again. The reason is NOT swallowed: it goes to LastReconnectError,
+          // to the text of the publish's EAMQPConnection and to OnReconnectError
+          // — before, a 404 in the replay repeated forever with no signal at all.
           FIsOpen := False;
           StopHeartbeatThread;
           StopReadThread;
@@ -1725,7 +1725,7 @@ var
   LChan: TAMQPChannel;
 begin
   if AFrame.IsHeartbeat then
-    Exit; // heartbeat tratado no item 4
+    Exit; // heartbeat handled in item 4
 
   if AFrame.Channel = AMQP_CHANNEL_CONNECTION then
   begin
@@ -1766,7 +1766,7 @@ begin
       FServerCloseReason := Format('%d %s', [LClose.ReplyCode, LClose.ReplyText]);
       SendMethod(AMQP_CHANNEL_CONNECTION, BuildCloseOk);
       FCloseOkEvent.SetEvent;
-      // (canais serão sinalizados quando a thread encerrar)
+      // (channels will be signaled when the thread ends)
     end
     else if LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_BLOCKED) then
       DispatchBlocked(DecodeBlocked(LReader))
@@ -1784,7 +1784,7 @@ begin
   LCallback := FOnBlocked;
   if not Assigned(LCallback) then
     Exit;
-  // Pool próprio: a thread de leitura NÃO roda o callback do usuário.
+  // Separate pool: the read thread does NOT run the user's callback.
   PcAtomicInc(FInFlightConn);
   PcPool.Queue(TAMQPBlockedWork.Create(Self, LCallback, AReason));
 end;
@@ -1802,8 +1802,8 @@ end;
 
 procedure TAMQPConnection.DrainConnCallbacks;
 begin
-  // Espera os callbacks Blocked/Unblocked em voo (capturaram Self) terminarem
-  // antes de o objeto ser liberado — mesmo racional do DrainInFlight do canal.
+  // Waits for the in-flight Blocked/Unblocked callbacks (they captured Self) to finish
+  // before the object is freed — same rationale as the channel's DrainInFlight.
   while PcAtomicGet(FInFlightConn) > 0 do
     Sleep(10);
 end;
@@ -1825,8 +1825,8 @@ begin
   if not FIsOpen then
     raise EAMQPConnection.Create('connection is not open');
 
-  // Alocação do id + inserção no dicionário sob o mesmo lock (evita duas threads
-  // gerarem o mesmo channel-id e o segundo Add levantar/vazar o canal).
+  // Id allocation + dictionary insertion under the same lock (keeps two threads from
+  // generating the same channel-id and the second Add raising/leaking the channel).
   FChannelsLock.Enter;
   try
     if (FNegotiated.ChannelMax > 0) and (FNextChannel >= FNegotiated.ChannelMax) then
@@ -1848,7 +1848,7 @@ begin
   end;
 
   try
-    LChan.Open; // RPC: usa a thread de leitura já rodando (fora do lock)
+    LChan.Open; // RPC: uses the read thread already running (outside the lock)
   except
     UnregisterChannel(LChan.ChannelId);
     LChan.Free;
@@ -1861,14 +1861,14 @@ procedure TAMQPConnection.Close(AReplyCode: Word; const AReplyText: string);
 var
   LClose: TAMQPConnectionClose;
 begin
-  // Idempotente. Sinaliza fechamento deliberado e aguarda qualquer reconexão em
-  // curso encerrar antes de mexer no socket/threads (evita corrida).
+  // Idempotent. Signals a deliberate close and waits for any reconnection in
+  // progress to end before touching the socket/threads (avoids a race).
   StopReconnect;
 
   if FIsOpen then
   begin
     FIsOpen := False;
-    StopHeartbeatThread; // não enviar heartbeats durante o fechamento
+    StopHeartbeatThread; // do not send heartbeats while closing
     LClose.ReplyCode := AReplyCode;
     LClose.ReplyText := AReplyText;
     LClose.ClassId := 0;
@@ -1882,7 +1882,7 @@ begin
   end;
 
   StopHeartbeatThread;
-  StopReadThread; // termina a thread e fecha o socket
+  StopReadThread; // ends the thread and closes the socket
   CloseSocketStream;
 end;
 
@@ -1918,13 +1918,13 @@ begin
       Close;
     except
     end;
-  // Sempre desregistra: Close (que também desregistra) não roda quando o canal
-  // já estava fechado — caso típico, o servidor ter mandado Channel.Close por
-  // erro de canal. Sem isto o dicionário da conexão fica com um ponteiro
-  // pendurado e o destrutor dela estoura. Remover chave ausente é no-op.
+  // Always unregisters: Close (which also unregisters) does not run when the channel
+  // was already closed — the typical case, the server having sent Channel.Close for a
+  // channel error. Without this the connection's dictionary keeps a dangling
+  // pointer and its destructor blows up. Removing a missing key is a no-op.
   FConnection.UnregisterChannel(FChannelId);
-  DrainInFlight; // garante que nenhum callback ainda usa este canal
-  FDispatchPool.Free; // nil-safe; se atribuído, já não há mais itens em voo
+  DrainInFlight; // makes sure no callback still uses this channel
+  FDispatchPool.Free; // nil-safe; if assigned, there are no more items in flight
   FRecovery.Free;
   FRecoveryLock.Free;
   FUnconfirmed.Free;
@@ -1963,7 +1963,7 @@ begin
   else if LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CONSUME) then
     Result := rpConsume
   else
-    Result := rpChannel; // qos, confirm.select: estado do próprio canal
+    Result := rpChannel; // qos, confirm.select: the channel's own state
 end;
 
 procedure TAMQPChannel.AddRecovery(const APayload: TBytes; AAwaitReply: Boolean;
@@ -2031,8 +2031,8 @@ var
   LBind: TAMQPQueueBind;
   LCandFalse, LCandTrue: TBytes;
 begin
-  // O recovery guarda o payload serializado do bind; reconstruímos os candidatos
-  // (nas duas variantes de no-wait, sem Arguments) e removemos os que casarem.
+  // Recovery keeps the bind's serialized payload; we rebuild the candidates
+  // (in both no-wait variants, without Arguments) and remove the ones that match.
   LBind := Default(TAMQPQueueBind);
   LBind.QueueName := AQueue;
   LBind.ExchangeName := AExchange;
@@ -2063,25 +2063,25 @@ end;
 
 procedure TAMQPChannel.BeginRecover;
 begin
-  // Roda na thread de reconexão. Segura FRpcLock até o EndRecover para que
-  // RPCs do usuário no canal esperem a recuperação terminar. FRpcLock é
-  // recursivo (critical section), então CallRpc interno funciona.
+  // Runs on the reconnect thread. Holds FRpcLock until EndRecover so that
+  // user RPCs on the channel wait for recovery to finish. FRpcLock is
+  // recursive (critical section), so the internal CallRpc works.
   FRpcLock.Enter;
   try
     FClosed := False;
     FAckLock.Enter;
     try
-      FClosing := False; // canal reaberto na sessão nova
+      FClosing := False; // channel reopened in the new session
     finally
       FAckLock.Leave;
     end;
     FAsmState := asIdle;
-    // Sessão nova: o broker reinicia a numeração do WIRE em 1. Mantemos o seq-no
-    // do USUÁRIO (FPublishSeqNo) monotônico e guardamos o offset da sessão para
-    // converter os tags do broker (ver ResolveConfirms) — os novos publishes
-    // recebem números ACIMA dos antigos, sem colisão. FNacked NÃO é limpo: os
-    // publishes perdidos na queda seguem reportáveis como não confirmados
-    // (FailAllUnconfirmed já os moveu de FUnconfirmed para FNacked).
+    // New session: the broker restarts the WIRE numbering at 1. We keep the
+    // USER seq-no (FPublishSeqNo) monotonic and store the session offset to
+    // convert the broker's tags (see ResolveConfirms) — new publishes
+    // get numbers ABOVE the old ones, with no collision. FNacked is NOT cleared: the
+    // publishes lost in the drop remain reportable as unconfirmed
+    // (FailAllUnconfirmed already moved them from FUnconfirmed to FNacked).
     FConfirmMon.Enter;
     try
       FConfirmBase := FPublishSeqNo;
@@ -2090,21 +2090,21 @@ begin
     finally
       FConfirmMon.Leave;
     end;
-    // Os tags da sessão nova recomeçam em 1. O conjunto já deveria estar
-    // vazio — o RunReconnect drena todo callback antigo (DrainAllChannels)
-    // antes de chegar aqui, e cada um retira o próprio tag —, mas um tag
-    // velho que sobrasse seria confundido com o de uma entrega nova.
+    // The new session's tags restart at 1. The set should already be
+    // empty — RunReconnect drains every old callback (DrainAllChannels)
+    // before getting here, and each one removes its own tag —, but a leftover
+    // old tag would be mistaken for that of a new delivery.
     FSettleLock.Enter;
     try
       FUnsettled.Clear;
     finally
       FSettleLock.Leave;
     end;
-    Open; // Channel.Open no novo socket (define FIsOpen := True)
+    Open; // Channel.Open on the new socket (sets FIsOpen := True)
 
     FConsumersLock.Enter;
     try
-      FConsumers.Clear; // registros da sessão antiga; voltam na fase rpConsume
+      FConsumers.Clear; // old session's records; they come back in the rpConsume phase
     finally
       FConsumersLock.Leave;
     end;
@@ -2199,7 +2199,7 @@ begin
   FRpcError := AMessage;
   FRpcKind := rkError;
   FRpcEvent.SetEvent;
-  FailAllUnconfirmed; // publishes pendentes viram "não confirmados"
+  FailAllUnconfirmed; // pending publishes become "unconfirmed"
 end;
 
 procedure TAMQPChannel.Open;
@@ -2226,7 +2226,7 @@ begin
   if ADeclare.NoWait then
     FConnection.SendMethod(FChannelId, LPayload)
   else
-    CallRpc(LPayload); // Declare-Ok (sem args, descartado)
+    CallRpc(LPayload); // Declare-Ok (no args, discarded)
   AddRecovery(LPayload, not ADeclare.NoWait);
 end;
 
@@ -2263,13 +2263,13 @@ begin
   if ABind.NoWait then
     FConnection.SendMethod(FChannelId, LPayload)
   else
-    CallRpc(LPayload); // Bind-Ok (sem args, descartado)
+    CallRpc(LPayload); // Bind-Ok (no args, discarded)
   AddRecovery(LPayload, not ABind.NoWait);
 end;
 
 procedure TAMQPChannel.UnbindQueue(const AUnbind: TAMQPQueueUnbind);
 begin
-  CallRpc(BuildQueueUnbind(AUnbind)); // Unbind-Ok (sem args, descartado)
+  CallRpc(BuildQueueUnbind(AUnbind)); // Unbind-Ok (no args, discarded)
   RemoveBindRecovery(AUnbind.QueueName, AUnbind.ExchangeName, AUnbind.RoutingKey);
 end;
 
@@ -2336,7 +2336,7 @@ begin
   if ABind.NoWait then
     FConnection.SendMethod(FChannelId, LPayload)
   else
-    CallRpc(LPayload); // Bind-Ok (sem args, descartado)
+    CallRpc(LPayload); // Bind-Ok (no args, discarded)
   AddRecovery(LPayload, not ABind.NoWait);
 end;
 
@@ -2348,7 +2348,7 @@ begin
   if AUnbind.NoWait then
     FConnection.SendMethod(FChannelId, LPayload)
   else
-    CallRpc(LPayload); // Unbind-Ok (sem args, descartado)
+    CallRpc(LPayload); // Unbind-Ok (no args, discarded)
   RemoveExchangeBindRecovery(AUnbind.Destination, AUnbind.Source, AUnbind.RoutingKey);
 end;
 
@@ -2365,16 +2365,16 @@ begin
     LMaxBody := 1;
 
   Result := 0;
-  // Os frames de uma mensagem (método + header + body) devem sair juntos, sem
-  // que frames de outra thread se intercalem — por isso, um único lock.
+  // A message's frames (method + header + body) must go out together, with no
+  // frames from another thread interleaving — hence a single lock.
   FConnection.FWriteLock.Enter;
   try
     if FConfirmMode then
     begin
-      // O seq-no acompanha a ordem de envio no wire: atribuído sob o FWriteLock,
-      // que serializa os publishes. Registramos a pendência ANTES de enviar
-      // (via FConfirmMon, o lock mais interno) para nunca perder um ack que
-      // chegue rápido demais — o padrão de registrar o consumer antes do Consume.
+      // The seq-no follows the send order on the wire: assigned under FWriteLock,
+      // which serializes the publishes. We register the pending entry BEFORE sending
+      // (via FConfirmMon, the innermost lock) so as never to miss an ack that
+      // arrives too fast — the same pattern as registering the consumer before Consume.
       FConfirmMon.Enter;
       try
         Inc(FPublishSeqNo);
@@ -2382,8 +2382,8 @@ begin
         FUnconfirmed.AddOrSetValue(Result, True);
         if FRepublish then
         begin
-          // Guarda o conteúdo para reenvio se a conexão cair antes do ack. Copy
-          // do corpo: o chamador pode reutilizar/liberar o array após retornar.
+          // Keeps the content for resending if the connection drops before the ack. Copy
+          // of the body: the caller may reuse/free the array after returning.
           LRaw.Method := AMethod;
           LRaw.Header := AHeader;
           LRaw.Body := Copy(ABody, 0, Length(ABody));
@@ -2419,9 +2419,9 @@ var
   LSpan: IPcSpan;
   LHeader: TBytes;
 begin
-  // Span producer (nil com o tracer desligado); o traceparent dele vai nos
-  // headers, só nos bytes. Termina aqui, na thread que o abriu: o confirm
-  // chega depois, noutra thread (ver AMQP.Tracing).
+  // Producer span (nil with the tracer off); its traceparent goes in the
+  // headers, only in the bytes. It ends here, on the thread that opened it: the confirm
+  // arrives later, on another thread (see AMQP.Tracing).
   LSpan := AmqpStartPublishSpan(AExchange, ARoutingKey, Length(ABody), AProps,
     FConnection.FParams.Host, FConnection.FParams.Port);
   if LSpan = nil then
@@ -2452,8 +2452,8 @@ end;
 
 procedure TAMQPChannel.ResendUnconfirmed;
 
-  // Insertion sort local: TArray.Sort<T> não existe no Generics.Collections do
-  // FPC e o buffer de reenvio é pequeno (publishes pendentes de uma queda).
+  // Local insertion sort: TArray.Sort<T> does not exist in FPC's
+  // Generics.Collections and the resend buffer is small (publishes pending from one drop).
   procedure SortKeys(var AKeys: TArray<UInt64>);
   var
     I, J: Integer;
@@ -2479,9 +2479,9 @@ var
 begin
   if not (FConfirmMode and FRepublish) then
     Exit;
-  // Tira um snapshot ordenado (ordem original de publicação) e limpa o buffer
-  // sob o lock; reenvia FORA do lock (DoSendPublish re-adquire FWriteLock/FConfirmMon
-  // e re-bufferiza sob os novos seq-nos).
+  // Takes an ordered snapshot (original publish order) and clears the buffer
+  // under the lock; resends OUTSIDE the lock (DoSendPublish re-acquires FWriteLock/FConfirmMon
+  // and re-buffers under the new seq-nos).
   FConfirmMon.Enter;
   try
     LKeys := FResendBuffer.Keys.ToArray;
@@ -2551,7 +2551,7 @@ begin
       raise EAMQPChannel.Create('timeout waiting for server response');
     case FRpcKind of
       rkMessage:
-        Result := FRpcMessage;      // Get-Ok (Found=True veio da montagem)
+        Result := FRpcMessage;      // Get-Ok (Found=True came from the assembly)
       rkMethod:
         begin                       // Get-Empty
           Result := Default(TAMQPGetResult);
@@ -2569,8 +2569,8 @@ end;
 
 procedure TAMQPChannel.Ack(ADeliveryTag: UInt64; AMultiple: Boolean);
 begin
-  // Canal fechando ou fechado: não sai para o fio (ver FClosing). O broker
-  // já devolveu à fila o que ficou sem ack quando o canal fechou.
+  // Channel closing or closed: nothing goes on the wire (see FClosing). The broker
+  // already returned to the queue whatever was left unacked when the channel closed.
   FAckLock.Enter;
   try
     SettleDeliveries(ADeliveryTag, AMultiple);
@@ -2615,7 +2615,7 @@ begin
       FUnsettled.Remove(ADeliveryTag)
     else
     begin
-      // O conjunto só tem os callbacks em voo (e os enfileirados): é pequeno.
+      // The set only has the in-flight callbacks (and the queued ones): it is small.
       LTags := FUnsettled.Keys.ToArray;
       for LTag in LTags do
         if LTag <= ADeliveryTag then
@@ -2630,8 +2630,8 @@ function TAMQPChannel.TakeUnsettled(ADeliveryTag: UInt64): Boolean;
 begin
   FSettleLock.Enter;
   try
-    // Remove é procedure no Delphi (e no FPC): consulta e retira separados,
-    // ainda sob o mesmo lock.
+    // Remove is a procedure in Delphi (and in FPC): check and remove separately,
+    // still under the same lock.
     Result := FUnsettled.ContainsKey(ADeliveryTag);
     if Result then
       FUnsettled.Remove(ADeliveryTag);
@@ -2656,8 +2656,8 @@ var
   LAction: TAMQPConsumerErrorAction;
   LHandler: TAMQPConsumerErrorEvent;
 begin
-  // Roda na thread do pool, dentro do except do callback (AError ainda vive).
-  // Entrega no-ack nunca entra no conjunto: cai em ceaNone aqui.
+  // Runs on the pool thread, inside the callback's except (AError is still alive).
+  // A no-ack delivery never enters the set: it falls into ceaNone here.
   if IsUnsettled(ADelivery.DeliveryTag) then
     LAction := ceaReject
   else
@@ -2668,19 +2668,19 @@ begin
     try
       LHandler(Self, ADelivery, AError, LAction);
     except
-      // O handler de erro que levanta não pode deixar a entrega pendurada,
-      // que é o defeito que ele existe para resolver: a ação segue valendo.
+      // An error handler that raises must not leave the delivery hanging,
+      // which is the defect it exists to fix: the action still stands.
     end;
 
-  // Confere DE NOVO, retirando: o handler pode ter dado Ack/Nack ele mesmo.
-  // Confirmar duas vezes o mesmo tag é 406 PRECONDITION_FAILED e derruba o canal.
+  // Checks AGAIN, removing: the handler may have done Ack/Nack itself.
+  // Acknowledging the same tag twice is 406 PRECONDITION_FAILED and brings down the channel.
   if (LAction = ceaNone) or (not TakeUnsettled(ADelivery.DeliveryTag)) then
     Exit;
   try
     FConnection.SendMethod(FChannelId, BuildBasicNack(ADelivery.DeliveryTag,
       False, LAction = ceaRequeue));
   except
-    // Conexão ou canal caiu: o broker devolve a entrega à fila sozinho.
+    // Connection or channel dropped: the broker returns the delivery to the queue by itself.
   end;
 end;
 
@@ -2688,19 +2688,19 @@ procedure TAMQPChannel.ConfirmSelect;
 begin
   if FConfirmMode then
     Exit;
-  CallRpc(BuildConfirmSelect(False)); // Confirm.Select-Ok (sem args)
+  CallRpc(BuildConfirmSelect(False)); // Confirm.Select-Ok (no args)
   FConfirmMon.Enter;
   try
     FUnconfirmed.Clear;
     FNacked.Clear;
     FResendBuffer.Clear;
-    FPublishSeqNo := 0; // primeiro publish daqui em diante recebe o seq-no 1
+    FPublishSeqNo := 0; // the first publish from here on gets seq-no 1
     FConfirmBase := 0;
   finally
     FConfirmMon.Leave;
   end;
-  FConfirmMode := True; // por último: a partir daqui Publish passa a numerar
-  AddRecovery(BuildConfirmSelect(False), True); // re-arma o confirm mode na reconexão
+  FConfirmMode := True; // last: from here on Publish starts numbering
+  AddRecovery(BuildConfirmSelect(False), True); // re-arms confirm mode on reconnection
 end;
 
 function TAMQPChannel.WaitForConfirm(ASeqNo: UInt64; ATimeoutMs: Cardinal): Boolean;
@@ -2720,11 +2720,11 @@ begin
       if FNacked.ContainsKey(ASeqNo) then
       begin
         FNacked.Remove(ASeqNo);
-        Exit(False); // nack-ado (ou perdido numa queda de conexão)
+        Exit(False); // nack'ed (or lost in a connection drop)
       end;
       if not FUnconfirmed.ContainsKey(ASeqNo) then
-        // não está pendente nem nack-ado: ack-ado (se já foi publicado) ou
-        // seq-no que nunca existiu (> último atribuído => False, não espera à toa).
+        // neither pending nor nack'ed: ack'ed (if already published) or a
+        // seq-no that never existed (> last assigned => False, no pointless wait).
         Exit(ASeqNo <= FPublishSeqNo);
       LNow := PcTickMs;
       if LNow >= LDeadline then
@@ -2755,9 +2755,9 @@ begin
       LRemaining := Int64(LDeadline) - Int64(LNow);
       FConfirmMon.Wait(Cardinal(LRemaining));
     end;
-    // Todos os pendentes resolveram: sucesso sse NENHUM foi nack-ado. FNacked
-    // guarda os nacks ainda não consumidos — inclusive os que chegaram ANTES
-    // desta chamada. Ao limpar, consumimos o resultado deste lote.
+    // All pending ones resolved: success iff NONE was nack'ed. FNacked
+    // keeps the nacks not yet consumed — including those that arrived BEFORE
+    // this call. By clearing it, we consume this batch's result.
     Result := FNacked.Count = 0;
     FNacked.Clear;
   finally
@@ -2770,7 +2770,7 @@ var
   LPayload: TBytes;
 begin
   LPayload := BuildBasicQos(APrefetchCount, AGlobal);
-  CallRpc(LPayload); // Qos-Ok (sem args)
+  CallRpc(LPayload); // Qos-Ok (no args)
   AddRecovery(LPayload, True);
 end;
 
@@ -2782,8 +2782,8 @@ var
   LPayload: TBytes;
   LInfo: TAMQPConsumerInfo;
 begin
-  // Geramos o consumer-tag no cliente e registramos o callback ANTES de enviar,
-  // para não perder deliveries que cheguem entre o Consume-Ok e o registro.
+  // We generate the consumer-tag on the client and register the callback BEFORE sending,
+  // so as not to lose deliveries that arrive between Consume-Ok and the registration.
   LTag := Format('ctag-%d-%d', [FChannelId, PcAtomicInc(FConsumerCounter)]);
   LInfo.Queue := AQueue;
   LInfo.NoAck := ANoAck;
@@ -2799,7 +2799,7 @@ begin
   LConsume.Exclusive := AExclusive;
   LPayload := BuildBasicConsume(LConsume);
   try
-    CallRpc(LPayload); // Consume-Ok (devolve o mesmo tag)
+    CallRpc(LPayload); // Consume-Ok (returns the same tag)
   except
     FConsumersLock.Enter;
     try
@@ -2810,15 +2810,15 @@ begin
     end;
     raise;
   end;
-  // Grava para replay após reconexão (mesmo tag e callback).
+  // Records for replay after reconnection (same tag and callback).
   AddRecovery(LPayload, True, True, LTag, ACallback);
   Result := LTag;
 end;
 
 procedure TAMQPChannel.Cancel(const AConsumerTag: string);
 begin
-  // O cleanup local roda mesmo se CallRpc falhar (canal caiu / timeout): senão o
-  // consumer ficaria em FRecovery e seria ressuscitado numa eventual reconexão.
+  // The local cleanup runs even if CallRpc fails (channel dropped / timeout): otherwise the
+  // consumer would stay in FRecovery and be resurrected on an eventual reconnection.
   try
     CallRpc(BuildBasicCancel(AConsumerTag, False)); // Cancel-Ok
   finally
@@ -2869,14 +2869,14 @@ begin
 
   if not Assigned(LCallback) then
   begin
-    // sem consumer (cancelado): libera eventuais Headers e descarta
+    // no consumer (cancelled): frees any Headers and discards
     if LDelivery.Properties.Has(bpHeaders) and Assigned(LDelivery.Properties.Headers) then
       LDelivery.Properties.Headers.Free;
     Exit;
   end;
 
-  // Registra a entrega como pendente ANTES de enfileirar: um Ack do callback
-  // (ou um Ack com multiple de outro callback) nunca chega antes do registro.
+  // Registers the delivery as pending BEFORE queueing: an Ack from the callback
+  // (or an Ack with multiple from another callback) never arrives before the registration.
   if not LInfo.NoAck then
   begin
     FSettleLock.Enter;
@@ -2887,7 +2887,7 @@ begin
     end;
   end;
 
-  // Despacha para o pool; a thread de leitura NÃO roda o callback.
+  // Dispatches to the pool; the read thread does NOT run the callback.
   PcAtomicInc(FInFlight);
   DispatchToPool(TAMQPDeliveryWork.Create(Self, LCallback, LDelivery, LInfo));
 end;
@@ -2910,14 +2910,14 @@ begin
 
   if not Assigned(LCallback) then
   begin
-    // sem handler: libera eventuais Headers e descarta (mesmo comportamento
-    // de antes de o Basic.Return ser tratado).
+    // no handler: frees any Headers and discards (same behavior
+    // as before Basic.Return was handled).
     if LReturned.Properties.Has(bpHeaders) and Assigned(LReturned.Properties.Headers) then
       LReturned.Properties.Headers.Free;
     Exit;
   end;
 
-  // Despacha para o pool; a thread de leitura NÃO roda o callback.
+  // Dispatches to the pool; the read thread does NOT run the callback.
   PcAtomicInc(FInFlight);
   DispatchToPool(TAMQPReturnWork.Create(Self, LCallback, LReturned));
 end;
@@ -2929,7 +2929,7 @@ begin
   LCallback := FOnConfirm;
   if not Assigned(LCallback) then
     Exit;
-  // Despacha para o pool; a thread de leitura NÃO roda o callback.
+  // Dispatches to the pool; the read thread does NOT run the callback.
   PcAtomicInc(FInFlight);
   DispatchToPool(TAMQPConfirmWork.Create(Self, LCallback, ASeqNo, AAck));
 end;
@@ -2940,10 +2940,10 @@ var
   LList: TList<UInt64>;
   LKey, LUserTag: UInt64;
 begin
-  // Roda na thread de leitura. ATag é o delivery-tag do broker (numeração do
-  // WIRE, reinicia por sessão); somamos o offset da sessão para chegar ao seq-no
-  // do usuário. `multiple` cobre "este e todos os anteriores ainda pendentes",
-  // então resolvemos todo seq-no <= tag.
+  // Runs on the read thread. ATag is the broker's delivery-tag (WIRE
+  // numbering, restarts per session); we add the session offset to get the user's
+  // seq-no. `multiple` covers "this one and all previous ones still pending",
+  // so we resolve every seq-no <= tag.
   LList := TList<UInt64>.Create;
   try
     FConfirmMon.Enter;
@@ -2955,11 +2955,11 @@ begin
       for LKey in LList do
       begin
         FUnconfirmed.Remove(LKey);
-        FResendBuffer.Remove(LKey); // confirmado (ack ou nack do broker): não reenvia
+        FResendBuffer.Remove(LKey); // confirmed (broker ack or nack): no resend
         if not AAck then
           FNacked.AddOrSetValue(LKey, True);
       end;
-      FConfirmMon.PulseAll; // acorda WaitForConfirm(s)
+      FConfirmMon.PulseAll; // wakes WaitForConfirm(s)
     finally
       FConfirmMon.Leave;
     end;
@@ -2973,9 +2973,9 @@ procedure TAMQPChannel.FailAllUnconfirmed;
 var
   LKey: UInt64;
 begin
-  // Chamado quando a conexão cai (SignalError): publishes pendentes ficam em
-  // estado ambíguo — reportamos como não confirmados (WaitForConfirm => False).
-  // NÃO dispara OnConfirm (que é só para confirmações reais do broker).
+  // Called when the connection drops (SignalError): pending publishes are left in an
+  // ambiguous state — we report them as unconfirmed (WaitForConfirm => False).
+  // Does NOT fire OnConfirm (which is only for real confirms from the broker).
   if not FConfirmMode then
     Exit;
   FConfirmMon.Enter;
@@ -2991,18 +2991,18 @@ end;
 
 procedure TAMQPChannel.DrainInFlight;
 begin
-  // Espera SEM timeout: liberar o canal com um item ainda em execução ou ainda
-  // na FILA do pool seria use-after-free (o item guarda Self e decrementa
-  // FInFlight no fim). Um callback bem-comportado sempre termina — mesmo que
-  // faça IO de 5s+ (o caso de uso alvo). Não chame Close de dentro do próprio
-  // callback (auto-espera).
+  // Waits WITHOUT a timeout: freeing the channel with an item still running or still
+  // in the pool's QUEUE would be a use-after-free (the item holds Self and decrements
+  // FInFlight at the end). A well-behaved callback always finishes — even if
+  // it does 5s+ of IO (the target use case). Do not call Close from inside the
+  // callback itself (self-wait).
   //
-  // O contador sobe no enfileiramento, então num canal comum esta espera
-  // depende do PcPool andar — e o PcPool é do processo inteiro. Medido
-  // (TPoolIsolationTests): PcPool saturado por 1,5 s, Free do canal com uma
-  // entrega na fila = 1,5 s; com CreateChannel(True), 29 ms. Um prazo aqui não
-  // teria saída segura (o item na fila ainda aponta para o canal); a saída é o
-  // pool próprio do canal.
+  // The counter goes up at queueing time, so on a regular channel this wait
+  // depends on PcPool moving — and PcPool belongs to the whole process. Measured
+  // (TPoolIsolationTests): PcPool saturated for 1.5 s, Free of the channel with one
+  // delivery in the queue = 1.5 s; with CreateChannel(True), 29 ms. A deadline here would
+  // have no safe way out (the queued item still points to the channel); the way out is the
+  // channel's own pool.
   while PcAtomicGet(FInFlight) > 0 do
     Sleep(10);
 end;
@@ -3016,9 +3016,9 @@ begin
   if FClosed or (not FIsOpen) then
     Exit;
 
-  // (1) Cancela os consumers: depois do Cancel-Ok o broker não entrega mais
-  // nada para estes tags. Falhou um (conexão caída, timeout), não insiste:
-  // os outros dariam o mesmo erro, cada um com o seu prazo.
+  // (1) Cancels the consumers: after Cancel-Ok the broker delivers nothing more
+  // for these tags. If one failed (connection down, timeout), do not insist:
+  // the others would give the same error, each with its own timeout.
   FConsumersLock.Enter;
   try
     LTags := FConsumers.Keys.ToArray;
@@ -3029,12 +3029,12 @@ begin
     try
       Cancel(LTag);
     except
-      Break; // segue fechando; o Channel.Close abaixo tem a mesma sorte
+      Break; // keeps closing; the Channel.Close below meets the same fate
     end;
-  // (2) Com o canal ainda aberto, os callbacks já despachados terminam e o
-  // Ack deles vale: fechar não reentrega o que já foi processado.
+  // (2) With the channel still open, the callbacks already dispatched finish and
+  // their Ack counts: closing does not redeliver what was already processed.
   DrainInFlight;
-  // (3) Daqui em diante Ack/Nack não saem (ver FClosing).
+  // (3) From here on Ack/Nack do not go out (see FClosing).
   MarkClosing;
 
   LClose.ReplyCode := AReplyCode;
@@ -3042,19 +3042,19 @@ begin
   LClose.ClassId := 0;
   LClose.MethodId := 0;
   try
-    CallRpc(BuildChannelClose(LClose)); // aguarda Channel.Close-Ok
+    CallRpc(BuildChannelClose(LClose)); // waits for Channel.Close-Ok
   except
-    // se falhar (conexão caiu etc.), segue fechando localmente
+    // if it fails (connection dropped etc.), keeps closing locally
   end;
   FClosed := True;
   FIsOpen := False;
-  // O que chegou entre o passo (2) e o Close-Ok (um Return, um confirm):
-  // espera terminar antes de o objeto poder ser liberado.
+  // Whatever arrived between step (2) and the Close-Ok (a Return, a confirm):
+  // waits for it to finish before the object can be freed.
   DrainInFlight;
   FConnection.UnregisterChannel(FChannelId);
 end;
 
-{ TAMQPChannel — recepção (roda na thread de leitura) }
+{ TAMQPChannel — reception (runs on the read thread) }
 
 procedure TAMQPChannel.CompleteContent;
 var
@@ -3080,9 +3080,9 @@ begin
     DispatchReturn(FAsmReturn, FAsmProps, FAsmBody)
   else
   begin
-    // Método desconhecido chegando por este caminho: descartamos o conteúdo.
-    // Como ninguém assume a posse das Properties aqui, liberamos a tabela de
-    // Headers se ela veio (senão vazaria).
+    // Unknown method arriving through this path: we discard the content.
+    // Since nobody takes ownership of the Properties here, we free the
+    // Headers table if it came (otherwise it would leak).
     if FAsmProps.Has(bpHeaders) and Assigned(FAsmProps.Headers) then
     begin
       FAsmProps.Headers.Free;
@@ -3108,7 +3108,7 @@ begin
     asHeader:
       begin
         if AFrame.FrameType <> AMQP_FRAME_HEADER then
-          Exit; // frame fora de ordem: ignora (protocolo)
+          Exit; // out-of-order frame: ignore (protocol)
         LReader := TAMQPReader.Create(AFrame.Payload);
         try
           LHeader := DecodeContentHeader(LReader);
@@ -3140,7 +3140,7 @@ begin
       end;
   end;
 
-  // asIdle: espera um frame de método.
+  // asIdle: expects a method frame.
   if not AFrame.IsMethod then
     Exit;
 
@@ -3158,18 +3158,18 @@ begin
     begin
       FAsmMethodId := LId;
       FAsmDeliver := DecodeBasicDeliver(LReader);
-      FAsmState := asHeader; // conteúdo vem nos próximos frames
+      FAsmState := asHeader; // content comes in the next frames
     end
     else if LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_RETURN) then
     begin
-      // publish mandatory não roteado: conteúdo vem nos próximos frames.
+      // unrouted mandatory publish: content comes in the next frames.
       FAsmMethodId := LId;
       FAsmReturn := DecodeBasicReturn(LReader);
       FAsmState := asHeader;
     end
     else if LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_CANCEL) then
     begin
-      // servidor cancelou o consumer (ex.: fila removida).
+      // server cancelled the consumer (e.g. queue deleted).
       LTag := DecodeBasicCancel(LReader);
       FConsumersLock.Enter;
       try
@@ -3182,8 +3182,8 @@ begin
     end
     else if LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_ACK) then
     begin
-      // publisher confirm: ack de um ou mais publishes (frame de método puro,
-      // sem content). Resolve os pendentes e despacha OnConfirm fora do lock.
+      // publisher confirm: ack of one or more publishes (pure method frame,
+      // no content). Resolves the pending ones and dispatches OnConfirm outside the lock.
       LAck := DecodeBasicAck(LReader);
       LResolved := ResolveConfirms(LAck.DeliveryTag, LAck.Multiple, True);
       for LSeq in LResolved do
@@ -3191,7 +3191,7 @@ begin
     end
     else if LId.Matches(AMQP_CLASS_BASIC, AMQP_BASIC_NACK) then
     begin
-      // publisher confirm: nack (o broker não conseguiu cuidar do publish).
+      // publisher confirm: nack (the broker could not handle the publish).
       LNack := DecodeBasicNack(LReader);
       LResolved := ResolveConfirms(LNack.DeliveryTag, LNack.Multiple, False);
       for LSeq in LResolved do
@@ -3200,9 +3200,9 @@ begin
     else if LId.Matches(AMQP_CLASS_CHANNEL, AMQP_CHANNEL_CLOSE) then
     begin
       LClose := DecodeChannelClose(LReader);
-      // Liga FClosing ANTES do Close-Ok, sob o mesmo lock do Ack: um Ack de
-      // callback em voo sai antes do Close-Ok (o broker o descarta, como a
-      // spec manda) ou não sai — nunca depois, que seria 504 de conexão.
+      // Sets FClosing BEFORE the Close-Ok, under the same lock as Ack: an Ack from an
+      // in-flight callback goes out before the Close-Ok (the broker discards it, as the
+      // spec says) or does not go out — never after, which would be a connection 504.
       FAckLock.Enter;
       try
         FClosing := True;
@@ -3215,7 +3215,7 @@ begin
     end
     else
     begin
-      // resposta de RPC (Open-Ok, Declare-Ok, Bind-Ok, Get-Empty, Close-Ok, ...)
+      // RPC reply (Open-Ok, Declare-Ok, Bind-Ok, Get-Empty, Close-Ok, ...)
       SignalMethod(AFrame.Payload);
     end;
   finally

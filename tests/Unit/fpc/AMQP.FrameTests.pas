@@ -36,7 +36,7 @@ type
 
 implementation
 
-// Forca a sobrecarga nao-generica AssertEquals(Integer, Integer).
+// Forces the non-generic AssertEquals(Integer, Integer) overload.
 procedure EqualByte(AExpected: Integer; AActual: Byte);
 begin
   TAssert.AssertEquals(AExpected, Integer(AActual));
@@ -66,7 +66,7 @@ begin
   try
     LFrame.WriteTo(LStream);
     B := Copy(LStream.Bytes, 0, Integer(LStream.Size));
-    // type=1, channel=00 01, size=00 00 00 02, payload=AA BB, end=CE => 10 octetos
+    // type=1, channel=00 01, size=00 00 00 02, payload=AA BB, end=CE => 10 octets
     TAssert.AssertEquals(10, Length(B));
     EqualByte(AMQP_FRAME_METHOD, B[0]);
     EqualByte($00, B[1]);
@@ -162,7 +162,7 @@ end;
 
 procedure TAMQPFrameTests.ReadFrom_FrameEndInvalido_Levanta;
 begin
-  // type=1, channel=0, size=1, payload=00, frame-end=FF (invalido)
+  // type=1, channel=0, size=1, payload=00, frame-end=FF (invalid)
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 1, 0, $FF]);
   try
     ChecaLevanta(EAMQPFrame, DoReadFrameEndInvalido);
@@ -178,11 +178,11 @@ end;
 
 procedure TAMQPFrameTests.ReadFrom_StreamTruncado_Levanta;
 begin
-  // cabecalho diz size=10 mas o stream acaba antes
+  // header says size=10 but the stream ends before that
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 10, 1, 2, 3]);
   try
-    // EAMQPFrameEOF (subclasse de EAMQPFrame): fim de stream, nao frame
-    // malformado. O ChecaLevanta exige a classe exata.
+    // EAMQPFrameEOF (subclass of EAMQPFrame): end of stream, not a malformed
+    // frame. ChecaLevanta requires the exact class.
     ChecaLevanta(EAMQPFrameEOF, DoReadStreamTruncado);
   finally
     FTruncStream.Free;
@@ -196,7 +196,7 @@ end;
 
 procedure TAMQPFrameTests.ReadFrom_PayloadAcimaDoMaximo_Levanta;
 begin
-  // size=100, mas passamos AMaxPayload=16
+  // size=100, but we pass AMaxPayload=16
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 100]);
   try
     ChecaLevanta(EAMQPFrame, DoReadPayloadAcimaDoMaximo);

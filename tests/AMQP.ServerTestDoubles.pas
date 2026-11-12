@@ -1,14 +1,14 @@
 ﻿unit AMQP.ServerTestDoubles;
 
-{ Dublês compartilhados pelas suítes do broker -- WS4 da Fase 2.
+{ Test doubles shared by the broker suites -- WS4 of Phase 2.
 
-  Vive numa unit própria porque duas fixtures precisam do mesmo alvo de
-  entrega falso: a da fila-ator (AMQP.ServerQueueTests, onde consumidores
-  existem só para serem contados e o alvo tem de RECUSAR tudo para o estoque
-  ficar onde está) e a da entrega (AMQP.ServerDeliveryTests, onde o alvo
-  registra o que recebeu).
+  Lives in a unit of its own because two fixtures need the same fake
+  delivery target: the queue actor's (AMQP.ServerQueueTests, where consumers
+  exist only to be counted and the target must REFUSE everything so the backlog
+  stays where it is) and the delivery one (AMQP.ServerDeliveryTests, where the
+  target records what it received).
 
-  Uma cópia só, compilada pelos runners Delphi e FPC. }
+  A single copy, compiled by the Delphi and FPC runners. }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -29,7 +29,7 @@ uses
   AMQP.Server.FrameIO;
 
 type
-  { Uma entrega registrada pelo alvo falso. }
+  { A delivery recorded by the fake target. }
   TEntregaReg = record
     ConsumerTag: string;
     QueueName: string;
@@ -38,9 +38,9 @@ type
     Corpo: string;
   end;
 
-  { Alvo de entrega falso: registra o que recebeu e permite mandar recusar ou
-    morrer. Refcontado como o de verdade -- a fila segura a interface, então o
-    objeto sobrevive enquanto ela o tiver na mão. }
+  { Fake delivery target: records what it received and can be told to refuse or
+    die. Refcounted like the real one -- the queue holds the interface, so the
+    object survives as long as the queue has it in hand. }
   TAlvoFalso = class(TInterfacedObject, IAMQPDeliveryTarget)
   private
     FLock: TCriticalSection;
@@ -63,31 +63,31 @@ type
 
     function Count: Integer;
     function Entrega(AIndex: Integer): TEntregaReg;
-    /// Corpos entregues, na ordem, separados por '|'.
+    /// Delivered bodies, in order, separated by '|'.
     function Corpos: string;
-    /// Consumer-tags que receberam Basic.Cancel (fila apagada sob eles).
+    /// Consumer tags that received Basic.Cancel (queue deleted under them).
     function Cancelados: string;
     function CanceladosCount: Integer;
     property Recusar: Boolean read FRecusar write FRecusar;
     property Vivo: Boolean read FVivo write FVivo;
   end;
 
-/// Alvo VIVO que recusa toda entrega. É o que os testes da fila-ator usam
-/// quando o consumidor existe só para ser contado: vivo (senão o ator o tira
-/// do rodízio) mas sem consumir o estoque.
+/// A LIVE target that refuses every delivery. It is what the queue-actor tests use
+/// when the consumer exists only to be counted: alive (otherwise the actor takes it
+/// out of the round-robin) but without consuming the backlog.
 function AlvoQueRecusa(AId: NativeUInt): IAMQPDeliveryTarget;
 
 type
-  { Arquivo de WAL em memoria: conta fsyncs, sabe falhar na escrita e deixa o
-    teste mexer nos bytes crus (simula queda e corrupcao sem tocar em disco).
+  { In-memory WAL file: counts fsyncs, can fail on write and lets the
+    test touch the raw bytes (simulates a crash and corruption without touching disk).
 
-    E' a CAMADA 2 da D28 (Fase 4): como TAMQPWalSegment e TAMQPJournal falam com
-    IAMQPWalFile e nao com o sistema de arquivos, da' para provar que o fsync
-    acontece na fronteira do lote e que uma falha de I/O nao corrompe estado em
-    memoria -- nenhuma das duas seria observavel por fora.
+    It is LAYER 2 of D28 (Phase 4): since TAMQPWalSegment and TAMQPJournal talk to
+    IAMQPWalFile and not to the file system, we can prove that the fsync
+    happens at the batch boundary and that an I/O failure does not corrupt
+    in-memory state -- neither would be observable from outside.
 
-    Protegido por lock porque no journal a thread do journal e a do teste o
-    tocam ao mesmo tempo. }
+    Protected by a lock because in the journal the journal thread and the test
+    thread touch it at the same time. }
   TAMQPWalFileFalso = class(TInterfacedObject, IAMQPWalFile)
   private
     FLock: TCriticalSection;
@@ -95,7 +95,7 @@ type
     FSyncs: Integer;
     FSyncOk: Boolean;
     FEscritas: Integer;
-    FFalharEscritaNa: Integer; // -1 = nunca
+    FFalharEscritaNa: Integer; // -1 = never
   public
     constructor Create;
     destructor Destroy; override;
@@ -106,23 +106,23 @@ type
     function Size: Int64;
     procedure TruncateTo(ASize: Int64);
 
-    /// Copia dos bytes crus, para o teste corromper e devolver.
+    /// Copy of the raw bytes, for the test to corrupt and put back.
     function Bytes: TBytes;
     procedure PoeBytes(const ABytes: TBytes);
     function Syncs: Integer;
     function Escritas: Integer;
     procedure SetSyncOk(AValue: Boolean);
-    /// Numero da escrita (1-based) em que Append vai levantar. -1 = nunca.
+    /// Number of the write (1-based) on which Append will raise. -1 = never.
     procedure SetFalharEscritaNa(AValue: Integer);
   end;
 
-  { Envolve um arquivo de WAL DE VERDADE e permite reprovar o fsync.
+  { Wraps a REAL WAL file and lets the fsync be failed.
 
-    Diferente do TAMQPWalFileFalso (que vive so' na memoria e serve a um
-    segmento so'), este existe porque a compactacao precisa de ARQUIVOS REAIS:
-    o que ela apaga sao entradas de diretorio, e o teste que importa e' "fsync
-    reprovado NAO apaga nada". Com um duble puramente em memoria nao ha
-    segmento nenhum no disco para apagar, e o teste passaria por vacuidade. }
+    Unlike TAMQPWalFileFalso (which lives only in memory and serves a single
+    segment), this one exists because compaction needs REAL FILES:
+    what it deletes are directory entries, and the test that matters is "a failed
+    fsync deletes NOTHING". With a purely in-memory double there is no
+    segment on disk to delete, and the test would pass vacuously. }
   TAMQPWalFileComFalha = class(TInterfacedObject, IAMQPWalFile)
   private
     FInterno: IAMQPWalFile;
@@ -134,23 +134,23 @@ type
     function Sync: Boolean;
     function Size: Int64;
     procedure TruncateTo(ASize: Int64);
-    /// False faz todo fsync deste arquivo reprovar.
+    /// False makes every fsync of this file fail.
     procedure SetSyncOk(AValue: Boolean);
   end;
 
-  { Stream de teste: guarda o que foi escrito e pode BLOQUEAR a escritora
-    (para encher a fila de saida do writer de proposito).
+  { Test stream: keeps what was written and can BLOCK the writer thread
+    (to fill the writer's outbound queue on purpose).
 
-    Mora aqui, e nao na suite da entrega onde nasceu, desde a WS5 da Fase 4: a
-    suite do confirm assincrono precisa exatamente do mesmo par -- um writer de
-    verdade sobre um stream que registra -- para LER os frames que o rastreador
-    emitiu. Duas copias divergiriam. }
+    Lives here, and not in the delivery suite where it was born, since WS5 of Phase 4:
+    the asynchronous confirm suite needs exactly the same pair -- a real
+    writer over a recording stream -- to READ the frames the tracker
+    emitted. Two copies would diverge. }
   TStreamGravador = class(TStream)
   private
     FLock: TCriticalSection;
     FLog: TBytes;
     FLen: Integer;
-    FPortao: TEvent; // sinalizado = passa
+    FPortao: TEvent; // signaled = passes
   public
     constructor Create;
     destructor Destroy; override;
@@ -162,8 +162,8 @@ type
     function Bytes: TBytes;
   end;
 
-/// Espera a escritora esvaziar (PARANDO-A) e devolve os frames escritos ate
-/// agora. Depois disso o writer nao serve mais para escrever.
+/// Waits for the writer thread to empty (STOPPING it) and returns the frames written
+/// so far. After this the writer can no longer be used for writing.
 function FramesEscritos(AWriter: TAMQPFrameWriter;
   AStream: TStreamGravador): TArray<TAMQPFrame>;
 
@@ -461,8 +461,8 @@ end;
 
 function TAMQPWalFileComFalha.Sync: Boolean;
 begin
-  // Os BYTES vao para o disco de verdade; so' a RESPOSTA do fsync e' reprovada.
-  // E' o que modela um disco que aceitou a escrita e nao garantiu a barreira.
+  // The BYTES really go to disk; only the fsync's ANSWER is failed.
+  // It models a disk that accepted the write and did not guarantee the barrier.
   FInterno.Sync;
   Result := FSyncOk;
 end;
@@ -488,7 +488,7 @@ constructor TStreamGravador.Create;
 begin
   inherited Create;
   FLock := TCriticalSection.Create;
-  FPortao := TEvent.Create(nil, True, True, ''); // manual-reset, aberto
+  FPortao := TEvent.Create(nil, True, True, ''); // manual-reset, open
 end;
 
 destructor TStreamGravador.Destroy;
@@ -573,7 +573,7 @@ end;
 function FramesEscritos(AWriter: TAMQPFrameWriter;
   AStream: TStreamGravador): TArray<TAMQPFrame>;
 begin
-  AWriter.Stop; // drena o que estiver na fila e encerra a thread escritora
+  AWriter.Stop; // drains whatever is queued and ends the writer thread
   Result := LeFrames(AStream.Bytes);
 end;
 

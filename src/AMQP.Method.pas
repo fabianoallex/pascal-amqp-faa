@@ -2,19 +2,19 @@
 
 {$I amqp.inc}
 
-{ Cabeçalho de método AMQP 0-9-1.
+{ AMQP 0-9-1 method header.
 
-  O payload de um frame de método (AMQP.Frame, tipo 1) começa com dois u16 em
-  big-endian — class-id e method-id — seguidos dos argumentos do método,
-  codificados com os tipos primitivos de AMQP.Wire.
+  The payload of a method frame (AMQP.Frame, type 1) starts with two big-endian
+  u16 — class-id and method-id — followed by the method arguments,
+  encoded with the primitive types of AMQP.Wire.
 
     +-----------+------------+ +----------------+
-    | class-id  | method-id  | | argumentos...  |
+    | class-id  | method-id  | | arguments...   |
     | u16 (BE)  | u16 (BE)   | |                |
     +-----------+------------+ +----------------+
 
-  Esta unit trata só do cabeçalho (os dois IDs). Os argumentos de cada método
-  ficam nas units específicas (ex.: AMQP.Connection.Methods). }
+  This unit handles only the header (the two IDs). The arguments of each method
+  live in the specific units (e.g. AMQP.Connection.Methods). }
 
 interface
 
@@ -22,22 +22,22 @@ uses
   AMQP.Wire;
 
 type
-  { Identifica um método pelo par (classe, método). }
+  { Identifies a method by the (class, method) pair. }
   TAMQPMethodId = record
     ClassId: Word;
     MethodId: Word;
     function Matches(AClassId, AMethodId: Word): Boolean;
   end;
 
-/// Escreve class-id + method-id no writer (início do payload de um método).
+/// Writes class-id + method-id to the writer (start of a method payload).
 procedure WriteMethodHeader(const AWriter: TAMQPWriter;
   AClassId, AMethodId: Word);
 
-/// Lê class-id + method-id do reader (consome 4 octetos).
+/// Reads class-id + method-id from the reader (consumes 4 octets).
 function ReadMethodHeader(const AReader: TAMQPReader): TAMQPMethodId;
 
-/// Cria um writer já com o cabeçalho do método escrito, pronto para os
-/// argumentos. O chamador é dono do writer (deve liberá-lo).
+/// Creates a writer with the method header already written, ready for the
+/// arguments. The caller owns the writer (must free it).
 function BeginMethod(AClassId, AMethodId: Word): TAMQPWriter;
 
 implementation

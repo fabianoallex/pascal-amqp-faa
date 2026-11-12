@@ -2,44 +2,44 @@
 
 {$I amqp.inc}
 
-{ Replay do WAL -- sub-modulo broker, WS6 da Fase 4 (durabilidade).
+{ WAL replay -- broker sub-module, WS6 of Phase 4 (durability).
 
-  Esta unit NAO fala com a engine. Ela le' os segmentos em ordem de LSN e
-  responde uma pergunta so': DADO ESTE LOG, QUAL E' O ESTADO? Quem aplica esse
-  estado a um broker vivo e' o TAMQPServer.Start, e a separacao e' deliberada
-  -- assim a parte dificil (a semantica do replay) e' testavel sem subir socket,
-  sem thread e sem broker, com o log montado a mao byte a byte.
+  This unit does NOT talk to the engine. It reads the segments in LSN order and
+  answers a single question: GIVEN THIS LOG, WHAT IS THE STATE? Applying that
+  state to a live broker is TAMQPServer.Start's job, and the separation is deliberate
+  -- that way the hard part (the replay semantics) is testable without opening a socket,
+  without threads and without a broker, with the log built by hand byte by byte.
 
-  O QUE O REPLAY TEM DE ACERTAR, E QUE NAO E' OBVIO
-  ------------------------------------------------
+  WHAT THE REPLAY HAS TO GET RIGHT, AND THAT IS NOT OBVIOUS
+  ---------------------------------------------------------
 
-  1. O LOG E' DE OPERACOES, O ESTADO E' O FINAL. Um QUEUE_DECLARE seguido de
-     QUEUE_DELETE nao deixa fila nenhuma -- e nao deixa BINDING nenhum, nem
-     COLOCACAO nenhuma daquela fila. Apagar a fila e esquecer o que pendia nela
-     ressuscitaria mensagem de fila que nao existe mais.
+  1. THE LOG IS OF OPERATIONS, THE STATE IS THE FINAL ONE. A QUEUE_DECLARE followed by
+     QUEUE_DELETE leaves no queue at all -- and no BINDING at all, nor any
+     PLACEMENT of that queue. Deleting the queue and forgetting what was pending in it
+     would resurrect messages of a queue that no longer exists.
 
-  2. A COLOCACAO VIVA E' A QUE TEM ENQ E NAO TEM DEQ. E' a D22 inteira: a
-     entrega nao e' journalada, entao uma mensagem entregue e NAO confirmada
-     continua sendo um ENQ vivo e volta pronta (D27). Nada a fazer para isso
-     acontecer -- e' consequencia de nao escrever nada na entrega.
+  2. THE LIVE PLACEMENT IS THE ONE WITH AN ENQ AND NO DEQ. That is all of D22: the
+     delivery is not journaled, so a message delivered and NOT acked
+     is still a live ENQ and comes back ready (D27). Nothing to do for that to
+     happen -- it follows from writing nothing on delivery.
 
-  3. O CORPO VEM UMA VEZ SO'. N colocacoes referenciam o mesmo ContentId
-     (D22), e o dead-letter deriva colocacao nova com o MESMO conteudo. Por
-     isso o conteudo vive num mapa a parte, e a colocacao so' guarda o id.
+  3. THE BODY COMES ONLY ONCE. N placements reference the same ContentId
+     (D22), and dead-lettering derives a new placement with the SAME content. That is
+     why the content lives in a separate map, and the placement only keeps the id.
 
-  4. A ORDEM DAS COLOCACOES E' A ORDEM DO LOG. A D27 se paga aqui: como o
-     journal e' append-only e o balde de prioridade esta' dentro do ENQ,
-     reenfileirar na ordem de leitura poe cada mensagem exatamente onde o
-     RequeueFront da D12 a poria. Nao ha ordenacao a fazer.
+  4. THE ORDER OF THE PLACEMENTS IS THE ORDER OF THE LOG. D27 pays off here: since the
+     journal is append-only and the priority bucket is inside the ENQ,
+     re-enqueueing in read order puts each message exactly where
+     D12's RequeueFront would put it. There is no sorting to do.
 
-  5. O MAIOR ID VISTO IMPORTA. EntryId e ContentId saem do mesmo contador da
-     engine; se ele recomecasse do zero depois de um restart, uma colocacao
-     nova colidiria com uma recuperada e o DEQ de uma aposentaria a outra.
-     Por isso MaxId sai daqui.
+  5. THE HIGHEST ID SEEN MATTERS. EntryId and ContentId come from the same engine
+     counter; if it restarted from zero after a restart, a new placement
+     would collide with a recovered one and the DEQ of one would retire the other.
+     That is why MaxId comes out of here.
 
-  O QUE ESTA UNIT NAO FAZ: nao decide prazo. O ENQ carrega o instante de
-  PAREDE e o TTL (D21), e converter isso para o relogio monotonico e' trabalho
-  de quem tem a fila viva na mao -- aqui os dois numeros passam intactos. }
+  WHAT THIS UNIT DOES NOT DO: it does not decide deadlines. The ENQ carries the
+  WALL-clock instant and the TTL (D21), and converting that to the monotonic clock is the job
+  of whoever holds the live queue -- here both numbers pass through intact. }
 
 interface
 
@@ -52,55 +52,55 @@ uses
   AMQP.Server.Records;
 
 type
-  { Um bind sobrevivente, com o tipo de destino que o distingue. }
+  { A surviving bind, with the destination type that distinguishes it. }
   TAMQPRecoveredBinding = record
     Binding: TAMQPRecBinding;
-    /// True = exchange->exchange (D5); False = exchange->fila.
+    /// True = exchange->exchange (D5); False = exchange->queue.
     DestinationIsExchange: Boolean;
   end;
 
-  { Contagens do replay, para o log do broker e para os testes. }
+  { Replay counts, for the broker log and for the tests. }
   TAMQPRecoveryStats = record
-    /// Segmentos abertos.
+    /// Segments opened.
     Segments: Integer;
-    /// Registros integros lidos.
+    /// Intact records read.
     Records: Integer;
-    /// Por que a leitura do ULTIMO segmento parou. awsFim = log inteiro.
+    /// Why reading the LAST segment stopped. awsFim = whole log.
     StopReason: TAMQPWalStop;
-    /// Colocacoes que ficaram vivas.
+    /// Placements that stayed alive.
     Live: Integer;
-    /// Colocacoes aposentadas por um DEQ.
+    /// Placements retired by a DEQ.
     Retired: Integer;
-    /// Colocacoes descartadas porque a fila delas foi apagada depois.
+    /// Placements dropped because their queue was deleted later.
     OrphanedFromQueue: Integer;
-    /// Colocacoes que apareceram DUAS vezes no log e foram unificadas. Nao e'
-    /// anomalia: e' o preco -- e a prova -- de a compactacao ser segura a
-    /// queda. Ela reescreve os registros vivos com o MESMO EntryId antes de
-    /// apagar os segmentos velhos, entao uma queda no meio deixa as duas
-    /// copias, e o replay tem de trata-las como UMA.
+    /// Placements that appeared TWICE in the log and were unified. It is not
+    /// an anomaly: it is the price -- and the proof -- of compaction being
+    /// crash-safe. It rewrites the live records with the SAME EntryId before
+    /// deleting the old segments, so a crash in the middle leaves both
+    /// copies, and the replay has to treat them as ONE.
     Duplicates: Integer;
-    /// Colocacoes descartadas porque o conteudo nao esta' no log. Nao deveria
-    /// acontecer (CONTENT e ENQ vao no MESMO lote indivisivel), e por isso e'
-    /// contado em vez de ignorado: se um dia for diferente de zero, o defeito
-    /// esta' em quem escreve, nao aqui.
+    /// Placements dropped because the content is not in the log. It should not
+    /// happen (CONTENT and ENQ go in the SAME indivisible batch), and that is why it is
+    /// counted instead of ignored: if it is ever non-zero, the defect
+    /// is in the writer, not here.
     OrphanedContent: Integer;
   end;
 
-  { O estado que o log descreve. Dono de tudo que criou -- inclusive das
-    TAMQPFieldTable de argumentos, que os decodificadores alocam. }
+  { The state the log describes. Owns everything it created -- including the
+    argument TAMQPFieldTables, which the decoders allocate. }
   TAMQPRecoveredState = class
   private
     FExchanges: TList<TAMQPRecExchange>;
     FQueues: TList<TAMQPRecQueue>;
     FBindings: TList<TAMQPRecoveredBinding>;
-    // Colocacoes na ORDEM DO LOG. Uma aposentada vira LAPIDE (EntryId = 0, que
-    // nenhuma colocacao real usa -- o contador da engine comeca no 1) em vez
-    // de sair da lista: remover do meio custaria O(n) por DEQ, e o log de um
-    // broker de vida longa tem um DEQ para cada ENQ. As lapides somem numa
-    // varredura so', no fim do replay.
+    // Placements in LOG ORDER. A retired one becomes a TOMBSTONE (EntryId = 0, which
+    // no real placement uses -- the engine counter starts at 1) instead
+    // of leaving the list: removing from the middle would cost O(n) per DEQ, and the log
+    // of a long-lived broker has one DEQ for every ENQ. The tombstones vanish in a
+    // single sweep, at the end of the replay.
     FEntries: TList<TAMQPRecEnqueue>;
-    /// EntryId -> posicao em FEntries, so' das VIVAS. E' o que faz unificar
-    /// duplicada e achar o alvo de um DEQ custarem O(1) em vez de O(vivas).
+    /// EntryId -> position in FEntries, LIVE ones only. It is what makes unifying
+    /// a duplicate and finding a DEQ's target cost O(1) instead of O(live).
     FLive: TDictionary<UInt64, Integer>;
     FTombstones: Integer;
     FContents: TDictionary<UInt64, TAMQPRecContent>;
@@ -113,36 +113,36 @@ type
     procedure RemoveBindingsFrom(const AVHost, AName: string; AIsQueue: Boolean);
     procedure Apply(const ARec: TAMQPWalRecord);
     procedure TrackId(AId: UInt64);
-    /// Marca a colocacao da posicao AIndex como morta, sem tirar da lista.
+    /// Marks the placement at position AIndex as dead, without removing it from the list.
     procedure Tombstone(AIndex: Integer);
-    /// Tira as lapides, preservando a ordem. Uma passada, no fim do replay.
+    /// Removes the tombstones, preserving order. One pass, at the end of the replay.
     procedure SweepTombstones;
   public
     constructor Create;
     destructor Destroy; override;
 
-    /// Exchanges duraveis sobreviventes, na ordem em que foram declaradas.
+    /// Surviving durable exchanges, in the order they were declared.
     property Exchanges: TList<TAMQPRecExchange> read FExchanges;
-    /// Filas duraveis sobreviventes, na ordem em que foram declaradas.
+    /// Surviving durable queues, in the order they were declared.
     property Queues: TList<TAMQPRecQueue> read FQueues;
-    /// Bindings sobreviventes (fila e exchange), na ordem de criacao.
+    /// Surviving bindings (queue and exchange), in creation order.
     property Bindings: TList<TAMQPRecoveredBinding> read FBindings;
-    /// Colocacoes vivas, NA ORDEM DO LOG -- que e' a ordem de enfileiramento.
+    /// Live placements, IN LOG ORDER -- which is the enqueue order.
     property Entries: TList<TAMQPRecEnqueue> read FEntries;
-    /// ContentId -> corpo. So' os referenciados por Entries sobrevivem.
+    /// ContentId -> body. Only those referenced by Entries survive.
     property Contents: TDictionary<UInt64, TAMQPRecContent> read FContents;
-    /// Maior EntryId/ContentId visto. O contador da engine tem de continuar
-    /// DEPOIS deste numero.
+    /// Highest EntryId/ContentId seen. The engine counter has to continue
+    /// AFTER this number.
     property MaxId: UInt64 read FMaxId;
     property Stats: TAMQPRecoveryStats read FStats;
   end;
 
-/// Le todo o WAL de ADir e devolve o estado que ele descreve. Nunca levanta
-/// por cauda torta -- e' o caso NORMAL depois de uma queda, e o prefixo valido
-/// e' exatamente o que a D23 manda replicar. Diretorio vazio devolve estado
-/// vazio.
+/// Reads the whole WAL in ADir and returns the state it describes. Never raises
+/// because of a torn tail -- that is the NORMAL case after a crash, and the valid prefix
+/// is exactly what D23 says to replay. An empty directory returns an empty
+/// state.
 ///
-/// O chamador e' dono do resultado.
+/// The caller owns the result.
 function AmqpReplayWal(const ADir: string): TAMQPRecoveredState;
 
 implementation
@@ -165,8 +165,8 @@ var
   I: Integer;
   LPair: TPair<UInt64, TAMQPRecContent>;
 begin
-  // As tabelas de argumentos sao criadas pelos decodificadores; a posse e' de
-  // quem chamou, e aqui isso quer dizer nos.
+  // The argument tables are created by the decoders; ownership belongs to
+  // the caller, and here that means us.
   for I := 0 to FExchanges.Count - 1 do
     FExchanges[I].Arguments.Free;
   for I := 0 to FQueues.Count - 1 do
@@ -182,8 +182,8 @@ begin
   inherited;
 end;
 
-// EntryId = 0 e' a lapide: nenhuma colocacao real usa esse numero, porque o
-// contador da engine faz Inc ANTES de devolver e portanto comeca no 1.
+// EntryId = 0 is the tombstone: no real placement uses that number, because the
+// engine counter does Inc BEFORE returning and therefore starts at 1.
 procedure TAMQPRecoveredState.Tombstone(AIndex: Integer);
 var
   LEnq: TAMQPRecEnqueue;
@@ -210,7 +210,7 @@ begin
       Inc(LDestination);
     end;
   FEntries.Count := LDestination;
-  FLive.Clear; // as posicoes mudaram; ninguem mais consulta o indice
+  FLive.Clear; // the positions changed; nobody queries the index anymore
   FTombstones := 0;
 end;
 
@@ -259,8 +259,8 @@ begin
   Result := -1;
 end;
 
-// Apagar um recurso apaga os bindings em que ele aparece -- dos DOIS lados,
-// porque um exchange pode ser origem de uns e destino de outros (D5).
+// Deleting a resource deletes the bindings it appears in -- on BOTH sides,
+// because an exchange may be the source of some and the destination of others (D5).
 procedure TAMQPRecoveredState.RemoveBindingsFrom(const AVHost, AName: string;
   AIsQueue: Boolean);
 var
@@ -307,8 +307,8 @@ begin
         I := FindExchange(LEx.VHost, LEx.Name);
         if I >= 0 then
         begin
-          // Redeclare: o ultimo vale. (A engine ja' recusou incompatibilidade
-          // la' atras -- o log so' guarda o que foi aceito.)
+          // Redeclare: the last one wins. (The engine already refused incompatibility
+          // back then -- the log only keeps what was accepted.)
           FExchanges[I].Arguments.Free;
           FExchanges[I] := LEx;
         end
@@ -348,8 +348,8 @@ begin
           FQueues.Delete(I);
         end;
         RemoveBindingsFrom(LName.VHost, LName.Name, True);
-        // ...e o que pendia nela vai junto: ressuscitar mensagem de fila
-        // apagada seria pior que perde-la.
+        // ...and what was pending in it goes too: resurrecting a message of a
+        // deleted queue would be worse than losing it.
         for I := FEntries.Count - 1 downto 0 do
           if (FEntries[I].EntryId <> 0)
             and (FEntries[I].VHost = LName.VHost)
@@ -367,7 +367,7 @@ begin
           LB.Binding.Destination, LB.Binding.RoutingKey, LB.DestinationIsExchange);
         if I >= 0 then
         begin
-          // Rebind do mesmo trio: idempotente, e o ultimo vale.
+          // Rebind of the same triple: idempotent, and the last one wins.
           FBindings[I].Binding.Arguments.Free;
           FBindings[I] := LB;
         end
@@ -387,7 +387,7 @@ begin
             FBindings.Delete(I);
           end;
         finally
-          LB.Binding.Arguments.Free; // o unbind so' precisava da chave
+          LB.Binding.Arguments.Free; // the unbind only needed the key
         end;
       end;
     AMQP_REC_CONTENT:
@@ -400,16 +400,16 @@ begin
       begin
         LEnq := AmqpDecodeRecEnqueue(ARec.Payload);
         TrackId(LEnq.EntryId);
-        // MESMA COLOCACAO DUAS VEZES = UMA. E' o que torna a reescrita da
-        // compactacao segura a queda: ela regrava o vivo com o MESMO EntryId
-        // e so' DEPOIS apaga os segmentos velhos, entao uma queda no meio
-        // deixa as duas copias no log. Sem isto, cada compactacao
-        // interrompida duplicaria o estoque inteiro.
+        // SAME PLACEMENT TWICE = ONE. It is what makes the compaction rewrite
+        // crash-safe: it rewrites the live data with the SAME EntryId
+        // and only AFTERWARDS deletes the old segments, so a crash in the middle
+        // leaves both copies in the log. Without this, every interrupted
+        // compaction would duplicate the whole backlog.
         //
-        // Fica a PRIMEIRA ocorrencia: a ordem do log e' a ordem de
-        // enfileiramento (D27), e a copia antiga e' a que esta' na posicao
-        // certa da fila. As duas sao iguais campo a campo, entao a escolha so'
-        // importa para a POSICAO.
+        // The FIRST occurrence stays: the log order is the enqueue
+        // order (D27), and the old copy is the one at the right position
+        // in the queue. Both are equal field by field, so the choice only
+        // matters for the POSITION.
         if FLive.ContainsKey(LEnq.EntryId) then
           Inc(FStats.Duplicates)
         else
@@ -421,8 +421,8 @@ begin
     AMQP_REC_DEQUEUE:
       begin
         LDeq := AmqpDecodeRecDequeue(ARec.Payload);
-        // O EntryId e' unico no broker (sai de UM contador na engine), entao
-        // ele sozinho identifica a colocacao -- vhost e fila vem de brinde.
+        // The EntryId is unique in the broker (it comes from ONE engine counter), so
+        // it alone identifies the placement -- vhost and queue come as a bonus.
         if FLive.TryGetValue(LDeq.EntryId, I) then
         begin
           Tombstone(I);
@@ -451,8 +451,8 @@ begin
     Exit;
   LDir := IncludeTrailingPathDelimiter(ADir);
   LSegs := AmqpWalListSegments(ADir);
-  // AmqpWalListSegments devolve em ordem crescente de numero, e o numero cresce
-  // com o tempo -- entao percorrer na ordem dada E' percorrer em ordem de LSN.
+  // AmqpWalListSegments returns in ascending number order, and the number grows
+  // over time -- so walking in the given order IS walking in LSN order.
   for I := 0 to High(LSegs) do
   begin
     LArq := TAMQPWalOsFile.Create(LDir + AmqpWalSegmentName(LSegs[I]), False);
@@ -470,14 +470,14 @@ begin
     end;
   end;
 
-  // As lapides saem AQUI, numa passada so': durante o replay elas ficam para
-  // as posicoes do indice continuarem valendo.
+  // The tombstones leave HERE, in a single pass: during the replay they stay so
+  // the index positions remain valid.
   Result.SweepTombstones;
 
-  // Conteudo que nenhuma colocacao viva referencia nao interessa a ninguem --
-  // e' o corpo de uma mensagem ja' consumida, ainda no arquivo so' porque o
-  // log e' append-only. Soltar aqui e' o que impede a recuperacao de carregar
-  // na memoria o estoque inteiro da vida do broker.
+  // Content that no live placement references matters to nobody --
+  // it is the body of an already consumed message, still in the file only because the
+  // log is append-only. Releasing it here is what keeps recovery from loading
+  // the whole lifetime backlog of the broker into memory.
   LUsed := TDictionary<UInt64, Byte>.Create;
   try
     for I := Result.FEntries.Count - 1 downto 0 do
@@ -485,13 +485,13 @@ begin
         LUsed.AddOrSetValue(Result.FEntries[I].ContentId, 0)
       else
       begin
-        // CONTENT e ENQ vao no MESMO lote indivisivel, entao isto nao deveria
-        // acontecer. Contado em vez de ignorado -- ver TAMQPRecoveryStats.
+        // CONTENT and ENQ go in the SAME indivisible batch, so this should not
+        // happen. Counted instead of ignored -- see TAMQPRecoveryStats.
         Result.FEntries.Delete(I);
         Inc(Result.FStats.OrphanedContent);
       end;
-    // Chaves a soltar recolhidas ANTES de apagar: mexer num dicionario durante
-    // a propria enumeracao e' comportamento indefinido nos dois compiladores.
+    // Keys to release collected BEFORE deleting: touching a dictionary during
+    // its own enumeration is undefined behavior on both compilers.
     LRelease := nil;
     for LKey in Result.FContents.Keys do
       if not LUsed.ContainsKey(LKey) then

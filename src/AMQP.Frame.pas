@@ -2,18 +2,18 @@
 
 {$I amqp.inc}
 
-{ Camada de framing do AMQP 0-9-1 (spec 2.3.5).
+{ AMQP 0-9-1 framing layer (spec 2.3.5).
 
-  Layout de um frame no wire:
+  Layout of a frame on the wire:
 
     +--------+----------+---------+ +--------------+ +-----------+
     | type   | channel  | size    | | payload      | | frame-end |
-    | octet  | u16 (BE) | u32(BE) | | size octetos | | octet 0xCE|
+    | octet  | u16 (BE) | u32(BE) | | size octets  | | octet 0xCE|
     +--------+----------+---------+ +--------------+ +-----------+
 
-  'size' e' o tamanho apenas do payload; o octeto frame-end (0xCE) que o segue
-  nao entra na contagem. Se o octeto lido nessa posicao for diferente de 0xCE, o
-  stream esta dessincronizado e levantamos EAMQPFrame. }
+  'size' is the size of the payload only; the frame-end octet (0xCE) that follows
+  it is not counted. If the octet read at that position is not 0xCE, the
+  stream is out of sync and we raise EAMQPFrame. }
 
 interface
 
@@ -23,16 +23,16 @@ uses
   AMQP.Protocol;
 
 type
-  /// Erro ao ler/montar um frame AMQP no nível de byte (fim de stream
-  /// inesperado, frame-end ausente/errado). Normalmente indica conexão
-  /// derrubada no meio de um frame, não um bug de aplicação.
+  /// Error reading/building an AMQP frame at the byte level (unexpected end
+  /// of stream, missing/wrong frame-end). Usually means the connection
+  /// dropped in the middle of a frame, not an application bug.
   EAMQPFrame = class(Exception);
 
-  { Subclasse de EAMQPFrame levantada quando o stream ACABA no meio (ou antes)
-    de um frame — o caso normal de "peer desconectou". Existe para o broker
-    distinguir isso de um frame malformado: fim de stream é encerramento
-    silencioso, frame malformado é FRAME_ERROR (501) com Connection.Close.
-    Quem só quer "falhou ao ler frame" continua capturando EAMQPFrame. }
+  { Subclass of EAMQPFrame raised when the stream ENDS in the middle of (or before)
+    a frame — the normal "peer disconnected" case. It exists so the broker can
+    tell this apart from a malformed frame: end of stream is a silent
+    shutdown, a malformed frame is FRAME_ERROR (501) with Connection.Close.
+    Code that only wants "failed to read frame" keeps catching EAMQPFrame. }
   EAMQPFrameEOF = class(EAMQPFrame);
 
   TAMQPFrame = record
@@ -43,14 +43,14 @@ type
     class function Create(AFrameType: Byte; AChannel: Word;
       const APayload: TBytes): TAMQPFrame; static;
 
-    /// Frame de heartbeat (tipo 8, canal 0, payload vazio).
+    /// Heartbeat frame (type 8, channel 0, empty payload).
     class function Heartbeat: TAMQPFrame; static;
 
-    /// Serializa o frame completo (cabecalho + payload + frame-end) em AStream.
+    /// Serializes the whole frame (header + payload + frame-end) into AStream.
     procedure WriteTo(AStream: TStream);
 
-    /// Le um frame completo de AStream. Se AMaxPayload > 0, recusa payloads
-    /// maiores (protecao contra frame-max estourado / stream corrompido).
+    /// Reads a whole frame from AStream. If AMaxPayload > 0, rejects larger
+    /// payloads (protection against an exceeded frame-max / corrupted stream).
     class function ReadFrom(AStream: TStream;
       AMaxPayload: Cardinal = 0): TAMQPFrame; static;
 
@@ -58,14 +58,14 @@ type
     function IsMethod: Boolean;
   end;
 
-/// Envia o cabecalho de protocolo ("AMQP" 0 0 9 1) — primeira coisa que o
-/// cliente escreve no socket, antes de qualquer frame.
+/// Sends the protocol header ("AMQP" 0 0 9 1) — the first thing the
+/// client writes to the socket, before any frame.
 procedure WriteProtocolHeader(AStream: TStream);
 
 implementation
 
-// Le exatamente ACount octetos de AStream, em loop (um Read de socket pode
-// retornar menos que o pedido). Levanta EAMQPFrame em fim de stream prematuro.
+// Reads exactly ACount octets from AStream, in a loop (a socket Read may
+// return less than requested). Raises EAMQPFrame on premature end of stream.
 procedure ReadFull(AStream: TStream; var ABuffer: TBytes; ACount: Integer);
 var
   LTotal, LRead: Integer;
@@ -120,7 +120,7 @@ begin
   LHeader[4] := Byte(LSize shr 16);
   LHeader[5] := Byte(LSize shr 8);
   LHeader[6] := Byte(LSize);
-  // Buffer untyped/por-referencia: sem @ antes da variavel (ver CLAUDE.md).
+  // Untyped/by-reference buffer: no @ before the variable (see CLAUDE.md).
   AStream.WriteBuffer(LHeader[0], SizeOf(LHeader));
   if LSize > 0 then
     AStream.WriteBuffer(Payload[0], Integer(LSize));
@@ -157,7 +157,7 @@ begin
       [AMQP_FRAME_END, LEnd[0]]);
 end;
 
-{ Cabecalho de protocolo }
+{ Protocol header }
 
 procedure WriteProtocolHeader(AStream: TStream);
 begin

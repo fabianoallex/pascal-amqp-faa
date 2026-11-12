@@ -1,18 +1,18 @@
 ﻿program AMQPUnitTestsFpc;
 
-{ Runner FPCUnit dos testes unitarios (mesma cobertura do tests/Unit/*.pas
-  DUnitX/Delphi, portada para FPCUnit). Sem broker.
+{ FPCUnit runner for the unit tests (same coverage as the DUnitX/Delphi
+  tests/Unit/*.pas, ported to FPCUnit). No broker.
 
-  Console (saida de texto), quando chamado com qualquer parametro:
+  Console (text output), when called with any parameter:
     .\AMQPUnitTestsFpc.exe --all --format=plain
-  GUI (janela com arvore de testes + barra verde/vermelha), sem parametros:
+  GUI (window with test tree + green/red bar), without parameters:
     .\AMQPUnitTestsFpc.exe
-  Fora do Windows roda sempre em modo console (sem LCL/widgetset), com ou
-  sem parametros.
+  Outside Windows it always runs in console mode (no LCL/widgetset), with or
+  without parameters.
 
-  Ver CLAUDE.md para os workarounds de erros internos do FPC 3.2.2
-  encontrados ao portar (encadeamento de TValue.From<T> / indexador de
-  TAMQPFieldTable seguido de .AsString/.AsExtended/.AsObject). }
+  See CLAUDE.md for the workarounds for FPC 3.2.2 internal errors
+  found while porting (chaining TValue.From<T> / TAMQPFieldTable indexer
+  followed by .AsString/.AsExtended/.AsObject). }
 
 {$mode delphi}{$H+}
 
@@ -34,9 +34,9 @@ uses
 var
   ConsoleApp: TTestRunner;
 begin
-  // Console FPC puro (fora de app Lazarus): DefaultSystemCodePage nao e' UTF-8
-  // por padrao, entao strings acentuadas nos testes (ShortStr_UsaUTF8,
-  // ShortStr_ComAcentos etc.) seriam transcodificadas errado. Ver CLAUDE.md.
+  // Plain FPC console (outside a Lazarus app): DefaultSystemCodePage is not UTF-8
+  // by default, so accented strings in the tests (ShortStr_UsaUTF8,
+  // ShortStr_ComAcentos etc.) would be transcoded wrongly. See CLAUDE.md.
   SetMultiByteConversionCodePage(CP_UTF8);
 
   {$IFDEF MSWINDOWS}

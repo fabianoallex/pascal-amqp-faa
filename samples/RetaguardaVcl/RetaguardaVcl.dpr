@@ -1,20 +1,20 @@
 ﻿program RetaguardaVcl;
 
-{ Versão VCL do sample Retaguarda: consome a fila "sefaz-respostas" e mostra
-  o status de cada nota (Recebida -> Processando -> Pronta) numa lista ao
-  vivo, em vez do log rolante do console — dá pra ver de relance quantas
-  notas chegaram e quantas já foram processadas, com vários workers do
-  thread pool rodando em paralelo (mesmo despacho nativo do Channel.Consume,
-  sem TTask.Run manual). Companheiro do sample AutorizadorSimVcl (fluxo PDV
-  -> autorizador -> retaguarda).
+{ VCL version of the Retaguarda sample: consumes the "sefaz-respostas" queue and
+  shows each invoice's status (Recebida -> Processando -> Pronta) in a live
+  list, instead of the console's scrolling log: you can see at a glance how many
+  invoices arrived and how many were already processed, with several thread
+  pool workers running in parallel (the same native dispatch of Channel.Consume,
+  without a manual TTask.Run). Companion of the AutorizadorSimVcl sample (flow POS
+  -> authorizer -> back office).
 
-  Compila nos dois mundos a partir do MESMO fonte: mesmo padrão dos outros
-  samples deste repositório. }
+  Compiles in both worlds from the SAME source: same pattern as the other
+  samples in this repository. }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

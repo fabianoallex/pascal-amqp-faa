@@ -1,8 +1,8 @@
-# Certificado do broker TLS de desenvolvimento
+# Development TLS broker certificate
 
-O `docker-compose.tls.yml` espera `server.crt` e `server.key` neste diretório.
-Eles **não são versionados** (chave privada não vai para o repositório, mesmo
-sendo de dev). Gere um par self-signed local com:
+`docker-compose.tls.yml` expects `server.crt` and `server.key` in this directory.
+They are **not versioned** (a private key does not go into the repository, even
+a dev one). Generate a local self-signed pair with:
 
 ```
 openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
@@ -10,5 +10,5 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
   -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
 ```
 
-Como o certificado é self-signed, use `TlsVerifyPeer := False` no cliente
-(é o que `TAMQPConnectionParams.LocalhostTls` já faz).
+Since the certificate is self-signed, use `TlsVerifyPeer := False` on the client
+(which is what `TAMQPConnectionParams.LocalhostTls` already does).

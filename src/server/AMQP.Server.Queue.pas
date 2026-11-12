@@ -2,71 +2,72 @@
 
 {$I amqp.inc}
 
-{ A fila como ATOR -- sub-modulo broker, WS3 da Fase 2 (engine de roteamento
-  em memoria, ver CLAUDE.md).
+{ The queue as an ACTOR -- broker sub-module, WS3 of Phase 2 (in-memory
+  routing engine, see CLAUDE.md).
 
-  Decisao D2 (travada): o ator NAO tem thread propria. Ele e' um work item
-  agendado num TPcThreadPool -- N filas ociosas nao podem virar N threads.
-  A regra que isso impoe: NENHUM comando pode bloquear o worker esperando I/O
-  (por isso a entrega da WS4 e' post nao-bloqueante e o consumidor lento sai
-  do rodizio, decisao D3).
+  Decision D2 (locked): the actor does NOT have its own thread. It is a work
+  item scheduled on a TPcThreadPool -- N idle queues must not become N threads.
+  The rule this imposes: NO command may block the worker waiting for I/O
+  (that is why WS4's delivery is a non-blocking post and the slow consumer
+  leaves the round-robin, decision D3).
 
-  A REGRA DE OURO: nenhum campo de estado da fila (estoque, nao-confirmadas,
-  consumidores, contadores) e' lido ou escrito fora do ator -- inclusive as
-  contagens que vao para o cliente no Queue.Declare-Ok/Purge-Ok/Delete-Ok.
-  Quem esta' de fora fala com a fila SO' por comando.
+  THE GOLDEN RULE: no queue state field (stock, unacked, consumers, counters)
+  is read or written outside the actor -- including the counts that go to the
+  client in Queue.Declare-Ok/Purge-Ok/Delete-Ok. Whoever is outside talks to
+  the queue ONLY through commands.
 
-  Caixa de comandos serial
-  ------------------------
-  Post enfileira sob o lock e, se FScheduled estiver falso, marca e agenda UM
-  work item. O runner faz laco: sob o lock, se a caixa esta' vazia zera
-  FScheduled e sai; senao tira um comando e executa FORA do lock. FScheduled
-  garante no maximo um work item agendado por fila -- quem esta' no laco e' o
-  unico executor. O ponto sutil: o runner so' declara a caixa vazia SOB O
-  LOCK, o que fecha a janela entre "vi vazio" e "zerei o flag" (um Post
-  concorrente que ve FScheduled=True nao agenda, e o runner corrente encontra
-  o comando na volta seguinte). Teto de AMQP_QUEUE_CMD_BATCH comandos por
-  rodada -- ao estourar, reagenda em vez de monopolizar um worker do pool.
+  Serial command mailbox
+  ----------------------
+  Post enqueues under the lock and, if FScheduled is false, sets it and
+  schedules ONE work item. The runner loops: under the lock, if the mailbox is
+  empty it clears FScheduled and exits; otherwise it takes a command and runs
+  it OUTSIDE the lock. FScheduled guarantees at most one scheduled work item
+  per queue -- whoever is in the loop is the only executor. The subtle point:
+  the runner only declares the mailbox empty UNDER THE LOCK, which closes the
+  window between "saw it empty" and "cleared the flag" (a concurrent Post that
+  sees FScheduled=True does not schedule, and the current runner finds the
+  command on the next turn). Cap of AMQP_QUEUE_CMD_BATCH commands per round --
+  when exceeded, it reschedules instead of monopolizing a pool worker.
 
-  Comandos assincronos x sincronos
-  --------------------------------
-  Assincronos (enqueue, add/remove consumidor, ack/nack/reject): o ator libera
-  no finally. Sincronos (Get, Purge, Delete, Stats): carregam evento de
-  conclusao e campos de resultado, porque a thread da conexao precisa da
-  resposta para montar o *-Ok. O chamador espera com timeout generoso -- o
-  ator nao faz I/O, entao estourar e' bug NOSSO, nao lentidao do peer.
+  Asynchronous vs synchronous commands
+  ------------------------------------
+  Asynchronous (enqueue, add/remove consumer, ack/nack/reject): the actor frees
+  them in the finally. Synchronous (Get, Purge, Delete, Stats): they carry a
+  completion event and result fields, because the connection thread needs the
+  answer to build the *-Ok. The caller waits with a generous timeout -- the
+  actor does no I/O, so exceeding it is OUR bug, not peer slowness.
 
-  O comando e' REFCONTADO (duas referencias: o chamador e a caixa), e nao
-  "propriedade do chamador": se um sincrono estourar o timeout, o dono liberar
-  o objeto enquanto o ator ainda o tem na mao seria use-after-free empilhado
-  em cima de um bug que ja' e' ruim. Custa quatro linhas e apaga a classe
-  inteira de crash.
+  The command is REFCOUNTED (two references: the caller and the mailbox), not
+  "owned by the caller": if a synchronous one exceeds the timeout, the owner
+  freeing the object while the actor still holds it would be a use-after-free
+  stacked on top of a bug that is already bad. It costs four lines and wipes
+  out the whole class of crash.
 
-  Guard vivo: o ator grava o thread-id enquanto executa, e postar um comando
-  SINCRONO a partir dessa thread levanta EAMQPQueueActor na hora, em vez de
-  travar em silencio (o ator esperaria por si mesmo).
+  Live guard: the actor records the thread-id while it runs, and posting a
+  SYNCHRONOUS command from that thread raises EAMQPQueueActor right away,
+  instead of hanging silently (the actor would be waiting for itself).
 
-  Ordem de destruicao
-  -------------------
-  Stop marca a parada sob o lock (recusa posts novos e novo agendamento),
-  espera o ator sair do laco (FScheduled=False) com deadline e SO' ENTAO drena
-  o estoque inline. NUNCA liberar a fila sem o Stop ter voltado -- e' a mesma
-  familia de erro que custou double-free na Fase 1. Stop NAO usa um "comando
-  de parada": um pool em shutdown libera SEM executar o item que recebe
-  depois de o Destroy comecar (o que ja' estava na fila ele executa -- o
-  Destroy do TPcThreadPool nunca descartou a fila; esta nota dizia o
-  contrario ate' a F8), entao um comando postado ali nunca rodaria e o Stop
-  so' voltaria no timeout.
+  Destruction order
+  -----------------
+  Stop marks the stop under the lock (refuses new posts and new scheduling),
+  waits for the actor to leave the loop (FScheduled=False) with a deadline and
+  ONLY THEN drains the stock inline. NEVER free the queue without Stop having
+  returned -- it is the same family of error that cost a double free in Phase 1.
+  Stop does NOT use a "stop command": a pool shutting down frees WITHOUT running
+  the item it receives after Destroy starts (what was already queued it does
+  run -- TPcThreadPool's Destroy never discarded the queue; this note said the
+  opposite until F8), so a command posted there would never run and Stop would
+  only return on the timeout.
 
-  Escopo do WS3 -- o que NAO esta' aqui
-  -------------------------------------
-  A ENTREGA e' a WS4. Esta unit registra os consumidores (tag, canal, no-ack,
-  alvo) e mantem o indice de rodizio, mas nao despacha Basic.Deliver, nao
-  aplica prefetch e nao olha Channel.Flow. A costura e' IAMQPDeliveryTarget:
-  a WS4 implementa (no canal/conexao) e passa no consumidor. Note tambem que
-  o TAMQPFrameWriter.PostFrames de hoje BLOQUEIA quando a fila outbound enche
-  -- incompativel com D2/D3; o TryPostFrames que a entrega precisa entra na
-  WS4, nao aqui. }
+  WS3 scope -- what is NOT here
+  -----------------------------
+  DELIVERY is WS4. This unit registers the consumers (tag, channel, no-ack,
+  target) and keeps the round-robin index, but does not dispatch Basic.Deliver,
+  does not apply prefetch and does not look at Channel.Flow. The seam is
+  IAMQPDeliveryTarget: WS4 implements it (in the channel/connection) and passes
+  it in the consumer. Note also that today's TAMQPFrameWriter.PostFrames BLOCKS
+  when the outbound queue fills up -- incompatible with D2/D3; the
+  TryPostFrames that delivery needs comes in WS4, not here. }
 
 interface
 
@@ -85,132 +86,134 @@ uses
   AMQP.Server.Records;
 
 const
-  /// Quantos comandos o ator executa por rodada antes de reagendar. Sem teto,
-  /// uma fila muito movimentada monopolizaria um worker do pool enquanto
-  /// houvesse trabalho.
+  /// How many commands the actor runs per round before rescheduling. Without
+  /// a cap, a very busy queue would monopolize a pool worker as long as there
+  /// was work.
   AMQP_QUEUE_CMD_BATCH = 64;
 
-  /// Espera de um comando sincrono. Generoso de proposito: o ator nunca faz
-  /// I/O, entao estourar isto nao e' peer lento -- e' bug nosso (ou pool
-  /// saturado, ver a mensagem de EAMQPQueueActor).
+  /// Wait for a synchronous command. Generous on purpose: the actor never does
+  /// I/O, so exceeding this is not a slow peer -- it is our bug (or a saturated
+  /// pool, see the EAMQPQueueActor message).
   AMQP_QUEUE_SYNC_TIMEOUT_MS = 15000;
 
-  /// Quanto o Stop espera o ator sair do laco antes de desistir.
+  /// How long Stop waits for the actor to leave the loop before giving up.
   AMQP_QUEUE_STOP_TIMEOUT_MS = 15000;
 
-  /// Teto de saltos de dead-letter (decisao D14). Mesmo espirito do
-  /// AMQP_MAX_EXCHANGE_HOP_DEPTH que o Route ja' usa: o grafo de DLX pode ter
-  /// ciclo, e cortar por PROFUNDIDADE e' mais barato que carregar o conjunto
-  /// de filas visitadas, com o mesmo efeito pratico. Ao estourar, a mensagem
-  /// e' descartada e contada -- nao ha caminho em que ela circule para sempre.
+  /// Cap on dead-letter hops (decision D14). Same spirit as the
+  /// AMQP_MAX_EXCHANGE_HOP_DEPTH that Route already uses: the DLX graph may
+  /// have a cycle, and cutting by DEPTH is cheaper than carrying the set of
+  /// visited queues, with the same practical effect. When exceeded, the message
+  /// is dropped and counted -- there is no path in which it circulates forever.
   AMQP_MAX_DEADLETTER_HOPS = 16;
 
 type
-  { Falha de uso do ator: sincrono postado de dentro do proprio ator, comando
-    numa fila ja parada, ou timeout de comando sincrono. Sempre bug de
-    programacao ou saturacao do pool -- nunca erro de protocolo. }
+  { Misuse of the actor: a synchronous command posted from inside the actor
+    itself, a command on an already stopped queue, or a synchronous command
+    timeout. Always a programming bug or pool saturation -- never a protocol error. }
   EAMQPQueueActor = class(Exception);
 
-  { Resultado de um Queue.Delete com if-unused/if-empty. Quem mapeia para
-    reply-code (405/406) e' a WS5 -- mesmo espirito do TAMQPTopologyResult. }
+  { Result of a Queue.Delete with if-unused/if-empty. Mapping to a reply-code
+    (405/406) is WS5's job -- same spirit as TAMQPTopologyResult. }
   TAMQPQueueDeleteResult = (amqqdOk, amqqdInUse, amqqdNotEmpty);
 
-  { Contagens que o cliente ve (Queue.Declare-Ok, Purge-Ok, Delete-Ok) mais as
-    metricas internas. So' o ator as produz. }
+  { Counts the client sees (Queue.Declare-Ok, Purge-Ok, Delete-Ok) plus the
+    internal metrics. Only the actor produces them. }
   TAMQPQueueStats = record
-    /// Mensagens prontas (nao conta as entregues e ainda nao confirmadas).
+    /// Ready messages (does not count the delivered and not yet acked ones).
     MessageCount: Integer;
     ConsumerCount: Integer;
-    /// Entregues e aguardando ack/nack/reject.
+    /// Delivered and awaiting ack/nack/reject.
     UnackedCount: Integer;
-    /// Descartadas por MaxLength (D7) ou por post numa fila ja parada.
-    /// Metrica OBRIGATORIA: sem ela, mensagem some sem ninguem saber.
+    /// Dropped by MaxLength (D7) or by a post on an already stopped queue.
+    /// MANDATORY metric: without it, messages vanish without anyone knowing.
     DroppedCount: Int64;
-    /// Entregues a consumidores desde a criacao (nao conta Basic.Get).
+    /// Delivered to consumers since creation (does not count Basic.Get).
     DeliveredCount: Int64;
-    /// Ha quanto tempo a fila esta' SEM USO (WS8 da Fase 3), em ms. Zero
-    /// enquanto houver consumidor: fila com consumidor esta' em uso por
-    /// definicao, e o relogio de x-expires so' comeca quando o ultimo sai.
+    /// How long the queue has been UNUSED (WS8 of Phase 3), in ms. Zero while
+    /// there is a consumer: a queue with a consumer is in use by definition,
+    /// and the x-expires clock only starts when the last one leaves.
     ///
-    /// "Uso" e' consumidor, Basic.Get e redeclare -- PUBLICAR NAO CONTA. E' a
-    /// regra do RabbitMQ, e a razao dela e' o proposito do argumento: uma fila
-    /// que so' recebe e ninguem le e' exatamente a que se quer recolher.
+    /// "Use" is a consumer, Basic.Get and a redeclare -- PUBLISHING DOES NOT
+    /// COUNT. That is RabbitMQ's rule, and its reason is the argument's purpose:
+    /// a queue that only receives and that nobody reads is exactly the one to reclaim.
     IdleMs: Int64;
-    /// Mortas que foram republicadas num DLX. Nao se soma a ExpiredCount nem
-    /// a DroppedCount: aquelas contam o MOTIVO, esta conta o DESTINO.
+    /// Dead messages that were republished to a DLX. Not added to ExpiredCount
+    /// nor to DroppedCount: those count the REASON, this one counts the DESTINATION.
     DeadLetteredCount: Int64;
-    /// Vencidas por TTL (x-message-ttl da fila ou 'expiration' da mensagem).
-    /// Metrica OBRIGATORIA pela mesma razao de DroppedCount: sem ela, mensagem
-    /// some sem ninguem saber. Na WS5 estas passam a ir para o DLX em vez de
-    /// serem descartadas -- a contagem continua valendo.
+    /// Expired by TTL (the queue's x-message-ttl or the message's 'expiration').
+    /// MANDATORY metric for the same reason as DroppedCount: without it,
+    /// messages vanish without anyone knowing. In WS5 these start going to the
+    /// DLX instead of being dropped -- the count still holds.
     ExpiredCount: Int64;
-    /// True se esta fila JA TEVE ao menos um consumidor. E' o que separa
-    /// "auto-delete que perdeu o ultimo consumidor" (some) de "auto-delete
-    /// que nunca teve nenhum" (fica) -- mesma regra do RabbitMQ.
+    /// True if this queue HAS EVER HAD at least one consumer. That is what
+    /// separates "auto-delete that lost its last consumer" (goes away) from
+    /// "auto-delete that never had one" (stays) -- same rule as RabbitMQ.
     EverHadConsumer: Boolean;
   end;
 
-  { Costura do dead-lettering (WS5). Quem implementa e' a engine, que e' a
-    unica que enxerga a topologia; a fila so' guarda a referencia.
+  { Dead-lettering seam (WS5). The engine implements it, being the only one
+    that sees the topology; the queue only keeps the reference.
 
-    Existe como interface pela mesma razao do IAMQPDeliveryTarget: sem ela,
-    AMQP.Server.Queue teria de enxergar AMQP.Server.Engine, que ja' enxerga a
-    fila -- ciclo de units.
+    It exists as an interface for the same reason as IAMQPDeliveryTarget:
+    without it, AMQP.Server.Queue would have to see AMQP.Server.Engine, which
+    already sees the queue -- a unit cycle.
 
-    NAO PODE BLOQUEAR NEM FAZER I/O (D17): republicar e' ler a topologia sob
-    RWLock e postar na caixa de outras filas, as duas coisas rapidas e sem
-    espera. Se um dia precisar esperar alguma coisa, o dead-letter sai do ator. }
+    IT MUST NOT BLOCK OR DO I/O (D17): republishing is reading the topology
+    under an RWLock and posting to other queues' mailboxes, both fast and
+    without waiting. If it ever needs to wait for something, dead-lettering
+    leaves the actor. }
   IAMQPDeadLetterSink = interface
     ['{2B9F1C74-5E30-4A88-9D61-7C0E3F5A82B4}']
-    /// Republica AMessage em ADlx com ARoutingKey. A referencia continua sendo
-    /// do CHAMADOR (a implementacao da AddRef se quiser guardar).
-    /// AContentId identifica o CORPO ja' gravado: a colocacao nova reusa o
-    /// mesmo (D22), e por isso o corpo nunca e' reescrito num dead-letter.
-    /// Zero = a mensagem nao estava persistida.
+    /// Republishes AMessage to ADlx with ARoutingKey. The reference still
+    /// belongs to the CALLER (the implementation AddRefs it if it wants to keep it).
+    /// AContentId identifies the BODY already written: the new placement reuses
+    /// it (D22), which is why the body is never rewritten on a dead-letter.
+    /// Zero = the message was not persisted.
     procedure DeadLetter(const ADlx, ARoutingKey: string;
       AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
   end;
 
-  { Costura da entrega (WS4). O canal/conexao implementa; a fila so' guarda a
-    referencia no consumidor.
+  { Delivery seam (WS4). The channel/connection implements it; the queue only
+    keeps the reference in the consumer.
 
-    TryDeliver NAO PODE BLOQUEAR (D2/D3): devolve False quando a fila outbound
-    do writer esta cheia ou o canal morreu, e nesse caso o consumidor sai do
-    rodizio ate drenar -- bloquear o ator seria head-of-line para todos os
-    outros consumidores da mesma fila. }
+    TryDeliver MUST NOT BLOCK (D2/D3): it returns False when the writer's
+    outbound queue is full or the channel died, and in that case the consumer
+    leaves the round-robin until it drains -- blocking the actor would be
+    head-of-line blocking for all the other consumers of the same queue. }
   IAMQPDeliveryTarget = interface
     ['{7C4E1F82-3A65-4D19-B0E7-5F2A8C93D604}']
-    /// Identidade do canal (NativeUInt e nao referencia, pela mesma razao do
-    /// TAMQPQueueDef.OwnerId: nao criar ciclo com AMQP.Server.Connection).
+    /// Channel identity (NativeUInt and not a reference, for the same reason
+    /// as TAMQPQueueDef.OwnerId: not to create a cycle with AMQP.Server.Connection).
     function ChannelId: NativeUInt;
-    /// False se o canal/conexao ja' morreu -- o ator descarta o consumidor.
+    /// False if the channel/connection has already died -- the actor drops the consumer.
     function IsAlive: Boolean;
-    /// Tenta escrever Basic.Deliver + content-header + body frames, como UM
-    /// lote indivisivel. False = nao coube AGORA (fila outbound cheia, canal
-    /// com Channel.Flow desligado, prefetch estourado ou canal morto) -- sem
-    /// bloquear e sem levantar. A mensagem continua sendo do chamador.
+    /// Tries to write Basic.Deliver + content-header + body frames as ONE
+    /// indivisible batch. False = it did not fit NOW (outbound queue full,
+    /// channel with Channel.Flow off, prefetch exceeded or dead channel) --
+    /// without blocking and without raising. The message still belongs to the caller.
     ///
-    /// A delivery-tag e' MONOTONICA POR CANAL, logo quem a gera e' o alvo (o
-    /// canal), nao a fila: uma fila entrega para N canais e um canal recebe de
-    /// N filas. Sai em ADeliveryTag e so' e' consumida quando a entrega de
-    /// fato entra na fila de escrita -- uma recusa nao abre buraco na
-    /// sequencia.
+    /// The delivery-tag is MONOTONIC PER CHANNEL, so the one generating it is
+    /// the target (the channel), not the queue: a queue delivers to N channels
+    /// and a channel receives from N queues. It comes out in ADeliveryTag and is
+    /// only consumed when the delivery actually enters the write queue -- a
+    /// refusal does not open a gap in the sequence.
     ///
-    /// ANoAck vem do consumidor porque muda duas coisas no alvo: entrega em
-    /// no-ack nao conta para o prefetch e nao gera nao-confirmada.
+    /// ANoAck comes from the consumer because it changes two things on the
+    /// target: a no-ack delivery does not count toward the prefetch and creates
+    /// no unacked entry.
     function TryDeliver(const AConsumerTag, AQueueName: string;
       ANoAck, ARedelivered: Boolean; AMessage: TAMQPMessage;
       out ADeliveryTag: UInt64): Boolean;
-    /// A fila sumiu debaixo do consumidor (Queue.Delete, ou auto-delete):
-    /// manda Basic.Cancel para o cliente saber. Como TryDeliver, NAO PODE
-    /// BLOQUEAR -- False = nao coube agora, e o consumidor morre em silencio
-    /// (o cliente descobre no proximo uso). Nao ha retentativa: a fila esta
-    /// sendo destruida.
+    /// The queue vanished from under the consumer (Queue.Delete, or
+    /// auto-delete): sends Basic.Cancel so the client knows. Like TryDeliver, IT
+    /// MUST NOT BLOCK -- False = it did not fit now, and the consumer dies
+    /// silently (the client finds out on next use). There is no retry: the
+    /// queue is being destroyed.
     function TryCancel(const AConsumerTag: string): Boolean;
   end;
 
-  { Um consumidor registrado (Basic.Consume). A fila e' dona destes objetos
-    depois do PostAddConsumer. }
+  { A registered consumer (Basic.Consume). The queue owns these objects
+    after PostAddConsumer. }
   TAMQPServerConsumer = class
   private
     FConsumerTag: string;
@@ -220,11 +223,12 @@ type
     FTarget: IAMQPDeliveryTarget;
     FSuspended: Boolean;
   public
-    /// ATarget NAO pode ser nil: um consumidor sem alvo nao teria como
-    /// receber nada. O ChannelId vem DELE -- e' a mesma identidade com que a
-    /// fila chaveia as nao-confirmadas e com que o teardown da conexao pede o
-    /// PostRemoveChannel; guardar uma copia independente abriria espaco para
-    /// as duas divergirem e o requeue de um canal morto errar o alvo.
+    /// ATarget may NOT be nil: a consumer without a target would have no way
+    /// to receive anything. The ChannelId comes FROM IT -- it is the same
+    /// identity the queue keys the unacked messages by and with which the
+    /// connection teardown asks for PostRemoveChannel; keeping an independent
+    /// copy would leave room for the two to diverge and the requeue of a dead
+    /// channel to miss its target.
     constructor Create(const AConsumerTag: string;
       ANoAck, AExclusive: Boolean; const ATarget: IAMQPDeliveryTarget);
     property ConsumerTag: string read FConsumerTag;
@@ -232,52 +236,52 @@ type
     property NoAck: Boolean read FNoAck;
     property Exclusive: Boolean read FExclusive;
     property Target: IAMQPDeliveryTarget read FTarget;
-    /// D3: recusou a entrega NESTA rodada (fila outbound cheia, prefetch
-    /// estourado, flow desligado) e por isso sai do rodizio ate' o fim dela.
-    /// Nao e' estado persistente: toda rodada de entrega recomeca com todos os
-    /// consumidores elegiveis e simplesmente tenta de novo -- uma tentativa
-    /// custa um lock e uma comparacao de contador, e assim nao ha nenhum
-    /// estado de "suspenso" para ressincronizar quando o canal drena.
+    /// D3: refused the delivery IN THIS round (outbound queue full, prefetch
+    /// exceeded, flow off) and therefore leaves the round-robin until the end
+    /// of it. It is not persistent state: every delivery round starts over with
+    /// all consumers eligible and simply tries again -- an attempt costs a lock
+    /// and a counter comparison, and this way there is no "suspended" state to
+    /// resynchronize when the channel drains.
     property Suspended: Boolean read FSuspended write FSuspended;
   end;
 
-  { Uma mensagem no estoque. Redelivered e' por FILA (a mesma TAMQPMessage
-    pode estar em N filas com historicos diferentes), por isso vive na
-    entrada e nao no objeto da mensagem. }
+  { A message in the stock. Redelivered is per QUEUE (the same TAMQPMessage
+    may be in N queues with different histories), which is why it lives in
+    the entry and not in the message object. }
   TAMQPQueueEntry = record
     Msg: TAMQPMessage;
     Redelivered: Boolean;
-    /// Nivel de prioridade JA' LIMITADO ao teto da fila. Quem le a propriedade
-    /// 'priority' da mensagem e' a thread do publicador (invariante da Fase 2:
-    /// a mensagem guarda o header CRU, decisao D1) -- o ator so' recebe o
-    /// numero pronto.
+    /// Priority level ALREADY LIMITED to the queue's cap. The one reading the
+    /// message's 'priority' property is the publisher thread (Phase 2
+    /// invariant: the message keeps the RAW header, decision D1) -- the actor
+    /// only receives the ready-made number.
     Priority: Byte;
-    /// Instante absoluto (mesma base do NowTick) em que a mensagem vence.
-    /// 0 = nunca vence.
+    /// Absolute instant (same base as NowTick) at which the message expires.
+    /// 0 = never expires.
     ExpiresAt: UInt64;
-    /// Identidade desta COLOCACAO no journal (Fase 4, D22). 0 = a mensagem nao
-    /// foi persistida -- fila nao duravel, mensagem nao persistente, ou broker
-    /// sem DataDir. Quando e' 0, nenhum registro de aposentadoria e' escrito.
+    /// Identity of this PLACEMENT in the journal (Phase 4, D22). 0 = the message
+    /// was not persisted -- non-durable queue, non-persistent message, or a
+    /// broker without DataDir. When it is 0, no retirement record is written.
     JournalId: UInt64;
-    /// Identidade do CORPO no journal. Varias colocacoes (e a derivada do
-    /// dead-letter) compartilham o mesmo -- e' o que faz o corpo ser gravado
-    /// uma vez so'.
+    /// Identity of the BODY in the journal. Several placements (and the one
+    /// derived by dead-lettering) share it -- that is what makes the body be
+    /// written only once.
     ContentId: UInt64;
   end;
 
-  { Uma entrega aguardando confirmacao, chaveada por (canal, delivery-tag). }
+  { A delivery awaiting confirmation, keyed by (channel, delivery-tag). }
   TAMQPUnackedEntry = record
     ChannelId: NativeUInt;
     DeliveryTag: UInt64;
     Msg: TAMQPMessage;
-    /// Guardados porque o requeue tem de devolver a mensagem A' CABECA DO SEU
-    /// PROPRIO BALDE, com o prazo original -- nao a' cabeca absoluta nem com o
-    /// relogio zerado.
+    /// Kept because the requeue must return the message TO THE HEAD OF ITS OWN
+    /// BUCKET, with the original deadline -- not to the absolute head nor with
+    /// the clock reset.
     Priority: Byte;
     ExpiresAt: UInt64;
-    /// Os mesmos da entrada no estoque: a colocacao continua VIVA no journal
-    /// enquanto estiver aqui (uma entrega nao confirmada nao e' aposentada --
-    /// e' o que faz a D27 sair de graca no replay).
+    /// The same as the stock entry's: the placement stays ALIVE in the journal
+    /// while it is here (an unacked delivery is not retired -- that is what
+    /// makes D27 come for free in the replay).
     JournalId: UInt64;
     ContentId: UInt64;
   end;
@@ -288,39 +292,39 @@ type
     amqqcEnqueueSync, amqqcTouch, amqqcGet, amqqcPurge, amqqcDelete,
     amqqcStats);
 
-  { Um comando na caixa. Campos publicos de proposito: e' um registro de
-    passagem entre o postador e o ator, nao um objeto de dominio.
+  { A command in the mailbox. Public fields on purpose: it is a pass-through
+    record between the poster and the actor, not a domain object.
 
-    Refcontado (chamador + caixa) -- ver o cabecalho da unit. }
+    Refcounted (caller + mailbox) -- see the unit header. }
   TAMQPQueueCommand = class
   private
     FRefCount: Integer;
     FKind: TAMQPQueueCmdKind;
-    FEvent: TEvent; // nil nos assincronos
+    FEvent: TEvent; // nil for asynchronous ones
     function GetIsSync: Boolean;
   public
-    // entrada
-    Msg: TAMQPMessage;             // amqqcEnqueue (referencia PROPRIA da fila)
-    Consumer: TAMQPServerConsumer; // amqqcAddConsumer (a fila passa a ser dona)
+    // input
+    Msg: TAMQPMessage;             // amqqcEnqueue (the queue's OWN reference)
+    Consumer: TAMQPServerConsumer; // amqqcAddConsumer (the queue becomes the owner)
     ConsumerTag: string;
     ChannelId: NativeUInt;
     DeliveryTag: UInt64;
     NoAck: Boolean;
     Priority: Byte;        // amqqcEnqueue
-    MessageTtlMs: Int64;   // amqqcEnqueue (-1 = sem 'expiration')
-    JournalId: UInt64;     // amqqcEnqueue (0 = nao persistida)
+    MessageTtlMs: Int64;   // amqqcEnqueue (-1 = no 'expiration')
+    JournalId: UInt64;     // amqqcEnqueue (0 = not persisted)
     ContentId: UInt64;     // amqqcEnqueue
-    /// amqqcEnqueue: entrada vinda da RECUPERACAO (WS6). A D27 manda toda
-    /// entrada recuperada voltar com redelivered=True -- persistir o flag
-    /// custaria uma escrita no caminho mais quente que existe, e seria
-    /// precisao falsa: depois de uma queda o broker nao sabe se o consumidor
-    /// chegou a ver a mensagem.
+    /// amqqcEnqueue: entry coming from RECOVERY (WS6). D27 says every
+    /// recovered entry comes back with redelivered=True -- persisting the flag
+    /// would cost a write on the hottest path there is, and would be false
+    /// precision: after a crash the broker does not know whether the consumer
+    /// got to see the message.
     Recuperada: Boolean;   // amqqcEnqueue
     Multiple: Boolean;
     Requeue: Boolean;
     IfUnused: Boolean;
     IfEmpty: Boolean;
-    // saida (sincronos)
+    // output (synchronous)
     ResOk: Boolean;
     ResCount: Integer;
     ResMsg: TAMQPMessage;
@@ -331,8 +335,8 @@ type
     constructor Create(AKind: TAMQPQueueCmdKind; ASync: Boolean);
     destructor Destroy; override;
     function AddRef: Integer;
-    /// Ultimo Release libera o objeto (e, com ele, as referencias de mensagem
-    /// que sobrarem em Msg/ResMsg -- caminho de descarte).
+    /// The last Release frees the object (and, with it, the message references
+    /// left in Msg/ResMsg -- the drop path).
     function Release: Integer;
     procedure Signal;
     function WaitFor(ATimeoutMs: Cardinal): Boolean;
@@ -343,7 +347,7 @@ type
 
   TAMQPServerQueue = class;
 
-  { O work item que roda uma rodada do ator num worker do pool. }
+  { The work item that runs one actor round on a pool worker. }
   TAMQPQueueWork = class(TPcWorkItem)
   private
     FQueue: TAMQPServerQueue;
@@ -352,15 +356,15 @@ type
     procedure Execute; override;
   end;
 
-  { A fila. Toda interacao de fora e' por Post*/comando sincrono. }
+  { The queue. Every interaction from outside is via Post*/synchronous command. }
   TAMQPServerQueue = class
   private
     FName: string;
-    FMaxLength: Integer;      // teto EFETIVO de contagem (global + fila)
-    FMaxBytes: Int64;         // teto EFETIVO de bytes (-1 = sem teto)
-    FBytesProntos: Int64;     // soma dos corpos das PRONTAS (so' do ator)
+    FMaxLength: Integer;      // EFFECTIVE count cap (global + queue)
+    FMaxBytes: Int64;         // EFFECTIVE byte cap (-1 = no cap)
+    FBytesProntos: Int64;     // sum of the READY bodies (actor only)
     FPool: TPcThreadPool;
-    // --- caixa (sob FMon) ---
+    // --- mailbox (under FMon) ---
     FMon: TPcMonitor;
     FMailbox: TQueue<TAMQPQueueCommand>;
     FScheduled: Boolean;
@@ -368,16 +372,16 @@ type
     FStopped: Boolean;
     FActorThread: TThreadID;
     FPolicy: TAMQPQueuePolicy;
-    FMaxPriority: Integer; // 0 = fila sem prioridade (um balde so')
-    // --- estado, SO' do ator ---
-    // UM BALDE POR NIVEL de prioridade (decisao D12: baldes, nao heap). Fila
-    // sem x-max-priority tem FMaxPriority=0, logo um balde so' e o mesmo
-    // caminho de codigo de antes -- sem ramo condicional espalhado.
+    FMaxPriority: Integer; // 0 = queue without priority (a single bucket)
+    // --- state, actor ONLY ---
+    // ONE BUCKET PER priority LEVEL (decision D12: buckets, not a heap). A queue
+    // without x-max-priority has FMaxPriority=0, so a single bucket and the same
+    // code path as before -- no conditional branch scattered around.
     FStock: array of TQueue<TAMQPQueueEntry>;
-    FRequeued: array of TQueue<TAMQPQueueEntry>; // cabeca logica de cada balde
+    FRequeued: array of TQueue<TAMQPQueueEntry>; // logical head of each bucket
     FUnacked: TList<TAMQPUnackedEntry>;
     FConsumers: TObjectList<TAMQPServerConsumer>;
-    FRoundRobin: Integer; // proximo consumidor a atender (rodizio)
+    FRoundRobin: Integer; // next consumer to serve (round-robin)
     FEverHadConsumer: Boolean;
     FDropped: Int64;
     FDelivered: Int64;
@@ -388,153 +392,154 @@ type
     FEvents: IAMQPEventSink;
     FVHostName: string;
     FDurable: Boolean;
-    /// Trava de mao unica: vira True no primeiro enqueue com prazo e nunca
-    /// volta. Serve so' para a fila SEM nenhuma mensagem expiravel pular o
-    /// laco de expiracao a cada rodada (D13: a varredura so' custa em fila que
-    /// tem TTL). Superestimar e' inofensivo -- no maximo varre uma fila que
-    /// ja' nao tem mais nada com prazo.
+    /// One-way latch: becomes True on the first enqueue with a deadline and
+    /// never goes back. It only serves to let a queue WITHOUT any expirable
+    /// message skip the expiration loop on every round (D13: the sweep only
+    /// costs in a queue that has a TTL). Overestimating is harmless -- at most
+    /// it sweeps a queue that no longer has anything with a deadline.
     FHasExpiration: Boolean;
-    /// Instante do ultimo USO (ver Stats.IdleMs). So' do ator.
+    /// Instant of the last USE (see Stats.IdleMs). Actor only.
     FLastUsed: UInt64;
 
     procedure ScheduleLocked;
     procedure Post(ACmd: TAMQPQueueCommand);
-    { --- observabilidade (Fase 4.1, Inc. 2) ---
-      Emitir do ATOR so' e' legitimo porque Emit nao bloqueia e nao levanta
-      (D31): ele copia para o ring e volta. Era esta a duvida que a D30
-      resolveu -- chamar handler de usuario daqui bloquearia o worker do pool,
-      que e' o MESMO pool dos outros atores.
+    { --- observability (Phase 4.1, Inc. 2) ---
+      Emitting from the ACTOR is only legitimate because Emit does not block
+      and does not raise (D31): it copies into the ring and returns. That was
+      the doubt D30 settled -- calling a user handler from here would block the
+      pool worker, which is the SAME pool as the other actors'.
 
-      O ator nao conhece conexao, usuario nem endereco: quem publica e quem
-      consome ficam do outro lado da caixa, de proposito. Entao evento de
-      origem-ator sai com ConnectionId=0 e RemoteAddr/Username vazios, e o
-      que identifica e' VHost+QueueName (+ConsumerTag na entrega). Quem
-      precisar amarrar consumidor a conexao junta pelo ConsumerTag, que o
-      seConsumerRegistered do Inc. 1 carrega com a conexao junto. }
+      The actor knows no connection, user or address: who publishes and who
+      consumes stay on the other side of the mailbox, on purpose. So an
+      actor-origin event goes out with ConnectionId=0 and empty
+      RemoteAddr/Username, and what identifies it is VHost+QueueName
+      (+ConsumerTag on delivery). Whoever needs to tie a consumer to a
+      connection joins by ConsumerTag, which Inc. 1's seConsumerRegistered
+      carries together with the connection. }
     function WantsEvent(AType: TAMQPServerEventType): Boolean;
     procedure EmitMessageEvent(AType: TAMQPServerEventType;
       const AEntry: TAMQPQueueEntry; const AReason: string);
     procedure PostSync(ACmd: TAMQPQueueCommand);
-    // --- helpers do ator (nunca chamados de fora dele) ---
+    // --- actor helpers (never called from outside it) ---
     function ReadyCount: Integer;
     function TakeReady(out AEntry: TAMQPQueueEntry): Boolean;
     function PeekReady(out AEntry: TAMQPQueueEntry): Boolean;
-    /// Vence o que passou do prazo, DA CABECA de cada balde para tras. Ver o
-    /// comentario da implementacao para a limitacao (deliberada, e a mesma do
-    /// RabbitMQ) de mensagem com prazo proprio no meio da fila.
+    /// Expires what is past its deadline, FROM THE HEAD of each bucket backward.
+    /// See the implementation's comment for the limitation (deliberate, and the
+    /// same as RabbitMQ's) of a message with its own deadline in the middle of the queue.
     procedure ExpireMessages;
-    /// Ponto unico por onde uma mensagem vencida sai. Na WS4 so' larga a
-    /// referencia e conta; a WS5 troca o corpo disto por "manda para o DLX".
+    /// Single point through which an expired message leaves. In WS4 it only
+    /// drops the reference and counts; WS5 swaps its body for "send to the DLX".
     procedure DiscardExpired(AEntry: TAMQPQueueEntry);
-    /// Manda a entrada para o DLX da fila, se houver um; senao so' larga a
-    /// referencia. Devolve True se de fato republicou. SEMPRE consome a
-    /// referencia da entrada -- quem chama nao larga de novo.
+    /// Sends the entry to the queue's DLX, if there is one; otherwise only drops
+    /// the reference. Returns True if it actually republished. ALWAYS consumes
+    /// the entry's reference -- the caller does not drop it again.
     function DeadLetterWith(AEntry: TAMQPQueueEntry; const AReason: string): Boolean;
-    /// Prazo absoluto de uma mensagem, combinando o TTL da FILA com o TTL da
-    /// MENSAGEM (o menor vence). 0 = nunca.
+    /// Absolute deadline of a message, combining the QUEUE's TTL with the
+    /// MESSAGE's TTL (the smaller wins). 0 = never.
     function CalculateExpiration(AMessageTtlMs: Int64): UInt64;
-    /// Limita a prioridade pedida ao teto da fila.
+    /// Limits the requested priority to the queue's cap.
     function LimitPriority(APriority: Byte): Byte;
     function NextEligible: TAMQPServerConsumer;
     procedure DeliverPending;
     procedure RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
       AExpiraEm: UInt64; AJournalId: UInt64 = 0; AContentId: UInt64 = 0);
     procedure EnforceMaxLength;
-    /// Soma/subtrai o corpo de uma entrada no acumulador de bytes prontos.
-    /// Toda entrada que ENTRA ou SAI do estoque passa por aqui -- se um
-    /// caminho esquecer, o acumulador vira lixo e o teto de bytes deixa de
-    /// valer (sem nenhum sintoma imediato).
-    /// UNICO ponto por onde uma colocacao e' aposentada no disco. Chamado de
-    /// dentro do ator, com SubmitNoWait: a D2 proibe o ator de esperar I/O, e
-    /// registro de retirada nunca pode ser recusado (D24, corolario c).
+    /// Adds/subtracts an entry's body in the ready-bytes accumulator.
+    /// Every entry that ENTERS or LEAVES the stock goes through here -- if a
+    /// path forgets, the accumulator becomes garbage and the byte cap stops
+    /// holding (with no immediate symptom).
+    /// The SINGLE point through which a placement is retired on disk. Called
+    /// from inside the actor, with SubmitNoWait: D2 forbids the actor from
+    /// waiting for I/O, and a retirement record can never be refused (D24, corollary c).
     ///
-    /// Nao ha aposentadoria quando a fila INTEIRA e' apagada: o registro de
-    /// delete da topologia ja' leva as colocacoes dela junto, do mesmo jeito
-    /// que leva os bindings -- gravar um DEQ por entrada seria escrever o que
-    /// ja' esta' implicito.
+    /// There is no retirement when the WHOLE queue is deleted: the topology
+    /// delete record already takes its placements along, the same way it takes
+    /// the bindings -- writing a DEQ per entry would be writing what is
+    /// already implicit.
     procedure Retire(AJournalId: UInt64);
     procedure TrackBytes(const AEntry: TAMQPQueueEntry; ASignal: Integer);
-    /// True se a fila esta' cheia AGORA (por contagem ou por bytes). So' faz
-    /// sentido em fila com x-overflow reject-publish.
+    /// True if the queue is full RIGHT NOW (by count or by bytes). Only makes
+    /// sense in a queue with x-overflow reject-publish.
     function IsFull: Boolean;
-    /// ARejeitada separa ACK de NACK/REJECT-sem-requeue: os dois chegam aqui
-    /// com ARequeue=False, mas so' o segundo e' morte (razao 'rejected').
-    /// Confundir os dois mandaria toda mensagem confirmada para o DLX.
+    /// ARejeitada separates ACK from NACK/REJECT-without-requeue: both arrive
+    /// here with ARequeue=False, but only the second is a death (reason 'rejected').
+    /// Confusing the two would send every acked message to the DLX.
     procedure ResolveUnacked(AChannelId: NativeUInt; ADeliveryTag: UInt64;
       AMultiple, ARequeue, ARejected: Boolean);
     function CurrentStats: TAMQPQueueStats;
     procedure DrainState;
   protected
-    /// Ponto exato entre "o laco de comandos terminou" e "o lock do fim de
-    /// rodada foi tomado" -- a JANELA que o desenho da caixa fecha. No-op em
-    /// producao; existe porque essa janela e' inalcancavel por um teste de
-    /// estresse comum (medido: uma versao com a checagem de caixa vazia FORA
-    /// do lock passa nos 16.000 posts concorrentes, porque um comando perdido
-    /// e' rescuscitado pelo post seguinte -- o bug so' e' fatal no ULTIMO post
-    /// antes da ociosidade). O teste sobrescreve isto para postar de outra
-    /// thread exatamente aqui. NAO PODE LEVANTAR.
+    /// The exact point between "the command loop ended" and "the end-of-round
+    /// lock was taken" -- the WINDOW the mailbox design closes. A no-op in
+    /// production; it exists because that window is unreachable by an ordinary
+    /// stress test (measured: a version with the empty-mailbox check OUTSIDE
+    /// the lock passes the 16,000 concurrent posts, because a lost command is
+    /// resurrected by the next post -- the bug is only fatal on the LAST post
+    /// before idleness). The test overrides this to post from another thread
+    /// exactly here. MUST NOT RAISE.
     procedure ActorRoundEnding; virtual;
-    /// Relogio do ator (decisao D13). Virtual porque teste de TTL nao pode
-    /// depender de Sleep: a suite sobrescreve isto e faz o tempo andar na mao,
-    /// o que torna a expiracao deterministica e instantanea. Em producao e'
+    /// The actor's clock (decision D13). Virtual because a TTL test cannot
+    /// depend on Sleep: the suite overrides this and moves time by hand, which
+    /// makes expiration deterministic and instantaneous. In production it is
     /// PcTickMs.
     function NowTick: UInt64; virtual;
-    /// Uma rodada do ator. Publico so' para o work item; nunca chame de fora.
+    /// One actor round. Public only for the work item; never call it from outside.
     procedure RunActor;
-    /// Executa UM comando, sempre na thread do ator e fora do lock. Virtual
-    /// so' para os testes conseguirem espiar de dentro do ator (e' assim que
-    /// o guard de comando sincrono e' exercitado).
+    /// Runs ONE command, always on the actor thread and outside the lock.
+    /// Virtual only so the tests can peek from inside the actor (that is how
+    /// the synchronous command guard is exercised).
     procedure ExecuteCommand(ACmd: TAMQPQueueCommand); virtual;
   public
-    /// AMaxLength = 0: sem limite (default da D7). > 0: ao estourar, descarta
-    /// da CABECA e conta em Stats.DroppedCount.
-    /// APool = nil: PcPool, o pool do processo (letra da D2). O broker NAO
-    /// usa o nil: o TAMQPServer passa o pool proprio dele desde a F8, porque
-    /// o PcPool tem teto e e' dividido com callbacks de consumer -- deste
-    /// cliente e das outras libs *-faa -- que podem bloquear em I/O; medido
-    /// em TPoolIsolationTests, o ator esperava ali ate' o timeout de 15 s.
+    /// AMaxLength = 0: no limit (D7's default). > 0: when exceeded, drops
+    /// from the HEAD and counts in Stats.DroppedCount.
+    /// APool = nil: PcPool, the process pool (the letter of D2). The broker does
+    /// NOT use nil: TAMQPServer passes its own pool since F8, because PcPool has
+    /// a cap and is shared with consumer callbacks -- of this client and of the
+    /// other *-faa libs -- that may block on I/O; measured in
+    /// TPoolIsolationTests, the actor waited there until the 15 s timeout.
     constructor Create(const AName: string; AMaxLength: Integer = 0;
       APool: TPcThreadPool = nil); overload;
-    /// Com os x-arguments ja' lidos (WS2). E' por aqui que a engine cria a
-    /// fila; a sobrecarga acima existe para quem nao tem politica nenhuma
-    /// (testes de estado puro) e equivale a passar TAMQPQueuePolicy.Empty.
+    /// With the x-arguments already parsed (WS2). This is how the engine
+    /// creates the queue; the overload above exists for whoever has no policy
+    /// at all (pure state tests) and is equivalent to passing TAMQPQueuePolicy.Empty.
     constructor Create(const AName: string; const APolicy: TAMQPQueuePolicy;
       AMaxLength: Integer = 0; APool: TPcThreadPool = nil); overload;
     destructor Destroy; override;
 
-    // --- comandos assincronos ---
-    /// A fila tira a SUA PROPRIA referencia (AddRef): quem publica em N filas
-    /// continua dono da referencia dele e da Release depois do fan-out.
-    /// Numa fila ja parada, a mensagem e' descartada e contada em
-    /// DroppedCount (nao levanta -- publish nao falha por corrida de
-    /// teardown).
-    /// APriority e AMessageTtlMs vem DECODIFICADOS pela thread do publicador
-    /// (a mensagem guarda o header cru -- decisao D1 --, entao quem le as
-    /// propriedades e' quem ainda tem a tabela viva do canal na mao). A fila
-    /// limita a prioridade ao proprio teto e combina o TTL da mensagem com o
-    /// da fila. AMessageTtlMs < 0 = a mensagem nao trouxe 'expiration'.
-    /// AJournalId/AContentId vem de quem ESCREVEU o registro de colocacao --
-    /// a thread do publicador (D24) --, e nao sao gerados aqui: a fila e' o
-    /// ultimo elo, nao o primeiro. Zero = nada foi persistido.
+    // --- asynchronous commands ---
+    /// The queue takes ITS OWN reference (AddRef): whoever publishes to N
+    /// queues still owns its reference and Releases it after the fan-out.
+    /// On an already stopped queue, the message is dropped and counted in
+    /// DroppedCount (does not raise -- a publish does not fail because of a
+    /// teardown race).
+    /// APriority and AMessageTtlMs come DECODED by the publisher thread (the
+    /// message keeps the raw header -- decision D1 --, so whoever reads the
+    /// properties is whoever still has the channel's live table at hand). The
+    /// queue limits the priority to its own cap and combines the message's TTL
+    /// with the queue's. AMessageTtlMs < 0 = the message carried no 'expiration'.
+    /// AJournalId/AContentId come from whoever WROTE the placement record --
+    /// the publisher thread (D24) --, and are not generated here: the queue is
+    /// the last link, not the first. Zero = nothing was persisted.
     procedure PostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
       AMessageTtlMs: Int64 = -1; AJournalId: UInt64 = 0;
       AContentId: UInt64 = 0; ARestored: Boolean = False);
-    /// A fila passa a ser dona de AConsumer.
+    /// The queue becomes the owner of AConsumer.
     procedure PostAddConsumer(AConsumer: TAMQPServerConsumer);
     procedure PostRemoveConsumer(AChannelId: NativeUInt;
       const AConsumerTag: string);
-    /// Canal (ou conexao) caiu: tira todos os consumidores dele e devolve as
-    /// nao-confirmadas dele para a fila, com redelivered. WS7 usa.
+    /// A channel (or connection) went down: removes all its consumers and returns
+    /// its unacked messages to the queue, with redelivered. WS7 uses it.
     procedure PostRemoveChannel(AChannelId: NativeUInt);
-    /// Reexamina a entrega sem nenhum outro evento. Existe para o caso
-    /// degradado da D3: consumidores que recusaram (fila outbound cheia) e
-    /// nenhum ack chegando -- tipico de consumidor em no-ack mais lento que o
-    /// produtor. Nesse caso nada mais acordaria o ator, entao a thread
-    /// monitora do broker cutuca as filas periodicamente. No caminho normal a
-    /// entrega sai do proprio enqueue/ack, sem depender deste tick.
+    /// Re-examines delivery with no other event. It exists for D3's degraded
+    /// case: consumers that refused (outbound queue full) and no ack arriving --
+    /// typical of a no-ack consumer slower than the producer. In that case
+    /// nothing else would wake the actor, so the broker's monitor thread nudges
+    /// the queues periodically. On the normal path delivery comes from the
+    /// enqueue/ack itself, without depending on this tick.
     procedure PostDeliverTick;
-    /// Marca a fila como USADA agora (WS8). O declare/redeclare chama isto --
-    /// e' um dos tres eventos que reiniciam o relogio do x-expires.
+    /// Marks the queue as USED now (WS8). The declare/redeclare calls this --
+    /// it is one of the three events that restart the x-expires clock.
     procedure PostTouch;
     procedure PostAck(AChannelId: NativeUInt; ADeliveryTag: UInt64;
       AMultiple: Boolean);
@@ -543,76 +548,76 @@ type
     procedure PostReject(AChannelId: NativeUInt; ADeliveryTag: UInt64;
       ARequeue: Boolean);
 
-    // --- comandos sincronos (levantam EAMQPQueueActor se a fila ja parou,
-    //     se forem postados de dentro do proprio ator, ou no timeout) ---
-    /// Enqueue SINCRONO, para fila declarada com x-overflow reject-publish
-    /// (decisao D15). Devolve False quando a fila esta' cheia e a mensagem foi
-    /// RECUSADA -- e' o unico caminho em que uma fila diz nao a um publish.
+    // --- synchronous commands (raise EAMQPQueueActor if the queue has already
+    //     stopped, if they are posted from inside the actor itself, or on timeout) ---
+    /// SYNCHRONOUS enqueue, for a queue declared with x-overflow reject-publish
+    /// (decision D15). Returns False when the queue is full and the message was
+    /// REJECTED -- it is the only path in which a queue says no to a publish.
     ///
-    /// Por que sincrono: o publicador precisa da resposta ANTES do Basic.Ack, e
-    /// o PostMessage e' assincrono e nao devolve nada. Bloquear o publicador
-    /// aqui nao e' efeito colateral -- e' literalmente a semantica que
-    /// reject-publish pede. O comando nao faz I/O, entao o teto de 15 s e' rede
-    /// contra bug nosso, nao contra peer lento.
+    /// Why synchronous: the publisher needs the answer BEFORE the Basic.Ack, and
+    /// PostMessage is asynchronous and returns nothing. Blocking the publisher
+    /// here is not a side effect -- it is literally the semantics reject-publish
+    /// asks for. The command does no I/O, so the 15 s cap is a net against our
+    /// own bug, not against a slow peer.
     ///
-    /// E' o UNICO ponto da Fase 3 desenhado para ser substituido: quando a
-    /// Fase 4 tiver o registro de confirms pendentes, isto vira assincrono.
+    /// It is the ONLY point of Phase 3 designed to be replaced: when Phase 4
+    /// has the pending-confirms registry, this becomes asynchronous.
     function TryPostMessage(AMessage: TAMQPMessage; APriority: Byte = 0;
       AMessageTtlMs: Int64 = -1; AJournalId: UInt64 = 0;
       AContentId: UInt64 = 0): Boolean;
 
-    /// Basic.Get. ADeliveryTag e' a tag que o CANAL vai usar (a fila nao
-    /// gera tags -- elas sao monotonicas por canal). Com ANoAck=False a
-    /// mensagem vai para as nao-confirmadas. A referencia devolvida em
-    /// AMessage e' do CHAMADOR (Release depois de usar). False = fila vazia.
+    /// Basic.Get. ADeliveryTag is the tag the CHANNEL will use (the queue does
+    /// not generate tags -- they are monotonic per channel). With ANoAck=False
+    /// the message goes to the unacked ones. The reference returned in AMessage
+    /// belongs to the CALLER (Release it after use). False = empty queue.
     function Get(AChannelId: NativeUInt; ADeliveryTag: UInt64; ANoAck: Boolean;
       out AMessage: TAMQPMessage; out ARedelivered: Boolean): Boolean;
-    /// Queue.Purge: descarta as prontas (nao mexe nas nao-confirmadas) e
-    /// devolve quantas foram.
+    /// Queue.Purge: drops the ready messages (does not touch the unacked ones)
+    /// and returns how many there were.
     function Purge: Integer;
     function Stats: TAMQPQueueStats;
-    /// Queue.Delete. Em amqqdOk a fila fica parada e vazia -- o dono ainda
-    /// precisa liberar o objeto.
+    /// Queue.Delete. On amqqdOk the queue is left stopped and empty -- the
+    /// owner still has to free the object.
     function Delete(AIfUnused, AIfEmpty: Boolean;
       out AMessageCount: Integer): TAMQPQueueDeleteResult;
 
-    /// Para o ator e libera o estoque. Idempotente. Chamado pelo destrutor.
-    /// Levanta EAMQPQueueActor se o ator nao sair do laco no prazo -- nesse
-    /// caso NADA e' liberado (vazar e' melhor que liberar sob os pes de um
-    /// ator ainda rodando).
+    /// Stops the actor and frees the stock. Idempotent. Called by the destructor.
+    /// Raises EAMQPQueueActor if the actor does not leave the loop within the
+    /// deadline -- in that case NOTHING is freed (leaking is better than freeing
+    /// from under an actor that is still running).
     procedure Stop;
 
     property Name: string read FName;
     property MaxLength: Integer read FMaxLength;
-    /// Teto de prioridade em vigor (0 = fila sem prioridade).
+    /// Priority cap in force (0 = queue without priority).
     property MaxPriority: Integer read FMaxPriority;
 
-    /// Prioridade efetiva desta mensagem NESTA fila (limitada ao teto) e TTL
-    /// efetivo em ms (o menor entre o da fila e o da mensagem; -1 = sem prazo).
+    /// Effective priority of this message IN THIS queue (limited to the cap) and
+    /// effective TTL in ms (the smaller of the queue's and the message's; -1 = no deadline).
     ///
-    /// Sao leituras PURAS da politica, que e' imutavel depois da criacao, e por
-    /// isso podem ser chamadas de FORA do ator -- e precisam ser: quem escreve
-    /// o registro de colocacao e' a thread do publicador (D24), e ela tem de
-    /// gravar os mesmos numeros que o ator vai guardar.
+    /// These are PURE reads of the policy, which is immutable after creation,
+    /// and so they may be called from OUTSIDE the actor -- and they must be:
+    /// whoever writes the placement record is the publisher thread (D24), and it
+    /// has to write the same numbers the actor will keep.
     function EffectivePriority(APriority: Byte): Byte;
     function EffectiveTtl(AMessageTtlMs: Int64): Int64;
-    /// Quem republica as mortas. nil = sem dead-letter (a mensagem e'
-    /// simplesmente descartada, como na WS4). A engine injeta na criacao.
+    /// Who republishes dead messages. nil = no dead-letter (the message is
+    /// simply dropped, as in WS4). The engine injects it at creation.
     property DeadLetterSink: IAMQPDeadLetterSink read FDeadLetterSink
       write FDeadLetterSink;
     property Policy: TAMQPQueuePolicy read FPolicy;
 
-    /// Journal de durabilidade (Fase 4). nil = nada desta fila vai ao disco.
-    /// A fila NAO e' dona; quem injeta e' a engine, na criacao.
+    /// Durability journal (Phase 4). nil = nothing from this queue goes to disk.
+    /// The queue does NOT own it; the engine injects it at creation.
     property Journal: TAMQPJournal read FJournal write FJournal;
-    /// Para onde o ator emite eventos de observabilidade. nil = desligado
-    /// (D29), e ai' nem o record e' montado. Semeado pela engine.
+    /// Where the actor emits observability events. nil = off (D29), and then
+    /// not even the record is built. Seeded by the engine.
     property Events: IAMQPEventSink read FEvents write FEvents;
-    /// vhost em que esta fila mora -- entra nos registros de colocacao, porque
-    /// a fila sozinha nao e' identidade (dois vhosts podem ter 'q').
+    /// vhost this queue lives in -- it goes into the placement records, because
+    /// the queue alone is not an identity (two vhosts may both have 'q').
     property VHostName: string read FVHostName write FVHostName;
-    /// D20: so' fila DURAVEL escreve. Fila transiente nao toca o journal, e o
-    /// caminho quente dela fica identico ao da Fase 3.
+    /// D20: only a DURABLE queue writes. A transient queue does not touch the
+    /// journal, and its hot path stays identical to Phase 3's.
     property Durable: Boolean read FDurable write FDurable;
   end;
 
@@ -647,9 +652,9 @@ end;
 
 destructor TAMQPQueueCommand.Destroy;
 begin
-  // Caminho de descarte (comando que nunca rodou, ou sincrono que estourou o
-  // timeout depois de o ator ter preenchido o resultado): as referencias de
-  // mensagem que sobraram sao nossas e tem de sair daqui.
+  // Drop path (a command that never ran, or a synchronous one that exceeded the
+  // timeout after the actor filled in the result): the message references
+  // left over are ours and must leave from here.
   if Msg <> nil then
     Msg.Release;
   if ResMsg <> nil then
@@ -717,25 +722,25 @@ begin
   inherited Create;
   FName := AName;
   FPolicy := APolicy;
-  // MaxPriority ausente (-1) vira 0: um balde so', que e' a fila de sempre.
+  // An absent MaxPriority (-1) becomes 0: a single bucket, which is the usual queue.
   if APolicy.MaxPriority > 0 then
     FMaxPriority := APolicy.MaxPriority
   else
     FMaxPriority := 0;
-  // COMPOSICAO DOS TETOS (WS6): o teto global do broker
-  // (TAMQPServer.MaxQueueLength, decisao D7) e o x-max-length da FILA sao os
-  // dois um limite superior, entao o MENOR vence. A razao e' de papel, nao de
-  // aritmetica: o global e' uma rede de seguranca do PROCESSO HOSPEDEIRO -- o
-  // broker roda dentro da app do usuario --, e um argumento vindo do cliente
-  // nao pode afrouxar uma rede de seguranca. 0/ausente = sem teto daquele
-  // lado, e ai' vale o outro.
+  // CAP COMPOSITION (WS6): the broker's global cap
+  // (TAMQPServer.MaxQueueLength, decision D7) and the QUEUE's x-max-length are
+  // both an upper bound, so the SMALLER wins. The reason is one of role, not of
+  // arithmetic: the global one is a safety net of the HOST PROCESS -- the
+  // broker runs inside the user's app --, and an argument coming from the
+  // client must not loosen a safety net. 0/absent = no cap on that side, and
+  // then the other one applies.
   if AMaxLength < 0 then
     AMaxLength := 0;
   FMaxLength := AMaxLength;
   if APolicy.MaxLength >= 0 then
     if (FMaxLength = 0) or (APolicy.MaxLength < FMaxLength) then
       FMaxLength := Integer(APolicy.MaxLength);
-  // Nao ha teto global de BYTES: x-max-length-bytes so' vem da fila.
+  // There is no global BYTE cap: x-max-length-bytes only comes from the queue.
   FMaxBytes := APolicy.MaxLengthBytes;
   if APool <> nil then
     FPool := APool
@@ -743,7 +748,7 @@ begin
     FPool := PcPool;
   FMon := TPcMonitor.Create;
   FMailbox := TQueue<TAMQPQueueCommand>.Create;
-  FLastUsed := NowTick; // a fila nasce "usada agora"
+  FLastUsed := NowTick; // the queue is born "used now"
   SetLength(FStock, FMaxPriority + 1);
   SetLength(FRequeued, FMaxPriority + 1);
   for I := 0 to FMaxPriority do
@@ -762,10 +767,10 @@ begin
   try
     Stop;
   except
-    // Ator preso: o Stop ja nao liberou nada, de proposito. Vazar e' o menos
-    // pior -- liberar as estruturas sob os pes de um ator rodando seria
-    // exatamente o double-free que a Fase 1 ja pagou uma vez. E excecao nao
-    // escapa de destrutor.
+    // Stuck actor: Stop has already freed nothing, on purpose. Leaking is the
+    // lesser evil -- freeing the structures from under a running actor would be
+    // exactly the double free Phase 1 already paid for once. And exceptions do
+    // not escape destructors.
     on E: Exception do
       ;
   end;
@@ -783,12 +788,12 @@ end;
 
 procedure TAMQPServerQueue.ActorRoundEnding;
 begin
-  // no-op: ver o comentario da declaracao.
+  // no-op: see the declaration's comment.
 end;
 
-{ --- caixa de comandos --- }
+{ --- command mailbox --- }
 
-// Sob FMon. Agenda uma rodada se ainda nao ha uma agendada.
+// Under FMon. Schedules a round if none is scheduled yet.
 procedure TAMQPServerQueue.ScheduleLocked;
 begin
   if FScheduled or FStopping then
@@ -797,7 +802,7 @@ begin
   FPool.Queue(TAMQPQueueWork.Create(Self));
 end;
 
-// Assincrono: enfileira e devolve. A referencia do chamador vira a da caixa.
+// Asynchronous: enqueues and returns. The caller's reference becomes the mailbox's.
 procedure TAMQPServerQueue.Post(ACmd: TAMQPQueueCommand);
 var
   LDiscard: Boolean;
@@ -807,9 +812,9 @@ begin
   try
     if FStopping then
     begin
-      // Fila parada/apagada: descarta em silencio, mas CONTA (nada some sem
-      // metrica). O ator nao roda mais, entao ninguem concorre com esta
-      // escrita feita sob o lock.
+      // Stopped/deleted queue: drops silently, but COUNTS (nothing vanishes
+      // without a metric). The actor no longer runs, so nobody competes with
+      // this write made under the lock.
       if ACmd.Kind = amqqcEnqueue then
         Inc(FDropped);
       LDiscard := True;
@@ -823,11 +828,11 @@ begin
     FMon.Leave;
   end;
   if LDiscard then
-    ACmd.Release; // fora do lock: o destrutor solta mensagem/consumidor
+    ACmd.Release; // outside the lock: the destructor releases message/consumer
 end;
 
-// Sincrono: enfileira, espera o evento e devolve com o resultado preenchido.
-// A referencia do CHAMADOR continua com ele (a caixa ganha a sua).
+// Synchronous: enqueues, waits for the event and returns with the result filled in.
+// The CALLER's reference stays with it (the mailbox gets its own).
 procedure TAMQPServerQueue.PostSync(ACmd: TAMQPQueueCommand);
 begin
   FMon.Enter;
@@ -840,7 +845,7 @@ begin
       raise EAMQPQueueActor.CreateFmt(
         'synchronous command (%d) posted to an already stopped queue ("%s")',
         [Ord(ACmd.Kind), FName]);
-    ACmd.AddRef; // a caixa tem a sua propria referencia
+    ACmd.AddRef; // the mailbox has its own reference
     FMailbox.Enqueue(ACmd);
     ScheduleLocked;
   finally
@@ -855,7 +860,7 @@ begin
 end;
 
 
-// Uma rodada do ator, num worker do pool.
+// One actor round, on a pool worker.
 procedure TAMQPServerQueue.RunActor;
 var
   LCmd: TAMQPQueueCommand;
@@ -880,36 +885,36 @@ begin
         try
           ExecuteCommand(LCmd);
         except
-          // Um comando nunca deveria levantar; se levantar, quem espera do
-          // outro lado nao pode ficar parado para sempre -- sinalizamos assim
-          // mesmo, com ResOk=False, e seguimos.
+          // A command should never raise; if it does, whoever waits on the
+          // other side cannot be left stuck forever -- we signal anyway, with
+          // ResOk=False, and move on.
           on E: Exception do
             LCmd.ResOk := False;
         end;
       finally
         LCmd.Signal;
-        LCmd.Release; // a referencia da caixa
+        LCmd.Release; // the mailbox's reference
       end;
       Inc(LCount);
     end;
   finally
     try
-      ActorRoundEnding; // seam de teste (no-op em producao)
+      ActorRoundEnding; // test seam (no-op in production)
     except
       on E: Exception do
-        ; // um hook que levante nao pode deixar FScheduled preso
+        ; // a hook that raises must not leave FScheduled stuck
     end;
     FMon.Enter;
     try
       FActorThread := 0;
       if (not FStopping) and (FMailbox.Count > 0) then
-        // Teto da rodada estourado (ou comando chegou na janela): continua
-        // agendado, so' troca de work item -- FScheduled segue True.
+        // Round cap exceeded (or a command arrived in the window): stays
+        // scheduled, only the work item changes -- FScheduled stays True.
         FPool.Queue(TAMQPQueueWork.Create(Self))
       else
       begin
         FScheduled := False;
-        FMon.PulseAll; // o Stop espera exatamente por isto
+        FMon.PulseAll; // Stop waits for exactly this
       end;
     finally
       FMon.Leave;
@@ -925,7 +930,7 @@ begin
   try
     if FStopped then
       Exit;
-    FStopping := True; // ninguem mais posta nem agenda
+    FStopping := True; // nobody posts or schedules anymore
     LDeadline := PcTickMs + AMQP_QUEUE_STOP_TIMEOUT_MS;
     while FScheduled and (PcTickMs < LDeadline) do
       FMon.Wait(100);
@@ -933,8 +938,8 @@ begin
       raise EAMQPQueueActor.CreateFmt(
         'queue actor "%s" did not finish within %d ms -- state NOT released',
         [FName, AMQP_QUEUE_STOP_TIMEOUT_MS]);
-    // Daqui pra baixo somos o unico executor: o ator saiu do laco e nenhum
-    // agendamento novo e' possivel.
+    // From here on we are the only executor: the actor left the loop and no
+    // new scheduling is possible.
     DrainState;
     FStopped := True;
   finally
@@ -942,7 +947,7 @@ begin
   end;
 end;
 
-// Libera tudo. So' o Stop chama, com o ator ja parado.
+// Frees everything. Only Stop calls it, with the actor already stopped.
 procedure TAMQPServerQueue.DrainState;
 var
   LCmd: TAMQPQueueCommand;
@@ -952,7 +957,7 @@ begin
   while FMailbox.Count > 0 do
   begin
     LCmd := FMailbox.Dequeue;
-    LCmd.Signal; // solta quem estiver esperando (vai ver ResOk=False)
+    LCmd.Signal; // releases whoever is waiting (it will see ResOk=False)
     LCmd.Release;
   end;
   for I := 0 to High(FStock) do
@@ -975,7 +980,7 @@ begin
   FConsumers.Clear; // OwnsObjects
 end;
 
-{ --- API assincrona --- }
+{ --- asynchronous API --- }
 
 procedure TAMQPServerQueue.PostMessage(AMessage: TAMQPMessage;
   APriority: Byte; AMessageTtlMs: Int64; AJournalId, AContentId: UInt64;
@@ -984,7 +989,7 @@ var
   LCmd: TAMQPQueueCommand;
 begin
   LCmd := TAMQPQueueCommand.Create(amqqcEnqueue, False);
-  AMessage.AddRef; // a referencia da FILA; o publicador continua com a dele
+  AMessage.AddRef; // the QUEUE's reference; the publisher keeps its own
   LCmd.Msg := AMessage;
   LCmd.Priority := APriority;
   LCmd.MessageTtlMs := AMessageTtlMs;
@@ -1002,7 +1007,7 @@ var
 begin
   LCmd := TAMQPQueueCommand.Create(amqqcEnqueueSync, True);
   try
-    AMessage.AddRef; // a referencia da FILA, como no PostMessage
+    AMessage.AddRef; // the QUEUE's reference, as in PostMessage
     LCmd.Msg := AMessage;
     LCmd.Priority := APriority;
     LCmd.MessageTtlMs := AMessageTtlMs;
@@ -1011,8 +1016,8 @@ begin
     PostSync(LCmd);
     Result := LCmd.ResOk;
   finally
-    // Se o ator recusou, a referencia que este comando carregava continua nele
-    // e sai no destrutor -- por isso o Release do comando basta.
+    // If the actor refused, the reference this command carried stays in it
+    // and leaves in the destructor -- that is why the command's Release suffices.
     LCmd.Release;
   end;
 end;
@@ -1093,7 +1098,7 @@ begin
   Post(LCmd);
 end;
 
-{ --- API sincrona --- }
+{ --- synchronous API --- }
 
 function TAMQPServerQueue.Get(AChannelId: NativeUInt; ADeliveryTag: UInt64;
   ANoAck: Boolean; out AMessage: TAMQPMessage;
@@ -1111,7 +1116,7 @@ begin
     PostSync(LCmd);
     Result := LCmd.ResOk;
     AMessage := LCmd.ResMsg;
-    LCmd.ResMsg := nil; // a referencia passa a ser do chamador
+    LCmd.ResMsg := nil; // the reference now belongs to the caller
     ARedelivered := LCmd.ResRedelivered;
   finally
     LCmd.Release;
@@ -1161,10 +1166,10 @@ begin
     LCmd.Release;
   end;
   if Result = amqqdOk then
-    Stop; // fila apagada nao volta a atender
+    Stop; // a deleted queue does not serve again
 end;
 
-{ --- estado: helpers do ator --- }
+{ --- state: actor helpers --- }
 
 function TAMQPServerQueue.ReadyCount: Integer;
 var
@@ -1175,10 +1180,10 @@ begin
     Inc(Result, FRequeued[I].Count + FStock[I].Count);
 end;
 
-// Tira a proxima pronta: do balde de MAIOR prioridade que tenha algo, e
-// dentro dele as devolvidas (requeue) antes, na ordem original. FIFO dentro do
-// nivel e' invariante testada -- prioridade reordena entre niveis, nunca
-// dentro de um.
+// Takes the next ready one: from the HIGHEST priority bucket that has something,
+// and within it the returned ones (requeue) first, in the original order. FIFO
+// within a level is a tested invariant -- priority reorders between levels,
+// never within one.
 function TAMQPServerQueue.TakeReady(out AEntry: TAMQPQueueEntry): Boolean;
 var
   I: Integer;
@@ -1191,15 +1196,15 @@ begin
       AEntry := FStock[I].Dequeue
     else
       Continue;
-    TrackBytes(AEntry, -1); // TakeReady e' o caminho comum de saida
+    TrackBytes(AEntry, -1); // TakeReady is the common exit path
     Exit(True);
   end;
   Result := False;
 end;
 
-// Espia a proxima pronta SEM tirar do estoque -- a entrega so' tira depois
-// de o alvo aceitar o lote de frames; se ele recusar, a mensagem tem de
-// continuar exatamente onde estava. Mesma ordem do TakeReady.
+// Peeks at the next ready one WITHOUT taking it from the stock -- delivery only
+// takes it after the target accepts the frame batch; if it refuses, the message
+// must stay exactly where it was. Same order as TakeReady.
 function TAMQPServerQueue.PeekReady(out AEntry: TAMQPQueueEntry): Boolean;
 var
   I: Integer;
@@ -1230,9 +1235,9 @@ begin
     Result := APriority;
 end;
 
-// Combina o TTL da FILA (x-message-ttl) com o da MENSAGEM ('expiration'): o
-// MENOR vence, que e' o que a spec de fato do RabbitMQ faz. Ausentes os dois,
-// a mensagem nao vence nunca (0).
+// Combines the QUEUE's TTL (x-message-ttl) with the MESSAGE's ('expiration'):
+// the SMALLER wins, which is what RabbitMQ's spec actually does. With both
+// absent, the message never expires (0).
 function TAMQPServerQueue.EffectiveTtl(AMessageTtlMs: Int64): Int64;
 begin
   Result := -1;
@@ -1252,30 +1257,30 @@ function TAMQPServerQueue.CalculateExpiration(AMessageTtlMs: Int64): UInt64;
 var
   LTtl: Int64;
 begin
-  // Uma implementacao so' da regra do "menor vence": o registro que a thread do
-  // publicador grava tem de dizer EXATAMENTE o que o ator vai guardar, e duas
-  // copias da regra seriam duas chances de divergir.
+  // A single implementation of the "smaller wins" rule: the record the
+  // publisher thread writes must say EXACTLY what the actor will keep, and two
+  // copies of the rule would be two chances to diverge.
   LTtl := EffectiveTtl(AMessageTtlMs);
   if LTtl < 0 then
     Exit(0);
   Result := NowTick + UInt64(LTtl);
 end;
 
-// Ponto UNICO de saida de uma mensagem vencida. Na WS4 so' larga a referencia
-// e conta; a WS5 (dead-lettering) troca o corpo daqui por "reescreve o header
-// com x-death e republica no DLX". Existe como metodo proprio justamente para
-// essa troca ser local.
+// SINGLE exit point of an expired message. In WS4 it only drops the reference
+// and counts; WS5 (dead-lettering) swaps its body for "rewrite the header with
+// x-death and republish to the DLX". It exists as its own method precisely so
+// that swap is local.
 procedure TAMQPServerQueue.DiscardExpired(AEntry: TAMQPQueueEntry);
 begin
   Inc(FExpired);
-  // ANTES do DeadLetterWith, que consome a referencia da entrada: depois dele
-  // AEntry.Msg pode ja' ter sido liberada.
+  // BEFORE DeadLetterWith, which consumes the entry's reference: after it
+  // AEntry.Msg may already have been freed.
   EmitMessageEvent(seMessageExpired, AEntry, AMQP_DEATH_EXPIRED);
   DeadLetterWith(AEntry, AMQP_DEATH_EXPIRED);
 end;
 
-// Roda NA THREAD DO ATOR, e por isso e' so' CPU (reescrever o header) mais um
-// post na caixa de outra fila (D17). Nada aqui espera I/O.
+// Runs ON THE ACTOR THREAD, and so is only CPU (rewriting the header) plus a
+// post to another queue's mailbox (D17). Nothing here waits for I/O.
 function TAMQPServerQueue.DeadLetterWith(AEntry: TAMQPQueueEntry;
   const AReason: string): Boolean;
 var
@@ -1286,12 +1291,12 @@ var
   LEv: TAMQPServerEvent;
 begin
   Result := False;
-  // O try/FINALLY externo existe por uma razao especifica: `Exit` dentro de um
-  // try/EXCEPT sai da FUNCAO e pula o codigo depois do bloco. A primeira
-  // versao daqui liberava a referencia DEPOIS de um try/except que tinha Exit
-  // no caminho "sem DLX" -- e nesse caminho o Release nunca rodava. Um teste
-  // da WS3 pegou (Nack_SemRequeue_Descarta) e o heaptrc confirmou com 21
-  // blocos vazados.
+  // The outer try/FINALLY exists for a specific reason: `Exit` inside a
+  // try/EXCEPT leaves the FUNCTION and skips the code after the block. The
+  // first version here freed the reference AFTER a try/except that had an Exit
+  // on the "no DLX" path -- and on that path the Release never ran. A WS3 test
+  // caught it (Nack_SemRequeue_Descarta) and heaptrc confirmed it with 21
+  // leaked blocks.
   try
     try
       if (FDeadLetterSink = nil) or (not FPolicy.HasDeadLetterExchange) then
@@ -1302,22 +1307,22 @@ begin
       try
         LEd := TAMQPHeaderEditor.Create(AEntry.Msg.HeaderPayload);
 
-        // Guarda de ciclo (D14) ANTES de mexer em qualquer coisa: se ja' deu
-        // voltas demais, a mensagem morre aqui e nao vira trafego novo.
+        // Cycle guard (D14) BEFORE touching anything: if it has already gone
+        // around too many times, the message dies here and does not become new traffic.
         if AmqpDeathHops(LEd.Headers) >= AMQP_MAX_DEADLETTER_HOPS then
           Exit;
 
-        // A mensagem morta por TTL nao pode levar o MESMO prazo para a DLQ:
-        // morreria no ato e o padrao retry-com-espera nao funcionaria. O valor
-        // antigo fica registrado na entrada de x-death.
+        // A message killed by TTL cannot carry the SAME deadline to the DLQ:
+        // it would die on arrival and the retry-with-delay pattern would not
+        // work. The old value is recorded in the x-death entry.
         LOrigExpiration := LEd.TakeExpiration;
         AmqpAddDeath(LEd, FName, AReason, AEntry.Msg.Exchange,
           AEntry.Msg.RoutingKey, LOrigExpiration);
         LPayload := LEd.BuildPayload(AEntry.Msg.BodySize);
 
         LDlx := FPolicy.DeadLetterExchange;
-        // Sem x-dead-letter-routing-key, a chave ORIGINAL e' mantida -- e' o
-        // que faz um DLX topic continuar roteando pelo mesmo criterio.
+        // Without x-dead-letter-routing-key, the ORIGINAL key is kept -- that
+        // is what makes a topic DLX keep routing by the same criterion.
         if FPolicy.HasDeadLetterRoutingKey then
           LKey := FPolicy.DeadLetterRoutingKey
         else
@@ -1327,9 +1332,9 @@ begin
         FDeadLetterSink.DeadLetter(LDlx, LKey, LNew, AEntry.Priority,
           AEntry.ContentId);
         Inc(FDeadLettered);
-        // So' aqui, e nao no topo do DeadLetterWith: o evento diz que a
-        // mensagem FOI republicada no DLX. Fila sem DLX, ou republicacao que
-        // falhou, e' descarte -- e sai como seMessageDropped, no chamador.
+        // Only here, and not at the top of DeadLetterWith: the event says the
+        // message WAS republished to the DLX. A queue without a DLX, or a
+        // republish that failed, is a drop -- and goes out as seMessageDropped, in the caller.
         if WantsEvent(seMessageDeadLettered) then
         begin
           LEv := AmqpNewEvent(seMessageDeadLettered);
@@ -1339,7 +1344,7 @@ begin
           LEv.Redelivered := AEntry.Redelivered;
           LEv.Reason := AReason;
           LEv.MessageSize := UInt64(AEntry.Msg.BodySize);
-          // Para onde ela FOI -- e' o que distingue este evento do descarte.
+          // Where it WENT -- that is what distinguishes this event from a drop.
           LEv.ExchangeName := LDlx;
           LEv.RoutingKey := LKey;
           FEvents.Emit(LEv);
@@ -1347,35 +1352,36 @@ begin
         Result := True;
       finally
         if LNew <> nil then
-          LNew.Release; // a referencia do derivador; o sink tirou a dele
+          LNew.Release; // the deriver's reference; the sink took its own
         LEd.Free;
       end;
     except
-      // Header malformado, DLX que sumiu, o que for: uma morte que nao
-      // consegue ser republicada vira descarte. NAO pode derrubar o ator --
-      // levantar aqui mataria a rodada e deixaria a fila meio processada.
+      // Malformed header, a DLX that vanished, whatever: a death that cannot be
+      // republished becomes a drop. It must NOT bring the actor down --
+      // raising here would kill the round and leave the queue half-processed.
       on E: Exception do
         Result := False;
     end;
   finally
-    // D23, ORDEM: a colocacao nova ja' foi escrita la' dentro (pelo sink, que
-    // roda nesta mesma thread), e so' AGORA a velha e' aposentada. Falhar no
-    // meio produz DUPLICATA, nunca perda -- e duplicata o at-least-once ja'
-    // admite. Vale para os tres motivos de morte, porque todos passam por aqui.
+    // D23, ORDER: the new placement has already been written in there (by the
+    // sink, which runs on this same thread), and only NOW is the old one
+    // retired. Failing in the middle produces a DUPLICATE, never a loss -- and
+    // at-least-once already admits duplicates. Holds for all three death
+    // reasons, because they all go through here.
     Retire(AEntry.JournalId);
-    // A referencia da entrada e' SEMPRE consumida, tenha republicado ou nao.
+    // The entry's reference is ALWAYS consumed, whether it republished or not.
     AEntry.Msg.Release;
   end;
 end;
 
-// Vence o que passou do prazo, DA CABECA de cada balde para tras.
+// Expires what is past its deadline, FROM THE HEAD of each bucket backward.
 //
-// LIMITACAO DELIBERADA, a mesma do RabbitMQ: com 'expiration' POR MENSAGEM as
-// entradas nao ficam em ordem de vencimento, entao uma mensagem de prazo curto
-// atras de uma de prazo longo so' e' recolhida quando chega a' cabeca. Varrer
-// a fila inteira a cada tick seria O(n) por tick para consertar um caso raro.
-// Com x-message-ttl da FILA (o caso comum) nao ha problema nenhum: todas tem o
-// mesmo TTL e a ordem FIFO ja' e' a ordem de vencimento.
+// DELIBERATE LIMITATION, the same as RabbitMQ's: with PER-MESSAGE 'expiration'
+// the entries are not in expiration order, so a short-deadline message behind
+// a long-deadline one is only collected when it reaches the head. Sweeping the
+// whole queue on every tick would be O(n) per tick to fix a rare case. With
+// the QUEUE's x-message-ttl (the common case) there is no problem at all: all
+// have the same TTL and FIFO order already is expiration order.
 procedure TAMQPServerQueue.ExpireMessages;
 var
   I: Integer;
@@ -1389,7 +1395,7 @@ var
   end;
 
 begin
-  // D13: fila que nunca recebeu mensagem com prazo nao paga nada por isto.
+  // D13: a queue that never received a message with a deadline pays nothing for this.
   if not FHasExpiration then
     Exit;
   LNow := NowTick;
@@ -1410,8 +1416,8 @@ begin
   end;
 end;
 
-// Proximo consumidor do rodizio que ainda nao recusou nesta rodada.
-// nil = todos recusaram (ou nao ha consumidor).
+// Next consumer in the round-robin that has not refused in this round yet.
+// nil = all refused (or there is no consumer).
 function TAMQPServerQueue.NextEligible: TAMQPServerConsumer;
 var
   I, N, LIdx: Integer;
@@ -1428,18 +1434,18 @@ begin
     if not FConsumers[LIdx].Suspended then
     begin
       Result := FConsumers[LIdx];
-      // O ponteiro avanca mesmo quando este consumidor acaba recusando: quem
-      // nao pode receber nao tem por que segurar a vez.
+      // The pointer advances even when this consumer ends up refusing: whoever
+      // cannot receive has no reason to hold its turn.
       FRoundRobin := (LIdx + 1) mod N;
       Exit;
     end;
   end;
 end;
 
-// Uma RODADA de entrega. Roda na thread do ator, fora do lock da caixa, e
-// NUNCA bloqueia (D2): o alvo devolve False em vez de esperar, e o consumidor
-// que recusou sai do rodizio ate' o fim desta rodada (D3) -- os outros
-// continuam recebendo, que e' justamente o head-of-line que a D3 evita.
+// One delivery ROUND. Runs on the actor thread, outside the mailbox lock, and
+// NEVER blocks (D2): the target returns False instead of waiting, and the
+// consumer that refused leaves the round-robin until the end of this round
+// (D3) -- the others keep receiving, which is exactly the head-of-line D3 avoids.
 procedure TAMQPServerQueue.DeliverPending;
 var
   I: Integer;
@@ -1449,14 +1455,14 @@ var
   LTag: UInt64;
   LDelivEv: TAMQPServerEvent;
 begin
-  // ANTES de qualquer coisa, e ANTES do early-exit por falta de consumidor:
-  // uma fila sem consumidor nenhum tambem tem de vencer no prazo (D13), e e'
-  // o tick da thread monitora que a acorda.
+  // BEFORE anything else, and BEFORE the early exit for lack of a consumer:
+  // a queue with no consumer at all must also expire on time (D13), and it is
+  // the monitor thread's tick that wakes it.
   ExpireMessages;
 
-  // Canal/conexao que ja morreu nao volta: o consumidor sai aqui. As
-  // nao-confirmadas dele sao devolvidas pelo amqqcRemoveChannel, que o
-  // teardown da conexao posta (WS7).
+  // A channel/connection that has already died does not come back: the
+  // consumer leaves here. Its unacked messages are returned by
+  // amqqcRemoveChannel, which the connection teardown posts (WS7).
   for I := FConsumers.Count - 1 downto 0 do
     if not FConsumers[I].Target.IsAlive then
       FConsumers.Delete(I);
@@ -1464,20 +1470,20 @@ begin
     Exit;
 
   for I := 0 to FConsumers.Count - 1 do
-    FConsumers[I].Suspended := False; // rodada nova: todos elegiveis de novo
+    FConsumers[I].Suspended := False; // new round: everyone eligible again
 
   while ReadyCount > 0 do
   begin
     LCons := NextEligible;
     if LCons = nil then
-      Break; // todos recusaram nesta rodada
+      Break; // all refused in this round
     if not PeekReady(LEntry) then
       Break;
 
     if LCons.Target.TryDeliver(LCons.ConsumerTag, FName, LCons.NoAck,
       LEntry.Redelivered, LEntry.Msg, LTag) then
     begin
-      TakeReady(LEntry); // so' sai do estoque depois de o lote ser aceito
+      TakeReady(LEntry); // only leaves the stock after the batch is accepted
       Inc(FDelivered);
       if WantsEvent(seMessageDelivered) then
       begin
@@ -1491,30 +1497,31 @@ begin
         LDelivEv.MessageSize := UInt64(LEntry.Msg.BodySize);
         LDelivEv.ExchangeName := LEntry.Msg.Exchange;
         LDelivEv.RoutingKey := LEntry.Msg.RoutingKey;
-        // NoAck: a entrega ja' encerra a vida da mensagem aqui.
+        // NoAck: the delivery already ends the message's life here.
         if LCons.NoAck then
           LDelivEv.Reason := 'no-ack';
         FEvents.Emit(LDelivEv);
       end;
       if LCons.NoAck then
       begin
-        // Sem ack nao ha volta: a colocacao acaba aqui, no disco tambem.
+        // Without an ack there is no way back: the placement ends here, on disk too.
         Retire(LEntry.JournalId);
-        LEntry.Msg.Release; // a fila larga a referencia dela agora
+        LEntry.Msg.Release; // the queue drops its reference now
       end
       else
       begin
-        // A referencia do estoque passa para as nao-confirmadas.
+        // The stock's reference passes to the unacked ones.
         //
-        // Priority e ExpiraEm TEM de vir junto: e' com eles que o requeue
-        // devolve a mensagem ao balde certo e com o prazo original (D12/D13).
-        // Faltavam aqui -- o caminho do Basic.Get ja' os copiava, este nao --,
-        // e o registro local ficava com lixo de pilha. Efeito: toda mensagem
-        // entregue a um CONSUMIDOR e depois devolvida (Nack/Reject com
-        // requeue, ou queda do canal) voltava para um balde arbitrario e com um
-        // prazo arbitrario. Ficou invisivel porque os testes de requeue usavam
-        // Basic.Get, e porque fila sem prioridade tem um balde so' e fila sem
-        // TTL nem varre prazo.
+        // Priority and ExpiraEm MUST come along: they are what the requeue uses
+        // to return the message to the right bucket with the original deadline
+        // (D12/D13). They were missing here -- the Basic.Get path already copied
+        // them, this one did not --, and the local record held stack garbage.
+        // Effect: every message delivered to a CONSUMER and then returned
+        // (Nack/Reject with requeue, or a channel going down) went back to an
+        // arbitrary bucket with an arbitrary deadline. It stayed invisible
+        // because the requeue tests used Basic.Get, and because a queue without
+        // priority has a single bucket and a queue without TTL does not even
+        // sweep deadlines.
         LUnacked.ChannelId := LCons.Target.ChannelId;
         LUnacked.DeliveryTag := LTag;
         LUnacked.Msg := LEntry.Msg;
@@ -1530,11 +1537,11 @@ begin
   end;
 end;
 
-// Devolve para a CABECA da fila, marcada como reentregue (spec: Basic.Nack/
-// Reject com requeue devolvem a mensagem a' sua posicao original).
-// Devolve a' CABECA DO PROPRIO BALDE, com o prazo original. Voltar para a
-// cabeca absoluta faria uma mensagem de prioridade baixa furar a fila das
-// altas; zerar o prazo daria sobrevida a quem ja' devia ter morrido.
+// Returns to the HEAD of the queue, marked as redelivered (spec: Basic.Nack/
+// Reject with requeue return the message to its original position).
+// Returns to the HEAD OF ITS OWN BUCKET, with the original deadline. Going back
+// to the absolute head would let a low-priority message jump the queue of the
+// high ones; resetting the deadline would give extra life to one that should already have died.
 procedure TAMQPServerQueue.RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
   AExpiraEm: UInt64; AJournalId, AContentId: UInt64);
 var
@@ -1544,23 +1551,23 @@ begin
   LEntry.Redelivered := True;
   LEntry.Priority := LimitPriority(APriority);
   LEntry.ExpiresAt := AExpiraEm;
-  // A colocacao NAO e' aposentada num requeue: ela continua a mesma no disco,
-  // so' voltou para o estoque. E' o que faz a D27 ("nao-confirmada volta
-  // pronta") sair de graca no replay -- nao ha registro nenhum a escrever.
+  // The placement is NOT retired on a requeue: it stays the same on disk, it
+  // only went back to the stock. That is what makes D27 ("unacked comes back
+  // ready") come for free in the replay -- there is no record at all to write.
   LEntry.JournalId := AJournalId;
   LEntry.ContentId := AContentId;
   TrackBytes(LEntry, +1);
   FRequeued[LEntry.Priority].Enqueue(LEntry);
 end;
 
-// D7: teto global de memoria. Descarta da CABECA (a mais velha) -- o broker
-// roda DENTRO da app do usuario e uma fila sem consumidor nao pode derrubar o
-// processo hospedeiro. Conta so' as prontas (as nao-confirmadas ja estao com
-// um consumidor).
-// O acumulador de bytes existe porque somar os corpos a cada checagem seria
-// O(n) por publish. O preco e' que TODA entrada e saida do estoque tem de
-// passar por aqui -- um caminho esquecido nao da sintoma nenhum na hora, so'
-// um teto que para de valer.
+// D7: global memory cap. Drops from the HEAD (the oldest) -- the broker runs
+// INSIDE the user's app and a queue without a consumer must not bring down the
+// host process. Counts only the ready ones (the unacked ones are already with
+// a consumer).
+// The byte accumulator exists because summing the bodies on every check would
+// be O(n) per publish. The price is that EVERY entry into and exit from the
+// stock must go through here -- a forgotten path gives no symptom at the time,
+// just a cap that stops holding.
 procedure TAMQPServerQueue.Retire(AJournalId: UInt64);
 var
   LRecs: TAMQPJournalRecords;
@@ -1575,11 +1582,11 @@ begin
   LRecs[0].Kind := AMQP_REC_DEQUEUE;
   LRecs[0].Payload := AmqpEncodeRecDequeue(LDeq);
   try
-    // SubmitNoWait, nunca Submit: estamos NA thread do ator.
+    // SubmitNoWait, never Submit: we are ON the actor thread.
     FJournal.SubmitNoWait(LRecs);
   except
-    // Journal em falha ja' avisou quem precisava (o sink da WS5). O ator nao
-    // pode morrer por causa disso -- a fila em memoria continua correta.
+    // A failing journal has already warned whoever needed it (WS5's sink). The
+    // actor must not die because of it -- the in-memory queue is still correct.
     on E: Exception do
       ;
   end;
@@ -1606,15 +1613,15 @@ var
 begin
   if (FMaxLength <= 0) and (FMaxBytes < 0) then
     Exit;
-  // Sai enquanto QUALQUER um dos dois tetos estiver estourado. O teste e' por
-  // ">" e nao ">=": o teto e' o que a fila PODE guardar, entao ela so' descarta
-  // depois de passar dele.
+  // Drops while EITHER of the two caps is exceeded. The test is ">" and not
+  // ">=": the cap is what the queue MAY hold, so it only drops after going
+  // past it.
   while ((FMaxLength > 0) and (ReadyCount > FMaxLength))
     or ((FMaxBytes >= 0) and (FBytesProntos > FMaxBytes)) do
   begin
-    // D12: comeca pelo balde de MENOR prioridade. Descartar da cabeca absoluta
-    // (que e' a de MAIOR prioridade) jogaria fora justamente o que o cliente
-    // marcou como mais importante. Dentro do balde, a cabeca -- a mais velha.
+    // D12: starts with the LOWEST priority bucket. Dropping from the absolute
+    // head (which is the HIGHEST priority one) would throw away exactly what
+    // the client marked as most important. Within the bucket, the head -- the oldest.
     LRemoved := False;
     for I := 0 to High(FStock) do
     begin
@@ -1626,21 +1633,21 @@ begin
         Continue;
       TrackBytes(LEntry, -1);
       Inc(FDropped);
-      // ANTES do DeadLetterWith, que consome a referencia.
+      // BEFORE DeadLetterWith, which consumes the reference.
       EmitMessageEvent(seMessageDropped, LEntry, AMQP_DEATH_MAXLEN);
-      // 'maxlen': o descarte por teto tambem e' morte, e vai para o DLX como
-      // as outras. MorreCom consome a referencia.
+      // 'maxlen': dropping by cap is also a death, and goes to the DLX like the
+      // others. MorreCom consumes the reference.
       DeadLetterWith(LEntry, AMQP_DEATH_MAXLEN);
       LRemoved := True;
       Break;
     end;
     if not LRemoved then
-      Break; // nao ha o que descartar (so' nao-confirmadas)
+      Break; // nothing to drop (only unacked ones)
   end;
 end;
 
-// Ack (ARequeue=False), Nack/Reject com ou sem requeue. AMultiple: todas as
-// tags <= ADeliveryTag DAQUELE canal.
+// Ack (ARequeue=False), Nack/Reject with or without requeue. AMultiple: all
+// tags <= ADeliveryTag OF THAT channel.
 procedure TAMQPServerQueue.ResolveUnacked(AChannelId: NativeUInt;
   ADeliveryTag: UInt64; AMultiple, ARequeue, ARejected: Boolean);
 var
@@ -1667,8 +1674,8 @@ begin
           LEntry.JournalId, LEntry.ContentId)
       else if ARejected then
       begin
-        // 'rejected': nack/reject SEM requeue. O ack cai no else abaixo --
-        // confundir os dois mandaria toda mensagem confirmada para o DLX.
+        // 'rejected': nack/reject WITHOUT requeue. The ack falls into the else
+        // below -- confusing the two would send every acked message to the DLX.
         LQueueEntry.Msg := LEntry.Msg;
         LQueueEntry.Redelivered := True;
         LQueueEntry.Priority := LEntry.Priority;
@@ -1679,8 +1686,8 @@ begin
       end
       else
       begin
-        // ACK: fim de linha. A colocacao sai do disco aqui -- e' o caso comum,
-        // e o unico em que a mensagem some sem ter morrido.
+        // ACK: end of the line. The placement leaves the disk here -- it is the
+        // common case, and the only one in which the message goes away without having died.
         Retire(LEntry.JournalId);
         LEntry.Msg.Release;
       end;
@@ -1708,7 +1715,7 @@ begin
   Result.EverHadConsumer := FEverHadConsumer;
 end;
 
-{ --- observabilidade (Fase 4.1, Inc. 2) ----------------------------------- }
+{ --- observability (Phase 4.1, Inc. 2) ------------------------------------ }
 
 function TAMQPServerQueue.WantsEvent(AType: TAMQPServerEventType): Boolean;
 begin
@@ -1728,8 +1735,8 @@ begin
   LEv.Priority := AEntry.Priority;
   LEv.Redelivered := AEntry.Redelivered;
   LEv.Reason := AReason;
-  // O TAMANHO, nunca o corpo (D34): carregar o corpo poria uma copia de
-  // buffer no caminho mais quente que existe e derrubaria o COW da D1.
+  // The SIZE, never the body (D34): carrying the body would put a buffer copy
+  // on the hottest path there is and would break D1's COW.
   if AEntry.Msg <> nil then
   begin
     LEv.MessageSize := UInt64(AEntry.Msg.BodySize);
@@ -1739,7 +1746,7 @@ begin
   FEvents.Emit(LEv);
 end;
 
-{ --- o despacho de comandos, na thread do ator --- }
+{ --- command dispatch, on the actor thread --- }
 
 procedure TAMQPServerQueue.ExecuteCommand(ACmd: TAMQPQueueCommand);
 var
@@ -1758,32 +1765,32 @@ begin
         LEntry.ContentId := ACmd.ContentId;
         if LEntry.ExpiresAt > 0 then
           FHasExpiration := True;
-        ACmd.Msg := nil; // a referencia passou para o estoque
+        ACmd.Msg := nil; // the reference passed to the stock
         TrackBytes(LEntry, +1);
         FStock[LEntry.Priority].Enqueue(LEntry);
         EmitMessageEvent(seMessageEnqueued, LEntry, '');
-        // A ORDEM importa: expira antes de aplicar o teto, senao uma mensagem
-        // ja vencida ocuparia vaga e faria descartar uma viva.
+        // ORDER matters: expire before applying the cap, otherwise an already
+        // expired message would take up a slot and cause a live one to be dropped.
         ExpireMessages;
         EnforceMaxLength;
       end;
 
     amqqcEnqueueSync:
       begin
-        // Expira ANTES de decidir: uma vencida ocupando vaga faria recusar um
-        // publish vivo -- mesmo motivo da ordem no enqueue assincrono.
+        // Expire BEFORE deciding: an expired message taking up a slot would
+        // cause a live publish to be rejected -- same reason as the order in the async enqueue.
         ExpireMessages;
         if IsFull then
         begin
-          // A referencia fica no comando e sai no destrutor dele.
+          // The reference stays in the command and leaves in its destructor.
           ACmd.ResOk := False;
-          // COMPENSACAO. O registro de colocacao ja' foi escrito pela thread do
-          // publicador ANTES de chegar aqui (D24) -- e' ela quem conhece o LSN.
-          // Se a fila recusa (x-overflow reject-publish, D15), a colocacao
-          // precisa ser aposentada, senao a recuperacao ressuscitaria uma
-          // mensagem que o broker RECUSOU. Escrever o DEQ e' mais simples e mais
-          // seguro que adiar o ENQ: adiar abriria a janela de a mensagem ser
-          // consumida e aposentada ANTES de existir no log.
+          // COMPENSATION. The placement record has already been written by the
+          // publisher thread BEFORE getting here (D24) -- it is the one that
+          // knows the LSN. If the queue rejects (x-overflow reject-publish, D15),
+          // the placement must be retired, otherwise recovery would resurrect a
+          // message the broker REJECTED. Writing the DEQ is simpler and safer
+          // than deferring the ENQ: deferring would open the window for the
+          // message to be consumed and retired BEFORE it exists in the log.
           Retire(ACmd.JournalId);
         end
         else
@@ -1810,14 +1817,14 @@ begin
       begin
         FLastUsed := NowTick;
         FConsumers.Add(ACmd.Consumer);
-        ACmd.Consumer := nil; // a fila e' dona agora
+        ACmd.Consumer := nil; // the queue owns it now
         FEverHadConsumer := True;
       end;
 
     amqqcRemoveConsumer:
       begin
-        // Sair TAMBEM e' uso: e' daqui que o relogio do x-expires comeca a
-        // contar, e nao do instante em que o consumidor entrou.
+        // Leaving is ALSO use: it is from here that the x-expires clock starts
+        // counting, not from the instant the consumer joined.
         FLastUsed := NowTick;
         for I := FConsumers.Count - 1 downto 0 do
           if (FConsumers[I].ChannelId = ACmd.ChannelId)
@@ -1830,8 +1837,8 @@ begin
         for I := FConsumers.Count - 1 downto 0 do
           if FConsumers[I].ChannelId = ACmd.ChannelId then
             FConsumers.Delete(I);
-        // Nao-confirmadas de um canal morto voltam para a fila: o cliente
-        // nunca as confirmou, entao a entrega tem de acontecer de novo.
+        // Unacked messages of a dead channel go back to the queue: the client
+        // never acked them, so the delivery has to happen again.
         I := 0;
         while I < FUnacked.Count do
         begin
@@ -1848,7 +1855,7 @@ begin
         EnforceMaxLength;
       end;
 
-    amqqcAck: // ack NAO e' morte: ARejeitada=False
+    amqqcAck: // an ack is NOT a death: ARejeitada=False
       ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, ACmd.Multiple,
         False, False);
 
@@ -1856,15 +1863,15 @@ begin
       ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, ACmd.Multiple,
         ACmd.Requeue, not ACmd.Requeue);
 
-    amqqcReject: // Basic.Reject nao tem 'multiple'
+    amqqcReject: // Basic.Reject has no 'multiple'
       ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, False, ACmd.Requeue,
         not ACmd.Requeue);
 
     amqqcGet:
       begin
-      FLastUsed := NowTick; // Basic.Get e' uso (spec de fato do RabbitMQ)
-      // Um Basic.Get nao pode devolver mensagem ja vencida -- a expiracao
-      // preguicosa roda no caminho de entrega, e o Get e' o outro caminho.
+      FLastUsed := NowTick; // Basic.Get is use (RabbitMQ's de facto spec)
+      // A Basic.Get must not return an already expired message -- lazy
+      // expiration runs on the delivery path, and Get is the other path.
       ExpireMessages;
       if TakeReady(LEntry) then
       begin
@@ -1873,8 +1880,8 @@ begin
         ACmd.ResMsg := LEntry.Msg;
         if not ACmd.NoAck then
         begin
-          // O chamador leva UMA referencia e a fila guarda a dela nas
-          // nao-confirmadas.
+          // The caller takes ONE reference and the queue keeps its own in
+          // the unacked ones.
           LEntry.Msg.AddRef;
           LUnacked.ChannelId := ACmd.ChannelId;
           LUnacked.DeliveryTag := ACmd.DeliveryTag;
@@ -1886,9 +1893,9 @@ begin
           FUnacked.Add(LUnacked);
         end
         else
-          // Get em no-ack: a colocacao acaba aqui, como na entrega sem ack.
+          // Get in no-ack: the placement ends here, as in delivery without ack.
           Retire(LEntry.JournalId);
-        // Com no-ack a referencia do estoque simplesmente passa ao chamador.
+        // With no-ack the stock's reference simply passes to the caller.
       end
       else
         ACmd.ResOk := False;
@@ -1900,7 +1907,7 @@ begin
         while TakeReady(LEntry) do
         begin
           Retire(LEntry.JournalId);
-          LEntry.Msg.Release; // purge nao e' descarte por limite: nao conta
+          LEntry.Msg.Release; // a purge is not a drop by limit: not counted
           Inc(LCount);
         end;
         ACmd.ResOk := True;
@@ -1917,19 +1924,19 @@ begin
         begin
           ACmd.ResCount := ReadyCount;
           ACmd.ResDelete := amqqdOk;
-          // Avisa quem estava consumindo ANTES de o estado ir embora: a fila
-          // sumiu debaixo deles e o cliente precisa saber (spec 1.7.2.9 --
-          // "the server MUST cancel all consumers"). Best-effort e sem
-          // bloquear: a fila esta' sendo destruida, nao ha retentativa.
+          // Warns whoever was consuming BEFORE the state goes away: the queue
+          // vanished from under them and the client needs to know (spec 1.7.2.9 --
+          // "the server MUST cancel all consumers"). Best-effort and without
+          // blocking: the queue is being destroyed, there is no retry.
           for I := 0 to FConsumers.Count - 1 do
             try
               FConsumers[I].Target.TryCancel(FConsumers[I].ConsumerTag);
             except
               on E: Exception do
-                ; // canal morrendo junto: nao atrapalha o delete
+                ; // channel dying along with it: does not get in the way of the delete
             end;
-          // O estado sai no DrainState do Stop que o Delete dispara --
-          // liberar aqui e depois de novo la' seria double-free.
+          // The state leaves in the DrainState of the Stop the Delete triggers --
+          // freeing it here and then again there would be a double free.
         end;
         ACmd.ResOk := ACmd.ResDelete = amqqdOk;
       end;
@@ -1941,14 +1948,14 @@ begin
       end;
 
     amqqcDeliverTick:
-      ; // so' existe para disparar a rodada de entrega abaixo
+      ; // only exists to trigger the delivery round below
   end;
 
-  // Uma rodada de entrega depois de todo comando que pode ter DESTRAVADO
-  // entrega: mensagem nova, consumidor novo, ack/nack/reject (que libera
-  // prefetch ou devolve mensagem) e o tick do caso degradado da D3. Get,
-  // Purge, Stats, Delete e a saida de um consumidor nunca criam oportunidade
-  // de entrega, entao nem tentam.
+  // A delivery round after every command that may have UNBLOCKED delivery:
+  // a new message, a new consumer, ack/nack/reject (which release prefetch or
+  // return a message) and the tick of D3's degraded case. Get, Purge, Stats,
+  // Delete and a consumer leaving never create a delivery opportunity, so they
+  // do not even try.
   if ACmd.Kind in [amqqcEnqueue, amqqcEnqueueSync, amqqcAddConsumer, amqqcAck, amqqcNack,
     amqqcReject, amqqcRemoveChannel, amqqcDeliverTick] then
     DeliverPending;

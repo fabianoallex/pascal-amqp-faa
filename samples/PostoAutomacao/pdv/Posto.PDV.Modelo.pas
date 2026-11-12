@@ -2,19 +2,20 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ A venda em andamento no PDV + o outbox + a reconciliacao (ARQUITETURA.md
-  §8, §9).
+{ The sale in progress on the POS + the outbox + the reconciliation
+  (ARCHITECTURE.md §8, §9).
 
-  Cada operacao (adicionar item, remover, finalizar, cancelar, reconciliar)
-  roda num worker do PcPool -- a UI nunca bloqueia num RPC. O resultado
-  volta pela UI via OnMudou/OnLog (a UI marca-se suja e le' o estado).
+  Each operation (add item, remove, finalize, cancel, reconcile)
+  runs on a PcPool worker -- the UI never blocks on an RPC. The result
+  comes back to the UI through OnMudou/OnLog (the UI marks itself dirty and
+  reads the state).
 
-  Online, adicionar item e' sincrono (feedback imediato). Offline / timeout,
-  e' otimista: o item entra marcado "pendente" e o comando vai pro outbox,
-  reproduzido na reconexao.
+  Online, adding an item is synchronous (immediate feedback). Offline / timeout,
+  it is optimistic: the item goes in marked "pending" and the command goes to
+  the outbox, replayed on reconnection.
 
-  v1: o outbox e' uma lista em memoria. Numa aplicacao real ele mora no banco
-  local do PDV (a automacao opera em contingencia). Ver ARQUITETURA.md §9. }
+  v1: the outbox is an in-memory list. In a real application it lives in the
+  POS's local database (the automation runs in contingency). See ARCHITECTURE.md §9. }
 
 interface
 
@@ -28,8 +29,8 @@ type
   TItemVenda = record
     Id: string;
     Abastecida: TAbastecida;
-    Confirmado: Boolean;   // servidor aceitou o lancar
-    Conflito: Boolean;     // servidor recusou (em uso em outro caixa)
+    Confirmado: Boolean;   // the server accepted the lancar
+    Conflito: Boolean;     // the server refused (in use at another register)
     Obs: string;
   end;
 
@@ -45,7 +46,7 @@ type
     FLock: TCriticalSection;
     FVenda: string;
     FItens: TList<TItemVenda>;
-    FOutbox: TStringList;   // requisicoes JSON pendentes (uma por linha)
+    FOutbox: TStringList;   // pending JSON requests (one per line)
     FSeq: Integer;
     FOnLog: TOnModeloLog;
     FOnMudou: TOnModeloMudou;
@@ -57,7 +58,7 @@ type
       const AObs: string);
     procedure EnfileiraOutbox(const AReqJson: TBytes);
     function GaranteVenda: string;
-    function ChamarJson(const AReqJson: TBytes): TJsonValue; // nil = sem resposta
+    function ChamarJson(const AReqJson: TBytes): TJsonValue; // nil = no reply
   public
     constructor Create(ACliente: TPostoPdvCliente; ASincronia: TPostoSincronia;
       const APdv: string);
@@ -70,7 +71,7 @@ type
     procedure FinalizarVenda;
     procedure ReconciliarAposReconexao;
 
-    // --- corpos bloqueantes (chamados pelos workers) ---
+    // --- blocking bodies (called by the workers) ---
     procedure ExecAdicionar(const AId: string);
     procedure ExecRemover(const AId: string);
     procedure ExecCancelar;
@@ -242,7 +243,7 @@ begin
   end;
 end;
 
-{ --- disparadores (thread da UI) --- }
+{ --- triggers (UI thread) --- }
 
 procedure TPostoModelo.NovaVenda;
 begin
@@ -311,7 +312,7 @@ begin
   PcPool.Queue(TModeloWork.Create(Self, moReconciliar, ''));
 end;
 
-{ --- corpos bloqueantes (worker do pool) --- }
+{ --- blocking bodies (pool worker) --- }
 
 procedure TPostoModelo.ExecAdicionar(const AId: string);
 var
@@ -394,7 +395,7 @@ begin
   for I := 0 to High(LIds) do
   begin
     LReq := EncReqEstornar(LIds[I], FPdv, LVenda);
-    // motivo CANCEL_VENDA no corpo
+    // CANCEL_VENDA reason in the body
     J := TJsonValue.Parse(BytesParaTexto(LReq));
     try
       J.Put('motivo', MOT_CANCEL_VENDA);
@@ -496,7 +497,7 @@ var
   LVenda: string;
   LE: TAbastecidaEstado;
 begin
-  // 1) drena o outbox, em ordem
+  // 1) drain the outbox, in order
   LFila := TStringList.Create;
   try
     FLock.Enter;
@@ -514,7 +515,7 @@ begin
       J := ChamarJson(AmqpUtf8Encode(LFila[I]));
       if J = nil then
       begin
-        // ainda sem servidor: devolve o resto pro outbox e sai
+        // still no server: put the rest back in the outbox and leave
         FLock.Enter;
         try
           while I < LFila.Count do
@@ -539,7 +540,7 @@ begin
     LFila.Free;
   end;
 
-  // 2) confere os itens da venda aberta contra o espelho ja' re-sincronizado
+  // 2) check the open sale's items against the already re-synced mirror
   FLock.Enter;
   try
     LVenda := FVenda;
@@ -563,7 +564,7 @@ begin
       MarcaItem(LItensAbertos[I], True, False, '')
     else if LE.Estado = eaDisponivel then
     begin
-      // a reserva caiu durante a queda -- tenta de novo
+      // the reservation was lost during the outage -- try again
       J := ChamarJson(EncReqLancar(LItensAbertos[I], FPdv, LVenda));
       if J <> nil then
       try
@@ -585,7 +586,7 @@ begin
   Notificar;
 end;
 
-{ --- leitura (thread da UI) --- }
+{ --- reading (UI thread) --- }
 
 function TPostoModelo.Itens: TArray<TItemVenda>;
 begin

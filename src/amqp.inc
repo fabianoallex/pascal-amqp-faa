@@ -1,11 +1,11 @@
-{ Diretivas de compilacao compartilhadas (dual Delphi / Free Pascal).
+{ Shared compiler directives (dual Delphi / Free Pascal).
 
-  Cada unit da lib inclui este arquivo logo apos o 'unit ...;'. No Delphi ele
-  nao tem efeito; no FPC ativa o mode Delphi (strings longas, advanced records,
-  generics estilo Delphi, type helpers).
+  Every unit of the lib includes this file right after 'unit ...;'. On Delphi it
+  has no effect; on FPC it enables Delphi mode (long strings, advanced records,
+  Delphi-style generics, type helpers).
 
-  AMQP_WINDOWS: definido quando o alvo e' Windows, em qualquer compilador
-  (Delphi define MSWINDOWS; FPC define WINDOWS).
+  AMQP_WINDOWS: defined when the target is Windows, on either compiler
+  (Delphi defines MSWINDOWS; FPC defines WINDOWS).
 
   AMQP_OPENSSL: opt-in (-dAMQP_OPENSSL). Since 0.6.0 it only makes OpenSSL
   the DEFAULT TLS backend (tbDefault); both backends come from

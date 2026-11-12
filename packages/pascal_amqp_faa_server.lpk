@@ -13,7 +13,7 @@
         <UnitOutputDirectory Value="lib\srv-$(TargetCPU)-$(TargetOS)"/>
       </SearchPaths>
     </CompilerOptions>
-    <Description Value="Broker AMQP 0-9-1 embutivel para FPC/Lazarus e Delphi (sub-modulo server do pascal-amqp-faa). Depende do pacote cliente pascal_amqp_faa: reusa o codec de wire, framing, field-tables e o transporte. Fase 1: handshake completo, canais, decodificacao de todo metodo cliente->servidor, heartbeat, close com modelo de erro; sem engine de roteamento ainda."/>
+    <Description Value="Embeddable AMQP 0-9-1 broker for FPC/Lazarus and Delphi (server sub-module of pascal-amqp-faa). Depends on the client package pascal_amqp_faa: reuses its wire codec, framing, field tables and transport. Exchanges (direct/fanout/topic/headers), in-memory queues with one actor each, publisher confirms, TTL, dead-lettering, priorities and queue limits; opt-in durability (WAL with group commit) through DataDir, read-only event observability and server-side TLS."/>
     <License Value="MIT"/>
     <Version Minor="6"/>
     <Files>

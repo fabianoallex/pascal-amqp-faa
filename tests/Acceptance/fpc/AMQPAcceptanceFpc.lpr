@@ -1,14 +1,14 @@
 program AMQPAcceptanceFpc;
 
-{ Aceitacao -- WS9 da Fase 2 (decisao D8 do CLAUDE.md).
+{ Acceptance -- WS9 of Phase 2 (decision D8 in CLAUDE.md).
 
-  Roda EXATAMENTE a mesma suite de integracao do cliente, mas contra o BROKER
-  EMBUTIDO desta lib em vez do RabbitMQ. Nenhum teste e' reescrito: a unica
-  diferenca e' o AmqpUseEmbeddedBroker abaixo, que redireciona o
-  AMQP.IntegrationConfig para a porta efemera do broker in-process.
+  Runs EXACTLY the same client integration suite, but against this library's
+  EMBEDDED BROKER instead of RabbitMQ. No test is rewritten: the only
+  difference is the AmqpUseEmbeddedBroker below, which redirects
+  AMQP.IntegrationConfig to the in-process broker's ephemeral port.
 
-  E' o teste que mede se o broker se comporta como o RabbitMQ na pratica --
-  com um cliente que NAO foi escrito para ele.
+  It is the test that measures whether the broker behaves like RabbitMQ in
+  practice -- with a client that was NOT written for it.
 
     .\AMQPAcceptanceFpc.exe --all --format=plain
 
@@ -17,27 +17,28 @@ program AMQPAcceptanceFpc;
   side on Windows; the `openssl` build mode makes OpenSSL the default). If
   it doesn't come up, the TLS tests find no port and ignore themselves.
 
-  DUAS PASSADAS: TRANSIENTE E DURAVEL (WS10 da Fase 4)
-  ----------------------------------------------------
-  Com --durable o broker embutido sobe com DataDir apontando para um diretorio
-  temporario, e as MESMAS 28 rodam de novo. A pergunta que a segunda passada
-  responde e' diferente da primeira, e e' a razao de ela existir: ligar a
-  durabilidade NAO PODE MUDAR A SEMANTICA que o cliente ve'.
+  TWO PASSES: TRANSIENT AND DURABLE (WS10 of Phase 4)
+  ---------------------------------------------------
+  With AMQP_ACEITACAO_DURAVEL=1 the embedded broker starts with DataDir pointing
+  to a temporary directory, and the SAME 48 run again. The question the second pass
+  answers is different from the first, and it is the reason it exists: turning
+  durability on MUST NOT CHANGE THE SEMANTICS the client sees.
 
-  E' facil escrever um broker durave que quebre algo sutil -- a ordem dos
-  confirms, o momento do Basic.Return, o requeue de uma nao-confirmada -- e
-  nenhum teste da suite do SERVER perceberia, porque todos eles ja' foram
-  escritos sabendo da durabilidade. Estes 28 nao: sao os testes do CLIENTE,
-  escritos contra o RabbitMQ, muito antes de existir Fase 4.
+  It is easy to write a durable broker that breaks something subtle -- the
+  order of the confirms, the moment of Basic.Return, the requeue of an
+  unacknowledged one -- and no test of the SERVER suite would notice, because
+  all of them were written already knowing about durability. These 48 were
+  not: they are the CLIENT tests, written against RabbitMQ, long before Phase 4
+  existed.
 
-  Duas passadas, dois processos:
+  Two passes, two processes:
 
     .\AMQPAcceptanceFpc.exe --all --format=plain
     set AMQP_ACEITACAO_DURAVEL=1 && .\AMQPAcceptanceFpc.exe --all --format=plain
 
-  Processos separados de proposito: um broker duravel recem-criado num
-  diretorio limpo e' o estado que interessa, e reaproveitar o processo
-  carregaria o estado da primeira passada para a segunda. }
+  Separate processes on purpose: a freshly created durable broker in a clean
+  directory is the state that matters, and reusing the process would carry
+  the first pass's state into the second. }
 
 {$mode delphi}{$H+}
 
@@ -61,13 +62,13 @@ uses
   AMQP.TlsIntegrationTests,
   AMQP.ReviewRegressionTests;
 
-// True quando a variavel de ambiente pede a passada duravel.
+// True when the environment variable asks for the durable pass.
 //
-// VARIAVEL, E NAO FLAG, e a razao e' pratica: tanto o runner do FPCUnit quanto
-// o do DUnitX parseiam a linha de comando inteira e RECUSAM opcao que nao
-// conhecem ("Invalid option at position 1"). Um --durable morreria antes de
-// chegar aos testes. A variavel passa ao largo dos dois parsers e vale
-// igualzinho nos dois espelhos.
+// VARIABLE, NOT FLAG, and the reason is practical: both the FPCUnit runner and
+// the DUnitX one parse the whole command line and REJECT options they do not
+// know ("Invalid option at position 1"). A --durable would die before reaching
+// the tests. The variable bypasses both parsers and works exactly the same in
+// both mirrors.
 function PediuDuravel: Boolean;
 var
   LVal: string;
@@ -76,8 +77,8 @@ begin
   Result := (LVal <> '') and (LVal <> '0') and (LVal <> 'false');
 end;
 
-// Diretorio limpo para a passada duravel. Nao reaproveita: um WAL de outra
-// execucao faria a suite comecar com filas e mensagens que ela nao criou.
+// Clean directory for the durable pass. Not reused: a WAL from another run
+// would make the suite start with queues and messages it did not create.
 function DirDuravel: string;
 begin
   Result := IncludeTrailingPathDelimiter(GetTempDir)
@@ -102,14 +103,14 @@ begin
   end;
 end;
 
-// Sobe o broker em 127.0.0.1 numa porta efemera. Devolve a porta escolhida.
+// Starts the broker on 127.0.0.1 on an ephemeral port. Returns the chosen port.
 function IniciaBroker(out ABroker: TAMQPServer;
   const ADataDir: string): Word;
 begin
   ABroker := TAMQPServer.Create;
   ABroker.BindAddress := '127.0.0.1';
-  ABroker.Port := 0; // o SO escolhe
-  ABroker.DataDir := ADataDir; // '' = broker da Fase 3, letra por letra (D19)
+  ABroker.Port := 0; // the OS picks
+  ABroker.DataDir := ADataDir; // '' = the Phase 3 broker, to the letter (D19)
   ABroker.Start;
   Result := ABroker.Port;
 end;

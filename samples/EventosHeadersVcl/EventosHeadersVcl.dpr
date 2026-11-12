@@ -1,18 +1,18 @@
 program EventosHeadersVcl;
 
-{ Pub/sub com exchange headers (GUI): o roteamento usa o casamento de campos do
-  header da mensagem contra critérios de cada binding (x-match all/any), não a
-  routing key. Único sample que exercita binding arguments (TAMQPFieldTable no
-  BindQueue) e a propriedade Headers da mensagem. Contraponto do EventosTopicVcl.
+{ Pub/sub with a headers exchange (GUI): routing matches the message's header
+  fields against each binding's criteria (x-match all/any), not the
+  routing key. The only sample that exercises binding arguments (TAMQPFieldTable
+  in BindQueue) and the message's Headers property. Counterpart of EventosTopicVcl.
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    lazbuild EventosHeadersVcl.lpi
-    Delphi: abrir EventosHeadersVcl.dproj no IDE }
+    Delphi: open EventosHeadersVcl.dproj in the IDE }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

@@ -1,47 +1,47 @@
-﻿# Outbox transacional por um broker AMQP (`src/outbox`)
+﻿# Transactional outbox through an AMQP broker (`src/outbox`)
 
-`AMQP.Outbox` liga o outbox transacional da [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa)
-(`PascalDb.Outbox`, 0.18.0 ou mais nova) a um broker AMQP: o **sink** publica cada evento que o
-relay entrega, e o **consumidor** roda um handler numa fila própria, com retry por fila de
-espera, fila de mortos e deduplicação no banco antes do ack. Entrou na **v0.5.0** (2026-10-31).
+`AMQP.Outbox` connects the transactional outbox of [pascal-db-faa](https://github.com/fabianoallex/pascal-db-faa)
+(`PascalDb.Outbox`, 0.18.0 or newer) to an AMQP broker: the **sink** publishes each event the
+relay delivers, and the **consumer** runs a handler on its own queue, with retry through a
+waiting queue, a dead queue and deduplication in the database before the ack. It landed in **v0.5.0** (2026-10-31).
 
-Veio do pascal-agenda-faa (`Agenda.Outbox.Amqp`, decisão 11 da M7 de lá), a mesma API: o que
-custava copiar é a fila de retry com TTL, a contagem de tentativas pelo `x-death`, a fila de
-mortos e a deduplicação antes do ack. A única troca foi o relógio: lá era o `TJwt.UnixNow` da
-pascal-api-infra-faa, usado só como relógio; aqui é o `TClock` da pascal-common-faa, e a ponte não
-puxa uma terceira lib.
+It came from pascal-agenda-faa (`Agenda.Outbox.Amqp`, decision 11 of its M7), with the same API: what
+was costly to copy is the retry queue with TTL, the attempt count through `x-death`, the dead
+queue and the deduplication before the ack. The only change was the clock: there it was
+pascal-api-infra-faa's `TJwt.UnixNow`, used only as a clock; here it is pascal-common-faa's `TClock`,
+and the bridge does not pull in a third lib.
 
-## Uma ponte, fora dos pacotes
+## A bridge, outside the packages
 
-A unit fica em `src/outbox`, **fora** de `pascal_amqp_faa.lpk` e de `pascal_amqp_faa_server.lpk`,
-como o `src/redis` da pascal-api-infra-faa: ela precisa da pascal-db-faa, que o cliente e o broker
-não precisam. Quem não usa o outbox não compila nem linka nada dela.
+The unit lives in `src/outbox`, **outside** `pascal_amqp_faa.lpk` and `pascal_amqp_faa_server.lpk`,
+like pascal-api-infra-faa's `src/redis`: it needs pascal-db-faa, which the client and the broker
+do not. Whoever does not use the outbox neither compiles nor links anything of it.
 
-| Build | O que somar |
+| Build | What to add |
 |---|---|
-| Lazarus | o pacote `pascal_db_faa` (da cópia que a aplicação fornece) nos pacotes requeridos do projeto; `src/outbox` em *Other unit files* e `src` em *Include files* (a unit começa com `{$I amqp.inc}`) |
-| FPC puro | `-Fu<amqp>/src/outbox -Fi<amqp>/src -Fu<pascal-db-faa>/src -Fi<pascal-db-faa>/src` |
-| Delphi | `src\outbox` e o `src\` da pascal-db-faa no search path |
+| Lazarus | the `pascal_db_faa` package (from the copy the application provides) in the project's required packages; `src/outbox` in *Other unit files* and `src` in *Include files* (the unit starts with `{$I amqp.inc}`) |
+| Plain FPC | `-Fu<amqp>/src/outbox -Fi<amqp>/src -Fu<pascal-db-faa>/src -Fi<pascal-db-faa>/src` |
+| Delphi | `src\outbox` and pascal-db-faa's `src\` in the search path |
 
-Como a pascal-common-faa, a pascal-db-faa é da **aplicação**: o submódulo
-`external/pascal-db-faa` deste repositório serve só aos testes. A pascal-db-faa 0.18.0 exige a
-pascal-common-faa 1.17 ou mais nova, então quem usa a ponte precisa dessa, mesmo que o cliente
-sozinho aceite a 1.8.
+Like pascal-common-faa, pascal-db-faa belongs to the **application**: this repository's
+`external/pascal-db-faa` submodule serves only the tests. pascal-db-faa 0.18.0 requires
+pascal-common-faa 1.17 or newer, so whoever uses the bridge needs that one, even though the client
+alone accepts 1.8.
 
-## A mensagem
+## The message
 
-| Campo do evento (`TOutboxEvent`) | Na mensagem |
+| Event field (`TOutboxEvent`) | In the message |
 |---|---|
-| `Payload` | o corpo, em UTF-8, `content-type: application/json` |
+| `Payload` | the body, in UTF-8, `content-type: application/json` |
 | `Id` | `message-id` |
-| `Kind` | a propriedade `type` e a **routing key** |
+| `Kind` | the `type` property and the **routing key** |
 | `CreatedAt` | `timestamp` |
-| `TenantId` | o header `tenant-id` (`OUTBOX_AMQP_TENANT_HEADER`) |
-| `TraceParent` | não vai como campo: o span do relay é o corrente quando o sink publica, e o `publish` do cliente põe o `traceparent` nos headers (ver [tracing](tracing.md)) |
+| `TenantId` | the `tenant-id` header (`OUTBOX_AMQP_TENANT_HEADER`) |
+| `TraceParent` | not sent as a field: the relay's span is the current one when the sink publishes, and the client's `publish` puts the `traceparent` in the headers (see [tracing](tracing.md)) |
 
-Toda mensagem sai **persistente** (`delivery-mode 2`), num exchange `topic`.
+Every message goes out **persistent** (`delivery-mode 2`), on a `topic` exchange.
 
-## O sink: `TOutboxAmqpSink`
+## The sink: `TOutboxAmqpSink`
 
 ```pascal
 uses PascalDb.Outbox, AMQP.Connection, AMQP.Outbox;
@@ -50,104 +50,104 @@ OutboxAmqpDeclareExchange(Canal, 'loja.eventos');
 Relay := TOutboxRelay.Create(Factory,
   TOutboxAmqpSink.Create(CanalDoRelay, 'loja.eventos'),
   PdbOutboxNewOwner('relay'), TOutboxOptions.Default);
-// num timer ou numa thread de trabalho:
+// in a timer or in a worker thread:
 Relay.RunOnce(AgoraEmSegundosUnix);
 ```
 
-- O construtor põe o canal em **confirm mode**, e cada `Deliver` espera o ack do broker
-  (`AConfirmTimeoutMs`, padrão 5 s). Sem ack, ou com a conexão caída, levanta, e o relay deixa o
-  evento pendente para a próxima passada. O relay não desiste de um sink: broker fora volta.
-- O `Deliver` roda **dentro da transação do relay** (o contrato do `IOutboxSink`): um broker lento
-  segura essa transação (no SQLite, a trava de escrita do banco inteiro).
-- O canal não é do sink (quem o cria o libera) e é usado por uma thread de cada vez, a do relay.
-- Um evento cujo `Kind` não casa binding nenhum é aceito pelo broker e descartado: o confirm sai do
-  mesmo jeito. É assim que uma fila nova só recebe o que foi publicado depois de ela existir.
+- The constructor puts the channel in **confirm mode**, and each `Deliver` waits for the broker's ack
+  (`AConfirmTimeoutMs`, default 5 s). Without an ack, or with the connection down, it raises, and the relay leaves the
+  event pending for the next pass. The relay does not give up on a sink: a broker that is down comes back.
+- `Deliver` runs **inside the relay's transaction** (the `IOutboxSink` contract): a slow broker
+  holds that transaction (in SQLite, the write lock of the whole database).
+- The channel does not belong to the sink (whoever creates it frees it) and is used by one thread at a time, the relay's.
+- An event whose `Kind` matches no binding is accepted by the broker and dropped: the confirm goes out
+  all the same. That is how a new queue only receives what was published after it exists.
 
-## O consumidor: `TOutboxAmqpConsumer`
+## The consumer: `TOutboxAmqpConsumer`
 
 ```pascal
 Fila := TOutboxAmqpQueue.Create('loja.email', 'loja.eventos', 'pedido.#');
-Fila.RetryDelayMs := 30000; // padrão
-Fila.MaxAttempts := 10;     // padrão (OUTBOX_DEFAULT_MAX_ATTEMPTS)
+Fila.RetryDelayMs := 30000; // default
+Fila.MaxAttempts := 10;     // default (OUTBOX_DEFAULT_MAX_ATTEMPTS)
 OutboxAmqpDeclareQueues(Canal, Fila);
 
 Consumidor := TOutboxAmqpConsumer.Create(Factory, CanalDoConsumidor, Fila, 'email', HandlerDeEmail);
-Consumidor.OnError := Log.OnOutboxError; // um método
+Consumidor.OnError := Log.OnOutboxError; // a method
 Consumidor.Start;
 ...
-Consumidor.Stop;           // antes de fechar o canal e de liberar o consumidor
+Consumidor.Stop;           // before closing the channel and freeing the consumer
 CanalDoConsumidor.Free;
 Consumidor.Free;
 ```
 
-### Três filas por consumidor
+### Three queues per consumer
 
-`OutboxAmqpDeclareQueues` declara, todas duráveis:
+`OutboxAmqpDeclareQueues` declares, all durable:
 
 ```
 exchange (topic) --binding--> loja.email --nack--> loja.email.retry --TTL--> loja.email
-                                  |                (sem consumidor)
+                                  |                (no consumer)
                                   +--(MaxAttempts)--> loja.email.dead
 ```
 
-- **`loja.email`**, a fila de trabalho, ligada ao exchange pela binding key, com dead-letter para
-  a fila de retry (pelo exchange padrão, que roteia pelo nome da fila).
-- **`loja.email.retry`**, sem consumidor, com `x-message-ttl = RetryDelayMs` e dead-letter de volta
-  para a fila de trabalho. É o TTL **da fila**, não um por mensagem: o `expiration` de uma
-  mensagem só vence quando ela chega na cabeça da fila.
-- **`loja.email.dead`**, onde a mensagem que esgotou as tentativas fica parada, como chegou.
+- **`loja.email`**, the work queue, bound to the exchange by the binding key, with dead-letter to
+  the retry queue (through the default exchange, which routes by queue name).
+- **`loja.email.retry`**, with no consumer, with `x-message-ttl = RetryDelayMs` and dead-letter back
+  to the work queue. It is the **queue's** TTL, not a per-message one: a message's `expiration`
+  only expires when the message reaches the head of the queue.
+- **`loja.email.dead`**, where the message that used up its attempts stays parked, as it arrived.
 
-Mudar o `RetryDelayMs` muda os argumentos da fila de retry, e redeclarar uma fila com outros
-argumentos é `PRECONDITION_FAILED` (406): apague a fila antes.
+Changing `RetryDelayMs` changes the retry queue's arguments, and redeclaring a queue with other
+arguments is `PRECONDITION_FAILED` (406): delete the queue first.
 
-### O que cada entrega vira
+### What each delivery turns into
 
-1. Se o handler não aceita o `Kind` (outro tipo debaixo da mesma binding key): **ack**, nada roda.
-2. Se o evento já está em `PROCESSED_EVENTS` para este consumidor (uma reentrega do broker, ou o
-   relay que publicou duas vezes depois de perder a lease): **ack**, o handler não roda de novo.
-3. Senão roda o handler, grava o evento em `PROCESSED_EVENTS` e dá **ack**. É at-least-once: uma
-   queda entre o handler e a gravação roda o handler de novo.
-4. Handler que levanta: `OnError`, e **`Nack` sem requeue**. O dead-letter da fila de trabalho leva
-   a mensagem para a fila de retry, e ela volta depois do TTL.
-5. As tentativas já feitas são as entradas `rejected` **da fila de trabalho** no header `x-death`
-   (o broker não conta tentativas sozinho). Na tentativa `MaxAttempts` que falha, o consumidor
-   publica a mensagem na fila de mortos e dá ack nela.
-6. Mensagem que não é evento do outbox (sem `message-id`, `type` ou `tenant-id`) vai direto para a
-   fila de mortos.
+1. If the handler does not accept the `Kind` (another type under the same binding key): **ack**, nothing runs.
+2. If the event is already in `PROCESSED_EVENTS` for this consumer (a redelivery by the broker, or the
+   relay that published twice after losing the lease): **ack**, the handler does not run again.
+3. Otherwise it runs the handler, records the event in `PROCESSED_EVENTS` and **acks**. It is at-least-once: a
+   crash between the handler and the recording runs the handler again.
+4. A handler that raises: `OnError`, and **`Nack` without requeue**. The work queue's dead-letter takes
+   the message to the retry queue, and it comes back after the TTL.
+5. The attempts already made are the `rejected` entries **of the work queue** in the `x-death` header
+   (the broker does not count attempts by itself). On the failing attempt number `MaxAttempts`, the consumer
+   publishes the message to the dead queue and acks it.
+6. A message that is not an outbox event (no `message-id`, `type` or `tenant-id`) goes straight to the
+   dead queue.
 
-Os callbacks rodam **em paralelo** no pool do processo (`PcPool`), até o prefetch
-(`TOutboxAmqpQueue.Prefetch`, padrão 10): o handler tem de aceitar isso. `InFlight` conta os
-callbacks em andamento, para quem espera o consumidor sossegar.
+The callbacks run **in parallel** on the process pool (`PcPool`), up to the prefetch
+(`TOutboxAmqpQueue.Prefetch`, default 10): the handler has to accept that. `InFlight` counts the
+callbacks in progress, for whoever waits for the consumer to settle.
 
-`Stop` cancela o consumer e espera (até `AWaitMs`) os callbacks em andamento; um callback que
-começa depois disso não roda o handler nem dá ack, e o fechamento do canal devolve a mensagem à
-fila. Chame antes de fechar o canal (nada de trabalho novo enquanto o processo encerra) e antes de
-liberar o consumidor.
+`Stop` cancels the consumer and waits (up to `AWaitMs`) for the callbacks in progress; a callback that
+starts after that neither runs the handler nor acks, and closing the channel returns the message to the
+queue. Call it before closing the channel (no new work while the process shuts down) and before
+freeing the consumer.
 
-`OutboxAmqpPending` soma as mensagens prontas nas filas de trabalho e de retry (não as entregues
-ainda sem ack), e `OutboxAmqpEvent` lê o evento de uma entrega, com as tentativas.
+`OutboxAmqpPending` sums the ready messages in the work and retry queues (not the ones delivered
+but not yet acked), and `OutboxAmqpEvent` reads the event from a delivery, with the attempts.
 
-### Métricas
+### Metrics
 
-No `PcMetrics` da pascal-common-faa, contado depois do ack, do nack ou do estacionamento:
+In pascal-common-faa's `PcMetrics`, counted after the ack, the nack or the parking:
 
-| Métrica | Labels |
+| Metric | Labels |
 |---|---|
-| `outbox.consumer.messages` | `outbox.consumer`, `outbox.event.kind` (`other` para um tipo que o handler não aceita, para quem publica no exchange não inflar as séries), `outbox.result` (`done`, `duplicate`, `ignored`, `retried`, `parked`) |
+| `outbox.consumer.messages` | `outbox.consumer`, `outbox.event.kind` (`other` for a type the handler does not accept, so that whoever publishes to the exchange does not inflate the series), `outbox.result` (`done`, `duplicate`, `ignored`, `retried`, `parked`) |
 
-## O SQL é da aplicação
+## The SQL belongs to the application
 
-Como o do `PascalDb.Outbox`, o SQL é lido **pelo nome** no loader da factory, e a tabela é da
-aplicação:
+Like `PascalDb.Outbox`'s, the SQL is read **by name** from the factory's loader, and the table belongs to the
+application:
 
-| Constante | Nome | Parâmetros |
+| Constant | Name | Parameters |
 |---|---|---|
-| `PROCESSED_SQL_EXISTS` | `PROCESSED.EXISTS` | `CONSUMER`, `TENANT_ID`, `EVENT_ID`; uma linha se já processado |
-| `PROCESSED_SQL_INSERT` | `PROCESSED.INSERT` | `CONSUMER`, `TENANT_ID`, `EVENT_ID`, `NOW` (segundos Unix) |
-| `PROCESSED_SQL_PURGE` | `PROCESSED.PURGE` | `BEFORE` (segundos Unix); chamado por `OutboxAmqpPurgeProcessed` |
+| `PROCESSED_SQL_EXISTS` | `PROCESSED.EXISTS` | `CONSUMER`, `TENANT_ID`, `EVENT_ID`; one row if already processed |
+| `PROCESSED_SQL_INSERT` | `PROCESSED.INSERT` | `CONSUMER`, `TENANT_ID`, `EVENT_ID`, `NOW` (Unix seconds) |
+| `PROCESSED_SQL_PURGE` | `PROCESSED.PURGE` | `BEFORE` (Unix seconds); called by `OutboxAmqpPurgeProcessed` |
 
-Referência (**testada no SQLite**, pela suíte `tests/Outbox`; a mesma forma vale no PostgreSQL,
-que é o que o pascal-agenda-faa roda):
+Reference (**tested on SQLite**, by the `tests/Outbox` suite; the same form works on PostgreSQL,
+which is what pascal-agenda-faa runs):
 
 ```sql
 CREATE TABLE PROCESSED_EVENTS (
@@ -171,28 +171,28 @@ ON CONFLICT (CONSUMER, TENANT_ID, EVENT_ID) DO NOTHING
 DELETE FROM PROCESSED_EVENTS WHERE PROCESSED_AT < :BEFORE
 ```
 
-O `ON CONFLICT ... DO NOTHING` cobre dois consumidores da mesma fila que receberam a mesma
-mensagem (uma reentrega enquanto o primeiro ainda rodava). Num banco sem essa forma, um `INSERT`
-simples também serve: a chave primária recusa o segundo, o callback trata como falha, e a
-reentrega seguinte cai no passo 2 (já processado) e leva ack. O `PROCESSED_AT` é o `TClock` da
-pascal-common-faa em segundos Unix (UTC), trocável nos testes (`TClock.SetClock`).
+`ON CONFLICT ... DO NOTHING` covers two consumers of the same queue that received the same
+message (a redelivery while the first was still running). On a database without that form, a plain `INSERT`
+works too: the primary key rejects the second one, the callback treats it as a failure, and the
+next redelivery falls into step 2 (already processed) and gets acked. `PROCESSED_AT` is
+pascal-common-faa's `TClock` in Unix seconds (UTC), replaceable in tests (`TClock.SetClock`).
 
-O purge de `PROCESSED_EVENTS` é da aplicação, no ritmo que ela quiser: uma linha só precisa viver
-enquanto o broker ainda pode reentregar aquele evento.
+Purging `PROCESSED_EVENTS` is up to the application, at whatever pace it wants: a row only needs to live
+while the broker can still redeliver that event.
 
-## Testes
+## Tests
 
-`tests/Outbox` (DUnitX `AMQP.OutboxTests.dproj`, FPCUnit `fpc/AMQPOutboxTestsFpc.lpi`, espelho
-gerado): 8 testes contra o **broker embutido** em porta efêmera, com um arquivo SQLite no
-diretório temporário (`AMQP.OutboxTestDb`: SQLdb no FPC, FireDAC no Delphi). Nenhum RabbitMQ.
+`tests/Outbox` (DUnitX `AMQP.OutboxTests.dproj`, FPCUnit `fpc/AMQPOutboxTestsFpc.lpi`, generated
+mirror): 8 tests against the **embedded broker** on an ephemeral port, with an SQLite file in the
+temp directory (`AMQP.OutboxTestDb`: SQLdb on FPC, FireDAC on Delphi). No RabbitMQ.
 
-- a mensagem publicada e seus campos, com confirm;
-- tratado uma vez e gravado; reentregue e não rodado de novo; outro tipo, ack sem rodar;
-- uma falha refeita a partir da fila de retry; estacionado depois das tentativas;
-- o purge por idade; o `PROCESSED_AT` vindo do `TClock` (a mutação "ler `SysUtils.Now` em vez do
-  `TClock`" derruba este).
+- the published message and its fields, with confirm;
+- handled once and recorded; redelivered and not run again; another type, ack without running;
+- a failure redone from the retry queue; parked after the attempts;
+- the purge by age; `PROCESSED_AT` coming from `TClock` (the mutation "read `SysUtils.Now` instead of
+  `TClock`" kills this one).
 
-O FPC carrega a biblioteca do SQLite: no Windows, a `sqlite3.dll` **do sqlite.org** (a do Python
-não tem as funções de metadado que o SQLdb usa; ver gotcha 23 da pascal-db-faa) ao lado do runner,
-ou em `AMQP_SQLITE_CLIENT`; no Linux, `libsqlite3.so.0` (`apt install libsqlite3-0`). O FireDAC
-linka o SQLite no programa. No Linux, `SUITES=outbox sh tools/test_fpc_docker.sh`.
+FPC loads the SQLite library: on Windows, the `sqlite3.dll` **from sqlite.org** (Python's
+lacks the metadata functions SQLdb uses; see pascal-db-faa's gotcha 23) next to the runner,
+or in `AMQP_SQLITE_CLIENT`; on Linux, `libsqlite3.so.0` (`apt install libsqlite3-0`). FireDAC
+links SQLite into the program. On Linux, `SUITES=outbox sh tools/test_fpc_docker.sh`.

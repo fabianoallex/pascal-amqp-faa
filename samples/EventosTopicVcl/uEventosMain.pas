@@ -1,36 +1,36 @@
 ﻿unit uEventosMain;
 
-{ Pub/sub com exchange TOPIC: eventos publicados com uma routing key
-  hierárquica (ex.: 'nota.aprovada', 'pdv.7.venda') chegam a TODO assinante
-  cuja binding key case — '*' casa exatamente uma palavra, '#' casa zero ou
-  mais. Diferente das filas de trabalho dos outros samples (cada mensagem vai
-  a UM consumidor), aqui cada assinante tem a PRÓPRIA fila (exclusiva +
-  auto-delete, descartável) ligada ao exchange pela binding key — um evento
-  pode ser entregue a vários assinantes ao mesmo tempo, ou a nenhum.
+{ Pub/sub with a TOPIC exchange: events published with a hierarchical routing
+  key (e.g. 'nota.aprovada', 'pdv.7.venda') reach EVERY subscriber whose
+  binding key matches: '*' matches exactly one word, '#' matches zero or
+  more. Unlike the work queues of the other samples (each message goes to
+  ONE consumer), here each subscriber has its OWN queue (exclusive +
+  auto-delete, disposable) bound to the exchange by the binding key: one event
+  can be delivered to several subscribers at once, or to none.
 
-  A tela permite criar assinantes dinamicamente (binding key livre) e
-  publicar eventos com qualquer routing key; a lista de eventos mostra QUEM
-  recebeu O QUÊ (o mesmo evento aparece uma vez por assinante que casou). O
-  publish usa mandatory + OnBasicReturn: evento que não casa com nenhum
-  assinante é devolvido pelo broker e aparece no log — pub/sub é
-  fire-and-forget, sem assinante o evento se perde (de propósito).
+  The screen lets you create subscribers dynamically (free binding key) and
+  publish events with any routing key; the event list shows WHO received
+  WHAT (the same event appears once per matching subscriber). The publish
+  uses mandatory + OnBasicReturn: an event that matches no subscriber is
+  returned by the broker and shows up in the log; pub/sub is fire-and-forget,
+  and without a subscriber the event is lost (on purpose).
 
-  Remover um assinante desfaz na ordem: Cancel (para as entregas), Unbind
-  (tira o binding e o remove da topologia de recovery) e DeleteQueue (apaga a
-  fila e remove o declare gravado) — sem isso, uma reconexão replayaria um
-  bind para fila inexistente (erro 404 no canal). É também o único sample que
-  exercita DeclareExchange/BindQueue/UnbindQueue.
+  Removing a subscriber undoes in this order: Cancel (stops the deliveries),
+  Unbind (removes the binding and drops it from the recovery topology) and
+  DeleteQueue (deletes the queue and removes the recorded declare); without it,
+  a reconnection would replay a bind for a missing queue (404 on the channel).
+  It is also the only sample that exercises DeclareExchange/BindQueue/UnbindQueue.
 
-  Compila nos dois mundos a partir do MESMO fonte (padrão dos samples GUI):
-  callbacks nomeados ('of object'), marshals descartáveis + TThread.Queue
-  para a UI (ver RetaguardaVcl) e eventos de conexão saltando pelo PcPool
-  (gotcha do TThread.Queue descartado; ver TConexaoEventoWork e CLAUDE.md). }
+  Compiles in both worlds from the SAME source (GUI samples pattern):
+  named callbacks ('of object'), disposable marshals + TThread.Queue
+  for the UI (see RetaguardaVcl) and connection events hopping through PcPool
+  (the dropped TThread.Queue gotcha; see TConexaoEventoWork and CLAUDE.md). }
 
 interface
 
 uses
-  // No FPC, a camada de emulacao da LCL (LCLIntf/LCLType/LMessages) cobre as
-  // chamadas WinAPI do autoscroll do log em qualquer widgetset (win32, gtk2...).
+  // On FPC, the LCL emulation layer (LCLIntf/LCLType/LMessages) covers the
+  // WinAPI calls of the log autoscroll on any widgetset (win32, gtk2...).
   {$IFDEF FPC}
   LCLIntf, LCLType, LMessages,
   {$ELSE}
@@ -43,9 +43,9 @@ uses
   AMQP.Exchange.Methods, AMQP.Queue.Methods, AMQP.Basic.Methods;
 
 type
-  { Um assinante: fila exclusiva própria ligada ao exchange pela binding key.
-    Criado e destruído SOMENTE na thread da UI; o mapa por consumer-tag é
-    consultado só nos marshals (também na thread da UI). }
+  { One subscriber: its own exclusive queue bound to the exchange by the binding
+    key. Created and destroyed ONLY on the UI thread; the map by consumer tag is
+    read only in the marshals (also on the UI thread). }
   TAssinante = class
     Numero: Integer;
     BindingKey: string;
@@ -104,7 +104,7 @@ type
     FChannel: TAMQPChannel;
     FExchange: string;
     FProximoNumero: Integer;
-    // Assinantes por consumer-tag; tocado SOMENTE na thread da UI.
+    // Subscribers by consumer tag; touched ONLY on the UI thread.
     FAssinantes: TDictionary<string, TAssinante>;
     function ScrollAtBottom(AHandle: HWND): Boolean;
     procedure Log(const AMsg: string);
@@ -112,13 +112,13 @@ type
     function BuildParams: TAMQPConnectionParams;
     procedure RemoverAssinante(AAssinante: TAssinante);
     procedure RemoverTodosAssinantes;
-    // Atualizações de UI (thread da UI, via marshals):
+    // UI updates (UI thread, through marshals):
     procedure EventoRecebido(const ATag, ARoutingKey, ACorpo: string);
     procedure EventoDevolvido(const ARoutingKey, ACorpo: string);
     procedure ConexaoCaiu;
     procedure ConexaoVoltou;
     procedure ConexaoFalhou;
-    // Callbacks da lib (threads do pool / de reconexão):
+    // Lib callbacks (pool / reconnection threads):
     procedure OnEvento(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure OnDevolvida(AChannel: TAMQPChannel; const AReturned: TAMQPReturnedMessage);
     procedure OnDesconectado(AConnection: TAMQPConnection);
@@ -139,7 +139,7 @@ implementation
 
 {$IFDEF FPC}
 const
-  // A LCL nao tem a unit Messages; LM_VSCROLL tem o mesmo valor do WM_VSCROLL.
+  // The LCL has no Messages unit; LM_VSCROLL has the same value as WM_VSCROLL.
   WM_VSCROLL = LM_VSCROLL;
 {$ENDIF}
 
@@ -152,10 +152,10 @@ begin
 end;
 
 type
-  // Um objeto por chamada: TThread.Queue no FPC so' aceita 'procedure of
-  // object' SEM PARAMETROS, entao os dados viajam num objeto descartavel
-  // (nao num campo compartilhado da form, que teria corrida entre callbacks
-  // concorrentes). Se autodestroi apos rodar. Ver RetaguardaVcl.
+  // One object per call: TThread.Queue on FPC only accepts a 'procedure of
+  // object' WITHOUT PARAMETERS, so the data travels in a disposable object
+  // (not in a shared field of the form, which would race between concurrent
+  // callbacks). It frees itself after running. See RetaguardaVcl.
   TLogMarshal = class
     Form: TfrmEventos;
     Texto: string;
@@ -182,10 +182,10 @@ type
     procedure Execute;
   end;
 
-  { Eventos de conexão rodam na thread de RECONEXÃO da lib, que morre logo
-    após o OnReconnect — no FPC um TThread.Queue postado por thread que morre
-    antes do bombeio é DESCARTADO (gotcha no CLAUDE.md). Salto por um worker
-    persistente do PcPool. }
+  { Connection events run on the lib's RECONNECTION thread, which dies right
+    after OnReconnect; on FPC a TThread.Queue posted by a thread that dies
+    before the pump is DROPPED (gotcha in CLAUDE.md). Hop through a persistent
+    PcPool worker. }
   TConexaoEventoWork = class(TPcWorkItem)
   private
     FForm: TfrmEventos;
@@ -244,8 +244,8 @@ end;
 
 procedure TfrmEventos.FormCreate(Sender: TObject);
 begin
-  // Backend TLS deste build (SChannel/OpenSSL/nenhum), pra conferir de cara
-  // qual motor um executável usa.
+  // TLS backend of this build (SChannel/OpenSSL/none), to see at a glance
+  // which engine an executable uses.
   Caption := Caption + '  [TLS: ' + AmqpTlsBackendName + ']';
   FAssinantes := TDictionary<string, TAssinante>.Create;
   SetConectado(False);
@@ -262,18 +262,18 @@ end;
 
 procedure TfrmEventos.FormClose(Sender: TObject; var Action: TCloseAction);
 begin
-  // Só cancela os consumers (as filas são exclusivas + auto-delete: morrem
-  // com a conexão). O desfazer completo fica no botão Remover.
+  // Only cancels the consumers (the queues are exclusive + auto-delete: they die
+  // with the connection). The full undo is the Remove button's job.
   if Assigned(FChannel) then
     RemoverTodosAssinantes;
   FreeAndNil(FChannel);
-  // O Free acima drena os callbacks em voo; os marshals que eles postaram
-  // ainda estao na fila do TThread.Queue — bombear aqui os drena com a form
-  // ainda viva (ver RetaguardaVcl.FormClose).
+  // The Free above drains the callbacks in flight; the marshals they posted
+  // are still in the TThread.Queue queue, and pumping here drains them with the
+  // form still alive (see RetaguardaVcl.FormClose).
   Application.ProcessMessages;
   FreeAndNil(FConn);
-  // O Free da conexao encerra a thread de reconexao; um TConexaoEventoWork ja
-  // enfileirado no pool pode estar postando o ultimo marshal NESTE instante.
+  // Freeing the connection ends the reconnection thread; a TConexaoEventoWork
+  // already queued on the pool may be posting the last marshal RIGHT NOW.
   Sleep(100);
   Application.ProcessMessages;
 end;
@@ -286,7 +286,7 @@ begin
   LInfo.cbSize := SizeOf(LInfo);
   LInfo.fMask := SIF_ALL;
   if not GetScrollInfo(AHandle, SB_VERT, LInfo) then
-    Exit(True); // sem scrollbar ainda (conteudo cabe todo) = considera "no fim"
+    Exit(True); // no scrollbar yet (all content fits) = treat as "at the end"
   Result := (LInfo.nPos + Integer(LInfo.nPage)) >= LInfo.nMax;
 end;
 
@@ -343,8 +343,8 @@ begin
   if AConectado then
   begin
     btnConectar.Caption := 'Desconectar';
-    // Com TLS, mostra o motor que CARREGOU de fato (o OpenSSL publica versão
-    // e DLL/soname na 1ª conexão — ver AmqpTlsBackendInfo).
+    // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
+    // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
       lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
     else
@@ -370,7 +370,7 @@ begin
   btnRemover.Enabled := AConectado;
 end;
 
-{ --- assinantes ------------------------------------------------------------- }
+{ --- subscribers ------------------------------------------------------------ }
 
 procedure TfrmEventos.btnAssinarClick(Sender: TObject);
 var
@@ -395,8 +395,8 @@ begin
     LAssinante.BindingKey := LBind;
     LAssinante.Fila := Format('eventos-sub%d-%s', [LAssinante.Numero, NovoSufixo]);
 
-    // Fila descartável do assinante: exclusiva (só esta conexão) e
-    // auto-delete (morre quando o consumer cancela / a conexão cai).
+    // The subscriber's disposable queue: exclusive (this connection only) and
+    // auto-delete (dies when the consumer cancels / the connection drops).
     LDeclare := TAMQPQueueDeclare.Create(LAssinante.Fila, False);
     LDeclare.Exclusive := True;
     LDeclare.AutoDelete := True;
@@ -405,7 +405,7 @@ begin
     LQueueBind := Default(TAMQPQueueBind);
     LQueueBind.QueueName := LAssinante.Fila;
     LQueueBind.ExchangeName := FExchange;
-    LQueueBind.RoutingKey := LBind; // binding key ('*' = 1 palavra; '#' = 0+)
+    LQueueBind.RoutingKey := LBind; // binding key ('*' = 1 word; '#' = 0+)
     FChannel.BindQueue(LQueueBind);
 
     LAssinante.Tag := FChannel.Consume(LAssinante.Fila, OnEvento, True); // NoAck
@@ -429,24 +429,24 @@ begin
     [LAssinante.Numero, LAssinante.BindingKey, LAssinante.Fila]));
 end;
 
-// Desfaz na ordem inversa da criação — e reconcilia a topologia de recovery:
-// sem o Unbind/DeleteQueue, uma reconexão replayaria o bind gravado para uma
-// fila que não existe mais (erro 404 fecharia o canal no meio do recovery).
+// Undoes in the reverse order of creation, and reconciles the recovery topology:
+// without the Unbind/DeleteQueue, a reconnection would replay the recorded bind
+// for a queue that no longer exists (a 404 would close the channel mid-recovery).
 procedure TfrmEventos.RemoverAssinante(AAssinante: TAssinante);
 var
   LUnbind: TAMQPQueueUnbind;
   LDelete: TAMQPQueueDelete;
 begin
   try
-    FChannel.Cancel(AAssinante.Tag); // para as entregas (e limpa o recovery do consumer)
+    FChannel.Cancel(AAssinante.Tag); // stops the deliveries (and clears the consumer from recovery)
     LUnbind := Default(TAMQPQueueUnbind);
     LUnbind.QueueName := AAssinante.Fila;
     LUnbind.ExchangeName := FExchange;
     LUnbind.RoutingKey := AAssinante.BindingKey;
-    FChannel.UnbindQueue(LUnbind);   // desfaz o binding (e o remove do recovery)
+    FChannel.UnbindQueue(LUnbind);   // undoes the binding (and removes it from recovery)
     LDelete := Default(TAMQPQueueDelete);
     LDelete.QueueName := AAssinante.Fila;
-    FChannel.DeleteQueue(LDelete);   // apaga a fila (e remove o declare do recovery)
+    FChannel.DeleteQueue(LDelete);   // deletes the queue (and removes the declare from recovery)
   except
     on E: Exception do
       Log('Erro ao remover assinante ' + IntToStr(AAssinante.Numero) + ': ' + E.Message);
@@ -471,8 +471,8 @@ begin
   RemoverAssinante(TAssinante(lvAssinantes.Selected.Data));
 end;
 
-// No encerramento/desconexão: só cancela os consumers (drena as entregas em
-// voo); as filas exclusivas/auto-delete morrem sozinhas com a conexão.
+// On shutdown/disconnect: only cancels the consumers (drains the deliveries in
+// flight); the exclusive/auto-delete queues die on their own with the connection.
 procedure TfrmEventos.RemoverTodosAssinantes;
 var
   LAssinante: TAssinante;
@@ -491,17 +491,17 @@ begin
   lvAssinantes.Items.Clear;
 end;
 
-{ --- eventos ---------------------------------------------------------------- }
+{ --- events ----------------------------------------------------------------- }
 
-// Roda numa thread do pool; um mesmo evento dispara este callback uma vez POR
-// assinante casado (cada um tem fila e consumer próprios).
+// Runs on a pool thread; one event fires this callback once PER matched
+// subscriber (each has its own queue and consumer).
 procedure TfrmEventos.OnEvento(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   LMarshal: TEventoMarshal;
 begin
   LMarshal := TEventoMarshal.Create;
   LMarshal.Form := Self;
-  LMarshal.Tag := ADelivery.ConsumerTag; // identifica o assinante
+  LMarshal.Tag := ADelivery.ConsumerTag; // identifies the subscriber
   LMarshal.RoutingKey := ADelivery.RoutingKey;
   LMarshal.Corpo := ADelivery.BodyAsText;
   TThread.Queue(nil, LMarshal.Execute);
@@ -514,7 +514,7 @@ var
   LAtBottom: Boolean;
 begin
   if not FAssinantes.TryGetValue(ATag, LAssinante) then
-    Exit; // entrega tardia de assinante já removido: descarta em silêncio
+    Exit; // late delivery for a subscriber already removed: drop it silently
 
   Inc(LAssinante.Recebidas);
   if LAssinante.Item <> nil then
@@ -548,7 +548,7 @@ begin
     'que case — pub/sub sem assinante perde o evento.', [ACorpo, ARoutingKey]));
 end;
 
-{ --- publicação ------------------------------------------------------------- }
+{ --- publishing ------------------------------------------------------------- }
 
 procedure TfrmEventos.btnPublicarClick(Sender: TObject);
 var
@@ -569,8 +569,8 @@ begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
   try
-    // mandatory=True: sem NENHUM binding casando, o broker devolve o evento
-    // (Basic.Return) em vez de descartar em silêncio — visível no log.
+    // mandatory=True: with NO matching binding, the broker returns the event
+    // (Basic.Return) instead of dropping it silently, so it is visible in the log.
     FChannel.Publish(FExchange, LRk, AmqpUtf8Encode(LCorpo), LProps, True);
     Log(Format('Publicado "%s" com routing key "%s".', [LCorpo, LRk]));
   except
@@ -579,7 +579,7 @@ begin
   end;
 end;
 
-{ --- eventos de conexão ------------------------------------------------------ }
+{ --- connection events ------------------------------------------------------ }
 
 procedure TfrmEventos.ConexaoCaiu;
 begin
@@ -602,8 +602,8 @@ begin
   Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
 end;
 
-// Os três eventos de conexão saltam pelo PcPool em vez de postar direto
-// (ver o comentário de TConexaoEventoWork).
+// The three connection events hop through PcPool instead of posting directly
+// (see the comment on TConexaoEventoWork).
 procedure TfrmEventos.OnDesconectado(AConnection: TAMQPConnection);
 begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceCaiu));
@@ -619,7 +619,7 @@ begin
   PcPool.Queue(TConexaoEventoWork.Create(Self, ceFalhou));
 end;
 
-{ --- conexão ----------------------------------------------------------------- }
+{ --- connection ------------------------------------------------------------- }
 
 procedure TfrmEventos.btnConectarClick(Sender: TObject);
 var

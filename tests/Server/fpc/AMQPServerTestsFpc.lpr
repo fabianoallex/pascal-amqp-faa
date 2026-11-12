@@ -1,10 +1,10 @@
 ﻿program AMQPServerTestsFpc;
 
-{ Runner FPCUnit dos testes do sub-módulo broker (server).
+{ FPCUnit runner for the broker (server) sub-module tests.
 
   Console: .\AMQPServerTestsFpc.exe --all --format=plain
-  GUI (Windows, sem parâmetros): árvore de testes FPCUnit.
-  Fora do Windows roda sempre em console (sem LCL). }
+  GUI (Windows, no parameters): FPCUnit test tree.
+  Outside Windows it always runs in console mode (no LCL). }
 
 {$mode delphi}{$H+}
 

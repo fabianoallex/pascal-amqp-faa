@@ -1,19 +1,19 @@
 ﻿program RetryDlqVcl;
 
-{ Dead-letter + retry com backoff (GUI): fila de trabalho com DLX apontando
-  para uma fila de espera (x-message-ttl = backoff) que devolve à fila de
-  trabalho; após esgotar as tentativas (contadas pelo header x-death), o
-  consumidor move a mensagem para a DLQ. Topologia montada só com argumentos
-  de fila (TAMQPFieldTable) e recriada a cada conexão via DeleteQueue.
+{ Dead-letter + retry with backoff (GUI): a work queue with a DLX pointing
+  to a wait queue (x-message-ttl = backoff) that hands back to the work
+  queue; after the attempts run out (counted through the x-death header), the
+  consumer moves the message to the DLQ. Topology built only with queue
+  arguments (TAMQPFieldTable) and recreated on every connection through DeleteQueue.
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    lazbuild RetryDlqVcl.lpi
-    Delphi: abrir RetryDlqVcl.dproj no IDE }
+    Delphi: open RetryDlqVcl.dproj in the IDE }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

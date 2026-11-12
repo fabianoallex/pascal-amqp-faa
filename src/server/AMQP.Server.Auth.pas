@@ -2,22 +2,22 @@
 
 {$I amqp.inc}
 
-{ Autenticacao e autorizacao do broker (sub-modulo server, Fase 1).
+{ Broker authentication and authorization (server sub-module, Phase 1).
 
-  Fluxo no handshake (ver AMQP.Server.Connection, WS4):
+  Handshake flow (see AMQP.Server.Connection, WS4):
     S: Connection.Start   mechanisms = IAMQPAuthenticator.Mechanisms
     C: Connection.Start-Ok  mechanism, response (SASL)
        -> IAMQPAuthenticator.Authenticate(mechanism, response, peer, tls)
-          Deny  + capability 'authentication_failure_close' anunciada
-                -> Connection.Close 403 ACCESS_REFUSED (FailReason no texto)
-          Deny  sem a capability -> fecha o socket TCP direto
-          Allow -> segue para Connection.Tune; UserId fica anexado a conexao
+          Deny  + capability 'authentication_failure_close' announced
+                -> Connection.Close 403 ACCESS_REFUSED (FailReason in the text)
+          Deny  without the capability -> closes the TCP socket directly
+          Allow -> moves on to Connection.Tune; UserId is attached to the connection
 
-  Fase 1: so o mecanismo PLAIN (#0 user #0 pass). Sem Connection.Secure/Secure-Ok
-  (SASL multi-step) e sem AMQPLAIN (mecanismo proprietario RabbitMQ). Ver o
-  CLAUDE.md ("Sub-modulo broker") para os desvios deliberados do RabbitMQ:
-  guest aceito fora de loopback, sem permissoes por vhost, sem delay pos-falha,
-  sem validacao da propriedade user-id do Basic.Publish. }
+  Phase 1: only the PLAIN mechanism (#0 user #0 pass). No Connection.Secure/Secure-Ok
+  (multi-step SASL) and no AMQPLAIN (proprietary RabbitMQ mechanism). See
+  CLAUDE.md ("Broker sub-module") for the deliberate deviations from RabbitMQ:
+  guest accepted outside loopback, no per-vhost permissions, no post-failure delay,
+  no validation of the Basic.Publish user-id property. }
 
 interface
 
@@ -31,44 +31,44 @@ const
   AMQP_MECH_PLAIN = 'PLAIN';
 
 type
-  { Resultado de uma tentativa de autenticacao. }
+  { Result of an authentication attempt. }
   TAMQPAuthResult = record
     Granted: Boolean;
-    UserId: string;      // identidade canonica anexada a conexao quando Granted
-    FailReason: string;  // texto do 403 ACCESS_REFUSED quando negado
+    UserId: string;      // canonical identity attached to the connection when Granted
+    FailReason: string;  // text of the 403 ACCESS_REFUSED when denied
     class function Allow(const AUserId: string): TAMQPAuthResult; static;
     class function Deny(const AReason: string): TAMQPAuthResult; static;
   end;
 
-  { Valida credenciais SASL. O broker segura uma referencia; a implementacao
-    e' consultada uma vez por conexao, durante o handshake. Deve ser
-    thread-safe (varias conexoes handshakeiam em paralelo). }
+  { Validates SASL credentials. The broker holds a reference; the implementation
+    is consulted once per connection, during the handshake. Must be
+    thread-safe (several connections handshake in parallel). }
   IAMQPAuthenticator = interface
     ['{44FC93B3-FD5A-40EB-8910-3AFBA9FD1054}']
-    /// Mecanismos SASL suportados, em ordem de preferencia. Vira a lista de
-    /// 'mechanisms' do Connection.Start (separada por espacos). Fase 1: ['PLAIN'].
+    /// Supported SASL mechanisms, in order of preference. Becomes the
+    /// 'mechanisms' list of Connection.Start (space separated). Phase 1: ['PLAIN'].
     function Mechanisms: TArray<string>;
-    /// Valida a resposta SASL crua. Para PLAIN: #0 user #0 pass.
-    /// APeerAddress: 'host:porta' do cliente, para log / rate-limit futuro.
-    /// ATls: True se a conexao ja esta cifrada no momento do handshake.
+    /// Validates the raw SASL response. For PLAIN: #0 user #0 pass.
+    /// APeerAddress: the client's 'host:port', for logging / future rate limiting.
+    /// ATls: True if the connection is already encrypted at handshake time.
     function Authenticate(const AMechanism: string; const AResponse: TBytes;
       const APeerAddress: string; ATls: Boolean): TAMQPAuthResult;
   end;
 
-  /// Permissao sobre um recurso, no modelo do RabbitMQ (configure/write/read).
+  /// Permission on a resource, in the RabbitMQ model (configure/write/read).
   TAMQPPerm = (ampConfigure, ampWrite, ampRead);
 
-  { Autoriza operacoes sobre recursos (exchange/queue) por usuario e vhost.
-    Stub allow-all na Fase 1 (TAMQPAllowAllAuthorizer); a interface existe para
-    a engine da Fase 2 encaixar sem mudar as assinaturas dos chamadores. }
+  { Authorizes operations on resources (exchange/queue) per user and vhost.
+    Allow-all stub in Phase 1 (TAMQPAllowAllAuthorizer); the interface exists so
+    the Phase 2 engine can plug in without changing the callers' signatures. }
   IAMQPAuthorizer = interface
     ['{06CDFA25-22D2-4B6B-B719-1B854837C4BD}']
     function CheckResource(const AUserId, AVHost, AResource: string;
       APerm: TAMQPPerm): Boolean;
   end;
 
-  { Concede qualquer credencial. Para testes e uso local sem controle de acesso.
-    O UserId vira o usuario informado no PLAIN (ou 'anonymous' se vazio). }
+  { Grants any credential. For tests and local use without access control.
+    The UserId becomes the user given in PLAIN (or 'anonymous' if empty). }
   TAMQPAllowAllAuthenticator = class(TInterfacedObject, IAMQPAuthenticator)
   public
     function Mechanisms: TArray<string>;
@@ -76,18 +76,18 @@ type
       const APeerAddress: string; ATls: Boolean): TAMQPAuthResult;
   end;
 
-  { Valida contra um dicionario usuario -> senha em memoria (senha em claro).
-    Default do broker: uma unica entrada guest/guest -- assim o
-    TAMQPConnectionParams.Localhost do cliente conecta sem mudanca. }
+  { Validates against an in-memory user -> password dictionary (plain-text password).
+    Broker default: a single guest/guest entry -- so the client's
+    TAMQPConnectionParams.Localhost connects unchanged. }
   TAMQPStaticAuthenticator = class(TInterfacedObject, IAMQPAuthenticator)
   private
     FUsers: TDictionary<string, string>;
-    FLock: TCriticalSection; // leituras/escritas concorrentes (varias conexoes)
+    FLock: TCriticalSection; // concurrent reads/writes (several connections)
   public
-    /// Semeia guest/guest.
+    /// Seeds guest/guest.
     constructor Create; overload;
-    /// Pares planos: ['user1','pass1','user2','pass2', ...]. Numero impar
-    /// de itens levanta EArgumentException.
+    /// Flat pairs: ['user1','pass1','user2','pass2', ...]. An odd number
+    /// of items raises EArgumentException.
     constructor Create(const APairs: array of string); overload;
     destructor Destroy; override;
     procedure SetUser(const AUser, APassword: string);
@@ -97,16 +97,16 @@ type
       const APeerAddress: string; ATls: Boolean): TAMQPAuthResult;
   end;
 
-  { Autorizador que libera tudo (Fase 1). }
+  { Authorizer that allows everything (Phase 1). }
   TAMQPAllowAllAuthorizer = class(TInterfacedObject, IAMQPAuthorizer)
   public
     function CheckResource(const AUserId, AVHost, AResource: string;
       APerm: TAMQPPerm): Boolean;
   end;
 
-/// Faz o parse da resposta do mecanismo PLAIN: [authzid] #0 authcid #0 passwd.
-/// authzid (primeiro campo) e' ignorado. Retorna False se a estrutura estiver
-/// malformada (numero de separadores != 2). user/passwd saem decodificados de
+/// Parses the PLAIN mechanism response: [authzid] #0 authcid #0 passwd.
+/// authzid (first field) is ignored. Returns False if the structure is
+/// malformed (number of separators != 2). user/passwd come out decoded from
 /// UTF-8.
 function AmqpParsePlainResponse(const AResponse: TBytes;
   out AUser, APassword: string): Boolean;
@@ -267,7 +267,7 @@ begin
     FLock.Leave;
   end;
 
-  // Mensagem generica de proposito: nao revela se o usuario existe.
+  // Generic message on purpose: does not reveal whether the user exists.
   if (not LFound) or (LStored <> LPass) then
     Exit(TAMQPAuthResult.Deny(
       'Login was refused using authentication mechanism PLAIN.'));

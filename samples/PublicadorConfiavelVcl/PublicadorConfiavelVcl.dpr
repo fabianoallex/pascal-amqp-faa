@@ -1,20 +1,20 @@
 ﻿program PublicadorConfiavelVcl;
 
-{ Publicador confiável (GUI): demonstra publisher confirms de ponta a ponta —
-  ConfirmSelect, OnConfirm (ack/nack por seq-no), Basic.Return de publish
-  mandatory sem rota, WaitForConfirms ao fim do lote e o reenvio automático
-  dos publishes não confirmados após uma queda de conexão
-  (RepublishUnconfirmedOnReconnect). Publique um lote com intervalo e derrube
-  o broker no meio (docker stop/start) para ver a história completa no log.
+{ Reliable publisher (GUI): shows publisher confirms end to end:
+  ConfirmSelect, OnConfirm (ack/nack per seq-no), Basic.Return of an unroutable
+  mandatory publish, WaitForConfirms at the end of the batch and the automatic
+  resend of unconfirmed publishes after a connection drop
+  (RepublishUnconfirmedOnReconnect). Publish a batch with an interval and bring
+  the broker down in the middle (docker stop/start) to see the whole story in the log.
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    lazbuild PublicadorConfiavelVcl.lpi
-    Delphi: abrir PublicadorConfiavelVcl.dproj no IDE }
+    Delphi: open PublicadorConfiavelVcl.dproj in the IDE }
 
 uses
   {$IFDEF FPC}
     {$IFDEF UNIX}
-  cthreads, // threads reais no Unix: sem isso os eventos/condvars da lib falham em runtime
+  cthreads, // real threads on Unix: without it the lib's events/condvars fail at runtime
     {$ENDIF}
   Interfaces,
   {$ENDIF}

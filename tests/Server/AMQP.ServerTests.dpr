@@ -79,10 +79,10 @@ begin
     runner.UseRTTI := True;
     runner.FailsOnNoAsserts := False;
 
-    // ANTES do logger de console, de proposito: o runner percorre os
-    // loggers na ordem de registro, e o rodape "Done testing" sai do
-    // OnTestingEnds do console. Assim a tabela de tempos aparece entre a
-    // saida detalhada e o resumo que ela qualifica.
+    // BEFORE the console logger, on purpose: the runner walks the
+    // loggers in registration order, and the "Done testing" footer comes from
+    // the console's OnTestingEnds. This way the timing table appears between the
+    // detailed output and the summary it qualifies.
     runner.AddLogger(TAMQPTestTimeLogger.Create);
 
     if TDUnitX.Options.ConsoleMode <> TDunitXConsoleMode.Off then

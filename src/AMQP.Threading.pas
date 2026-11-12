@@ -2,24 +2,24 @@
 
 {$I amqp.inc}
 
-{ O que sobrou da camada de concorrencia propria da lib: o relogio de parede
-  (AmqpWallMs) e a checagem da versao minima da pascal-common-faa.
+{ What is left of the lib's own concurrency layer: the wall clock
+  (AmqpWallMs) and the pascal-common-faa minimum-version check.
 
-  Atomics, PcTickMs, o monitor (TPcMonitor) e o pool de threads (TPcThreadPool,
-  PcPool) vivem na pascal-common-faa desde a migracao F8 (PascalCommon.Threading
-  e PascalCommon.ThreadPool). Eram copia identica, linha a linha, da mesma
-  origem que pascal-named-pipes-faa e pascal-redis-faa carregavam.
+  Atomics, PcTickMs, the monitor (TPcMonitor) and the thread pool (TPcThreadPool,
+  PcPool) live in pascal-common-faa since the F8 migration (PascalCommon.Threading
+  and PascalCommon.ThreadPool). They were an identical copy, line by line, of the
+  same source that pascal-named-pipes-faa and pascal-redis-faa carried.
 
-  Esta unit continua no uses de AMQP.Connection e de AMQP.Server.Engine mesmo
-  onde AmqpWallMs nao e' usado: e' por ela que todo usuario do cliente ou do
-  broker compila a checagem de versao abaixo. Uma pascal-common-faa mais velha
-  que a minima para o build com a mensagem do $MESSAGE, em vez de falhar adiante
-  com identificador nao encontrado.
+  This unit stays in the uses of AMQP.Connection and AMQP.Server.Engine even
+  where AmqpWallMs is not used: it is through it that every user of the client or
+  the broker compiles the version check below. A pascal-common-faa older than
+  the minimum stops the build with the $MESSAGE text, instead of failing later
+  with an identifier not found.
 
-  O PcPool e' UM pool para o processo inteiro, dividido com qualquer outra lib
-  que o use, e e' liberado DEPOIS de todas as units da amqp (na finalizacao de
-  PascalCommon.ThreadPool). O broker NAO roda seus atores nele: ver
-  TAMQPServer.Create em AMQP.Server.Broker. }
+  PcPool is ONE pool for the whole process, shared with any other lib
+  that uses it, and it is freed AFTER every amqp unit (in the finalization of
+  PascalCommon.ThreadPool). The broker does NOT run its actors on it: see
+  TAMQPServer.Create in AMQP.Server.Broker. }
 
 interface
 
@@ -28,40 +28,40 @@ uses
   DateUtils,
   PascalCommon.Version;
 
-// 1.1.3: antes dela o PcPool nao crescia numa rajada de itens (com 1 worker
-// ocioso, 17 callbacks que bloqueiam rodavam um de cada vez) -- achado aqui,
-// ver .ci/findings-for-pascal-common-faa.md. Os callbacks do cliente rodam
-// no PcPool, entao uma copia mais velha e' defeito em producao, nao so' teste.
-// 1.8.0: PascalCommon.Tracing (spans de publish e consumo, AMQP.Tracing). A 1.7
-// ja' tinha o que se usa aqui, mas e' a 1.8 que as libs irmas exigem -- uma
-// aplicacao nao fica com duas exigencias diferentes para o mesmo pacote.
+// 1.1.3: before it PcPool did not grow on a burst of items (with 1 idle
+// worker, 17 blocking callbacks ran one at a time) -- found here,
+// see .ci/findings-for-pascal-common-faa.md. The client's callbacks run
+// on PcPool, so an older copy is a production defect, not just a test one.
+// 1.8.0: PascalCommon.Tracing (publish and consume spans, AMQP.Tracing). 1.7
+// already had what is used here, but 1.8 is what the sibling libs require -- an
+// application does not end up with two different requirements for the same package.
 // 1.27.0: the TCP and TLS transport (PascalCommon.Transport*), which the
 // client and the broker use since 0.6.0.
 {$IF PASCALCOMMON_VERSION < 12700}
   {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.27.0 ou mais nova'}
 {$IFEND}
 
-/// Milissegundos de RELOGIO DE PAREDE desde a epoch Unix, em UTC.
+/// WALL-CLOCK milliseconds since the Unix epoch, in UTC.
 ///
-/// Existe para a UNICA fronteira em que um instante precisa sobreviver ao
-/// processo: o journal de durabilidade (decisao D21 da Fase 4 do broker).
-/// Monotonico na memoria, parede no disco -- gravar PcTickMs seria gravar
-/// coordenada de um referencial que nao existe depois de um restart, e ler o
-/// relogio de parede em regime normal exporia todo prazo vivo a um acerto de
-/// NTP.
+/// Exists for the ONLY boundary where an instant must outlive the
+/// process: the durability journal (decision D21 of the broker's Phase 4).
+/// Monotonic in memory, wall clock on disk -- writing PcTickMs would write a
+/// coordinate of a reference frame that does not exist after a restart, and
+/// reading the wall clock in normal operation would expose every live deadline
+/// to an NTP adjustment.
 ///
-/// A FORMA IMPORTA, e foi medida (WS0 da Fase 4). O caminho obvio --
-/// DateTimeToUnix(LocalTimeToUniversal(Now), False) -- converte DUAS vezes: o
-/// False significa "a entrada e' local, converta", e a entrada ja' tinha sido
-/// convertida na mao. Erra em uma hora inteira por fuso... e some numa maquina
-/// com fuso UTC, que e' todo container e a maioria dos servidores Linux, entao
-/// o defeito nao aparece justamente onde a suite roda.
+/// THE FORM MATTERS, and it was measured (WS0 of Phase 4). The obvious path --
+/// DateTimeToUnix(LocalTimeToUniversal(Now), False) -- converts TWICE: the
+/// False means "the input is local, convert it", and the input had already been
+/// converted by hand. It is off by a whole hour per time zone... and vanishes on a
+/// machine in the UTC zone, which is every container and most Linux servers, so
+/// the defect does not show up precisely where the suite runs.
 ///
-/// Daqui sai a escolha desta expressao: ela nao chama DateTimeToUnix, entao
-/// nao depende da semantica do flag (que difere entre os compiladores) nem de
-/// a RTL zerar os milissegundos antes do Round interno (o FPC zera, via
-/// RecodeMillisecond; o Delphi nao foi verificado). UnixDateDelta vale 25569
-/// nos dois.
+/// Hence the choice of this expression: it does not call DateTimeToUnix, so
+/// it depends neither on the flag's semantics (which differ between the compilers)
+/// nor on the RTL zeroing the milliseconds before the internal Round (FPC does, via
+/// RecodeMillisecond; Delphi was not checked). UnixDateDelta is 25569
+/// on both.
 function AmqpWallMs: Int64;
 
 implementation

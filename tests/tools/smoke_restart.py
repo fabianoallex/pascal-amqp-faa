@@ -1,32 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Passo de restart do SmokeTest -- WS10 da Fase 4.
+"""SmokeTest restart step -- WS10 of Phase 4.
 
-O UNICO lugar do repositorio onde a durabilidade e' observada por um cliente
-PURO, por cima de um socket, contra um processo de broker que morreu de
-verdade. As suites rodam broker e cliente no mesmo processo -- otimo para
-cobertura, inutil para esta pergunta.
+The ONLY place in the repository where durability is observed by a PURE
+client, over a socket, against a broker process that really died. The suites
+run broker and client in the same process -- great for coverage, useless for
+this question.
 
     BrokerHostFpc --datadir D  ->  SmokeTest --durable-publish N
-                               ->  MATA o host (SIGKILL / taskkill /F)
-                               ->  BrokerHostFpc --datadir D (o MESMO)
+                               ->  KILLS the host (SIGKILL / taskkill /F)
+                               ->  BrokerHostFpc --datadir D (the SAME one)
                                ->  SmokeTest --durable-verify N
 
-O verify checa contagem, ORDEM, integridade do corpo e o flag `redelivered`
-(D27), e exige que nada a mais volte.
+The verify checks count, ORDER, body integrity and the `redelivered` flag
+(D27), and requires that nothing extra comes back.
 
-LEMBRETE, o mesmo da matriz de queda: matar o processo NAO testa fsync -- a
-cache do SO sobrevive a morte do processo. O que este passo prova e' que o que
-o broker CONFIRMOU a um cliente de verdade continua la' depois de o processo
-morrer e outro subir no mesmo diretorio.
+REMINDER, the same as the crash matrix's: killing the process does NOT test
+fsync -- the OS cache survives the death of the process. What this step proves
+is that what the broker CONFIRMED to a real client is still there after the
+process dies and another one starts on the same directory.
 
-USO
+USAGE
     python tests/tools/smoke_restart.py [--porta 5674] [--n 50]
-                                       [--smoke <caminho>]
+                                       [--smoke <path>]
 
---smoke aponta para OUTRO SmokeTest -- e' assim que se valida o lado Delphi:
-o host continua sendo o BrokerHostFpc (o broker so' tem build FPC por linha de
-comando), e o cliente passa a ser o executavel que a IDE gerou.
+--smoke points to ANOTHER SmokeTest -- that is how the Delphi side is
+validated: the host is still BrokerHostFpc (the broker only has a
+command-line FPC build), and the client becomes the executable the IDE built.
 """
 
 import os
@@ -46,8 +46,8 @@ SMOKE = os.path.join(RAIZ, 'samples', 'SmokeTest', 'SmokeTest' + EXT)
 
 
 def mata(proc):
-    """Morte sem aviso -- um SIGTERM daria chance de finalizar, e ai' o passo
-    mediria um shutdown em vez de uma queda."""
+    """Death without warning -- a SIGTERM would give it a chance to finalize,
+    and then the step would measure a shutdown instead of a crash."""
     if proc.poll() is not None:
         return
     if os.name == 'nt':

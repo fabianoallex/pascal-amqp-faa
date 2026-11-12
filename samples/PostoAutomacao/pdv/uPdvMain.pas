@@ -1,16 +1,16 @@
 ﻿unit uPdvMain;
 
-{ Frente de caixa (recorte de abastecidas) -- ARQUITETURA.md §3, §8, §9.
+{ Point of sale (fuelings slice) -- ARCHITECTURE.md §3, §8, §9.
 
-  Como o painel do servidor: UI construida em codigo (ConstroiUI), .dfm/.lfm
-  sao cascas vazias. Nenhuma thread toca a UI: Sincronia e Modelo mexem no
-  seu estado (com lock) e sinalizam "sujo" + enfileiram log; um TTimer na
-  thread da UI drena o log e reconstroi as listas.
+  Like the server panel: UI built in code (ConstroiUI), .dfm/.lfm
+  are empty shells. No thread touches the UI: Sincronia and Modelo change
+  their state (under lock) and signal "dirty" + queue log lines; a TTimer on
+  the UI thread drains the log and rebuilds the lists.
 
-  Os eventos de conexao (OnDisconnect/OnReconnect) chegam por threads da lib
-  que podem morrer logo em seguida -- por isso NAO usamos TThread.Queue aqui;
-  so' flag atomica, log com lock, e disparo de workers do PcPool (gotcha
-  do CLAUDE.md; ver EventosTopicVcl). }
+  The connection events (OnDisconnect/OnReconnect) arrive on lib threads
+  that may die right afterwards -- that is why we do NOT use TThread.Queue here;
+  only an atomic flag, a locked log, and firing PcPool workers (gotcha
+  in CLAUDE.md; see EventosTopicVcl). }
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
@@ -411,7 +411,7 @@ begin
     Result := '';
 end;
 
-{ --------------------------------------------------------- conexao/estado --- }
+{ ------------------------------------------------------ connection/state --- }
 
 procedure TfrmPdv.SetConectado(AValor: Boolean);
 begin
@@ -481,7 +481,7 @@ begin
   end;
 end;
 
-// --- eventos de conexao (threads da lib; sem TThread.Queue) ---
+// --- connection events (lib threads; no TThread.Queue) ---
 
 procedure TfrmPdv.OnDesconectado(AConn: TAMQPConnection);
 begin
@@ -503,7 +503,7 @@ begin
   QLog('Reconexao esgotada.');
 end;
 
-{ --------------------------------------------------------------- acoes --- }
+{ ------------------------------------------------------------- actions --- }
 
 procedure TfrmPdv.btnAdicionarClick(Sender: TObject);
 var

@@ -1,59 +1,63 @@
 program CrashHostFpc;
 
-{ Host de crash-safety -- WS8 da Fase 4 (durabilidade, D28 camada 3).
+{ Crash-safety host -- WS8 of Phase 4 (durability, D28 layer 3).
 
-  O QUE ELE E', E O QUE ELE NAO E'
-  --------------------------------
-  Este programa sobe o broker com DataDir, faz UM trabalho, imprime uma marca
-  e FICA VIVO. Quem o mata e' o driver (tests/tools/matriz_de_queda.py), de
-  fora, sem aviso. E' morte de processo de verdade: nenhum destrutor roda,
-  nenhum Stop e' chamado, o journal nao drena.
+  WHAT IT IS, AND WHAT IT IS NOT
+  ------------------------------
+  This program starts the broker with DataDir, does ONE job, prints a marker
+  and STAYS ALIVE. The one who kills it is the driver
+  (tests/tools/matriz_de_queda.py), from outside, without warning. It is real
+  process death: no destructor runs, no Stop is called, the journal does not
+  drain.
 
-  O QUE ISSO NAO TESTA, E ESTA' NA D28 COM ESTAS PALAVRAS: **matar o processo
-  NAO testa fsync**. A cache do sistema operacional sobrevive a morte do
-  processo -- so' a queda da MAQUINA a perde. O que esta matriz prova e' outra
-  coisa, e ela vale por si: que o que o broker escreveu e' suficiente para
-  reconstruir o estado, que a cauda torta nao impede o boot, e que o que foi
-  confirmado como consumido nao ressuscita.
+  WHAT THIS DOES NOT TEST, AND IT IS IN D28 IN THESE WORDS: **killing the
+  process does NOT test fsync**. The operating system's cache survives the
+  death of the process -- only a crash of the MACHINE loses it. What this
+  matrix proves is something else, and it is worth having on its own: that
+  what the broker wrote is enough to rebuild the state, that a torn tail does
+  not prevent the boot, and that what was confirmed as consumed does not come
+  back to life.
 
-  As outras duas camadas da D28 ja' vivem na suite: a varredura exaustiva de
-  truncamento (WS1) e o duble de arquivo que conta fsyncs e falha na hora
-  escolhida (WS1/WS2, mais o TAMQPWalFileComFalha da WS7). Esta e' a terceira,
-  e mora FORA do runner pelo mesmo motivo do SmokeTest: um teste que precisa
-  matar o proprio processo nao cabe num runner que quer contar assercoes.
+  The other two layers of D28 already live in the suite: the exhaustive
+  truncation sweep (WS1) and the file test double that counts fsyncs and fails
+  at the chosen moment (WS1/WS2, plus WS7's TAMQPWalFileComFalha). This is the
+  third, and it lives OUTSIDE the runner for the same reason as the SmokeTest:
+  a test that needs to kill its own process does not fit in a runner that
+  wants to count assertions.
 
-  MODOS
+  MODES
 
     CrashHostFpc publica <dir> <n> [inicio]
-                                     sobe, publica n persistentes com confirm
-                                     numerados a partir de `inicio` (1 se
-                                     omitido), imprime PUBLICADAS n e espera
-                                     ser morto. O `inicio` existe para varias
-                                     quedas seguidas produzirem uma sequencia
-                                     GLOBALMENTE crescente -- senao o confere
-                                     acusaria "fora de ordem" so' porque cada
-                                     rodada recomecou do 1
-    CrashHostFpc consome <dir> <n>   sobe, consome e confirma n, imprime
-                                     CONSUMIDAS n e espera ser morto
-    CrashHostFpc despeja <dir>       sobe, publica sem parar imprimindo
-                                     CONFIRMADA <seq> a cada confirm -- serve
-                                     para o driver matar NO MEIO da escrita
-    CrashHostFpc confere <dir>       sobe, conta o que voltou, imprime
-                                     RECUPERADAS n e SAI (este encerra limpo).
-                                     NAO CONSOME: pega em modo ack e nunca
-                                     confirma, entao fechar a conexao devolve
-                                     tudo a fila. E' o que permite conferir
-                                     entre uma queda e a seguinte sem alterar o
-                                     que se esta medindo.
+                                     starts, publishes n persistent messages
+                                     with confirm, numbered from `inicio` (1
+                                     if omitted), prints PUBLICADAS n and
+                                     waits to be killed. `inicio` exists so
+                                     that several crashes in a row produce a
+                                     GLOBALLY increasing sequence -- otherwise
+                                     confere would report "out of order" just
+                                     because each round restarted from 1
+    CrashHostFpc consome <dir> <n>   starts, consumes and acks n, prints
+                                     CONSUMIDAS n and waits to be killed
+    CrashHostFpc despeja <dir>       starts, publishes nonstop printing
+                                     CONFIRMADA <seq> on each confirm -- lets
+                                     the driver kill IN THE MIDDLE of a write
+    CrashHostFpc confere <dir>       starts, counts what came back, prints
+                                     RECUPERADAS n and EXITS (this one shuts
+                                     down cleanly). It does NOT CONSUME: it
+                                     gets in ack mode and never acks, so
+                                     closing the connection returns everything
+                                     to the queue. That is what allows
+                                     checking between one crash and the next
+                                     without changing what is being measured.
 
-  A fila e' sempre q.crash, duravel, e o corpo de cada mensagem e' o proprio
-  numero -- assim o "confere" checa integridade, e nao so' contagem.
+  The queue is always q.crash, durable, and each message's body is its own
+  number -- so "confere" checks integrity, not just count.
 
-  UM CUIDADO QUE CUSTOU MEIA HORA: aqui NAO se usa Halt fora do bloco
-  principal. `Halt` abandona os frames sem finalizar os locais GERENCIADOS
-  (strings, TBytes, interfaces) das rotinas que estao na pilha -- e o heaptrc
-  denuncia isso como vazamento, corretamente. Os modos devolvem o controle e
-  quem encerra e' o fim do programa; erro vira `ExitCode`. }
+  A CAVEAT THAT COST HALF AN HOUR: Halt is NOT used here outside the main
+  block. `Halt` abandons the frames without finalizing the MANAGED locals
+  (strings, TBytes, interfaces) of the routines on the stack -- and heaptrc
+  reports that as a leak, correctly. The modes return control and the end of
+  the program is what shuts down; an error becomes `ExitCode`. }
 
 {$mode delphi}{$H+}
 
@@ -81,8 +85,9 @@ begin
   Flush(Output);
 end;
 
-// Sobe o broker no diretorio e liga um cliente nele. Porta efemera: o driver
-// nao precisa saber, porque cliente e broker estao no mesmo processo.
+// Starts the broker on the directory and connects a client to it. Ephemeral
+// port: the driver does not need to know it, because client and broker are in
+// the same process.
 procedure Sobe(const ADir: string);
 var
   LParams: TAMQPConnectionParams;
@@ -101,8 +106,8 @@ begin
   GChan.DeclareQueue(TAMQPQueueDeclare.Create(FILA, True));
 end;
 
-/// Fica vivo ate' alguem matar o processo. NAO ha saida limpa daqui: e' o
-/// ponto do exercicio.
+/// Stays alive until someone kills the process. There is NO clean exit from
+/// here: that is the point of the exercise.
 procedure EsperaAMorte;
 begin
   while True do
@@ -135,7 +140,7 @@ begin
   Sobe(ADir);
   for I := 1 to AN do
   begin
-    LGet := GChan.BasicGet(FILA, False); // modo ack
+    LGet := GChan.BasicGet(FILA, False); // ack mode
     if not LGet.Found then
     begin
       Diz('ERRO fila vazia em ' + IntToStr(I));
@@ -144,8 +149,8 @@ begin
     end;
     GChan.Ack(LGet.DeliveryTag);
   end;
-  // O ack viaja e o ator ainda tem de processa-lo e escrever o DEQ. Sem esta
-  // espera o teste mediria a corrida, nao a durabilidade.
+  // The ack travels and the actor still has to process it and write the DEQ.
+  // Without this wait the test would measure the race, not durability.
   Sleep(1000);
   Diz('CONSUMIDAS ' + IntToStr(AN));
   EsperaAMorte;
@@ -186,16 +191,17 @@ begin
   LUltimo := 0;
   while True do
   begin
-    // MODO ACK, e NUNCA confirma: fechar a conexao devolve todas a fila. Um
-    // no-ack aqui esvaziaria a fila -- e o conferidor passaria a mudar o que
-    // mede, o que estragaria qualquer cenario com mais de uma queda.
+    // ACK MODE, and it NEVER acks: closing the connection returns them all to
+    // the queue. A no-ack here would empty the queue -- and the checker would
+    // start changing what it measures, which would spoil any scenario with
+    // more than one crash.
     LGet := GChan.BasicGet(FILA, False);
     if not LGet.Found then
       Break;
     Inc(LN);
-    // O corpo E' o numero: da para checar INTEGRIDADE e ORDEM, e nao so'
-    // contagem. Uma recuperacao que devolvesse as mensagens certas na ordem
-    // errada passaria num teste que so' contasse.
+    // The body IS the number: it lets us check INTEGRITY and ORDER, not just
+    // count. A recovery that returned the right messages in the wrong order
+    // would pass a test that only counted.
     if TryStrToInt(LGet.BodyAsText, LAtual) then
     begin
       if LAtual <= LUltimo then
@@ -210,10 +216,10 @@ begin
   Diz('RECUPERADAS ' + IntToStr(LN));
   GConn.Close;
   GConn.Free;
-  // As nao-confirmadas voltam para a fila no teardown da conexao, e isso
-  // acontece no ATOR. Parar o broker sem dar essa volta perderia da MEMORIA o
-  // que ainda esta' no disco -- nao seria perda de dado, mas o proximo confere
-  // mediria uma corrida.
+  // The unacknowledged ones go back to the queue in the connection teardown,
+  // and that happens in the ACTOR. Stopping the broker without letting that
+  // round trip happen would lose from MEMORY what is still on disk -- it would
+  // not be data loss, but the next confere would measure a race.
   Sleep(1000);
   GBroker.Stop;
   GBroker.Free;

@@ -1,359 +1,359 @@
 ﻿# Changelog
 
-O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/), e as versões
-seguem o [Versionamento Semântico](https://semver.org/lang/pt-BR/). Enquanto a versão for 0.x,
-uma versão minor pode mudar a API; toda mudança desse tipo aparece aqui.
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions
+follow [Semantic Versioning](https://semver.org/). While the version is 0.x,
+a minor version may change the API; every such change shows up here.
 
 ## [Unreleased]
 
 ## [0.6.0] - 2026-11-02
 
-TCP e TLS pela **pascal-common-faa 1.27.0** (passo 5 da "Migration order" do
-`docs/transport-design.md` de lá): o cliente conecta com `PcTcpConnect`/`PcTlsWrap`, o broker escuta
-com `PcTcpListen`/`PcTlsListen`, e os dois leem e escrevem por um `TAMQPEndpointStream`. As três
-cópias do transporte (amqp, redis, pipes) viraram uma.
+TCP and TLS through **pascal-common-faa 1.27.0** (step 5 of the "Migration order" in
+`docs/transport-design.md` there): the client connects with `PcTcpConnect`/`PcTlsWrap`, the broker listens
+with `PcTcpListen`/`PcTlsListen`, and both read and write through a `TAMQPEndpointStream`. The three
+copies of the transport (amqp, redis, pipes) became one.
 
-### Adicionado
+### Added
 
-- **CA privada e mTLS no cliente** (`TAMQPConnectionParams`): `TlsCaFile` (PEM, os dois backends:
-  confia NESTA CA para o servidor em vez do repositório do sistema), `TlsCertFile` + `TlsKeyFile`
-  (par PEM no OpenSSL) ou `TlsCertFile` + `TlsCertPassword` (PFX no SChannel) para o certificado do
-  cliente. Antes só havia o repositório do sistema e nenhum certificado de cliente.
-- **Backend TLS escolhido em tempo de execução**: `TAMQPConnectionParams.TlsBackend` e
-  `TAMQPServer.TlsBackend` (`tbDefault`, `tbSChannel`, `tbOpenSsl`). No Windows os dois backends
-  estão em todo build; fora dele, o OpenSSL é o único.
-- **Broker: TLS de servidor também no SChannel** (Windows, certificado em PFX com
-  `TlsCertPassword`) e **mTLS** (`TAMQPServer.TlsCaFile`: exige certificado de cliente emitido por
-  essa CA). Antes o TLS de servidor exigia `-dAMQP_OPENSSL`.
-- `TAMQPConnectionParams.ConnectTimeoutMs` (0 = o padrão da common, 10 s).
-- Em `AMQP.Transport`: `TAMQPEndpointStream`, `AmqpTcpOptions`, `AmqpDefaultTlsBackend`,
-  `AmqpResolveTlsBackend`, `AmqpRaiseTransportError` e sobrecargas de `AmqpTlsBackendName`/
-  `AmqpTlsBackendInfo` que recebem o backend. Em `AMQP.Connection`: `AmqpClientTlsOptions`.
-- Testes: `AMQP.TransportTests` (unitária, 14: a fronteira das exceções e o mapeamento dos
-  parâmetros); a fixture TLS do broker roda em todo build, com CA privada, nome errado e mTLS
-  aceito/recusado, e no Windows também com OpenSSL dos dois lados e cruzado (9 testes × 4); a PKI é
-  a `tests/pki` da pascal-common-faa, pelo submódulo.
+- **Private CA and mTLS in the client** (`TAMQPConnectionParams`): `TlsCaFile` (PEM, both backends:
+  trusts THIS CA for the server instead of the system store), `TlsCertFile` + `TlsKeyFile`
+  (PEM pair on OpenSSL) or `TlsCertFile` + `TlsCertPassword` (PFX on SChannel) for the client
+  certificate. Before there was only the system store and no client certificate.
+- **TLS backend chosen at run time**: `TAMQPConnectionParams.TlsBackend` and
+  `TAMQPServer.TlsBackend` (`tbDefault`, `tbSChannel`, `tbOpenSsl`). On Windows both backends
+  are in every build; elsewhere, OpenSSL is the only one.
+- **Broker: server TLS on SChannel too** (Windows, PFX certificate with
+  `TlsCertPassword`) and **mTLS** (`TAMQPServer.TlsCaFile`: requires a client certificate issued by
+  that CA). Before, server TLS required `-dAMQP_OPENSSL`.
+- `TAMQPConnectionParams.ConnectTimeoutMs` (0 = the common's default, 10 s).
+- In `AMQP.Transport`: `TAMQPEndpointStream`, `AmqpTcpOptions`, `AmqpDefaultTlsBackend`,
+  `AmqpResolveTlsBackend`, `AmqpRaiseTransportError` and overloads of `AmqpTlsBackendName`/
+  `AmqpTlsBackendInfo` that take the backend. In `AMQP.Connection`: `AmqpClientTlsOptions`.
+- Tests: `AMQP.TransportTests` (unit, 14: the exception boundary and the parameter
+  mapping); the broker's TLS fixture runs in every build, with private CA, wrong name and mTLS
+  accepted/refused, and on Windows also with OpenSSL on both sides and crossed (9 tests × 4); the PKI is
+  pascal-common-faa's `tests/pki`, through the submodule.
 
-### Mudado
+### Changed
 
-- **Exige a pascal-common-faa 1.27.0** (checagem em `AMQP.Threading` e `MinVersion` dos dois
-  `.lpk`; era 1.8.0). Submódulo na tag v1.27.0.
-- **Mensagens de erro de transporte em inglês**, as da pascal-common-faa (texto de mensagem não é
-  contrato). As classes que saem da lib continuam `EAMQPTransport` e `EAMQPTls` (nenhuma
-  `EPcTransport*` sai), e `EAMQPTls` continua fora da hierarquia de `EAMQPTransport`, para um
-  `except on EAMQPTransport` antigo não passar a capturar erro de TLS.
-- **Falha ao conectar** levanta `EAMQPTransport`. Antes saía a exceção da RTL (`ESocketError` do
-  `ssockets` no FPC, do `System.Net.Socket` no Delphi).
-- `-dAMQP_OPENSSL` agora **só troca o backend padrão** para OpenSSL (`AmqpDefaultTlsBackend`). Os
-  build modes `openssl` continuam valendo.
-- **Prazos**: o connect tem orçamento (`ConnectTimeoutMs`, 10 s por padrão; antes era o do SO) e o
-  handshake TLS tem o prazo padrão da common, 15 s, nos dois lados; ele sai assim que o handshake
-  termina. Leitura e escrita continuam **sem prazo** (o AMQP tem heartbeat). TCP_NODELAY continua
-  ligado em todo socket.
-- **Broker: o certificado é carregado no `Start`** (uma vez, pelo listener), e um arquivo ou senha
-  errados levantam `EAMQPTls` ali, com o broker parado. Antes cada handshake falhava. Um `Start`
-  que não consegue escutar (porta ocupada, certificado) desfaz o que já tinha subido (journal,
-  notificadora de eventos).
-- Broker: o handshake TLS continua na thread da conexão (`TPcEndpoint.Handshake`), nunca na de
-  accept. `BindAddress` aceita `'::'` (todas as interfaces IPv6).
-- `TAMQPServerConnection.Create` recebe um `TPcEndpoint`; `TAMQPServerConnConfig` perdeu
-  `TlsCertFile`/`TlsKeyFile` (o certificado é do listener).
-- `TAMQPServer.Backlog` é **ignorado** (o listener da common usa o próprio); fica para não quebrar
-  quem o atribui.
+- **Requires pascal-common-faa 1.27.0** (check in `AMQP.Threading` and `MinVersion` of both
+  `.lpk`; it was 1.8.0). Submodule at tag v1.27.0.
+- **Transport error messages in English**, pascal-common-faa's (message text is not a
+  contract). The classes that leave the lib are still `EAMQPTransport` and `EAMQPTls` (no
+  `EPcTransport*` leaves), and `EAMQPTls` is still outside the `EAMQPTransport` hierarchy, so that an old
+  `except on EAMQPTransport` does not start catching TLS errors.
+- **Failure to connect** raises `EAMQPTransport`. Before, the RTL's exception came out (`ESocketError` from
+  `ssockets` on FPC, from `System.Net.Socket` on Delphi).
+- `-dAMQP_OPENSSL` now **only switches the default backend** to OpenSSL (`AmqpDefaultTlsBackend`). The
+  `openssl` build modes still apply.
+- **Deadlines**: connect has a budget (`ConnectTimeoutMs`, 10 s by default; before it was the OS's) and the
+  TLS handshake has the common's default deadline, 15 s, on both sides; it is removed as soon as the handshake
+  ends. Read and write still have **no deadline** (AMQP has heartbeat). TCP_NODELAY is still
+  on for every socket.
+- **Broker: the certificate is loaded at `Start`** (once, by the listener), and a wrong file or password
+  raises `EAMQPTls` there, with the broker stopped. Before, each handshake failed. A `Start`
+  that cannot listen (port in use, certificate) undoes what it had already brought up (journal,
+  event notifier).
+- Broker: the TLS handshake still runs on the connection's thread (`TPcEndpoint.Handshake`), never on the
+  accept thread. `BindAddress` accepts `'::'` (all IPv6 interfaces).
+- `TAMQPServerConnection.Create` takes a `TPcEndpoint`; `TAMQPServerConnConfig` lost
+  `TlsCertFile`/`TlsKeyFile` (the certificate belongs to the listener).
+- `TAMQPServer.Backlog` is **ignored** (the common's listener uses its own); it stays so as not to break
+  whoever assigns it.
 
-### Removido
+### Removed
 
-- `TAMQPTcpSocket`, `TAMQPTcpListener`, `TAMQPSocketStream` e `AmqpSetTlsBackendDetail`
-  (`AMQP.Transport`), `TAMQPSchannelStream` (`AMQP.Transport.Tls`) e `TAMQPOpenSslStream`
-  (`AMQP.Transport.OpenSSL`). As duas units de TLS ficam vazias, só puxando as da common, por uma
-  versão minor; saem na próxima.
+- `TAMQPTcpSocket`, `TAMQPTcpListener`, `TAMQPSocketStream` and `AmqpSetTlsBackendDetail`
+  (`AMQP.Transport`), `TAMQPSchannelStream` (`AMQP.Transport.Tls`) and `TAMQPOpenSslStream`
+  (`AMQP.Transport.OpenSSL`). The two TLS units stay empty, only pulling in the common's, for one
+  minor version; they go away in the next.
 
-### Conhecido
+### Known
 
-- Um cliente **sem TLS** contra a porta TLS de um broker **SChannel** só cai depois do prazo do
-  handshake (15 s): o SChannel espera um registro TLS completo, e o protocol-header do AMQP tem 8
-  bytes. Com OpenSSL a recusa é imediata. Registrado para a pascal-common-faa em
+- A **non-TLS** client against the TLS port of an **SChannel** broker only drops after the handshake
+  deadline (15 s): SChannel waits for a complete TLS record, and the AMQP protocol-header is 8
+  bytes. With OpenSSL the refusal is immediate. Recorded for pascal-common-faa in
   `.ci/transport-findings-for-pascal-common-faa.md`.
 
 ## [0.5.0] - 2026-10-31
 
-O outbox transacional da pascal-db-faa por um broker AMQP: a ponte que o pascal-agenda-faa usava
-(`Agenda.Outbox.Amqp`, decisão 11 da M7 de lá) veio para cá. Manual em `docs/outbox.md`.
+pascal-db-faa's transactional outbox through an AMQP broker: the bridge pascal-agenda-faa used
+(`Agenda.Outbox.Amqp`, decision 11 of its M7) moved here. Manual in `docs/outbox.md`.
 
-### Adicionado
+### Added
 
-- **`AMQP.Outbox`** (`src/outbox`), **fora dos pacotes**: precisa da pascal-db-faa 0.18.0 ou mais
-  nova (`PascalDb.Outbox`), que o cliente e o broker não precisam. A API é a do pascal-agenda-faa:
-  - `TOutboxAmqpSink`, o `IOutboxSink` que publica cada evento (persistente, num exchange `topic`,
-    routing key = tipo, header `tenant-id`) num canal em confirm mode e espera o ack; sem ack,
-    levanta, e o relay tenta de novo.
-  - `TOutboxAmqpConsumer`, que roda um `IOutboxHandler` numa fila própria: grava o evento em
-    `PROCESSED_EVENTS` antes do ack e não roda de novo um evento já gravado; falha vira `Nack`
-    sem requeue, que o dead-letter leva para a fila `.retry` (TTL) e de volta; as tentativas vêm
-    do `x-death`, e a última estaciona a mensagem na fila `.dead`.
+- **`AMQP.Outbox`** (`src/outbox`), **outside the packages**: it needs pascal-db-faa 0.18.0 or
+  newer (`PascalDb.Outbox`), which the client and the broker do not. The API is pascal-agenda-faa's:
+  - `TOutboxAmqpSink`, the `IOutboxSink` that publishes each event (persistent, on a `topic` exchange,
+    routing key = type, `tenant-id` header) on a channel in confirm mode and waits for the ack; without an ack,
+    it raises, and the relay tries again.
+  - `TOutboxAmqpConsumer`, which runs an `IOutboxHandler` on its own queue: it records the event in
+    `PROCESSED_EVENTS` before the ack and does not run an already recorded event again; a failure becomes a `Nack`
+    without requeue, which the dead-letter takes to the `.retry` queue (TTL) and back; the attempts come
+    from `x-death`, and the last one parks the message in the `.dead` queue.
   - `TOutboxAmqpQueue`, `OutboxAmqpDeclareExchange`, `OutboxAmqpDeclareQueues`,
-    `OutboxAmqpPending`, `OutboxAmqpEvent`, `OutboxAmqpPurgeProcessed`, e a métrica
-    `outbox.consumer.messages`.
-  - O SQL (`PROCESSED.EXISTS`, `PROCESSED.INSERT`, `PROCESSED.PURGE`) é da aplicação, lido pelo nome
-    no loader da factory; tabela e comandos de referência em `docs/outbox.md`.
-- Suíte `tests/Outbox` (8 testes, DUnitX e FPCUnit espelhados): o sink e o consumidor contra o
-  broker embutido, com um arquivo SQLite (SQLdb no FPC, FireDAC no Delphi). Nenhum RabbitMQ.
-  `tools/test_fpc_docker.sh` ganhou a suíte `outbox`.
+    `OutboxAmqpPending`, `OutboxAmqpEvent`, `OutboxAmqpPurgeProcessed`, and the
+    `outbox.consumer.messages` metric.
+  - The SQL (`PROCESSED.EXISTS`, `PROCESSED.INSERT`, `PROCESSED.PURGE`) belongs to the application, read by name
+    from the factory's loader; reference table and commands in `docs/outbox.md`.
+- `tests/Outbox` suite (8 tests, mirrored DUnitX and FPCUnit): the sink and the consumer against the
+  embedded broker, with an SQLite file (SQLdb on FPC, FireDAC on Delphi). No RabbitMQ.
+  `tools/test_fpc_docker.sh` gained the `outbox` suite.
 
-### Mudado
+### Changed
 
-- O `PROCESSED_AT` gravado pelo consumidor vem do `TClock` da pascal-common-faa (era o
-  `TJwt.UnixNow` da pascal-api-infra-faa, usado só como relógio): a ponte não puxa uma terceira lib,
-  e os testes trocam o relógio com `TClock.SetClock`.
-- Submódulos de teste: pascal-common-faa 1.12.0 → **1.26.0**, e **pascal-db-faa 0.18.0** (novo,
-  só para a suíte do outbox). O mínimo que o cliente e o broker exigem continua 1.8.0; quem usa a
-  ponte precisa do que a pascal-db-faa exige (1.17).
+- The `PROCESSED_AT` recorded by the consumer comes from pascal-common-faa's `TClock` (it was
+  pascal-api-infra-faa's `TJwt.UnixNow`, used only as a clock): the bridge does not pull in a third lib,
+  and the tests swap the clock with `TClock.SetClock`.
+- Test submodules: pascal-common-faa 1.12.0 → **1.26.0**, and **pascal-db-faa 0.18.0** (new,
+  only for the outbox suite). The minimum the client and the broker require is still 1.8.0; whoever uses the
+  bridge needs what pascal-db-faa requires (1.17).
 
-### Corrigido
+### Fixed
 
-- **Broker: o tick de entrega da thread monitora podia postar numa fila já liberada.**
-  `TAMQPEngine.DeliverTick` copiava as filas sob o lock da engine, soltava o lock e só então
-  postava em cada uma; um `Queue.Delete` nessa janela liberava a fila (o `DeleteQueue` libera sob o
-  mesmo lock), e o comando caía num objeto morto. Achado pelo heaptrc nesta rodada: um comando
-  vazado (200 bytes), uma vez em 16 execuções da passada durável da aceitação. Agora os posts saem
-  com o lock seguro (o `Post` nunca espera). O mesmo padrão — ponteiro de fila usado depois de
-  soltar o lock — existe em quem usa `TAMQPEngine.FindQueue`; fica registrado no worklog para uma
-  sessão própria do broker.
+- **Broker: the monitor thread's delivery tick could post to an already freed queue.**
+  `TAMQPEngine.DeliverTick` copied the queues under the engine lock, released the lock and only then
+  posted to each one; a `Queue.Delete` in that window freed the queue (`DeleteQueue` frees under the
+  same lock), and the command landed on a dead object. Found by heaptrc in this round: one
+  leaked command (200 bytes), once in 16 runs of the acceptance durable pass. Now the posts go out
+  with the lock held (`Post` never waits). The same pattern — a queue pointer used after
+  releasing the lock — exists in the users of `TAMQPEngine.FindQueue`; it is recorded in the worklog for a
+  dedicated broker session.
 
 ## [0.4.2] - 2026-10-27
 
-Defeito achado pelo pascal-agenda-faa (`docs/design.md` de lá, seção "M4: the broker, the compose
-file, the trace"), no teste em que o consumidor parava logo depois de o handler começar.
+Defect found by pascal-agenda-faa (its `docs/design.md`, section "M4: the broker, the compose
+file, the trace"), in the test where the consumer stopped right after the handler started.
 
-### Corrigido
+### Fixed
 
-- **Fechar um canal com callback de consumer em voo derrubava a conexão inteira.** O `Close`
-  mandava o `Channel.Close`, esperava o `Close-Ok` e só então esperava os callbacks. Um callback
-  que terminava nessa janela e dava `Ack` mandava `Basic.Ack` num canal já fechado, e pela spec
-  isso é erro de conexão: `504 CHANNEL_ERROR`, todos os canais caem. O `Free` do canal passava
-  pelo mesmo caminho. Medido antes de mudar, contra o RabbitMQ 3
-  (`504 CHANNEL_ERROR - expected 'channel.open'`) e contra o broker embutido. Agora o `Close`
-  cancela os consumers do canal, espera os callbacks com o canal ainda aberto (o `Ack` deles
-  vale, e nada do que já foi processado é reentregue) e só então manda o `Channel.Close`.
-- **O mesmo 504 quando era o broker que fechava o canal** (um 404 ou 406 com um callback em voo).
-  `Ack`/`Nack` num canal fechado ou fechando não saem mais para o fio e não levantam exceção: o
-  broker já devolveu à fila, como `redelivered`, o que ficou sem ack. Depois de uma queda de
-  conexão nada muda: `Ack`/`Nack` levantam `EAMQPConnection`, como antes.
+- **Closing a channel with a consumer callback in flight brought down the whole connection.** `Close`
+  sent `Channel.Close`, waited for `Close-Ok` and only then waited for the callbacks. A callback
+  that finished in that window and called `Ack` sent `Basic.Ack` on an already closed channel, and per the spec
+  that is a connection error: `504 CHANNEL_ERROR`, all channels go down. The channel's `Free` went
+  through the same path. Measured before changing, against RabbitMQ 3
+  (`504 CHANNEL_ERROR - expected 'channel.open'`) and against the embedded broker. Now `Close`
+  cancels the channel's consumers, waits for the callbacks with the channel still open (their `Ack`
+  counts, and nothing already processed is redelivered) and only then sends `Channel.Close`.
+- **The same 504 when it was the broker that closed the channel** (a 404 or 406 with a callback in flight).
+  `Ack`/`Nack` on a closed or closing channel no longer go to the wire and no longer raise: the
+  broker has already returned to the queue, as `redelivered`, whatever was left unacked. After a connection
+  drop nothing changes: `Ack`/`Nack` raise `EAMQPConnection`, as before.
 
-### Para quem usa
+### For users
 
-- O contorno que o consumidor fazia antes de fechar o canal (cancelar o consumer e esperar os
-  callbacks em voo) deixa de ser necessário. Uma flag própria de "não tratar depois do Stop"
-  continua útil se o callback não deve começar trabalho novo durante o encerramento.
+- The workaround the consumer did before closing the channel (cancel the consumer and wait for the
+  callbacks in flight) is no longer necessary. A flag of your own for "do not handle after Stop"
+  is still useful if the callback must not start new work during shutdown.
 
 ## [0.4.1] - 2026-10-15
 
-### Corrigido
+### Fixed
 
-- **O `OnConsumerError` rodava sem span corrente**, e o log escrito nele saía sem o trace id da
-  mensagem (com o `try` dentro do callback, como até a 0.3.0, saía com). O span `process <fila>`
-  era fechado antes de o handler ser chamado. Agora ele segue corrente durante o handler e o
-  `Nack`, e termina depois, marcado com o erro do callback (`error.type` e status, como antes).
-  Achado pela pascal-api-infra-faa no `samples/04-messaging`; medido aqui com um teste que lê
-  `TPcTracing.Current` dentro do handler (vazio na 0.4.0).
+- **`OnConsumerError` ran without a current span**, and the log written in it went out without the
+  message's trace id (with the `try` inside the callback, as up to 0.3.0, it went out with it). The `process <queue>` span
+  was closed before the handler was called. Now it stays current during the handler and the
+  `Nack`, and ends afterwards, marked with the callback's error (`error.type` and status, as before).
+  Found by pascal-api-infra-faa in `samples/04-messaging`; measured here with a test that reads
+  `TPcTracing.Current` inside the handler (empty in 0.4.0).
 
 ## [0.4.0] - 2026-10-15
 
-Defeito achado ao medir o guia `docs/guide/dtos-json.md` da pascal-api-infra-faa (FPC
-3.2.2/Windows contra RabbitMQ 3).
+Defect found while measuring pascal-api-infra-faa's `docs/guide/dtos-json.md` guide (FPC
+3.2.2/Windows against RabbitMQ 3).
 
-### Corrigido
+### Fixed
 
-- **Exceção no callback de consumer sumia, e a entrega ficava sem ack.** O
-  `TAMQPDeliveryWork` relançava a exceção, e o pool (`TPcThreadPool`) a engole de propósito: nada
-  era logado, a mensagem ficava sem ack até a conexão cair, voltava a cada reinício do processo
-  e travava de novo, e com `Qos(1)` o consumer inteiro parava. Medido: 7 mensagens com a 4ª
-  levantando deixavam 0 prontas e 1 sem ack; com `Qos(1)` e a 1ª de 5 levantando, 1 callback
-  em 8 s e 4 prontas para sempre. Agora a entrega pendente leva `Nack` sem requeue (vai para a
-  dead-letter exchange da fila, se houver; sem DLX, o broker a descarta), e as 4 passam.
-  **Mudança de comportamento:** quem contava com a mensagem voltando depois de uma queda passa a
-  vê-la na DLX (ou descartada); para o comportamento de antes, `AAction := ceaNone` no handler.
+- **An exception in a consumer callback vanished, and the delivery was left unacked.**
+  `TAMQPDeliveryWork` re-raised the exception, and the pool (`TPcThreadPool`) swallows it on purpose: nothing
+  was logged, the message stayed unacked until the connection dropped, came back on every process restart
+  and got stuck again, and with `Qos(1)` the whole consumer stopped. Measured: 7 messages with the 4th
+  raising left 0 ready and 1 unacked; with `Qos(1)` and the 1st of 5 raising, 1 callback
+  in 8 s and 4 ready forever. Now the pending delivery gets a `Nack` without requeue (it goes to the
+  queue's dead-letter exchange, if any; without a DLX, the broker drops it), and the 4 go through.
+  **Behavior change:** whoever counted on the message coming back after a drop now
+  sees it in the DLX (or dropped); for the old behavior, `AAction := ceaNone` in the handler.
 
-### Adicionado
+### Added
 
-- **`TAMQPChannel.OnConsumerError(Canal, Entrega, Erro, var Acao)`**, chamado quando um
-  callback de consumer levanta, na mesma thread do pool. `Acao` (`TAMQPConsumerErrorAction`)
-  chega como `ceaReject` se a entrega está pendente, ou `ceaNone` se já foi confirmada ou se o
-  consumer é no-ack; o handler pode trocá-la por `ceaRequeue` (Nack com requeue) ou `ceaNone`
-  (o aplicativo confirma depois). A lib nunca confirma duas vezes: se o callback ou o handler já
-  deu `Ack`/`Nack`, nada é enviado (confirmar o mesmo tag de novo é `406` e fecha o canal).
+- **`TAMQPChannel.OnConsumerError(Canal, Entrega, Erro, var Acao)`**, called when a consumer
+  callback raises, on the same pool thread. `Acao` (`TAMQPConsumerErrorAction`)
+  arrives as `ceaReject` if the delivery is pending, or `ceaNone` if it was already settled or if the
+  consumer is no-ack; the handler can change it to `ceaRequeue` (Nack with requeue) or `ceaNone`
+  (the application settles later). The lib never settles twice: if the callback or the handler already
+  called `Ack`/`Nack`, nothing is sent (settling the same tag again is `406` and closes the channel).
 
 ## [0.3.0] - 2026-10-15
 
-Dois defeitos achados ao medir o guia de mensageria da pascal-api-infra-faa (FPC 3.2.2/Windows
-contra RabbitMQ 3).
+Two defects found while measuring pascal-api-infra-faa's messaging guide (FPC 3.2.2/Windows
+against RabbitMQ 3).
 
-### Corrigido
+### Fixed
 
-- **A reconexão automática não se recuperava quando a fila era declarada só noutro canal.** O
-  replay da topologia era canal a canal, na ordem do `TDictionary` dos canais (a do hash, não a
-  de criação: com os canais 1, 2 e 3 o 3 vinha primeiro). Com a fila não durável declarada no
-  canal 1 e consumida no 3, o restart do broker a apagava, o `basic.consume` do canal 3 levava
-  `404` antes de o declare do canal 1 voltar, e toda tentativa falhava igual, para sempre, sem
-  nenhum sinal. Agora o replay é da conexão inteira, fase a fase: exchanges, filas, bindings e só
-  então consumers, na ordem de criação dos canais. Medido com `docker restart`: antes, toda
-  tentativa com o broker de pé levou o mesmo `404` até o fim da medição (90 s na do guia);
-  depois, recuperado na primeira tentativa com o broker de pé.
-- **Publish numa conexão morta levantava `EWriteError` ("Stream write error") em vez de
-  `EAMQPConnection`.** A conexão passa a saber quando não é gravável (antes do handshake, depois da
-  queda) e levanta `EAMQPConnection` sem tocar o stream, com o motivo no texto
-  (`connection closed by server: 320 CONNECTION_FORCED - ...`); uma escrita que falha antes de a
-  queda ser percebida também vira `EAMQPConnection` (`connection write failed (...)`), igual nos
-  dois compiladores e em todo backend de transporte.
+- **Automatic reconnection did not recover when the queue was declared only on another channel.** The
+  topology replay was channel by channel, in the order of the channels' `TDictionary` (the hash order, not the
+  creation order: with channels 1, 2 and 3, 3 came first). With the non-durable queue declared on
+  channel 1 and consumed on 3, the broker restart deleted it, channel 3's `basic.consume` got
+  `404` before channel 1's declare came back, and every attempt failed the same way, forever, without
+  any signal. Now the replay is of the whole connection, phase by phase: exchanges, queues, bindings and only
+  then consumers, in channel creation order. Measured with `docker restart`: before, every
+  attempt with the broker up got the same `404` until the end of the measurement (90 s in the guide's);
+  after, recovered on the first attempt with the broker up.
+- **Publish on a dead connection raised `EWriteError` ("Stream write error") instead of
+  `EAMQPConnection`.** The connection now knows when it is not writable (before the handshake, after the
+  drop) and raises `EAMQPConnection` without touching the stream, with the reason in the text
+  (`connection closed by server: 320 CONNECTION_FORCED - ...`); a write that fails before the
+  drop is noticed also becomes `EAMQPConnection` (`connection write failed (...)`), the same on both
+  compilers and on every transport backend.
 
-### Adicionado
+### Added
 
-- **`TAMQPConnection.OnReconnectError(Conn, Tentativa, Motivo)`**, disparado a cada tentativa de
-  reconexão que falha, e **`TAMQPConnection.LastReconnectError`**, a mensagem da última (zerada
-  quando a reconexão dá certo). A `EAMQPConnection` de um publish feito durante a reconexão traz
-  o motivo da queda e o da última tentativa; o começo do texto
-  (`connection unavailable right now (reconnecting`) é o de antes.
-- Variáveis `AMQP_TEST_HOST`/`AMQP_TEST_PORT` para apontar a suíte de integração para outro
-  RabbitMQ (o default segue `localhost:5672`).
+- **`TAMQPConnection.OnReconnectError(Conn, Tentativa, Motivo)`**, fired on each reconnection
+  attempt that fails, and **`TAMQPConnection.LastReconnectError`**, the message of the last one (cleared
+  when the reconnection succeeds). The `EAMQPConnection` of a publish made during the reconnection carries
+  the reason for the drop and that of the last attempt; the start of the text
+  (`connection unavailable right now (reconnecting`) is the same as before.
+- `AMQP_TEST_HOST`/`AMQP_TEST_PORT` variables to point the integration suite at another
+  RabbitMQ (the default is still `localhost:5672`).
 
 ## [0.2.0] - 2026-10-12
 
-Fase D do design de observabilidade da pascal-api-infra-faa: spans do OpenTelemetry no
-cliente, sobre o `PascalCommon.Tracing` da pascal-common-faa. Detalhes e decisões em
+Phase D of pascal-api-infra-faa's observability design: OpenTelemetry spans in the
+client, on top of pascal-common-faa's `PascalCommon.Tracing`. Details and decisions in
 [`docs/tracing.md`](docs/tracing.md).
 
-### Adicionado
+### Added
 
-- **Spans por publish e por mensagem consumida**, abertos pelo próprio canal quando a
-  aplicação liga o tracer (`TPcTracing.Start`): `publish <exchange>` (producer, filho do span
-  corrente), `process <fila>` em volta do callback do `Consume` (consumer, filho do
-  `traceparent` da mensagem e span corrente durante o callback) e `receive <fila>` no
-  `BasicGet` (client). Atributos das convenções de mensageria do OpenTelemetry. Com o tracer
-  desligado nada muda: nenhum span, nenhum header, os mesmos bytes.
-- **`traceparent`/`tracestate` nos headers da mensagem publicada**, injetados só nos bytes do
-  content header: a tabela de headers do chamador não é alterada, e um `traceparent` que a
-  aplicação já pôs vence.
-- Unit `AMQP.Tracing`: `AmqpTraceParentOf`, `AmqpStartProcessSpan` (para processar o resultado
-  de um `BasicGet` na trace do produtor), `AmqpFinishSpan` e as demais peças.
-- `BuildContentHeader` com contexto de trace e `TAMQPWriter.WriteFieldTable` com pares extras
-  (overloads; as formas antigas seguem iguais).
+- **Spans per publish and per consumed message**, opened by the channel itself when the
+  application turns the tracer on (`TPcTracing.Start`): `publish <exchange>` (producer, child of the current
+  span), `process <queue>` around the `Consume` callback (consumer, child of the message's
+  `traceparent` and current span during the callback) and `receive <queue>` on
+  `BasicGet` (client). Attributes from the OpenTelemetry messaging conventions. With the tracer
+  off nothing changes: no span, no header, the same bytes.
+- **`traceparent`/`tracestate` in the published message's headers**, injected only into the
+  content header bytes: the caller's header table is not changed, and a `traceparent` the
+  application already set wins.
+- Unit `AMQP.Tracing`: `AmqpTraceParentOf`, `AmqpStartProcessSpan` (to process the result
+  of a `BasicGet` in the producer's trace), `AmqpFinishSpan` and the other pieces.
+- `BuildContentHeader` with trace context and `TAMQPWriter.WriteFieldTable` with extra pairs
+  (overloads; the old forms stay the same).
 
-### Mudado
+### Changed
 
-- **A versão mínima da pascal-common-faa sobe de 1.1.3 para 1.8.0**, que traz o
-  `PascalCommon.Tracing`; é a mesma que as outras libs `*-faa` exigem. Uma cópia mais velha
-  para o build com `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova`; os dois
-  `.lpk` exigem `MinVersion` 1.8.
-- Submódulo `external/pascal-common-faa` (só testes e samples) de v1.2.0 para v1.8.0.
+- **The minimum pascal-common-faa version goes up from 1.1.3 to 1.8.0**, which brings
+  `PascalCommon.Tracing`; it is the same one the other `*-faa` libs require. An older copy
+  stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova`; both
+  `.lpk` require `MinVersion` 1.8.
+- Submodule `external/pascal-common-faa` (tests and samples only) from v1.2.0 to v1.8.0.
 
 ## [0.1.2] - 2026-10-05
 
-### Mudado
+### Changed
 
-- **A versão mínima da pascal-common-faa sobe de 1.0 para 1.1.3.** Antes da 1.1.3 o `PcPool`
-  não crescia numa rajada de itens: com um worker ocioso, entregas cujos callbacks bloqueiam
-  rodavam uma de cada vez, e um callback que esperasse outro enfileirado atrás dele só andava
-  quando chegasse outro item (achado aqui, corrigido lá). Os callbacks do cliente rodam no
-  `PcPool`, então uma cópia mais velha é defeito em produção. Uma cópia anterior à 1.1.3 para o
-  build com `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`; os dois `.lpk`
-  exigem `MinVersion` 1.1.3.
-- Submódulo `external/pascal-common-faa` (só testes e samples) de v1.1.2 para v1.2.0, que
-  também conta os núcleos de verdade no FPC/Linux (o teto do `PcPool` lá era sempre 16).
+- **The minimum pascal-common-faa version goes up from 1.0 to 1.1.3.** Before 1.1.3 `PcPool`
+  did not grow during a burst of items: with one idle worker, deliveries whose callbacks block
+  ran one at a time, and a callback waiting for another one queued behind it only moved
+  when another item arrived (found here, fixed there). The client's callbacks run on
+  `PcPool`, so an older copy is a production defect. A copy older than 1.1.3 stops the
+  build with `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`; both `.lpk`
+  require `MinVersion` 1.1.3.
+- Submodule `external/pascal-common-faa` (tests and samples only) from v1.1.2 to v1.2.0, which
+  also counts the real cores on FPC/Linux (`PcPool`'s ceiling there was always 16).
 
-### Corrigido
+### Fixed
 
-- A falha intermitente de `ConsomeTodas_ComAck_E_Concorrencia` (pico de concorrência 1) era a
-  rajada acima; some com a pascal-common-faa 1.1.3 ou mais nova.
+- The intermittent failure of `ConsomeTodas_ComAck_E_Concorrencia` (concurrency peak 1) was the
+  burst above; it goes away with pascal-common-faa 1.1.3 or newer.
 
 ## [0.1.1] - 2026-10-05
 
-Correções vindas da migração do pascal-dfe-broker para a v0.1.0 (achados 4 e 6 do F10 de lá),
-mais o que a validação desta rodada encontrou. Nenhuma mudança de API além de uma função de
-diagnóstico.
+Fixes coming from the migration of pascal-dfe-broker to v0.1.0 (findings 4 and 6 of its F10),
+plus what this round's validation found. No API change besides one diagnostic
+function.
 
-### Corrigido
+### Fixed
 
-- **`Close`/`Free` da conexão durante a reconexão esperavam o `ReconnectDelayMs` inteiro.** A
-  espera entre tentativas era um `Sleep`; agora é um evento que o `Close` sinaliza, e fechar é
-  imediato (medido: 3000 ms → 38 ms).
-- **Com `ReconnectDelayMs` acima de 12 s, `Close`/`Destroy` liberavam a conexão com a thread
-  de reconexão ainda viva**, que depois acordava lendo o objeto liberado. A espera desistia
-  num teto de 12 s; agora a thread é unida, e `Close`/`Destroy` só voltam depois de ela sair.
-  Uma tentativa já em curso (connect, handshake, replay da topologia) termina antes, limitada
-  pelos timeouts dela.
-- `Close` chamado de dentro de `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (que rodam na
-  thread de reconexão) ficava preso 12 s esperando a própria thread; agora volta na hora.
-- Broker: **nomes de fila gerados (`amq.gen-…`) se repetiam entre conexões.** A sequência era
-  por conexão, e duas conexões no mesmo milissegundo geravam o mesmo nome; com a primeira fila
-  exclusiva e viva, o declare da segunda levava `405`. A sequência agora é do processo.
-- As suítes de teste compilam no **Delphi Win64** (asserções que comparavam `Integer` com o
-  `NativeInt` de `Length`/`Count`); as quatro passam em Win32 e Win64.
+- **`Close`/`Free` of the connection during reconnection waited for the whole `ReconnectDelayMs`.** The
+  wait between attempts was a `Sleep`; now it is an event that `Close` signals, and closing is
+  immediate (measured: 3000 ms → 38 ms).
+- **With `ReconnectDelayMs` above 12 s, `Close`/`Destroy` freed the connection with the
+  reconnection thread still alive**, which then woke up reading the freed object. The wait gave up
+  at a 12 s cap; now the thread is joined, and `Close`/`Destroy` only return after it exits.
+  An attempt already in progress (connect, handshake, topology replay) finishes first, bounded
+  by its timeouts.
+- `Close` called from inside `OnDisconnect`/`OnReconnect`/`OnReconnectFailed` (which run on the
+  reconnection thread) stayed stuck for 12 s waiting for its own thread; now it returns at once.
+- Broker: **generated queue names (`amq.gen-…`) repeated across connections.** The sequence was
+  per connection, and two connections in the same millisecond generated the same name; with the first queue
+  exclusive and alive, the second one's declare got `405`. The sequence is now per process.
+- The test suites compile on **Delphi Win64** (assertions that compared `Integer` with the
+  `NativeInt` of `Length`/`Count`); all four pass on Win32 and Win64.
 
-### Adicionado
+### Added
 
-- `AmqpReconnectThreadsAlive` (`AMQP.Connection`): quantas threads de reconexão existem no
-  processo. Serve a testes e diagnóstico.
+- `AmqpReconnectThreadsAlive` (`AMQP.Connection`): how many reconnection threads exist in the
+  process. Serves tests and diagnostics.
 
-### Documentado
+### Documented
 
-- `Close`/`Free` de um canal esperam também os callbacks **ainda na fila** do pool; num canal
-  comum o pool é o `PcPool`, do processo inteiro, e um `PcPool` saturado por outra lib atrasa
-  o fechamento (medido: 1,5 s de saturação, 1,5 s de `Free`). Sem prazo, de propósito;
-  `CreateChannel(True)` não depende do `PcPool` (29 ms no mesmo cenário). Nos dois READMEs.
+- `Close`/`Free` of a channel also wait for the callbacks **still queued** on the pool; on a regular
+  channel the pool is `PcPool`, the whole process's, and a `PcPool` saturated by another lib delays
+  the close (measured: 1.5 s of saturation, 1.5 s of `Free`). No deadline, on purpose;
+  `CreateChannel(True)` does not depend on `PcPool` (29 ms in the same scenario). In both READMEs.
 
-### Mudado
+### Changed
 
-- Submódulo `external/pascal-common-faa` (só testes e samples) de v1.0.1 para v1.1.2. O mínimo
-  exigido da aplicação continua 1.0.
+- Submodule `external/pascal-common-faa` (tests and samples only) from v1.0.1 to v1.1.2. The minimum
+  required of the application is still 1.0.
 
 ## [0.1.0] - 2026-10-04
 
-Primeira versão publicada. Cliente AMQP 0-9-1 para Delphi 12 e FPC 3.2.2/Lazarus (Windows e
-Linux x86_64/ARM64) numa codebase só, e um broker AMQP 0-9-1 embutível no mesmo processo da
-aplicação (pacote separado).
+First published version. AMQP 0-9-1 client for Delphi 12 and FPC 3.2.2/Lazarus (Windows and
+Linux x86_64/ARM64) in a single codebase, and an AMQP 0-9-1 broker embeddable in the same process as the
+application (separate package).
 
-### Adicionado
+### Added
 
-- **Cliente**: conexão e canais, declare/bind/delete de exchanges e filas, publish com
-  propriedades, consumo push e `Basic.Get`, ack/nack/reject, `Basic.Qos`, publisher confirms,
-  `mandatory` com `Basic.Return`, reconexão automática com replay de topologia e consumidores,
-  heartbeats, TLS (SChannel no Windows; OpenSSL em qualquer plataforma com `-dAMQP_OPENSSL`),
-  `Connection.Blocked`/`Unblocked`, canal com worker dedicado (`CreateChannel(True)`).
-- **Broker embutido** (`pascal_amqp_faa_server.lpk`): handshake SASL PLAIN, exchanges
-  direct/fanout/topic/headers e exchange→exchange, filas como atores, confirms, `mandatory`,
-  filas exclusive/auto-delete; TTL de fila e de mensagem, dead-lettering com `x-death`,
-  prioridade, `x-max-length`/`x-max-length-bytes` com `x-overflow`, `alternate-exchange`,
-  `x-expires`; durabilidade opt-in por `DataDir` (WAL com group commit, recuperação no `Start`,
-  confirm preso à marca d'água, compactação, teto de disco que recusa); observabilidade opt-in
-  (eventos por thread notificadora, best-effort). Desvios deliberados do RabbitMQ listados no
+- **Client**: connection and channels, declare/bind/delete of exchanges and queues, publish with
+  properties, push consumption and `Basic.Get`, ack/nack/reject, `Basic.Qos`, publisher confirms,
+  `mandatory` with `Basic.Return`, automatic reconnection with replay of topology and consumers,
+  heartbeats, TLS (SChannel on Windows; OpenSSL on any platform with `-dAMQP_OPENSSL`),
+  `Connection.Blocked`/`Unblocked`, channel with a dedicated worker (`CreateChannel(True)`).
+- **Embedded broker** (`pascal_amqp_faa_server.lpk`): SASL PLAIN handshake, exchanges
+  direct/fanout/topic/headers and exchange→exchange, queues as actors, confirms, `mandatory`,
+  exclusive/auto-delete queues; queue and message TTL, dead-lettering with `x-death`,
+  priority, `x-max-length`/`x-max-length-bytes` with `x-overflow`, `alternate-exchange`,
+  `x-expires`; opt-in durability through `DataDir` (WAL with group commit, recovery at `Start`,
+  confirm tied to the watermark, compaction, disk cap that refuses); opt-in observability
+  (events through a notifier thread, best-effort). Deliberate deviations from RabbitMQ listed in the
   README.
-- Samples de padrões de mensageria (GUI dual VCL/LCL) e o `PostoAutomacao`; suítes unitária,
-  de integração, do broker e de aceitação (a suíte de integração do cliente contra o broker
-  embutido), espelhadas em DUnitX e FPCUnit.
+- Messaging pattern samples (dual VCL/LCL GUI) and `PostoAutomacao`; unit,
+  integration, broker and acceptance suites (the client's integration suite against the embedded
+  broker), mirrored in DUnitX and FPCUnit.
 
-### Mudado
+### Changed
 
-- **Dependência nova: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa)
-  1.0 ou mais nova** (fase F8 do plano dela). Atomics, ticks, monitor e thread pool saíram de
-  `AMQP.Threading`, sem alias: `AmqpAtomic*` → `PcAtomic*`, `AmqpTickMs` → `PcTickMs`,
+- **New dependency: [pascal-common-faa](https://github.com/fabianoallex/pascal-common-faa)
+  1.0 or newer** (phase F8 of its plan). Atomics, ticks, monitor and thread pool left
+  `AMQP.Threading`, without aliases: `AmqpAtomic*` → `PcAtomic*`, `AmqpTickMs` → `PcTickMs`,
   `TAMQPMonitor` → `TPcMonitor`, `TAMQPWorkItem` → `TPcWorkItem`, `TAMQPThreadPool` →
   `TPcThreadPool`, `AmqpPool` → `PcPool`, `AMQP_WAIT_INFINITE` → `PC_WAIT_INFINITE`
-  (`TAMQPCondGen` e `TAMQPPoolWorker` viraram tipos privados de lá). `AmqpWallMs` fica em
-  `AMQP.Threading`. A aplicação fornece a cópia única da pascal-common-faa; os pacotes a exigem
-  pelo nome, e uma cópia mais velha que a mínima para o build com mensagem clara.
-- Os callbacks do cliente rodam no `PcPool`, **um pool para o processo inteiro**, dividido com
-  as outras libs `*-faa`.
-- **O broker roda os atores das filas num pool próprio** (do `TAMQPServer`), não no pool do
-  processo: com o pool do processo saturado por callbacks que bloqueiam, o `Queue.Declare`
-  esperava 15 s e a conexão caía; com o pool próprio, responde em milissegundos.
+  (`TAMQPCondGen` and `TAMQPPoolWorker` became private types there). `AmqpWallMs` stays in
+  `AMQP.Threading`. The application provides the single copy of pascal-common-faa; the packages require it
+  by name, and a copy older than the minimum stops the build with a clear message.
+- The client's callbacks run on `PcPool`, **one pool for the whole process**, shared with
+  the other `*-faa` libs.
+- **The broker runs the queue actors on a pool of its own** (the `TAMQPServer`'s), not on the
+  process pool: with the process pool saturated by callbacks that block, `Queue.Declare`
+  waited 15 s and the connection dropped; with its own pool, it answers in milliseconds.
 
-### Corrigido
+### Fixed
 
-- Broker: double free da tabela de argumentos no `Queue.Declare` quando o ator da fila não
-  respondia a tempo (o canal liberava a tabela que o descritor da fila já possuía) — access
-  violation no `Destroy` do broker.
-- Teste de rotação do journal que supunha a rotação visível logo após a marca d'água (falhava
-  sob carga).
+- Broker: double free of the argument table in `Queue.Declare` when the queue actor did not
+  answer in time (the channel freed the table the queue descriptor already owned) — access
+  violation in the broker's `Destroy`.
+- Journal rotation test that assumed the rotation was visible right after the watermark (it failed
+  under load).
 
 [Unreleased]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/fabianoallex/pascal-amqp-faa/compare/v0.4.2...v0.5.0

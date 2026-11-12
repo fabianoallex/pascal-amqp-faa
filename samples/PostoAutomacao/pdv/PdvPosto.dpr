@@ -1,10 +1,10 @@
 ﻿program PdvPosto;
 
-{ PDV do posto: ve as abastecidas pendentes e as lanca numa venda
-  (ARQUITETURA.md). So' precisa do pacote cliente -- nao linka o submodulo
-  server. Um fonte para os dois compiladores:
+{ The station's POS: sees the pending fuelings and posts them to a sale
+  (ARCHITECTURE.md). It only needs the client package -- it does not link the
+  server sub-module. One source for both compilers:
     FPC:    lazbuild PdvPosto.lpi
-    Delphi: abrir PdvPosto.dproj no IDE }
+    Delphi: open PdvPosto.dproj in the IDE }
 
 uses
   {$IFDEF FPC}

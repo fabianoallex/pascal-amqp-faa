@@ -2,18 +2,18 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ O estado autoritativo das abastecidas no servidor de automacao
-  (ARQUITETURA.md §2 e §4). Toda a maquina de estados vive aqui; nenhuma
-  outra parte muta uma abastecida.
+{ The authoritative state of the fuelings on the automation server
+  (ARCHITECTURE.md §2 and §4). The whole state machine lives here; no
+  other part mutates a fueling.
 
-  Concorrencia: um TCriticalSection unico protege o dicionario e a versao.
-  A escala e' de dezenas de bombas e um punhado de PDVs, e o consumidor de
-  comandos e' serial (prefetch 1) -- um lock global e' suficiente e simples.
-  A "serializacao por id" da ARQUITETURA e' consequencia disso, nao um
-  mecanismo a mais.
+  Concurrency: a single TCriticalSection protects the dictionary and the version.
+  The scale is tens of pumps and a handful of POS terminals, and the command
+  consumer is serial (prefetch 1) -- a global lock is enough and simple.
+  The "serialization per id" of the ARCHITECTURE is a consequence of that, not one
+  more mechanism.
 
-  v1: so' memoria. Reiniciar o servidor perde o que estava pendente
-  (ARQUITETURA.md §12). }
+  v1: memory only. Restarting the server loses what was pending
+  (ARCHITECTURE.md §12). }
 
 interface
 
@@ -23,14 +23,14 @@ uses
   Posto.Abastecida;
 
 type
-  { Desfecho de uma transicao. Versao e' sempre a corrente apos a operacao.
-    Mudou = o estado realmente mudou (o chamador publica evento sse Ok e
+  { Outcome of a transition. Versao is always the current one after the operation.
+    Mudou = the state really changed (the caller publishes an event iff Ok and
     Mudou). }
   TResultadoTransicao = record
     Ok: Boolean;
     Mudou: Boolean;
-    Motivo: string;             // quando nao Ok
-    PdvAtual: string;           // recusa por ja-bloqueada
+    Motivo: string;             // when not Ok
+    PdvAtual: string;           // refusal because already locked
     VendaAtual: string;
     Versao: Int64;
     EstadoAnterior: TEstadoAbastecida;   // liberar_forcado
@@ -48,8 +48,8 @@ type
     constructor Create;
     destructor Destroy; override;
 
-    { Bomba concluiu um abastecimento. True = abastecida nova (publicar
-      EVT_NOVA); False = id ja' conhecido (ignora, idempotente). }
+    { The pump completed a refuel. True = new fueling (publish
+      EVT_NOVA); False = id already known (ignored, idempotent). }
     function Registrar(const A: TAbastecida; out AVersao: Int64): Boolean;
 
     function Lancar(const AId, APdv, AVenda: string): TResultadoTransicao;
@@ -62,7 +62,7 @@ type
 
     function Snapshot(out ADisponiveis: TArray<TAbastecida>;
       out ABloqueadas: TArray<TAbastecidaEstado>): Int64;
-    { Tudo, para o painel (inclui disponiveis e bloqueadas). }
+    { Everything, for the panel (includes available and locked ones). }
     function Todas: TArray<TAbastecidaEstado>;
     function Versao: Int64;
   end;
@@ -148,7 +148,7 @@ begin
         end;
       eaLancando:
         begin
-          // Idempotente para o proprio dono/venda (replay de outbox).
+          // Idempotent for the owner/sale itself (outbox replay).
           if (LE.Pdv = APdv) and (LE.Venda = AVenda) then
             Result := OkMudou(False)
           else
@@ -180,7 +180,7 @@ begin
     if not FItens.TryGetValue(AId, LE) then
       Exit(Recusa(REC_NAO_EXISTE));
     if LE.Estado = eaDisponivel then
-      // Ja' disponivel: idempotente (replay de outbox / dupla remocao).
+      // Already available: idempotent (outbox replay / double removal).
       Exit(OkMudou(False));
     if (LE.Estado <> eaLancando) or (LE.Pdv <> APdv) then
       Exit(Recusa(REC_NAO_E_DONO));
@@ -205,7 +205,7 @@ begin
     if not FItens.TryGetValue(AId, LE) then
       Exit(Recusa(REC_NAO_EXISTE));
     if (LE.Estado = eaLancado) and (LE.Pdv = APdv) and (LE.Venda = AVenda) then
-      Exit(OkMudou(False)); // idempotente (replay)
+      Exit(OkMudou(False)); // idempotent (replay)
     if (LE.Estado <> eaLancando) or (LE.Pdv <> APdv) or (LE.Venda <> AVenda) then
       Exit(Recusa(REC_NAO_E_DONO));
     LE.Estado := eaLancado;
@@ -227,7 +227,7 @@ begin
     if not FItens.TryGetValue(AId, LE) then
       Exit(Recusa(REC_NAO_EXISTE));
     if LE.Estado = eaDisponivel then
-      Exit(OkMudou(False)); // idempotente
+      Exit(OkMudou(False)); // idempotent
     if (LE.Estado <> eaLancado) or (LE.Pdv <> APdv) or (LE.Venda <> AVenda) then
       Exit(Recusa(REC_NAO_E_DONO));
     LE.Estado := eaDisponivel;
@@ -275,7 +275,7 @@ begin
   FLock.Enter;
   try
     if not FItens.TryGetValue(AId, LE) then
-      Exit(OkMudou(False)); // idempotente
+      Exit(OkMudou(False)); // idempotent
     if LE.Estado <> eaDisponivel then
       Exit(Recusa(REC_BLOQUEADA));
     FItens.Remove(AId);

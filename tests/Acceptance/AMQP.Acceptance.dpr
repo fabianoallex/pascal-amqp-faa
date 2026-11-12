@@ -1,35 +1,36 @@
 ﻿program AMQP.Acceptance;
 
-{ Aceitacao -- WS9 da Fase 2 (decisao D8 do CLAUDE.md).
+{ Acceptance -- WS9 of Phase 2 (decision D8 in CLAUDE.md).
 
-  Espelho Delphi de tests\Acceptance\fpc\AMQPAcceptanceFpc.lpr: roda
-  EXATAMENTE a mesma suite de integracao do cliente, mas contra o BROKER
-  EMBUTIDO desta lib em vez do RabbitMQ. Nenhum teste e' reescrito -- a unica
-  diferenca e' o AmqpUseEmbeddedBroker abaixo.
+  Delphi mirror of tests\Acceptance\fpc\AMQPAcceptanceFpc.lpr: runs
+  EXACTLY the same client integration suite, but against this library's
+  EMBEDDED BROKER instead of RabbitMQ. No test is rewritten -- the only
+  difference is the AmqpUseEmbeddedBroker below.
 
-  DUAS PASSADAS: TRANSIENTE E DURAVEL (WS10 da Fase 4)
-  ----------------------------------------------------
-  Com a variavel de ambiente AMQP_ACEITACAO_DURAVEL=1 o broker embutido sobe
-  com DataDir num diretorio temporario, e as MESMAS 28 rodam de novo. A
-  pergunta da segunda passada e' diferente da primeira: ligar a durabilidade
-  NAO PODE MUDAR A SEMANTICA que o cliente ve'. E' facil quebrar algo sutil --
-  a ordem dos confirms, o momento do Basic.Return, o requeue de uma
-  nao-confirmada -- sem que nenhum teste da suite do SERVER perceba, porque
-  todos eles foram escritos ja' sabendo da durabilidade. Estes 28 nao: sao os
-  testes do CLIENTE, escritos contra o RabbitMQ muito antes de existir Fase 4.
+  TWO PASSES: TRANSIENT AND DURABLE (WS10 of Phase 4)
+  ---------------------------------------------------
+  With the environment variable AMQP_ACEITACAO_DURAVEL=1 the embedded broker
+  starts with DataDir in a temporary directory, and the SAME 48 run again. The
+  question of the second pass is different from the first: turning durability
+  on MUST NOT CHANGE THE SEMANTICS the client sees. It is easy to break
+  something subtle -- the order of the confirms, the moment of Basic.Return,
+  the requeue of an unacknowledged one -- without any test of the SERVER suite
+  noticing, because all of them were written already knowing about
+  durability. These 48 were not: they are the CLIENT tests, written against
+  RabbitMQ long before Phase 4 existed.
 
-  VARIAVEL, E NAO FLAG: o runner do DUnitX (como o do FPCUnit) parseia a linha
-  de comando inteira e recusa opcao que nao conhece. Um --durable morreria
-  antes de chegar aos testes.
+  VARIABLE, NOT FLAG: the DUnitX runner (like the FPCUnit one) parses the whole
+  command line and rejects options it does not know. A --durable would die
+  before reaching the tests.
 
     AMQP.Acceptance.exe
     set AMQP_ACEITACAO_DURAVEL=1 && AMQP.Acceptance.exe
 
-  No build sem TLS de servidor (o backend SChannel desta lib so' implementa o
-  lado cliente), o broker nao sobe porta cifrada e os testes de TLS se
-  auto-ignoram -- o AMQP.IntegrationConfig aponta para uma porta onde nada
-  escuta, de proposito, para a suite NAO cair de volta no RabbitMQ e reportar
-  um verde falso. }
+  Every build has a TLS broker since 0.6.0 (both backends serve the server
+  side). If the encrypted port does not come up (no PKI found, for example),
+  the TLS tests ignore themselves -- AMQP.IntegrationConfig points to a port
+  where nothing listens, on purpose, so the suite does NOT fall back to
+  RabbitMQ and report a false green. }
 
 {$APPTYPE CONSOLE}
 {$STRONGLINKTYPES ON}
@@ -104,7 +105,7 @@ begin
   end;
 end;
 
-// True quando a variavel de ambiente pede a passada duravel.
+// True when the environment variable asks for the durable pass.
 function PediuDuravel: Boolean;
 var
   LVal: string;
@@ -113,13 +114,14 @@ begin
   Result := (LVal <> '') and (LVal <> '0') and (LVal <> 'false');
 end;
 
-// Diretorio limpo para a passada duravel. Nao reaproveita: um WAL de outra
-// execucao faria a suite comecar com filas e mensagens que ela nao criou.
+// Clean directory for the durable pass. Not reused: a WAL from another run
+// would make the suite start with queues and messages it did not create.
 function DirDuravel: string;
 begin
-  // Nome unico sem precisar do PID -- pegar o PID exigiria Winapi.Windows, e
-  // essa unit sombreia FindClose e DeleteFile da System.SysUtils (ver a tabela
-  // de armadilhas do CLAUDE.md). Nao vale a pena so' por um nome de pasta.
+  // Unique name without needing the PID -- getting the PID would require
+  // Winapi.Windows, and that unit shadows FindClose and DeleteFile from
+  // System.SysUtils (see the pitfalls table in CLAUDE.md). Not worth it just
+  // for a folder name.
   Result := IncludeTrailingPathDelimiter(TPath.GetTempPath)
     + 'amqpaceita-' + TPath.GetGUIDFileName(False);
   ForceDirectories(Result);
@@ -159,24 +161,24 @@ begin
   brokerTls := nil;
   try
     broker.BindAddress := '127.0.0.1';
-    broker.Port := 0; // porta efemera
+    broker.Port := 0; // ephemeral port
     dataDir := '';
     if PediuDuravel then
     begin
       dataDir := DirDuravel;
       LimpaDir(dataDir);
     end;
-    broker.DataDir := dataDir; // '' = broker da Fase 3, letra por letra (D19)
+    broker.DataDir := dataDir; // '' = the Phase 3 broker, to the letter (D19)
     broker.Start;
     if dataDir <> '' then
       WriteLn('PASSADA DURAVEL -- DataDir: ', dataDir)
     else
       WriteLn('passada transiente -- sem DataDir');
 
-    // Sem isto o build OpenSSL rodava a aceitacao SEM exercitar TLS de
-    // servidor: os 5 testes de TLS se auto-ignoravam em 0.000s e o resumo
-    // dizia "28 Passed", escondendo que 5 nem tocaram no broker. O XML
-    // (dunitx-results.xml) foi o que expos isso -- tempo zero.
+    // Without this the OpenSSL build ran the acceptance suite WITHOUT
+    // exercising server-side TLS: the 5 TLS tests ignored themselves in 0.000s
+    // and the summary said "28 Passed", hiding that 5 never touched the
+    // broker. The XML (dunitx-results.xml) is what exposed it -- zero time.
     brokerTls := TAMQPServer.Create;
     brokerTls.BindAddress := '127.0.0.1';
     brokerTls.Port := 0;
@@ -207,10 +209,10 @@ begin
       runner.UseRTTI := True;
       runner.FailsOnNoAsserts := False;
 
-      // ANTES do logger de console, de proposito: o runner percorre os
-      // loggers na ordem de registro, e o rodape "Done testing" sai do
-      // OnTestingEnds do console. Assim a tabela de tempos aparece entre a
-      // saida detalhada e o resumo que ela qualifica.
+      // BEFORE the console logger, on purpose: the runner walks the loggers
+      // in registration order, and the "Done testing" footer comes from the
+      // console's OnTestingEnds. That way the timing table shows up between
+      // the detailed output and the summary it qualifies.
       runner.AddLogger(TAMQPTestTimeLogger.Create);
 
       if TDUnitX.Options.ConsoleMode <> TDunitXConsoleMode.Off then

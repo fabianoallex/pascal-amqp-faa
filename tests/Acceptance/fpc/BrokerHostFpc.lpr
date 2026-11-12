@@ -1,25 +1,26 @@
 program BrokerHostFpc;
 
-{ Hospeda o broker embutido para o SmokeTest rodar contra ele -- WS9 da Fase 2.
+{ Hosts the embedded broker for the SmokeTest to run against -- WS9 of Phase 2.
 
-  Por que um processo separado em vez de um "--embedded" dentro do SmokeTest:
-  o SmokeTest e' um SAMPLE do cliente, e ele tem valor justamente por ser 100%
-  cliente -- fazer o sample linkar o sub-modulo server mudaria o que ele
-  demonstra e o que ele exige para compilar. Com dois processos, cada um fica
-  puro: aqui o broker, la' o cliente.
+  Why a separate process instead of an "--embedded" inside the SmokeTest: the
+  SmokeTest is a client SAMPLE, and its value is precisely in being 100%
+  client -- making the sample link the server sub-module would change what it
+  demonstrates and what it needs to compile. With two processes, each one
+  stays pure: the broker here, the client there.
 
-    .\BrokerHostFpc.exe [porta] [--tls porta-tls] [--seconds N]
+    .\BrokerHostFpc.exe [port] [--tls tls-port] [--seconds N]
                         [--datadir <dir>]
-    .\SmokeTest.exe --host 127.0.0.1 --port <porta>
+    .\SmokeTest.exe --host 127.0.0.1 --port <port>
 
-  --datadir liga a durabilidade (Fase 4). E' o que permite o passo de RESTART
-  do SmokeTest: sobe o host com um diretorio, o SmokeTest publica persistente,
-  o host e' morto e sobe de novo no MESMO diretorio, e o SmokeTest confere que
-  as mensagens estao la'. Ver tests\tools\smoke_restart.py.
+  --datadir turns durability on (Phase 4). It is what enables the SmokeTest's
+  RESTART step: the host starts with a directory, the SmokeTest publishes
+  persistent messages, the host is killed and starts again on the SAME
+  directory, and the SmokeTest checks that the messages are there. See
+  tests\tools\smoke_restart.py.
 
-  Sem argumentos: porta 5673 (fora do 5672 do RabbitMQ de dev, para os dois
-  poderem coexistir), sem TLS, e fica no ar por 120 s ou ate' receber uma
-  linha na entrada padrao. }
+  Without arguments: port 5673 (away from the dev RabbitMQ's 5672, so both can
+  coexist), no TLS, and it stays up for 120 s or until it receives a line on
+  standard input. }
 
 {$mode delphi}{$H+}
 
@@ -102,8 +103,8 @@ begin
   try
     LBroker.BindAddress := '127.0.0.1';
     LBroker.Port := LPorta;
-    // Vazio = broker da Fase 3, letra por letra (D19). Preenchido = o WAL
-    // vive ali, e o host passa a sobreviver ao proprio restart.
+    // Empty = the Phase 3 broker, to the letter (D19). Filled in = the WAL
+    // lives there, and the host survives its own restart.
     LBroker.DataDir := LDataDir;
     LBroker.Start;
     WriteLn('broker embutido ouvindo em 127.0.0.1:', LBroker.Port);
@@ -140,9 +141,9 @@ begin
     WriteLn('no ar por ate ', LSegundos, 's (ou ate uma linha na entrada padrao)');
     Flush(Output);
 
-    // Sai por prazo OU por uma linha na entrada padrao: com prazo o script nao
-    // trava se algo der errado; com a entrada padrao quem chamou encerra assim
-    // que o SmokeTest termina.
+    // Exits on a deadline OR on a line on standard input: with the deadline
+    // the script does not hang if something goes wrong; with standard input
+    // the caller shuts it down as soon as the SmokeTest finishes.
     LDeadline := PcTickMs + UInt64(LSegundos) * 1000;
     while PcTickMs < LDeadline do
     begin

@@ -2,16 +2,17 @@
 
 {$I amqp.inc}
 
-{ O broker: ciclo de vida do listener, loop de accept e registro de conexões
-  (sub-módulo server).
+{ The broker: listener lifecycle, accept loop and connection registry
+  (server sub-module).
 
-  Start liga o listener e uma thread de accept que cria uma
-  TAMQPServerConnection por conexão, entregando a cada uma a config corrente
-  (autenticador, autorizador, vhosts e os limites do Tune); Stop derruba tudo
-  sem leak. A FSM de handshake e o mapa de canais vivem na conexão (WS4); a
-  engine de roteamento (WS5/Fase 2) e os heartbeats (WS7) vêm depois.
+  Start brings up the listener and an accept thread that creates one
+  TAMQPServerConnection per connection, handing each the current config
+  (authenticator, authorizer, vhosts and the Tune limits); Stop tears it all
+  down without leaks. The handshake FSM and the channel map live in the
+  connection (WS4); the routing engine (WS5/Phase 2) and heartbeats (WS7) come
+  later.
 
-  Uso:
+  Usage:
     B := TAMQPServer.Create;
     B.BindAddress := '0.0.0.0';
     B.Port := 5672;
@@ -19,7 +20,7 @@
     B.VirtualHosts.Add('/app');
     B.Start;
     ...
-    B.Stop;  // idempotente; Destroy também para
+    B.Stop;  // idempotent; Destroy also stops
 }
 
 interface
@@ -43,9 +44,9 @@ uses
   AMQP.Server.Recovery,
   AMQP.Server.Connection;
 
-// TAMQPVirtualHostRegistry mudou-se para AMQP.Server.Types no WS4 (a FSM de
-// handshake precisa consultá-lo, e ela não pode usar esta unit — que a usa).
-// Quem mexe em vhosts precisa listar AMQP.Server.Types no próprio uses.
+// TAMQPVirtualHostRegistry moved to AMQP.Server.Types in WS4 (the handshake
+// FSM needs to consult it, and it cannot use this unit — which uses it).
+// Code that touches vhosts must list AMQP.Server.Types in its own uses.
 
 type
   TAMQPServer = class;
@@ -59,11 +60,11 @@ type
     constructor Create(AServer: TAMQPServer);
   end;
 
-  { Thread monitora: uma só para o broker inteiro (não uma por conexão). A cada
-    AMQP_SERVER_MONITOR_TICK_MS percorre as conexões vivas aplicando o passo de
-    heartbeat e o prazo do Connection.Close-Ok, e recolhe as mortas. É a ÚNICA
-    thread que libera conexões enquanto o broker roda — por isso o snapshot que
-    ela tira não pode ser liberado debaixo dela. }
+  { Monitor thread: a single one for the whole broker (not one per connection).
+    Every AMQP_SERVER_MONITOR_TICK_MS it walks the live connections applying the
+    heartbeat step and the Connection.Close-Ok deadline, and collects the dead
+    ones. It is the ONLY thread that frees connections while the broker runs —
+    which is why the snapshot it takes cannot be freed under it. }
   TAMQPMonitorThread = class(TThread)
   private
     FServer: TAMQPServer;
@@ -85,24 +86,24 @@ type
     FAuth: IAMQPAuthenticator;
     FAuthorizer: IAMQPAuthorizer;
     FSink: IAMQPMessageSink;
-    FEngine: TAMQPEngine; // WS5: a engine de verdade; tambem e' o Sink
-    // Pool PROPRIO dos atores das filas (F8). Nao o PcPool da
-    // pascal-common-faa: aquele e' do processo inteiro -- callbacks de
-    // consumer deste cliente e das outras libs *-faa, que podem bloquear em
-    // I/O por segundos -- e tem teto. Medido (TPoolIsolationTests): com o
-    // PcPool saturado e o ator nele, o Queue.Declare-Ok esperava os 15 s do
-    // comando sincrono do ator e a conexao caia. O ator nunca bloqueia (D2),
-    // entao este pool so' disputa CPU entre filas, que e' o que ele deve
-    // disputar. Criar e' barato (nenhuma thread antes do primeiro Queue).
+    FEngine: TAMQPEngine; // WS5: the real engine; also the Sink
+    // The queue actors' OWN pool (F8). Not pascal-common-faa's PcPool: that
+    // one belongs to the whole process -- consumer callbacks of this client
+    // and of the other *-faa libs, which may block on I/O for seconds -- and
+    // has a cap. Measured (TPoolIsolationTests): with PcPool saturated and the
+    // actor on it, Queue.Declare-Ok waited the 15 s of the actor's synchronous
+    // command and the connection dropped. The actor never blocks (D2), so this
+    // pool only competes for CPU among queues, which is what it should compete
+    // for. Creating it is cheap (no thread before the first Queue).
     FActorPool: TPcThreadPool;
-    FJournal: TAMQPJournal; // Fase 4: nil enquanto DataDir estiver vazio
-    // Onde os canais penduram confirms adiados. Existe junto com o journal e
-    // pelo mesmo motivo: sem DataDir nao ha o que esperar, e o confirm sai
-    // inline como na Fase 3.
+    FJournal: TAMQPJournal; // Phase 4: nil while DataDir is empty
+    // Where channels park deferred confirms. Exists together with the journal
+    // and for the same reason: without a DataDir there is nothing to wait for,
+    // and the confirm goes out inline as in Phase 3.
     FConfirms: IAMQPConfirmRegistry;
-    // O que a ultima recuperacao encontrou. Zerado enquanto DataDir estiver
-    // vazio. Existe pela mesma razao das contagens do journal: um broker que
-    // subiu com o log truncado tem de conseguir DIZER isso.
+    // What the last recovery found. Zeroed while DataDir is empty. Exists for
+    // the same reason as the journal counters: a broker that came up with a
+    // truncated log has to be able to SAY so.
     FRecoveryStats: TAMQPRecoveryStats;
     FMaxJournalBytes: Int64;
     FDataDir: string;
@@ -123,8 +124,8 @@ type
     FTlsBackend: TPcTlsBackend;
     FRunning: Boolean;
     FStopping: Boolean;
-    FTotalAccepted: Integer; // atômico
-    FEventBus: TAMQPEventBus; // dono; vive do constructor ao destructor
+    FTotalAccepted: Integer; // atomic
+    FEventBus: TAMQPEventBus; // owner; lives from constructor to destructor
     function ConnConfig: TAMQPServerConnConfig;
     function OpenListener: TPcListener;
     procedure AcceptLoop;
@@ -143,107 +144,105 @@ type
     procedure Start;
     procedure Stop;
 
-    // --- observabilidade (Fase 4.1, D29-D36) ---
-    /// Registra um handler para TODOS os tipos de evento. Thread-safe, e
-    /// pode ser chamado antes ou depois do Start.
+    // --- observability (Phase 4.1, D29-D36) ---
+    /// Registers a handler for ALL event types. Thread-safe, and may be
+    /// called before or after Start.
     ///
-    /// O handler roda na thread notificadora do broker -- nunca na thread de
-    /// leitura de uma conexao, nunca num worker do pool (D30). Ele pode
-    /// demorar sem travar nada, mas enquanto demora o ring enche e passa a
-    /// DESCARTAR eventos, contados em EventsDropped (D31).
+    /// The handler runs on the broker's notifier thread -- never on a
+    /// connection's read thread, never on a pool worker (D30). It may take
+    /// its time without stalling anything, but while it does the ring fills
+    /// up and starts DROPPING events, counted in EventsDropped (D31).
     ///
-    /// Chame Unsubscribe ANTES de destruir o objeto dono do metodo: um
-    /// handler orfao vira AV, que a notificadora conta e sobrevive (D33), mas
-    /// o sintoma aparece longe da causa.
+    /// Call Unsubscribe BEFORE destroying the object that owns the method: an
+    /// orphan handler becomes an AV, which the notifier counts and survives
+    /// (D33), but the symptom shows up far from the cause.
     procedure Subscribe(AHandler: TAMQPServerEventHandler); overload;
-    /// Idem, filtrando os tipos. Assinar o mesmo metodo de novo SUBSTITUI a
-    /// mascara anterior, em vez de duplicar a entrega.
+    /// Same, filtering the types. Subscribing the same method again REPLACES
+    /// the previous mask, instead of duplicating delivery.
     procedure Subscribe(AHandler: TAMQPServerEventHandler;
       const ATypes: TAMQPServerEventTypes); overload;
-    /// Remove um handler previamente registrado. Thread-safe.
+    /// Removes a previously registered handler. Thread-safe.
     procedure Unsubscribe(AHandler: TAMQPServerEventHandler);
 
-    /// Espera a notificadora entregar tudo que ja' foi emitido. E' a barreira
-    /// da D35 -- teste espera por ela, nao por Sleep. False = estourou o
-    /// prazo. NAO chamar de dentro de um handler.
+    /// Waits for the notifier to deliver everything already emitted. It is
+    /// D35's barrier -- tests wait on it, not on Sleep. False = the deadline
+    /// expired. Do NOT call from inside a handler.
     function DrainEvents(ATimeoutMs: Cardinal = 2000): Boolean;
-    /// Quantos eventos entraram no ring desde o Create.
+    /// How many events entered the ring since Create.
     function EventsEmitted: Int64;
-    /// Quantos foram DESCARTADOS por ring cheio. Um valor > 0 quer dizer que
-    /// o observador nao viu tudo -- e' o preco do best-effort da D31, e a
-    /// unica forma de saber que ele foi pago.
+    /// How many were DROPPED because the ring was full. A value > 0 means the
+    /// observer did not see everything -- it is the price of D31's best-effort,
+    /// and the only way to know it was paid.
     function EventsDropped: Int64;
-    /// Quantas excecoes de handler a notificadora capturou (D33).
+    /// How many handler exceptions the notifier caught (D33).
     function EventsFailed: Int64;
-    /// Classe e mensagem da ultima excecao de handler ('' se nenhuma).
+    /// Class and message of the last handler exception ('' if none).
     function LastEventFailure: string;
 
-    /// Tamanho do ring de eventos, em eventos (default
-    /// AMQP_EVENT_QUEUE_CAPACITY). So' pode mudar antes do Start.
+    /// Size of the event ring, in events (default
+    /// AMQP_EVENT_QUEUE_CAPACITY). Can only change before Start.
     property EventQueueCapacity: Integer read GetEventQueueCapacity
       write SetEventQueueCapacity;
 
-    /// Nº de conexões vivas neste momento.
+    /// Number of connections alive right now.
     function ConnectionCount: Integer;
-    /// Snapshot das conexões vivas. Os objetos podem ser reapados logo em
-    /// seguida — use só para inspeção imediata (log, testes, métricas).
+    /// Snapshot of the live connections. The objects may be reaped right
+    /// after — use only for immediate inspection (logs, tests, metrics).
     function Connections: TArray<TAMQPServerConnection>;
-    /// Total de conexões aceitas desde o Start (inclui as já fechadas).
+    /// Total connections accepted since Start (includes the ones already closed).
     property TotalAccepted: Integer read FTotalAccepted;
 
-    /// A engine de roteamento (Fase 2). Criada pelo broker e usada como
-    /// MessageSink; exposta para testes e diagnóstico.
+    /// The routing engine (Phase 2). Created by the broker and used as the
+    /// MessageSink; exposed for tests and diagnostics.
     property Engine: TAMQPEngine read FEngine;
-    /// Journal de durabilidade, ou nil quando DataDir esta' vazio. Existe so'
-    /// entre o Start e o Stop.
+    /// Durability journal, or nil when DataDir is empty. Exists only between
+    /// Start and Stop.
     property Journal: TAMQPJournal read FJournal;
-    /// Registro de confirms adiados, ou nil quando DataDir esta' vazio.
-    /// Existe pela mesma razao do Journal acima: diagnostico e teste.
+    /// Registry of deferred confirms, or nil when DataDir is empty.
+    /// Exists for the same reason as Journal above: diagnostics and tests.
     property Confirms: IAMQPConfirmRegistry read FConfirms;
-    /// O que o replay do WAL encontrou no ultimo Start. Tudo zero quando
-    /// DataDir esta' vazio ou o log estava vazio.
+    /// What the WAL replay found on the last Start. All zero when DataDir is
+    /// empty or the log was empty.
     property RecoveryStats: TAMQPRecoveryStats read FRecoveryStats;
 
-    /// Diretorio de dados. VAZIO (default) = broker exatamente igual ao da
-    /// Fase 3: `durable` e `delivery-mode 2` continuam aceitos e ignorados, e
-    /// nada e' escrito em disco. Preenchido = durabilidade ligada (decisao
-    /// D19).
+    /// Data directory. EMPTY (default) = broker exactly like Phase 3's:
+    /// `durable` and `delivery-mode 2` are still accepted and ignored, and
+    /// nothing is written to disk. Set = durability on (decision D19).
     ///
-    /// E' opt-in pela mesma razao do UseTls: o broker roda DENTRO da app do
-    /// usuario, e ninguem deve ganhar arquivos em disco por ter chamado Start.
-    /// So' pode mudar com o broker parado.
+    /// It is opt-in for the same reason as UseTls: the broker runs INSIDE the
+    /// user's app, and nobody should get files on disk for having called
+    /// Start. Can only change with the broker stopped.
     property DataDir: string read FDataDir write SetDataDir;
-    /// Teto duro do WAL em bytes. 0 (default) = ilimitado, a forma do
-    /// MaxQueueLength. Ao estourar, o publish PERSISTENTE leva Basic.Nack --
-    /// teto de memoria descarta, teto de disco recusa. Aplicado a partir do
-    /// proximo Start.
+    /// Hard cap of the WAL in bytes. 0 (default) = unlimited, the shape of
+    /// MaxQueueLength. When exceeded, the PERSISTENT publish gets Basic.Nack --
+    /// the memory cap drops, the disk cap refuses. Applied from the next Start.
     property MaxJournalBytes: Int64 read FMaxJournalBytes
       write FMaxJournalBytes;
-    /// Teto de mensagens prontas POR FILA (decisão D7 do CLAUDE.md).
-    /// 0 (default) = ilimitado. O broker roda dentro da app do usuário: uma
-    /// fila sem consumidor não pode derrubar o processo hospedeiro. Vale para
-    /// as filas criadas depois de atribuído. `x-max-length` por fila é Fase 3.
+    /// Cap of ready messages PER QUEUE (decision D7 in CLAUDE.md).
+    /// 0 (default) = unlimited. The broker runs inside the user's app: a
+    /// queue with no consumer must not bring down the host process. Applies
+    /// to queues created after it is set. Per-queue `x-max-length` is Phase 3.
     property MaxQueueLength: Integer read FMaxQueueLength
       write SetMaxQueueLength;
 
     /// '' or '0.0.0.0' (default) = every IPv4 interface; '::' = every IPv6
     /// one; or an address of this machine.
     property BindAddress: string read FBindAddress write FBindAddress;
-    /// Porta a ligar; 0 = o SO escolhe. Depois do Start, reflete a efetiva.
+    /// Port to bind; 0 = the OS chooses. After Start, reflects the actual one.
     property Port: Word read FPort write FPort;
     /// IGNORED since 0.6.0: the listener comes from pascal-common-faa, which
     /// uses its own backlog. Kept so that existing code compiles.
     property Backlog: Integer read FBacklog write FBacklog;
     property Running: Boolean read FRunning;
 
-    // --- limites propostos no Connection.Tune (0 = sem limite). Lidos a cada
-    //     conexão aceita, que recebe uma cópia da config.
+    // --- limits proposed in Connection.Tune (0 = no limit). Read on each
+    //     accepted connection, which gets a copy of the config.
     property ChannelMax: Word read FChannelMax write FChannelMax;
     property FrameMax: Cardinal read FFrameMax write FFrameMax;
-    /// Heartbeat proposto no Tune. Quem decide é o cliente no Tune-Ok (spec):
-    /// o broker adota o valor que ele devolver. 0 = sem heartbeat.
+    /// Heartbeat proposed in Tune. The client decides in Tune-Ok (spec): the
+    /// broker adopts the value it returns. 0 = no heartbeat.
     property Heartbeat: Word read FHeartbeat write FHeartbeat;
-    /// Quanto esperar pelo Connection.Close-Ok antes de derrubar o socket.
+    /// How long to wait for Connection.Close-Ok before dropping the socket.
     property CloseTimeoutMs: Cardinal read FCloseTimeoutMs write FCloseTimeoutMs;
 
     // --- TLS (WS3; pascal-common-faa's transport since 0.6.0). Each accepted
@@ -271,12 +270,12 @@ type
     /// AmqpDefaultTlsBackend in AMQP.Transport.
     property TlsBackend: TPcTlsBackend read FTlsBackend write FTlsBackend;
 
-    /// Default: TAMQPStaticAuthenticator com guest/guest. Só antes do Start.
+    /// Default: TAMQPStaticAuthenticator with guest/guest. Only before Start.
     property Authenticator: IAMQPAuthenticator read FAuth write FAuth;
     property Authorizer: IAMQPAuthorizer read FAuthorizer write FAuthorizer;
-    /// Para onde vão as mensagens publicadas. Default: TAMQPNullMessageSink,
-    /// que descarta — é o que faz da Fase 1 um "null broker". A engine de
-    /// roteamento da Fase 2 entra por aqui.
+    /// Where published messages go. Default: TAMQPNullMessageSink, which
+    /// drops them — that is what makes Phase 1 a "null broker". Phase 2's
+    /// routing engine plugs in here.
     property MessageSink: IAMQPMessageSink read FSink write FSink;
     property VirtualHosts: TAMQPVirtualHostRegistry read FVHosts;
   end;
@@ -324,20 +323,20 @@ begin
   FVHosts := TAMQPVirtualHostRegistry.Create;
   FAuth := TAMQPStaticAuthenticator.Create; // guest/guest
   FAuthorizer := TAMQPAllowAllAuthorizer.Create;
-  // WS5: a engine e' o sink. O caminho de conteudo da Fase 1 (canal remonta
-  // -> Sink.RouteMessage) nao mudou -- so' quem esta' plugado nele.
+  // WS5: the engine is the sink. Phase 1's content path (channel reassembles
+  // -> Sink.RouteMessage) did not change -- only what is plugged into it.
   FEngine := TAMQPEngine.Create;
-  // Antes de qualquer fila existir (a recuperacao do Start ja' cria filas).
+  // Before any queue exists (Start's recovery already creates queues).
   FActorPool := TPcThreadPool.Create;
   FEngine.Pool := FActorPool;
   FSink := FEngine;
   FMonitorStop := TEvent.Create(nil, True, False, '');
-  // O barramento nasce com o servidor (e nao no Start) para o Subscribe
-  // funcionar antes de o broker subir -- que e' o caso normal: quem observa
-  // quer o primeiro evento, nao o segundo.
+  // The bus is born with the server (not in Start) so that Subscribe works
+  // before the broker comes up -- which is the normal case: an observer wants
+  // the first event, not the second.
   FEventBus := TAMQPEventBus.Create;
-  // A engine repassa o sink a cada fila que cria (Inc. 2). Semeado aqui, e
-  // nao no Start, porque fila pode nascer antes dele (recuperacao).
+  // The engine passes the sink on to each queue it creates (Inc. 2). Seeded
+  // here, not in Start, because a queue may be born before it (recovery).
   FEngine.Events := FEventBus;
   FBindAddress := '0.0.0.0';
   FPort := 5672;
@@ -390,23 +389,23 @@ begin
   FAuth := nil;
   FAuthorizer := nil;
   FSink := nil;
-  // Depois do Stop: nenhuma conexao viva, entao nenhum ator de fila esta'
-  // sendo alimentado. O destrutor da engine para os atores antes de liberar.
+  // After Stop: no live connection, so no queue actor is being fed. The
+  // engine's destructor stops the actors before freeing.
   FreeAndNil(FJournal);
   FEngine.Free;
-  // Depois da engine: o destrutor dela para cada ator (Stop espera o work
-  // item em voo sair do laco), entao aqui nao ha item de fila na mao de
-  // nenhum worker. O Destroy do pool executaria o que ainda estivesse na
-  // fila -- nunca descartou --, mas nao sobra nada para executar.
+  // After the engine: its destructor stops each actor (Stop waits for the
+  // in-flight work item to leave the loop), so here no worker holds a queue
+  // item. The pool's Destroy would run whatever was still queued -- it never
+  // dropped --, but nothing is left to run.
   FActorPool.Free;
-  // O BARRAMENTO POR ULTIMO, depois da engine e do journal. A engine, cada
-  // FILA que ela possui e o journal guardam um IAMQPEventSink apontando para
-  // ele; liberar o barramento antes faz o destrutor de cada um desses campos
-  // chamar _Release em memoria ja' liberada -- access violation na saida, com
-  // o broker inteiro funcionando ate' ali. E' a mesma regra de tempo de vida
-  // que a documentacao manda o usuario seguir (Unsubscribe antes de destruir
-  // o dono do handler), so' que aplicada de dentro para fora.
-  FEventBus.Free; // o destructor dele para a notificadora
+  // THE BUS LAST, after the engine and the journal. The engine, each QUEUE it
+  // owns and the journal hold an IAMQPEventSink pointing to it; freeing the
+  // bus earlier makes the destructor of each of those fields call _Release on
+  // already freed memory -- access violation on exit, with the whole broker
+  // working until then. It is the same lifetime rule the documentation tells
+  // the user to follow (Unsubscribe before destroying the handler's owner),
+  // only applied from the inside out.
+  FEventBus.Free; // its destructor stops the notifier
   inherited;
 end;
 
@@ -427,18 +426,18 @@ begin
   FStopping := False;
   FTotalAccepted := 0;
 
-  // O journal sobe ANTES do socket de escuta: nenhum cliente pode chegar num
-  // broker meio recuperado (a recuperacao propriamente dita e' a WS6, e vai
-  // entrar exatamente aqui). Se ele nao subir -- diretorio ja tem dono, disco
-  // sem permissao --, o Start levanta e nada foi prometido a ninguem.
+  // The journal comes up BEFORE the listening socket: no client may reach a
+  // half-recovered broker (recovery proper is WS6, and it goes exactly here).
+  // If it does not come up -- directory already owned, disk without
+  // permission --, Start raises and nothing was promised to anyone.
   if FDataDir <> '' then
   begin
     FJournal := TAMQPJournal.Create(FDataDir);
     FJournal.MaxJournalBytes := FMaxJournalBytes;
     FJournal.Events := FEventBus;
-    // O registro de confirms E' o IAMQPDurabilitySink do journal: e' assim que
-    // "a marca d'agua andou" vira "estes canais podem confirmar" (D24).
-    // Injetado ANTES do Start, como a propriedade pede.
+    // The confirm registry IS the journal's IAMQPDurabilitySink: that is how
+    // "the watermark moved" becomes "these channels may confirm" (D24).
+    // Injected BEFORE Start, as the property requires.
     FConfirms := TAMQPConfirmRegistry.Create;
     FJournal.DurabilitySink := FConfirms as IAMQPDurabilitySink;
     try
@@ -450,10 +449,10 @@ begin
     end;
     FEngine.Journal := FJournal;
 
-    // A RECUPERACAO RODA AQUI: depois de o journal estar de pe' -- e com o
-    // lock do diretorio ja' na mao, o que garante que nenhum outro broker
-    // esta' mexendo no mesmo WAL -- e ANTES de o socket de escuta abrir.
-    // Ninguem pode falar com um broker meio recuperado.
+    // RECOVERY RUNS HERE: after the journal is up -- and with the directory
+    // lock already in hand, which guarantees no other broker is touching the
+    // same WAL -- and BEFORE the listening socket opens. Nobody may talk to a
+    // half-recovered broker.
     LState := AmqpReplayWal(FDataDir);
     try
       FEngine.Recover(LState);
@@ -462,17 +461,17 @@ begin
       LState.Free;
     end;
 
-    // COMPACTACAO, e SO' AQUI: o journal esta' quiescente (a recuperacao ja'
-    // terminou e o socket de escuta ainda nao abriu, entao nao ha publicador
-    // nem ator submetendo). Compactar em voo exigiria quiescer a alocacao de
-    // LSN, o que esbarra na D2 -- ver o cabecalho de AMQP.Server.Journal.
-    // O efeito pratico: o log e' podado A CADA REINICIO.
+    // COMPACTION, and ONLY HERE: the journal is quiescent (recovery has
+    // finished and the listening socket has not opened yet, so no publisher
+    // or actor is submitting). Compacting in flight would require quiescing
+    // LSN allocation, which runs into D2 -- see AMQP.Server.Journal's header.
+    // The practical effect: the log is pruned ON EVERY RESTART.
     if (FJournal.CompactAbove > 0)
       and (FJournal.TotalSize >= FJournal.CompactAbove) then
       FJournal.Compact;
   end;
-  // A notificadora sobe ANTES do listener: assim o primeiro
-  // seConnectionEstablished ja' encontra quem o entregue.
+  // The notifier comes up BEFORE the listener: that way the first
+  // seConnectionEstablished already finds someone to deliver it.
   FEventBus.Start;
 
   try
@@ -499,7 +498,7 @@ begin
       raise;
     end;
   end;
-  FPort := FListener.Port; // efetiva (relevante se veio 0)
+  FPort := FListener.Port; // actual (relevant if it was 0)
   FRunning := True;
   FAccept := TAMQPAcceptThread.Create(Self);
   FAccept.Start;
@@ -521,11 +520,11 @@ begin
   end;
   FStopping := True;
 
-  // 0) para a monitora ANTES de tudo: enquanto ela vive, é ela quem libera as
-  //    conexões mortas — dois reapers concorrentes dariam double-free.
+  // 0) stop the monitor BEFORE everything: while it lives, it is the one that
+  //    frees dead connections — two concurrent reapers would double-free.
   StopMonitor;
 
-  // 1) para o accept: fecha o listener (desbloqueia o Accept pendente).
+  // 1) stop accepting: close the listener (unblocks the pending Accept).
   if FListener <> nil then
     FListener.Close;
   if FAccept <> nil then
@@ -535,8 +534,8 @@ begin
   end;
   FreeAndNil(FListener);
 
-  // 2) derruba as conexões vivas. Snapshot sob lock, depois age sem o lock
-  //    (HandleConnClosed também pega o lock).
+  // 2) drop the live connections. Snapshot under the lock, then act without
+  //    it (HandleConnClosed also takes the lock).
   FLock.Enter;
   try
     SetLength(LSnapshot, FActive.Count);
@@ -550,10 +549,10 @@ begin
   for I := 0 to High(LSnapshot) do
     LSnapshot[I].WaitFor;
 
-  // 3) o OnClosed de cada conexão já as moveu para FDead; libera todas.
+  // 3) each connection's OnClosed already moved it to FDead; free them all.
   ReapDead;
 
-  // resto que por acaso ainda esteja em FActive (corrida rara): move e libera.
+  // whatever happens to still be in FActive (rare race): move and free.
   FLock.Enter;
   try
     for I := 0 to FActive.Count - 1 do
@@ -564,8 +563,8 @@ begin
   end;
   ReapDead;
 
-  // O journal desce por ULTIMO: as conexoes ja' morreram, entao ninguem mais
-  // submete, e o Stop dele drena o que ja' foi aceito antes de fechar.
+  // The journal goes down LAST: the connections are already dead, so nobody
+  // submits anymore, and its Stop drains what was accepted before closing.
   if FJournal <> nil then
   begin
     FEngine.Journal := nil;
@@ -575,13 +574,13 @@ begin
     end;
     FreeAndNil(FJournal);
   end;
-  // O registro so cai depois do journal: enquanto a thread do journal vive,
-  // ela pode estar dentro de um Release.
+  // The registry only goes after the journal: while the journal thread lives,
+  // it may be inside a Release.
   FConfirms := nil;
 
-  // A notificadora desce por ULTIMO, e de proposito: os eventos de
-  // fechamento de canal e de conexao nascem durante o teardown acima, e o
-  // Stop dela entrega o que ja' esta' no ring antes de a thread sair.
+  // The notifier goes down LAST, on purpose: the channel and connection
+  // close events are born during the teardown above, and its Stop delivers
+  // what is already in the ring before the thread exits.
   FEventBus.Stop;
 
   FRunning := False;
@@ -596,21 +595,21 @@ begin
   begin
     LSock := FListener.Accept;
     if LSock = nil then
-      Break; // listener fechado
+      Break; // listener closed
     if FStopping then
     begin
       LSock.Free;
       Break;
     end;
 
-    // (o reap fica com a thread monitora — ver MonitorLoop)
+    // (reaping is left to the monitor thread — see MonitorLoop)
 
-    // A conexão vira dona do endpoint e recebe uma cópia da config do broker.
+    // The connection becomes the endpoint's owner and gets a copy of the broker's config.
     // Under TLS it isn't negotiated yet: the handshake runs on the
     // connection's thread (TAMQPServerConnection.SetupTransport).
     LConn := TAMQPServerConnection.Create(LSock, ConnConfig);
     LConn.OnClosed := HandleConnClosed;
-    // Antes do Start: a FSM consulta a engine desde o Connection.Open.
+    // Before Start: the FSM consults the engine from Connection.Open on.
     LConn.Engine := FEngine;
     FLock.Enter;
     try
@@ -635,14 +634,15 @@ begin
     if FStopping then
       Break;
 
-    // Snapshot sob lock; os Tick rodam FORA do lock (HeartbeatTick pode postar
-    // no writer e o Shutdown de uma conexão morta chama HandleConnClosed, que
-    // também pega o lock). Seguro porque só ESTA thread libera conexões
-    // enquanto o broker roda, e o ReapDead abaixo só acontece depois dos Tick.
-    // WS5: recobra confirm que ficou preso porque a fila de escrita do canal
-    // estava cheia no instante do fsync. Sem este cutucao, um canal assim so'
-    // confirmaria no PROXIMO avanco da marca -- que pode nunca vir, se ninguem
-    // mais publicar. Mesma ideia do PostDeliverTick para a entrega (D3).
+    // Snapshot under the lock; the Ticks run OUTSIDE the lock (HeartbeatTick
+    // may post to the writer and the Shutdown of a dead connection calls
+    // HandleConnClosed, which also takes the lock). Safe because only THIS
+    // thread frees connections while the broker runs, and ReapDead below only
+    // happens after the Ticks.
+    // WS5: recovers a confirm that got stuck because the channel's write queue
+    // was full at the moment of the fsync. Without this nudge, such a channel
+    // would only confirm on the NEXT watermark advance -- which may never come,
+    // if nobody publishes again. Same idea as PostDeliverTick for delivery (D3).
     if FConfirms <> nil then
       try
         FConfirms.RetryPending;
@@ -662,18 +662,18 @@ begin
       end;
     end;
 
-    // Caso degradado da D3: consumidor que recusou e nenhum ack chegando --
-    // sem este empurrao a fila so' voltaria a entregar no proximo publish.
+    // D3's degraded case: a consumer that refused and no ack arriving --
+    // without this push the queue would only resume delivering on the next publish.
     if FEngine <> nil then
       try
         FEngine.DeliverTick;
       except
       end;
 
-    // WS8: fila com x-expires que passou do prazo sem uso e' recolhida aqui.
-    // Mesmo lugar do DeliverTick porque e' o mesmo papel: a thread da conexao
-    // esta' bloqueada no read, entao quem tem de acordar para olhar o relogio
-    // e' esta monitora.
+    // WS8: a queue with x-expires that went past its deadline unused is
+    // collected here. Same place as DeliverTick because it is the same role:
+    // the connection's thread is blocked in read, so whoever has to wake up to
+    // look at the clock is this monitor.
     if FEngine <> nil then
       try
         FEngine.ExpireIdleQueues;
@@ -704,7 +704,7 @@ end;
 
 procedure TAMQPServer.HandleConnClosed(AConn: TAMQPServerConnection);
 begin
-  // Disparado NA thread da conexão: só move para a lista de reap.
+  // Fired ON the connection's thread: only moves it to the reap list.
   FLock.Enter;
   try
     FActive.Remove(AConn);
@@ -730,7 +730,7 @@ begin
   finally
     FLock.Leave;
   end;
-  // Free fora do lock: o destrutor da conexão faz join da thread de leitura.
+  // Free outside the lock: the connection's destructor joins the read thread.
   for I := 0 to High(LToFree) do
     LToFree[I].Free;
 end;

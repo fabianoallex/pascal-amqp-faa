@@ -1,10 +1,10 @@
 ﻿program AutorizadorSim;
 
-{ Simula o autorizador publicando N retornos de nota quase ao mesmo tempo,
-  como se vários PDVs tivessem emitido notas em sequência. Companheiro do
-  sample Retaguarda (fluxo PDV -> autorizador -> retaguarda).
+{ Simulates the authorizer publishing N invoice replies almost at once,
+  as if several POS terminals had issued invoices in a row. Companion of the
+  Retaguarda sample (flow POS -> authorizer -> back office).
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    fpc -Fu..\..\src -Fi..\..\src AutorizadorSim.dpr
     Delphi: dcc32 -NSSystem;Winapi -U..\..\src -I..\..\src AutorizadorSim.dpr }
 
@@ -38,8 +38,8 @@ var
   Chave: string;
   Execucao: string;
 begin
-  // Sufixo unico por execucao, so pra nao confundir com chaves de rodadas
-  // anteriores do teste ao olhar a saida do Retaguarda.
+  // Suffix unique per run, just so they are not confused with keys from earlier
+  // test rounds when reading the Retaguarda output.
   Execucao := FormatDateTime('hhnnsszzz', Now);
 
   LParams := TAMQPConnectionParams.Localhost;

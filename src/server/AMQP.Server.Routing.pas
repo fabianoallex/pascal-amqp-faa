@@ -2,20 +2,20 @@
 
 {$I amqp.inc}
 
-{ Matchers puros de roteamento -- sub-modulo broker, WS2 da Fase 2 (engine de
-  roteamento em memoria, ver CLAUDE.md).
+{ Pure routing matchers -- broker sub-module, WS2 of Phase 2 (in-memory
+  routing engine, see CLAUDE.md).
 
-  Nenhuma funcao aqui toca em topologia (isso e' AMQP.Server.VHost, que usa
-  estas): so' decide, dados um binding e uma mensagem, se casam. Os vetores de
-  aceitacao que guiam esta unit foram escritos ANTES do codigo e sao
-  normativos -- ver o arquivo de vetores citado no plano do WS2. Onde este
-  codigo divergir dos vetores, os vetores vencem.
+  No function here touches topology (that is AMQP.Server.VHost, which uses
+  these): they only decide, given a binding and a message, whether they match. The
+  acceptance vectors that guide this unit were written BEFORE the code and are
+  normative -- see the vectors file cited in the WS2 plan. Where this
+  code diverges from the vectors, the vectors win.
 
-  Requisito de desempenho: o casamento roda no caminho quente do publish, na
-  thread do PUBLICADOR (ver "Invariante nova" do CLAUDE.md) -- por isso
-  AmqpTopicMatches caminha por INDICES sobre as strings (sem Copy, sem montar
-  lista de palavras, sem regex): cada "palavra" e' so' um par (inicio,
-  tamanho) dentro da string original. }
+  Performance requirement: matching runs on the hot publish path, on the
+  PUBLISHER thread (see the "new invariant" in CLAUDE.md) -- that is why
+  AmqpTopicMatches walks the strings by INDICES (no Copy, no building a
+  word list, no regex): each "word" is just a (start,
+  length) pair inside the original string. }
 
 interface
 
@@ -23,74 +23,74 @@ uses
   SysUtils,
   Rtti,
   AMQP.Wire,
-  AMQP.Server.Resources; // AmqpValuesEqual (comparador escalar exportado do WS1)
+  AMQP.Server.Resources; // AmqpValuesEqual (scalar comparer exported by WS1)
 
 type
-  { Modo de casamento de um binding de headers exchange (spec: propriedade
-    'x-match' dos argumentos do bind). Default (ausente) e' amqhmAll. }
+  { Match mode of a headers-exchange binding (spec: the 'x-match'
+    property of the bind arguments). Default (absent) is amqhmAll. }
   TAMQPHeadersMatch = (amqhmAll, amqhmAny);
 
-/// True se ARoutingKey casa com ABindingKey pelas regras do exchange topic
-/// (spec 3.1.3.3): '*' casa EXATAMENTE uma palavra (inclusive a palavra
-/// vazia); '#' casa ZERO ou mais palavras, em qualquer posicao, quantas vezes
-/// aparecer; qualquer outra palavra precisa bater literalmente, byte a byte
-/// (case-sensitive). Palavras sao separadas por '.'; uma chave vazia ("") tem
-/// ZERO palavras, nao uma palavra vazia -- e' a definicao travada no vetor de
-/// aceitacao (regra especifica deste projeto onde a spec e' omissa).
+/// True if ARoutingKey matches ABindingKey by the topic exchange rules
+/// (spec 3.1.3.3): '*' matches EXACTLY one word (including the empty
+/// word); '#' matches ZERO or more words, in any position, as many times as it
+/// appears; any other word must match literally, byte by byte
+/// (case-sensitive). Words are separated by '.'; an empty key ("") has
+/// ZERO words, not one empty word -- that is the definition locked in the acceptance
+/// vector (a rule specific to this project where the spec is silent).
 ///
-/// Implementacao: backtracking recursivo sobre INDICES nas duas strings (ver
-/// TryGetWord na implementation) -- nenhuma alocacao por chamada (sem Copy,
-/// sem TStringList, sem regex). O teste de 10k casamentos na suite cobre isso.
+/// Implementation: recursive backtracking over INDICES in both strings (see
+/// TryGetWord in the implementation) -- no allocation per call (no Copy,
+/// no TStringList, no regex). The 10k-match test in the suite covers this.
 function AmqpTopicMatches(const ABindingKey, ARoutingKey: string): Boolean;
 
-/// True se ARoutingKey e' EXATAMENTE igual a ABindingKey (exchange direct,
-/// spec 3.1.3.1) -- byte a byte, case-sensitive. Existe como funcao propria
-/// (em vez de so' usar "=" direto no chamador) para o dispatch por tipo de
-/// exchange em AMQP.Server.VHost.Route ficar uniforme entre os quatro tipos.
+/// True if ARoutingKey is EXACTLY equal to ABindingKey (direct exchange,
+/// spec 3.1.3.1) -- byte by byte, case-sensitive. It exists as its own function
+/// (instead of just using "=" directly in the caller) so the dispatch by exchange
+/// type in AMQP.Server.VHost.Route stays uniform across the four types.
 function AmqpDirectMatches(const ABindingKey, ARoutingKey: string): Boolean;
 
-/// Le a propriedade 'x-match' de AArgs (argumentos de um Queue.Bind ou
-/// Exchange.Bind num headers exchange) e devolve o modo em AMode.
-/// - AArgs = nil OU sem a chave 'x-match': AMode = amqhmAll (default da spec).
-/// - 'x-match' = 'all' ou 'any': AMode preenchido, devolve True.
-/// - qualquer outro valor: devolve False -- o BIND e' invalido (a WS5 mapeia
-///   isso para 406 PRECONDITION_FAILED no proprio Exchange.Bind/Queue.Bind,
-///   NAO faz fallback silencioso para 'all').
+/// Reads the 'x-match' property of AArgs (arguments of a Queue.Bind or
+/// Exchange.Bind on a headers exchange) and returns the mode in AMode.
+/// - AArgs = nil OR without the 'x-match' key: AMode = amqhmAll (spec default).
+/// - 'x-match' = 'all' or 'any': AMode filled in, returns True.
+/// - any other value: returns False -- the BIND is invalid (WS5 maps
+///   this to 406 PRECONDITION_FAILED on the Exchange.Bind/Queue.Bind itself,
+///   it does NOT silently fall back to 'all').
 function AmqpParseHeadersMatch(AArgs: TAMQPFieldTable;
   out AMode: TAMQPHeadersMatch): Boolean;
 
-/// True se AMessageHeaders casa com os criterios de ABindingArgs (headers
-/// exchange, spec 3.1.3.4), no modo AMode:
-/// - amqhmAll: TODO criterio (chave que NAO comeca com 'x-') tem de existir
-///   em AMessageHeaders com valor IGUAL (AmqpValuesEqual: tipo e valor).
-///   Zero criterios => True (verdade vacua -- "todos de um conjunto vazio").
-/// - amqhmAny: BASTA um criterio bater. Zero criterios => False (falso vacuo
-///   -- "existe algum de um conjunto vazio" e' sempre falso).
-/// Chaves do binding que comecam com 'x-' (inclusive 'x-match', que e'
-/// justamente o modo, nao um criterio) sao ignoradas na comparacao.
-/// ABindingArgs = nil equivale a "nenhum criterio". AMessageHeaders = nil
-/// equivale a "mensagem sem headers" (tabela vazia).
+/// True if AMessageHeaders matches the criteria of ABindingArgs (headers
+/// exchange, spec 3.1.3.4), in mode AMode:
+/// - amqhmAll: EVERY criterion (key that does NOT start with 'x-') must exist
+///   in AMessageHeaders with an EQUAL value (AmqpValuesEqual: type and value).
+///   Zero criteria => True (vacuous truth -- "all of an empty set").
+/// - amqhmAny: ONE matching criterion is ENOUGH. Zero criteria => False (vacuous
+///   falsehood -- "some element of an empty set exists" is always false).
+/// Binding keys that start with 'x-' (including 'x-match', which is
+/// precisely the mode, not a criterion) are ignored in the comparison.
+/// ABindingArgs = nil is equivalent to "no criteria". AMessageHeaders = nil
+/// is equivalent to "message without headers" (empty table).
 function AmqpHeadersMatch(ABindingArgs, AMessageHeaders: TAMQPFieldTable;
   AMode: TAMQPHeadersMatch): Boolean;
 
 implementation
 
-{ ---- Matcher topic: caminhamento por indices, sem alocar ---- }
+{ ---- Topic matcher: walking by indices, without allocating ---- }
 
-// Extrai a PROXIMA palavra da string S a partir do cursor APos (1-based),
-// avancando APos ate o inicio da palavra seguinte (ou para um estado
-// "esgotado" depois da ultima). Convencao do cursor, ver o comentario de
-// AmqpTopicMatches: uma string de tamanho ALen=0 tem ZERO palavras (regra
-// travada no vetor de aceitacao) -- TryGetWord devolve False de cara nesse
-// caso, mesmo na primeira chamada. Para ALen>0, toda palavra -- inclusive a
-// vazia apos um '.' final ou entre dois '.' consecutivos -- e' emitida.
+// Extracts the NEXT word of string S starting at cursor APos (1-based),
+// advancing APos to the start of the following word (or to an "exhausted"
+// state after the last one). Cursor convention, see the comment on
+// AmqpTopicMatches: a string of length ALen=0 has ZERO words (rule
+// locked in the acceptance vector) -- TryGetWord returns False right away in that
+// case, even on the first call. For ALen>0, every word -- including the
+// empty one after a trailing '.' or between two consecutive '.' -- is emitted.
 //
-// Nao aloca nada: so' anda o indice AStart/AWordLen sobre a string original.
+// Allocates nothing: it only moves the AStart/AWordLen index over the original string.
 function TryGetWord(const S: string; var APos: Integer; ALen: Integer;
   out AStart, AWordLen: Integer): Boolean;
 begin
   if (ALen = 0) or (APos > ALen + 1) then
-    Exit(False); // string original vazia (zero palavras) OU cursor esgotado
+    Exit(False); // empty original string (zero words) OR exhausted cursor
 
   AStart := APos;
   AWordLen := 0;
@@ -101,15 +101,15 @@ begin
   end;
 
   if APos <= ALen then
-    Inc(APos) // pula o '.' -- proxima chamada comeca na palavra seguinte
+    Inc(APos) // skips the '.' -- the next call starts at the following word
   else
-    Inc(APos); // ALen+1 -> ALen+2: sentinela de "acabou" pra proxima chamada
+    Inc(APos); // ALen+1 -> ALen+2: "done" sentinel for the next call
 
   Result := True;
 end;
 
-// Compara duas faixas de caracteres (uma "palavra" de cada string) byte a
-// byte, sem materializar substring nenhuma.
+// Compares two character ranges (one "word" from each string) byte by
+// byte, without materializing any substring.
 function WordsEqual(const S1: string; AStart1, ALen1: Integer;
   const S2: string; AStart2, ALen2: Integer): Boolean;
 var
@@ -123,29 +123,29 @@ begin
   Result := True;
 end;
 
-// Nucleo do casamento de topic. Iterativo de proposito, com backtracking
-// APENAS para o ultimo '#' visto -- o algoritmo classico de casamento de
-// curinga (o mesmo de glob, onde '#' faz o papel de '*' e '*' o de '?').
+// Core of topic matching. Iterative on purpose, with backtracking
+// ONLY to the last '#' seen -- the classic wildcard matching algorithm
+// (the same as glob, where '#' plays the role of '*' and '*' that of '?').
 //
-// POR QUE NAO RECURSAO: a versao recursiva "tenta 0, 1, 2... palavras para
-// cada '#'" e' exponencial no numero de '#'. Medido nesta maquina, com um
-// routing key de 24 palavras: 5 '#' = 0 ms, 6 = 15 ms, 7 = 110 ms, 8 = 453 ms.
-// Uma binding key cabe 255 octetos, ou seja, mais de 100 '#' -- um cliente
-// podia declarar 'hash.hash....zz' e fazer CADA publish naquele exchange
-// custar segundos, na thread do publicador e com o RWLock de leitura na mao.
-// Negacao de servico com uma linha de declare. Aqui o custo e' O(n*m) no pior
-// caso e O(n) no caso comum, sem recursao e sem alocar nada.
+// WHY NOT RECURSION: the recursive version "try 0, 1, 2... words for
+// each '#'" is exponential in the number of '#'. Measured on this machine, with a
+// 24-word routing key: 5 '#' = 0 ms, 6 = 15 ms, 7 = 110 ms, 8 = 453 ms.
+// A binding key holds 255 octets, that is, more than 100 '#' -- a client
+// could declare 'hash.hash....zz' and make EVERY publish to that exchange
+// cost seconds, on the publisher thread and holding the read RWLock.
+// Denial of service with a one-line declare. Here the cost is O(n*m) in the worst
+// case and O(n) in the common case, with no recursion and no allocation.
 //
-// A chave do algoritmo: basta lembrar o ULTIMO '#'. Se o resto do padrao
-// falhar mais adiante, a unica coisa util a tentar e' deixar esse '#' engolir
-// mais uma palavra -- retomar de um '#' anterior nunca abre possibilidade que
-// esta retomada ja nao cubra.
+// The key to the algorithm: remembering the LAST '#' is enough. If the rest of the pattern
+// fails further on, the only useful thing to try is letting that '#' swallow
+// one more word -- resuming from an earlier '#' never opens a possibility that
+// this resumption does not already cover.
 function AmqpTopicMatches(const ABindingKey, ARoutingKey: string): Boolean;
 var
   LBLen, LRLen: Integer;
-  LBPos, LRPos: Integer;           // cursores correntes (binding e routing)
-  LStarBPos, LStarRPos: Integer;   // retomada do ultimo '#'; -1 = nenhum ainda
-  LNextB, LNextR: Integer;         // cursores de tentativa (TryGetWord avanca)
+  LBPos, LRPos: Integer;           // current cursors (binding and routing)
+  LStarBPos, LStarRPos: Integer;   // resume point of the last '#'; -1 = none yet
+  LNextB, LNextR: Integer;         // trial cursors (TryGetWord advances)
   LBStart, LBWordLen: Integer;
   LRStart, LRWordLen: Integer;
   LTemB: Boolean;
@@ -157,27 +157,27 @@ begin
   LStarBPos := -1;
   LStarRPos := -1;
 
-  // Enquanto houver palavra de routing para casar.
+  // While there is a routing word to match.
   while True do
   begin
     LNextR := LRPos;
     if not TryGetWord(ARoutingKey, LNextR, LRLen, LRStart, LRWordLen) then
-      Break; // routing esgotado -- decide no rabo, depois do laco
+      Break; // routing exhausted -- decide on the tail, after the loop
 
     LNextB := LBPos;
     LTemB := TryGetWord(ABindingKey, LNextB, LBLen, LBStart, LBWordLen);
 
-    // '#': por ora consome ZERO palavras; guarda de onde retomar se falhar.
+    // '#': for now it consumes ZERO words; remember where to resume if it fails.
     if LTemB and (LBWordLen = 1) and (ABindingKey[LBStart] = '#') then
     begin
-      LStarBPos := LNextB;  // binding logo depois do '#'
-      LStarRPos := LRPos;   // routing onde o '#' comecou
+      LStarBPos := LNextB;  // binding right after the '#'
+      LStarRPos := LRPos;   // routing where the '#' started
       LBPos := LNextB;
       Continue;
     end;
 
-    // '*' casa exatamente uma palavra (inclusive vazia); literal casa byte a
-    // byte. Nos dois casos, consome uma palavra de cada lado.
+    // '*' matches exactly one word (including empty); a literal matches byte by
+    // byte. In both cases, it consumes one word from each side.
     if LTemB and (((LBWordLen = 1) and (ABindingKey[LBStart] = '*')) or
        WordsEqual(ABindingKey, LBStart, LBWordLen,
                   ARoutingKey, LRStart, LRWordLen)) then
@@ -187,21 +187,21 @@ begin
       Continue;
     end;
 
-    // Nao casou aqui. Se ha um '#' pendente, deixa ele engolir mais uma
-    // palavra e retoma dali; senao, acabou.
+    // No match here. If there is a pending '#', let it swallow one more
+    // word and resume from there; otherwise, it is over.
     if LStarBPos < 0 then
       Exit(False);
 
     LNextR := LStarRPos;
     if not TryGetWord(ARoutingKey, LNextR, LRLen, LRStart, LRWordLen) then
-      Exit(False); // nao ha mais palavra para o '#' engolir
+      Exit(False); // no more words for the '#' to swallow
     LStarRPos := LNextR;
     LRPos := LNextR;
     LBPos := LStarBPos;
   end;
 
-  // Routing esgotado: o que sobrou do binding so' pode ser '#' (que casa zero
-  // palavras). Qualquer literal ou '*' pendente significa palavra faltando.
+  // Routing exhausted: what is left of the binding can only be '#' (which matches zero
+  // words). Any pending literal or '*' means a missing word.
   while True do
   begin
     LNextB := LBPos;
@@ -233,7 +233,7 @@ var
   LValue: TValue;
   LMatch: string;
 begin
-  AMode := amqhmAll; // default da spec quando 'x-match' esta ausente
+  AMode := amqhmAll; // spec default when 'x-match' is absent
   if (AArgs = nil) or (not AArgs.TryGetValue('x-match', LValue)) then
     Exit(True);
 
@@ -249,7 +249,7 @@ begin
     Exit(True);
   end;
 
-  Result := False; // valor de 'x-match' desconhecido -- bind invalido (406)
+  Result := False; // unknown 'x-match' value -- invalid bind (406)
 end;
 
 function AmqpHeadersMatch(ABindingArgs, AMessageHeaders: TAMQPFieldTable;
@@ -263,9 +263,9 @@ begin
     for LKey in ABindingArgs.Keys do
     begin
       if AmqpIsXKey(LKey) then
-        Continue; // 'x-match' e qualquer outra chave 'x-' nao sao criterio
+        Continue; // 'x-match' and any other 'x-' key are not criteria
 
-      LBindVal := ABindingArgs[LKey]; // indexador -> local antes do uso (gotcha FPC)
+      LBindVal := ABindingArgs[LKey]; // indexer -> local before use (FPC gotcha)
       LMatched := (AMessageHeaders <> nil) and
         AMessageHeaders.TryGetValue(LKey, LMsgVal) and
         AmqpValuesEqual(LBindVal, LMsgVal);
@@ -273,18 +273,18 @@ begin
       case AMode of
         amqhmAll:
           if not LMatched then
-            Exit(False); // um criterio falhou -> "todos" ja nao bate mais
+            Exit(False); // one criterion failed -> "all" can no longer match
         amqhmAny:
           if LMatched then
-            Exit(True); // um criterio bateu -> "algum" ja e' suficiente
+            Exit(True); // one criterion matched -> "any" is already enough
       end;
     end;
 
-  // Terminou o loop sem decidir por short-circuit:
-  // - amqhmAll: nenhum criterio falhou (inclusive o caso de zero criterios --
-  //   verdade vacua, vetor #8);
-  // - amqhmAny: nenhum criterio bateu (inclusive zero criterios -- falso
-  //   vacuo, vetor #9).
+  // The loop ended without deciding by short-circuit:
+  // - amqhmAll: no criterion failed (including the zero-criteria case --
+  //   vacuous truth, vector #8);
+  // - amqhmAny: no criterion matched (including zero criteria -- vacuous
+  //   falsehood, vector #9).
   case AMode of
     amqhmAll: Result := True;
     amqhmAny: Result := False;

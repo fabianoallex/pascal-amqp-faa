@@ -1,27 +1,27 @@
 ﻿program Retaguarda;
 
-{ Cenario: PDV -> autorizador -> retaguarda. O autorizador (sample
-  AutorizadorSim) publica o retorno de cada nota numa fila; a retaguarda
-  consome e "busca o XML" (aqui, simulado com um Sleep aleatorio), como se
-  varios PDVs estivessem aguardando resposta ao mesmo tempo.
+{ Scenario: POS -> authorizer -> back office. The authorizer (sample
+  AutorizadorSim) publishes each invoice's reply to a queue; the back office
+  consumes it and "fetches the XML" (here, simulated with a random Sleep), as if
+  several POS terminals were waiting for a reply at the same time.
 
-  Diferenca em relacao ao mesmo cenario com outras libs AMQP para Delphi:
-  o Channel.Consume desta lib ja despacha cada entrega para o thread pool
-  proprio (PcPool, dentro de TAMQPChannel.DispatchDelivery) - o callback
-  abaixo roda concorrente para mensagens diferentes sem nenhum despacho
-  manual, e a thread de leitura nunca fica bloqueada esperando
-  ProcessarChave terminar.
+  Difference from the same scenario with other AMQP libs for Delphi:
+  this lib's Channel.Consume already dispatches each delivery to its own
+  thread pool (PcPool, inside TAMQPChannel.DispatchDelivery) - the callback
+  below runs concurrently for different messages without any manual
+  dispatch, and the read thread is never blocked waiting for
+  ProcessarChave to finish.
 
-  Argumento opcional --dedicado: usa CreateChannel(True), que troca o pool
-  global (concorrente) por um worker fixo do proprio canal - entregas
-  processadas uma de cada vez, na ordem em que chegaram.
+  Optional --dedicado argument: uses CreateChannel(True), which swaps the
+  global (concurrent) pool for a fixed worker of the channel itself - deliveries
+  processed one at a time, in the order they arrived.
 
-  Compila nos dois mundos a partir do MESMO fonte:
+  Compiles in both worlds from the SAME source:
     FPC:    fpc -Fu..\..\src -Fi..\..\src Retaguarda.dpr
     Delphi: dcc32 -NSSystem;Winapi -U..\..\src -I..\..\src Retaguarda.dpr
 
-  Callbacks sao `of object` (nao anonimos — ver CLAUDE.md): o estado
-  (NotasProntas/Lock) vive em TRetaguardaState, nao em globais de unit. }
+  Callbacks are `of object` (not anonymous; see CLAUDE.md): the state
+  (NotasProntas/Lock) lives in TRetaguardaState, not in unit globals. }
 
 {$IFDEF FPC}
   {$MODE DELPHI}
@@ -54,11 +54,11 @@ type
   public
     constructor Create;
     destructor Destroy; override;
-    // Escreve no console protegido pelo lock - varias threads do pool
-    // chamando Writeln ao mesmo tempo, sem isso, embaralham a saida
-    // (TCriticalSection e' reentrante na mesma thread).
+    // Writes to the console under the lock - several pool threads
+    // calling Writeln at the same time scramble the output without it
+    // (TCriticalSection is reentrant on the same thread).
     procedure Log(const S: string);
-    // Simula a busca do XML (API ou banco). Ja roda numa thread do pool.
+    // Simulates fetching the XML (API or database). Already runs on a pool thread.
     procedure ProcessarChave(const Chave: string);
     procedure OnDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure ImprimeStatus;
@@ -110,8 +110,8 @@ begin
   Log(Format('[worker %d] nota %s pronta', [TThread.CurrentThread.ThreadID, Chave]));
 end;
 
-// ANoAck=False (padrao do Consume): so confirmamos apos processar - garantia
-// "pelo menos uma vez" de fabrica, sem passo extra.
+// ANoAck=False (the Consume default): we only ack after processing - an
+// "at least once" guarantee out of the box, with no extra step.
 procedure TRetaguardaState.OnDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 var
   Chave: string;
@@ -122,7 +122,7 @@ begin
     ProcessarChave(Chave);
     AChannel.Ack(ADelivery.DeliveryTag);
   except
-    AChannel.Nack(ADelivery.DeliveryTag, True); // requeue em erro
+    AChannel.Nack(ADelivery.DeliveryTag, True); // requeue on error
   end;
 end;
 
@@ -163,7 +163,7 @@ begin
       LChannel := LConn.CreateChannel(LDedicado);
       try
         LChannel.DeclareQueue(TAMQPQueueDeclare.Create(QUEUE_NAME, True));
-        LChannel.Qos(10); // prefetch: limita mensagens nao confirmadas em voo
+        LChannel.Qos(10); // prefetch: caps the unacknowledged messages in flight
 
         LConsumerTag := LChannel.Consume(QUEUE_NAME, LState.OnDelivery);
 

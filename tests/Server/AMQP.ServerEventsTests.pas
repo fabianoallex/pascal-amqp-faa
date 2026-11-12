@@ -1,44 +1,44 @@
 ﻿unit AMQP.ServerEventsTests;
 
-{ Testes da observabilidade do broker (Fase 4.1, Inc. 1 -- D29-D36).
+{ Tests of the broker's observability (Phase 4.1, Inc. 1 -- D29-D36).
 
-  Duas fixturas, com alvos diferentes:
+  Two fixtures, with different targets:
 
-  - TEventBusTests exercita o barramento SOZINHO, sem broker e sem socket. E'
-    onde vivem os dois testes-ancora do mecanismo, os dois deterministicos por
-    construcao (nenhum Sleep, nenhuma corrida):
+  - TEventBusTests exercises the bus ALONE, with no broker and no socket. It is
+    where the mechanism's two anchor tests live, both deterministic by
+    construction (no Sleep, no race):
 
-      RingCheio_DescartaOMaisNovoEConta  -- a D31 inteira. Enche o ring com a
-        notificadora AINDA PARADA, entao a pressao e' exata. Nao basta contar
-        descarte: o teste exige que o que sobrou seja o PREFIXO (1..4) e nao a
-        cauda (7..10). Uma implementacao que descartasse a cabeca passaria no
-        contador e morreria na segunda metade.
+      RingCheio_DescartaOMaisNovoEConta  -- the whole of D31. Fills the ring with
+        the notifier STILL STOPPED, so the pressure is exact. Counting drops is
+        not enough: the test requires that what is left is the PREFIX (1..4) and
+        not the tail (7..10). An implementation that dropped the head would pass
+        the counter and die in the second half.
 
-      HandlerQueLevanta_ContaESegue -- a D33. A mutacao que tem de derruba-lo
-        e' voltar o "except end" do WIP: FailedCount iria a zero. E o segundo
-        handler recebendo tudo e' o que separa "a notificadora sobreviveu" de
-        "ela morreu no primeiro evento".
+      HandlerQueLevanta_ContaESegue -- D33. The mutation that has to kill it
+        is bringing back the WIP's "except end": FailedCount would go to zero. And
+        the second handler receiving everything is what separates "the notifier
+        survived" from "it died on the first event".
 
-  - TServerEventTests sobe o broker de verdade em porta efemera e conecta um
-    TAMQPConnection nele: prova que os emissores estao nos lugares certos e
-    que os campos saem preenchidos. O ancora aqui e'
-    SemAssinante_BrokerNaoEmiteNada, que e' a D29 -- broker inteiro
-    exercitado, ninguem assinando, contador em zero.
+  - TServerEventTests brings up the real broker on an ephemeral port and connects
+    a TAMQPConnection to it: proves that the emitters are in the right places and
+    that the fields come out filled in. The anchor here is
+    SemAssinante_BrokerNaoEmiteNada, which is D29 -- the whole broker
+    exercised, nobody subscribed, counter at zero.
 
-  Nenhum teste espera por Sleep (D35), e o tipo de barreira nao e' detalhe:
+  No test waits by Sleep (D35), and the kind of barrier is not a detail:
 
-  - onde se assere PRESENCA, espera-se a CONDICAO (TCaptura.Espera). Drain
-    sozinho nao serve, e a primeira rodada provou: ele espera o ring
-    esvaziar, e um ring que ainda nao recebeu o evento ja' esta' vazio. Como
-    o publish do cliente nao tem round-trip, drenar logo depois dele devolve
-    True antes de o broker ter lido o frame -- quatro testes falharam
-    exatamente assim;
-  - onde se assere AUSENCIA, Drain e' a barreira certa, precedida de uma
-    operacao COM round-trip (Channel.Close): quando ela volta, o broker ja'
-    passou por todos os pontos de emissao.
+  - where PRESENCE is asserted, the test waits for the CONDITION (TCaptura.Espera).
+    Drain alone does not do, and the first run proved it: it waits for the ring
+    to empty, and a ring that has not received the event yet is already empty.
+    Since the client's publish has no round-trip, draining right after it returns
+    True before the broker has read the frame -- four tests failed
+    exactly like that;
+  - where ABSENCE is asserted, Drain is the right barrier, preceded by an
+    operation WITH a round-trip (Channel.Close): when it returns, the broker has
+    already gone through every emission point.
 
-  As quatro funcoes Checa* existem para os corpos dos testes serem IDENTICOS
-  nos dois dialetos: so' a implementacao delas muda de lado. }
+  The four Checa* functions exist so the test bodies are IDENTICAL
+  in both dialects: only their implementation changes sides. }
 
 
 interface
@@ -60,8 +60,8 @@ uses
   AMQP.Server.Broker;
 
 type
-  { Sink de captura. O handler roda na thread notificadora e o teste le' da
-    thread do runner, entao tudo passa por lock. }
+  { Capture sink. The handler runs on the notifier thread and the test reads from
+    the runner thread, so everything goes through a lock. }
   TCaptura = class
   private
     FMon: TPcMonitor;
@@ -75,12 +75,12 @@ type
     function CountOf(AType: TAMQPServerEventType): Integer;
     function Primeiro(AType: TAMQPServerEventType;
       out AEvent: TAMQPServerEvent): Boolean;
-    /// Barreira por CONDICAO (D35): espera chegarem ACount eventos do tipo.
+    /// Barrier by CONDITION (D35): waits for ACount events of the type to arrive.
     function Espera(AType: TAMQPServerEventType; ACount: Integer;
       ATimeoutMs: Cardinal): Boolean;
   end;
 
-  { Handler que sempre levanta -- o dube da D33. }
+  { Handler that always raises -- the test double of D33. }
   TLevanta = class
   private
     FChamadas: Integer;
@@ -89,7 +89,7 @@ type
     property Chamadas: Integer read FChamadas;
   end;
 
-  { Handler LENTO -- o dube do ancora da D2 (Inc. 2). }
+  { SLOW handler -- the test double of the D2 anchor (Inc. 2). }
   TLerdo = class
   private
     FChamadas: Integer;
@@ -147,8 +147,8 @@ type
 
 implementation
 
-// Assercoes com o tipo fixado: o valor entra ja' convertido, e a sobrecarga
-// do TAssert e' a mesma nos dois compiladores.
+// Assertions with the type fixed: the value comes in already converted, and the
+// TAssert overload is the same on both compilers.
 procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
 begin
   TAssert.AssertEquals(AMsg, AEsperado, AObtido);
@@ -169,19 +169,19 @@ begin
   TAssert.AssertFalse(AMsg, ACond);
 end;
 
-// RTL por dialeto (regra do CLAUDE.md): o corpo dos testes e' compartilhado,
-// mas tudo que chama a RTL tem de ser escrito de cada lado. Aqui e' o
-// GetTempDir do FPC contra o TPath.GetTempPath do Delphi.
+// RTL per dialect (CLAUDE.md rule): the test body is shared,
+// but everything that calls the RTL has to be written on each side. Here it is
+// FPC's GetTempDir versus Delphi's TPath.GetTempPath.
 function DirTempDeTeste: string;
 begin
   Result := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpobs-'
     + FormatDateTime('yyyymmddhhnnsszzz', Now);
 end;
 
-// --- dublês -----------------------------------------------------------------
+// --- test doubles -----------------------------------------------------------
 
-{ Sink de captura: guarda tudo que chega, sob lock -- o handler roda na thread
-  notificadora e o teste lê da thread do runner. }
+{ Capture sink: keeps everything that arrives, under a lock -- the handler runs on
+  the notifier thread and the test reads from the runner thread. }
 constructor TCaptura.Create;
 begin
   inherited Create;
@@ -200,7 +200,7 @@ begin
   try
     SetLength(FEvents, Length(FEvents) + 1);
     FEvents[High(FEvents)] := AEvent;
-    FMon.PulseAll; // acorda quem estiver em Espera
+    FMon.PulseAll; // wakes whoever is in Espera
   finally
     FMon.Leave;
   end;
@@ -260,14 +260,14 @@ begin
   end;
 end;
 
-{ Espera ate' ACount eventos do tipo chegarem, ou o prazo estourar.
+{ Waits until ACount events of the type arrive, or the deadline expires.
 
-  Drain sozinho NAO serve aqui, e o teste mostrou por que: ele espera o ring
-  esvaziar, e um ring que ainda nao recebeu o evento ja' esta' vazio. Publish
-  do cliente nao tem round-trip, entao drenar logo depois dele devolve True
-  antes de o broker ter lido o frame. A barreira certa e' pela CONDICAO --
-  mesma linha do "esperar OnReconnect, nao IsOpen" do CLAUDE.md --, com
-  deadline e re-checagem em laco, nunca Sleep fixo. }
+  Drain alone does NOT do here, and the test showed why: it waits for the ring
+  to empty, and a ring that has not received the event yet is already empty. The
+  client's publish has no round-trip, so draining right after it returns True
+  before the broker has read the frame. The right barrier is by CONDITION --
+  same line as "wait for OnReconnect, not IsOpen" in CLAUDE.md --, with
+  a deadline and re-checking in a loop, never a fixed Sleep. }
 function TCaptura.Espera(AType: TAMQPServerEventType; ACount: Integer;
   ATimeoutMs: Cardinal): Boolean;
 var
@@ -293,23 +293,23 @@ begin
   end;
 end;
 
-{ Handler que sempre levanta. A D33 diz que isso é contado e o laço segue. }
+{ Handler that always raises. D33 says this is counted and the loop goes on. }
 procedure TLevanta.Handle(const AEvent: TAMQPServerEvent);
 begin
   Inc(FChamadas);
   raise Exception.Create('handler de teste explodiu');
 end;
 
-{ Handler LENTO -- o dube do ancora da D2. Dorme a cada evento, de proposito:
-  e' o unico jeito de provar que o ator nao espera por ele. }
+{ SLOW handler -- the test double of the D2 anchor. Sleeps on every event, on
+  purpose: it is the only way to prove the actor does not wait for it. }
 procedure TLerdo.Handle(const AEvent: TAMQPServerEvent);
 begin
   Inc(FChamadas);
   Sleep(40);
 end;
 
-{ Declara fila simples. A API do cliente e' por record -- e' o mesmo helper
-  que os outros testes de servidor usam. }
+{ Declares a plain queue. The client's API is record-based -- it is the same
+  helper the other server tests use. }
 procedure DeclaraFila(AChannel: TAMQPChannel; const ANome: string);
 var
   LDecl: TAMQPQueueDeclare;
@@ -328,7 +328,7 @@ end;
 
 procedure TEventBusTests.TearDown;
 begin
-  FBus.Free; // o destructor para a notificadora
+  FBus.Free; // the destructor stops the notifier
   FCap.Free;
 end;
 
@@ -336,8 +336,8 @@ procedure TEventBusTests.SemAssinante_NaoQuerNenhumTipo;
 var
   LType: TAMQPServerEventType;
 begin
-  // A D29 em uma asserção: sem assinante, Wants é False para TUDO -- e é isso
-  // que faz o emissor nem montar o record.
+  // D29 in one assertion: with no subscriber, Wants is False for EVERYTHING -- and
+  // that is what makes the emitter not even build the record.
   for LType := Low(TAMQPServerEventType) to High(TAMQPServerEventType) do
     ChecaNao('nao quer ' + AmqpEventTypeName(LType), FBus.Wants(LType));
 end;
@@ -349,7 +349,7 @@ begin
   ChecaOk('quer o outro que assinou', FBus.Wants(seMessageAcked));
   ChecaNao('nao quer o que nao assinou', FBus.Wants(seConnectionClosed));
 
-  // E o filtro vale na ENTREGA, não só no Wants.
+  // And the filter applies at DELIVERY, not only in Wants.
   FBus.Start;
   FBus.Emit(AmqpNewEvent(seChannelOpened));
   FBus.Emit(AmqpNewEvent(seConnectionClosed));
@@ -382,9 +382,9 @@ var
   I: Integer;
   LEv: TAMQPServerEvent;
 begin
-  // O ANCORA da D31. Sem Start nao ha quem drene, entao o ring enche de
-  // verdade e o comportamento sob pressao fica deterministico -- sem Sleep,
-  // sem handler lento, sem corrida.
+  // The ANCHOR of D31. Without Start there is nobody to drain, so the ring really
+  // fills up and the behavior under pressure is deterministic -- no Sleep,
+  // no slow handler, no race.
   FBus.Capacity := 4;
   FBus.Subscribe(FCap.Handle);
   for I := 1 to 10 do
@@ -398,9 +398,9 @@ begin
   ChecaInt('o resto foi contado como descartado', 6,
     Integer(FBus.DroppedCount));
 
-  // E agora o que a D31 tem de PROVAR: o que sobrou e' o PREFIXO (1..4), nao
-  // a cauda (7..10). Descartar a cabeca passaria no contador acima e falharia
-  // aqui -- e' a mutacao que este teste existe para pegar.
+  // And now what D31 has to PROVE: what is left is the PREFIX (1..4), not
+  // the tail (7..10). Dropping the head would pass the counter above and fail
+  // here -- it is the mutation this test exists to catch.
   FBus.Start;
   ChecaOk('drenou', FBus.Drain(2000));
   ChecaInt('entregou os que couberam', 4, FCap.Count);
@@ -414,8 +414,8 @@ var
   LBomba: TLevanta;
   I: Integer;
 begin
-  // O ANCORA da D33: a mutacao que tem de derrubar este teste e' voltar o
-  // "except end" do WIP, que zeraria FailedCount.
+  // The ANCHOR of D33: the mutation that has to kill this test is bringing back
+  // the WIP's "except end", which would zero FailedCount.
   LBomba := TLevanta.Create;
   try
     FBus.Subscribe(LBomba.Handle);
@@ -427,8 +427,8 @@ begin
 
     ChecaInt('as tres excecoes foram contadas', 3, Integer(FBus.FailedCount));
     ChecaOk('e a ultima ficou registrada', FBus.LastFailure <> '');
-    // O que separa "sobreviveu" de "morreu na primeira": o SEGUNDO handler
-    // continuou recebendo, evento a evento.
+    // What separates "survived" from "died on the first one": the SECOND handler
+    // kept receiving, event after event.
     ChecaInt('o handler seguinte recebeu tudo', 3, FCap.Count);
   finally
     FBus.Unsubscribe(LBomba.Handle);
@@ -447,7 +447,7 @@ begin
   ChecaOk('quer o novo tipo', FBus.Wants(seChannelOpened));
   ChecaNao('e nao quer mais o antigo', FBus.Wants(seConnectionClosed));
 
-  // Substituir, e nao duplicar, quer dizer entregar UMA vez.
+  // Replacing, not duplicating, means delivering ONCE.
   FBus.Start;
   FBus.Emit(AmqpNewEvent(seChannelOpened));
   ChecaOk('drenou', FBus.Drain(2000));
@@ -475,9 +475,9 @@ var
   LType, LOutro: TAMQPServerEventType;
   LNome: string;
 begin
-  // Guarda o EVENT_NAMES contra um tipo novo acrescentado sem nome: o array
-  // e' indexado pelo enum, entao o compilador exige a contagem certa, mas nao
-  // exige que os nomes sejam distintos nem nao-vazios.
+  // Guards EVENT_NAMES against a new type added without a name: the array
+  // is indexed by the enum, so the compiler requires the right count, but it does
+  // not require the names to be distinct or non-empty.
   for LType := Low(TAMQPServerEventType) to High(TAMQPServerEventType) do
   begin
     LNome := AmqpEventTypeName(LType);
@@ -511,8 +511,8 @@ begin
   end;
   if FBroker <> nil then
   begin
-    // Unsubscribe ANTES de soltar a captura: e' exatamente o contrato da D33
-    // que a documentacao manda o usuario seguir, e o teste segue tambem.
+    // Unsubscribe BEFORE releasing the capture: it is exactly the D33 contract
+    // the documentation tells the user to follow, and the test follows it too.
     FBroker.Unsubscribe(FCap.Handle);
     try
       FBroker.Stop;
@@ -523,8 +523,8 @@ begin
   FreeAndNil(FCap);
 end;
 
-{ Sobe o broker (assinando antes do Start, que e' o caso normal) e conecta um
-  cliente de verdade nele. }
+{ Brings up the broker (subscribing before Start, which is the normal case) and
+  connects a real client to it. }
 procedure TServerEventTests.SobeEConecta(AAssina: Boolean);
 begin
   if AAssina then
@@ -533,8 +533,8 @@ begin
   ConectaCliente;
 end;
 
-{ Separado do SobeEConecta porque ha' teste que precisa configurar o broker
-  ANTES do Start (a capacidade do ring, por exemplo) e conectar depois. }
+{ Separate from SobeEConecta because some tests need to configure the broker
+  BEFORE Start (the ring capacity, for example) and connect afterwards. }
 procedure TServerEventTests.ConectaCliente;
 var
   LParams: TAMQPConnectionParams;
@@ -546,8 +546,8 @@ begin
   FConn.Open;
 end;
 
-{ Consumidor de teste: so' precisa existir para a fila ter para quem
-  entregar. O que se assere e' o EVENTO, nao o que chega aqui. }
+{ Test consumer: it only needs to exist so the queue has someone to
+  deliver to. What is asserted is the EVENT, not what arrives here. }
 procedure TServerEventTests.ConsumidorDeTeste(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery);
 begin
@@ -566,8 +566,8 @@ begin
   ChecaOk('achou a estabelecida', FCap.Primeiro(seConnectionEstablished, LEv));
   ChecaOk('com endereco do peer', LEv.RemoteAddr <> '');
   ChecaOk('e com id de conexao', LEv.ConnectionId > 0);
-  // A estabelecida nasce ANTES do handshake: usuario e vhost ainda nao existem,
-  // e a D34 manda que campo nao populado saia ZERADO.
+  // The established one is born BEFORE the handshake: user and vhost do not exist yet,
+  // and D34 says that an unpopulated field comes out ZEROED.
   ChecaStr('sem usuario ainda', '', LEv.Username);
   ChecaStr('sem vhost ainda', '', LEv.VHost);
 
@@ -587,7 +587,7 @@ begin
   try
     LCh.Close;
   finally
-    // Canal FECHADO pelo cliente sai do dono (a conexao) -- quem fecha, libera.
+    // A channel CLOSED by the client leaves its owner (the connection) -- whoever closes, frees.
     LCh.Free;
   end;
   ChecaOk('chegou o fechamento', FCap.Espera(seChannelClosed, 1, 3000));
@@ -615,7 +615,7 @@ begin
   ChecaOk('achou o publish', FCap.Primeiro(seMessagePublished, LEv));
   ChecaStr('exchange default', '', LEv.ExchangeName);
   ChecaStr('routing key', 'obs.q', LEv.RoutingKey);
-  // A D34 em uma asserção: vai o TAMANHO, nunca o corpo.
+  // D34 in one assertion: the SIZE goes, never the body.
   ChecaInt('tamanho do corpo', Length(LCorpo), Integer(LEv.MessageSize));
   ChecaStr('roteou, entao sem motivo', '', LEv.Reason);
 end;
@@ -630,9 +630,9 @@ begin
   LCh.PublishText('', 'fila.que.nao.existe', 'x');
   ChecaOk('chegou o publish', FCap.Espera(seMessagePublished, 1, 3000));
 
-  // Sem rota NAO e' publish recusado: e' publish bem-sucedido que nao achou
-  // fila (leva ack, e Return se mandatory). Confundir os dois faria o
-  // observador contar erro onde nao ha.
+  // No route is NOT a refused publish: it is a successful publish that found no
+  // queue (it gets an ack, and a Return if mandatory). Confusing the two would make
+  // the observer count an error where there is none.
   ChecaInt('nenhum publish recusado', 0,
     FCap.CountOf(seMessagePublishRejected));
   ChecaOk('achou o publish', FCap.Primeiro(seMessagePublished, LEv));
@@ -669,8 +669,8 @@ begin
   ChecaOk('chegou o fechamento',
     FCap.Espera(seConnectionClosed, 1, 3000));
 
-  // O fechamento nasce no teardown da thread de leitura -- e so' chega porque
-  // a notificadora e' a ULTIMA a descer (ver TAMQPServer.Stop).
+  // The close is born in the read thread's teardown -- and it only arrives because
+  // the notifier is the LAST one to go down (see TAMQPServer.Stop).
   ChecaInt('uma conexao fechada', 1, FCap.CountOf(seConnectionClosed));
 end;
 
@@ -678,11 +678,11 @@ procedure TServerEventTests.CanalMorreComAConexao_EmiteFechamento;
 var
   LEv: TAMQPServerEvent;
 begin
-  // Canal aberto e NUNCA fechado pelo cliente: quem o fecha e' o teardown da
-  // conexao. Sem emitir aqui, um observador que conte aberturas contra
-  // fechamentos acusaria vazamento de canal a cada conexao derrubada -- foi
-  // o que a corrida do sample contra o SmokeTest mostrou (3 aberturas, 2
-  // fechamentos), e e' a mutacao que este teste existe para pegar.
+  // A channel opened and NEVER closed by the client: whoever closes it is the
+  // connection's teardown. Without emitting here, an observer that counts opens
+  // against closes would report a channel leak on every dropped connection -- that
+  // is what the sample's race against the SmokeTest showed (3 opens, 2
+  // closes), and it is the mutation this test exists to catch.
   SobeEConecta(True);
   FConn.CreateChannel;
   ChecaOk('chegou a abertura', FCap.Espera(seChannelOpened, 1, 3000));
@@ -699,21 +699,21 @@ procedure TServerEventTests.SemAssinante_BrokerNaoEmiteNada;
 var
   LCh: TAMQPChannel;
 begin
-  // O ANCORA da D29: com o broker inteiro exercitado e NINGUEM assinando,
-  // nenhum record e' montado e nada entra no ring. A mutacao que tem de
-  // derrubar este teste e' emitir sem checar Wants.
+  // The ANCHOR of D29: with the whole broker exercised and NOBODY subscribed,
+  // no record is built and nothing enters the ring. The mutation that has to
+  // kill this test is emitting without checking Wants.
   SobeEConecta(False);
   LCh := FConn.CreateChannel;
   DeclaraFila(LCh, 'obs.silencio');
   LCh.PublishText('', 'obs.silencio', 'nada disso deve virar evento');
   try
-    LCh.Close; // round-trip: o broker JA' processou tudo acima quando volta
+    LCh.Close; // round-trip: the broker HAS processed everything above when it returns
   finally
     LCh.Free;
   end;
-  // Aqui o Drain e' a barreira certa: a asserção e' de AUSENCIA, e o
-  // round-trip do Close-Ok garante que o broker ja' passou por todos os
-  // pontos de emissao.
+  // Here Drain is the right barrier: the assertion is of ABSENCE, and the
+  // Close-Ok round-trip guarantees the broker has already gone through every
+  // emission point.
   ChecaOk('drenou', FBroker.DrainEvents(3000));
 
   ChecaInt('nada emitido', 0, Integer(FBroker.EventsEmitted));
@@ -727,9 +727,9 @@ var
   LEv: TAMQPServerEvent;
   LMsg: TAMQPGetResult;
 begin
-  // Estes dois nascem num worker do pool dos atores -- nao na thread
-  // de leitura. Que eles cheguem e' a prova de que o marshalling da D30 vale
-  // para as duas origens, com o MESMO contrato.
+  // These two are born in a worker of the actors' pool -- not on the read
+  // thread. That they arrive is the proof that the D30 marshalling holds
+  // for both origins, with the SAME contract.
   SobeEConecta(True);
   LCh := FConn.CreateChannel;
   DeclaraFila(LCh, 'obs.ator');
@@ -740,8 +740,8 @@ begin
   ChecaStr('com a fila', 'obs.ator', LEv.QueueName);
   ChecaStr('e o vhost', '/', LEv.VHost);
   ChecaInt('e o tamanho', 7, Integer(LEv.MessageSize));
-  // O ator vive do outro lado da caixa: ele nao conhece conexao nem usuario,
-  // e a D34 manda que campo nao populado saia ZERADO em vez de lixo.
+  // The actor lives on the other side of the mailbox: it knows neither connection
+  // nor user, and D34 says an unpopulated field comes out ZEROED instead of garbage.
   ChecaInt('ator nao conhece a conexao', 0, Integer(LEv.ConnectionId));
   ChecaStr('nem o usuario', '', LEv.Username);
 
@@ -780,15 +780,15 @@ begin
   SobeEConecta(True);
   LCh := FConn.CreateChannel;
   LArgs := TAMQPFieldTable.Create;
-  // x-message-ttl curtissimo: a varredura do tick da monitora vence a
-  // mensagem sozinha, sem consumidor nenhum (D13).
+  // Very short x-message-ttl: the sweep on the monitor's tick expires the
+  // message on its own, with no consumer at all (D13).
   LArgs.Put('x-message-ttl', 1);
   LDecl := TAMQPQueueDeclare.Create('obs.ttl', False);
   LDecl.Arguments := LArgs;
   try
     LCh.DeclareQueue(LDecl);
   finally
-    LArgs.Free; // quem cria a tabela, libera -- o declare nao vira dono dela
+    LArgs.Free; // whoever creates the table frees it -- the declare does not become its owner
   end;
   LCh.PublishText('', 'obs.ttl', 'vou vencer');
 
@@ -815,7 +815,7 @@ begin
   try
     LCh.DeclareQueue(LDecl);
   finally
-    LArgs.Free; // quem cria a tabela, libera -- o declare nao vira dono dela
+    LArgs.Free; // whoever creates the table frees it -- the declare does not become its owner
   end;
   for I := 1 to 5 do
     LCh.PublishText('', 'obs.teto', 'enche');
@@ -834,17 +834,17 @@ var
   LStats: TAMQPQueueStats;
   LFila: TAMQPServerQueue;
 begin
-  // O ANCORA DA D2, e o teste que justifica a Fase 4.1 inteira ter um ring.
+  // THE ANCHOR OF D2, and the test that justifies the whole of Phase 4.1 having a ring.
   //
-  // O handler dorme 40 ms por evento. O ring tem 8 vagas. Publicamos 200
-  // mensagens: o ator produz eventos MUITO mais rapido do que o handler
-  // consome, entao o ring enche e passa a descartar (D31).
+  // The handler sleeps 40 ms per event. The ring has 8 slots. We publish 200
+  // messages: the actor produces events MUCH faster than the handler
+  // consumes them, so the ring fills up and starts dropping (D31).
   //
-  // O que se assere NAO e' que os eventos chegaram -- e' que o ATOR NAO
-  // ESPEROU por eles: as 200 mensagens tem de estar na fila. A mutacao que
-  // derruba este teste e' trocar o Emit nao-bloqueante por qualquer espera --
-  // o ator ficaria preso atras do handler, as 200 nao entrariam no prazo, e o
-  // pool inteiro (que e' o MESMO dos outros atores) iria junto.
+  // What is asserted is NOT that the events arrived -- it is that the ACTOR DID NOT
+  // WAIT for them: the 200 messages have to be in the queue. The mutation that
+  // kills this test is replacing the non-blocking Emit with any wait --
+  // the actor would be stuck behind the handler, the 200 would not get in within the
+  // deadline, and the whole pool (which is the SAME as the other actors') would go with it.
   FBroker.EventQueueCapacity := 8;
   LLerdo := TLerdo.Create;
   try
@@ -857,8 +857,8 @@ begin
     for I := 1 to 200 do
       LCh.PublishText('', 'obs.lenta', 'carga');
 
-    // A fila e' a testemunha: se o ator tivesse esperado pelo handler, as 200
-    // nao estariam la' dentro deste prazo (200 x 40 ms = 8 s so' de handler).
+    // The queue is the witness: if the actor had waited for the handler, the 200
+    // would not be in there within this deadline (200 x 40 ms = 8 s of handler alone).
     LFila := nil;
     LEnfileiradas := 0;
     LFila := FBroker.Engine.FindQueue('/', 'obs.lenta');
@@ -874,13 +874,13 @@ begin
     ChecaInt('o ator enfileirou tudo sem esperar o handler', 200,
       LEnfileiradas);
 
-    // E o preco do best-effort aparece: com o handler a 40 ms por evento e 8
-    // vagas, houve descarte. Isto e' a D31 cobrando, nao um defeito.
+    // And the price of best-effort shows up: with the handler at 40 ms per event and 8
+    // slots, there were drops. This is D31 collecting its due, not a defect.
     ChecaOk('e houve descarte contado', FBroker.EventsDropped > 0);
   finally
     FBroker.Unsubscribe(LLerdo.Handle);
-    // Parar o broker ANTES de liberar o handler lento: o Stop drena o ring, e
-    // drenar chama o handler. Liberar antes seria o AV que a D33 descreve.
+    // Stop the broker BEFORE freeing the slow handler: Stop drains the ring, and
+    // draining calls the handler. Freeing it first would be the AV that D33 describes.
     FBroker.Stop;
     LLerdo.Free;
   end;
@@ -892,18 +892,18 @@ var
   LDecl: TAMQPQueueDeclare;
   LEv: TAMQPServerEvent;
 begin
-  // O unico evento que nasce na THREAD DO JOURNAL. Ele so' existe com
-  // DataDir: sem durabilidade nao ha fsync, e sem fsync nao ha lote que
-  // ficou duravel.
+  // The only event born on the JOURNAL THREAD. It only exists with
+  // DataDir: without durability there is no fsync, and without fsync there is no
+  // batch that became durable.
   //
-  // UM evento por LOTE, nunca por registro (D25/D36): o group commit existe
-  // porque o fsync e' caro, e um evento por registro custaria mais que o
-  // fsync que ele observa.
+  // ONE event per BATCH, never per record (D25/D36): group commit exists
+  // because fsync is expensive, and one event per record would cost more than the
+  // fsync it observes.
   FBroker.DataDir := DirTempDeTeste;
   SobeEConecta(True);
   LCh := FConn.CreateChannel;
-  // A regra classica dos tres (D20): fila DURAVEL + mensagem PERSISTENTE +
-  // broker com DataDir. Faltando qualquer uma, nada toca o journal.
+  // The classic rule of three (D20): DURABLE queue + PERSISTENT message +
+  // broker with DataDir. With any one missing, nothing touches the journal.
   LDecl := TAMQPQueueDeclare.Create('obs.wal', True);
   LCh.DeclareQueue(LDecl);
   LCh.PublishText('', 'obs.wal', 'vai pro disco', True);
@@ -912,7 +912,7 @@ begin
   ChecaOk('achou o flush', FCap.Primeiro(seJournalFlushed, LEv));
   ChecaOk('com a marca d''agua', LEv.Lsn > 0);
   ChecaOk('e com registros no lote', LEv.Count > 0);
-  // Evento da thread do journal nao tem fila nem conexao: ele fala do LOTE.
+  // An event from the journal thread has neither queue nor connection: it speaks of the BATCH.
   ChecaStr('sem fila', '', LEv.QueueName);
   ChecaInt('e sem conexao', 0, Integer(LEv.ConnectionId));
 end;

@@ -2,26 +2,26 @@
 
 {$I amqp.inc}
 
-{ A mensagem publicada, do jeito que a engine (Fase 2) vai guardar nas filas
-  (sub-modulo broker, WS1 da Fase 2).
+{ The published message, the way the engine (Phase 2) keeps it in the queues
+  (broker sub-module, WS1 of Phase 2).
 
-  Decisao D1 (CLAUDE.md, "Sub-modulo broker" / Fase 2): a mensagem carrega o
-  payload CRU do content-header (HeaderPayload), nao um clone da
-  TAMQPFieldTable de Properties -- reemissao fiel byte a byte ao consumidor
-  (Basic.Deliver) e nada do problema de TValue-em-TValue do FPC 3.2 ao clonar
-  tabelas/arrays aninhados. Quem precisa das propriedades decodificadas (ex.:
-  o match de bindings de um headers exchange) decodifica a partir da tabela
-  VIVA do canal, antes do enqueue -- e' o que a "Invariante nova" do CLAUDE.md
-  descreve. TAMQPMessage, por isso, NAO guarda TAMQPBasicProperties nenhuma.
+  Decision D1 (CLAUDE.md, "Broker sub-module" / Phase 2): the message carries the
+  RAW content-header payload (HeaderPayload), not a clone of the Properties
+  TAMQPFieldTable -- faithful byte-by-byte re-emission to the consumer
+  (Basic.Deliver) and none of FPC 3.2's TValue-in-TValue problem when cloning
+  nested tables/arrays. Whoever needs the decoded properties (e.g.
+  the binding match of a headers exchange) decodes from the channel's LIVE
+  table, before the enqueue -- that is what the "new invariant" in CLAUDE.md
+  describes. TAMQPMessage therefore keeps NO TAMQPBasicProperties at all.
 
-  Refcount (decisao de arquitetura travada no CLAUDE.md, secao "Mensagem"):
-  TAMQPMessage nasce com RefCount=1 e e' compartilhada por N filas sem copiar
-  o corpo (COW) -- cada fila que segura a mensagem da' AddRef; Release quando
-  larga. O ultimo Release libera o objeto. NINGUEM muta a mensagem depois de
-  criada: Body e HeaderPayload sao expostos so' para leitura.
+  Refcount (architecture decision locked in CLAUDE.md, "Message" section):
+  TAMQPMessage is born with RefCount=1 and is shared by N queues without copying
+  the body (COW) -- each queue that holds the message calls AddRef; Release when
+  it lets go. The last Release frees the object. NOBODY mutates the message after it
+  is created: Body and HeaderPayload are exposed read-only.
 
-  Atomics via PcAtomicInc/Dec (PascalCommon.Threading) -- TInterlocked nao existe no
-  FPC (ver tabela de proibidos do CLAUDE.md). }
+  Atomics via PcAtomicInc/Dec (PascalCommon.Threading) -- TInterlocked does not exist in
+  FPC (see the forbidden table in CLAUDE.md). }
 
 interface
 
@@ -31,19 +31,19 @@ uses
   AMQP.Server.Types;
 
 type
-  { Um pedaco do corpo, para reparticao em N body frames pelo frame-max do
-    DESTINATARIO da entrega. Tipo nomeado por causa do FPC: um parametro
-    tipado como "array of T" e' open array (semantica de valor, copia os
-    elementos) -- aqui e' so' o tipo de retorno de AmqpSplitBody, mas fica
-    nomeado por documentacao e simetria com o resto da lib (ver gotcha do
-    array nomeado vs. open array no CLAUDE.md). }
+  { A piece of the body, for splitting into N body frames by the frame-max of the
+    delivery's RECIPIENT. Named type because of FPC: a parameter
+    typed as "array of T" is an open array (value semantics, copies the
+    elements) -- here it is only the return type of AmqpSplitBody, but it stays
+    named for documentation and symmetry with the rest of the lib (see the
+    named array vs. open array gotcha in CLAUDE.md). }
   TAMQPBodyChunks = array of TBytes;
 
-  { Mensagem publicada, guardada pela engine sob refcount atomico. Imutavel
-    apos construida. }
+  { Published message, kept by the engine under an atomic refcount. Immutable
+    once constructed. }
   TAMQPMessage = class
   private
-    FRefCount: Integer; // atomico -- ver AddRef/Release
+    FRefCount: Integer; // atomic -- see AddRef/Release
     FExchange: string;
     FRoutingKey: string;
     FUserId: string;
@@ -52,46 +52,46 @@ type
     function GetBodySize: Integer;
     function GetRefCount: Integer;
   public
-    /// Body e HeaderPayload sao guardados por REFERENCIA (semantica normal de
-    /// dynamic array do Pascal): o chamador que quiser um buffer independente
-    /// copia ANTES de construir. RefCount nasce em 1 -- quem cria e' dono
-    /// dessa primeira referencia e tem de dar Release (nunca Free direto).
+    /// Body and HeaderPayload are kept by REFERENCE (normal Pascal dynamic
+    /// array semantics): a caller that wants an independent buffer
+    /// copies BEFORE constructing. RefCount starts at 1 -- the creator owns
+    /// that first reference and must call Release (never Free directly).
     constructor Create(const AExchange, ARoutingKey, AUserId: string;
       const AHeaderPayload, ABody: TBytes);
 
-    /// Incrementa o refcount; devolve o valor novo.
+    /// Increments the refcount; returns the new value.
     function AddRef: Integer;
-    /// Decrementa o refcount; quando chega a 0, libera o objeto (Self.Free)
-    /// e devolve 0 -- nesse caso, Self nao pode mais ser usado.
+    /// Decrements the refcount; when it reaches 0, frees the object (Self.Free)
+    /// and returns 0 -- in that case, Self can no longer be used.
     function Release: Integer;
 
-    /// Constroi a partir de uma TAMQPServerMessage ja remontada pelo canal
+    /// Builds from a TAMQPServerMessage already reassembled by the channel
     /// (BeginContent -> SetContentHeader -> AppendBody -> CurrentMessage).
-    /// RefCount nasce em 1, como em Create.
+    /// RefCount starts at 1, as in Create.
     class function FromServerMessage(
       const AMsg: TAMQPServerMessage): TAMQPMessage;
 
     property Exchange: string read FExchange;
     property RoutingKey: string read FRoutingKey;
-    /// Usuario autenticado da conexao que publicou (auditoria / validacao
-    /// futura da propriedade user-id).
+    /// Authenticated user of the publishing connection (auditing / future
+    /// validation of the user-id property).
     property UserId: string read FUserId;
-    /// Payload cru do content-header (class-id/weight/body-size/flags e as
-    /// propriedades presentes), exatamente como veio no frame -- decisao D1.
-    /// Reemitir para um consumidor e' escrever este payload direto no frame
-    /// de header da entrega, sem redecodificar/reencodar.
+    /// Raw content-header payload (class-id/weight/body-size/flags and the
+    /// present properties), exactly as it came in the frame -- decision D1.
+    /// Re-emitting to a consumer is writing this payload straight into the delivery's
+    /// header frame, without re-decoding/re-encoding.
     property HeaderPayload: TBytes read FHeaderPayload;
-    /// Corpo da mensagem. Compartilhado por N filas sem copia -- ninguem muta.
+    /// Message body. Shared by N queues without copying -- nobody mutates it.
     property Body: TBytes read FBody;
     property BodySize: Integer read GetBodySize;
     property RefCount: Integer read GetRefCount;
   end;
 
-/// Fatia ABody em pedacos de no maximo AMaxPayload bytes cada. AMaxPayload e'
-/// o tamanho maximo de payload de um body frame para o DESTINATARIO da
-/// entrega -- o chamador ja' desconta o overhead do frame do frame-max
-/// negociado (cabecalho de frame + terminador). Corpo vazio -> 0 pedacos.
-/// AMaxPayload = 0 -> um unico pedaco com o corpo inteiro (sem limite).
+/// Slices ABody into pieces of at most AMaxPayload bytes each. AMaxPayload is
+/// the maximum payload size of a body frame for the delivery's
+/// RECIPIENT -- the caller already subtracts the frame overhead from the negotiated
+/// frame-max (frame header + terminator). Empty body -> 0 pieces.
+/// AMaxPayload = 0 -> a single piece with the whole body (no limit).
 function AmqpSplitBody(const ABody: TBytes;
   AMaxPayload: Cardinal): TAMQPBodyChunks;
 
@@ -150,7 +150,7 @@ begin
   Result := nil;
   LTotal := Length(ABody);
   if LTotal = 0 then
-    Exit; // corpo vazio -> 0 pedacos
+    Exit; // empty body -> 0 pieces
 
   if AMaxPayload = 0 then
   begin
@@ -160,7 +160,7 @@ begin
   end;
 
   LMax := Integer(AMaxPayload);
-  LCount := (LTotal + LMax - 1) div LMax; // teto da divisao
+  LCount := (LTotal + LMax - 1) div LMax; // ceiling of the division
   SetLength(Result, LCount);
   LOffset := 0;
   for I := 0 to LCount - 1 do

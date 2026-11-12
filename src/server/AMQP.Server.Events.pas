@@ -2,47 +2,46 @@
 
 {$I amqp.inc}
 
-{ Vocabulário de observabilidade do broker (Fase 4.1, D29-D36).
+{ The broker's observability vocabulary (Phase 4.1, D29-D36).
 
-  Esta unit tem SÓ tipos: o que é um evento, que tipos existem e como se
-  monta um. Quem os transporta é o TAMQPEventBus (AMQP.Server.EventBus);
-  quem os expõe é o TAMQPServer. Ela não usa nada do submódulo de propósito
-  -- é a base da pilha, e o AMQP.Server.Types depende dela para declarar o
-  IAMQPEventSink.
+  This unit holds ONLY types: what an event is, which types exist and how
+  one is built. TAMQPEventBus (AMQP.Server.EventBus) transports them;
+  TAMQPServer exposes them. It uses nothing from the sub-module on purpose
+  -- it is the bottom of the stack, and AMQP.Server.Types depends on it to
+  declare IAMQPEventSink.
 
-  O QUE ESTE MECANISMO É (D29): um observador READ-ONLY. Nenhum handler
-  influencia roteamento, autenticação, ack ou descarte -- quem precisa
-  DECIDIR usa o IAMQPAuthorizer. Sem nenhum assinante o caminho quente paga
-  uma leitura de máscara e nem chega a montar o record.
+  WHAT THIS MECHANISM IS (D29): a READ-ONLY observer. No handler influences
+  routing, authentication, ack or drop -- whoever needs to DECIDE uses
+  IAMQPAuthorizer. With no subscriber at all the hot path pays one mask read
+  and does not even build the record.
 
-  O QUE ELE NÃO É (D36): log de auditoria. A entrega é best-effort e a D31
-  admite perda por desenho, contada em DroppedCount. Quem precisa de tudo
-  guarda tudo do lado de dentro do handler -- e mesmo assim perde o que for
-  descartado sob pressão.
+  WHAT IT IS NOT (D36): an audit log. Delivery is best-effort and D31 admits
+  loss by design, counted in DroppedCount. Whoever needs everything keeps
+  everything inside the handler -- and even then loses what is dropped under
+  pressure.
 
-  POR QUE O RECORD É FLAT (D34): porque TODO evento é entregue por outra
-  thread (D30). Um evento é uma cópia POR VALOR, sem um único ponteiro para
-  conexão, canal ou mensagem -- qualquer um deles pode morrer entre a
-  emissão e a entrega, e com record flat isso não é problema de ninguém.
-  É a mesma razão da D1 (nada de TValue, cuja dor no FPC já está catalogada
-  no CLAUDE.md).
+  WHY THE RECORD IS FLAT (D34): because EVERY event is delivered by another
+  thread (D30). An event is a copy BY VALUE, without a single pointer to a
+  connection, channel or message -- any of them may die between emission and
+  delivery, and with a flat record that is nobody's problem. It is the same
+  reason as D1 (no TValue, whose pain in FPC is already catalogued in
+  CLAUDE.md).
 
-  Três amarras da D34, todas com motivo:
+  Three constraints of D34, each with a reason:
 
-  - O CORPO DA MENSAGEM NUNCA ENTRA no evento, só MessageSize. Carregá-lo
-    derrubaria o COW da D1 e poria uma cópia de buffer no caminho mais
-    quente que existe.
-  - O relógio de parede é WallMs (Int64, epoch ms UTC) via AmqpWallMs, e
-    NÃO TDateTime: a conversão DateTimeToUnix(LocalTimeToUniversal(...)) da
-    D21 converte duas vezes e o erro é invisível em máquina UTC -- ou seja,
-    invisível em todo container onde a suíte roda. TickMs (monotônico) fica
-    só para medir latência, e não sobrevive a um restart.
-  - Cada tipo popula um conjunto FIXO de campos; o resto sai zerado, porque
-    AmqpNewEvent parte de um record zerado. A tabela campo-por-tipo está em
-    docs/observabilidade.md e os testes a asseram.
+  - The MESSAGE BODY NEVER GOES INTO the event, only MessageSize. Carrying it
+    would break D1's COW and put a buffer copy on the hottest path there is.
+  - The wall clock is WallMs (Int64, epoch ms UTC) via AmqpWallMs, and NOT
+    TDateTime: D21's DateTimeToUnix(LocalTimeToUniversal(...)) conversion
+    converts twice and the error is invisible on a UTC machine -- that is,
+    invisible in every container where the suite runs. TickMs (monotonic) is
+    only for measuring latency, and does not survive a restart.
+  - Each type populates a FIXED set of fields; the rest comes out zeroed,
+    because AmqpNewEvent starts from a zeroed record. The field-by-type table
+    is in docs/observability.md and the tests assert it.
 
-  Acrescentar campo ao record é a direção compatível (handler existente
-  continua compilando); tirar campo, não. }
+  Adding a field to the record is the compatible direction (existing handlers
+  keep compiling); removing a field is not. }
 
 interface
 
@@ -52,176 +51,177 @@ uses
   AMQP.Threading; // AmqpWallMs
 
 type
-  { O que aconteceu. A ORDEM DESTE ENUM É API: o valor ordinal vira bit na
-    máscara de assinatura (D32), então acrescentar tipo é sempre NO FIM.
+  { What happened. THE ORDER OF THIS ENUM IS API: the ordinal value becomes a
+    bit in the subscription mask (D32), so a new type always goes AT THE END.
 
-    TETO DE 32 TIPOS (D32): a máscara é um Cardinal, lido sem lock no
-    caminho quente. Passar de 32 é mudar o tipo da máscara -- decisão
-    consciente, não um enum acrescentado por distração. 18 usados, 14 de
-    folga.
+    CAP OF 32 TYPES (D32): the mask is a Cardinal, read lock-free on the hot
+    path. Going past 32 means changing the mask's type -- a conscious
+    decision, not an enum value added absent-mindedly. 18 used, 14 spare.
 
-    A coluna [thread] diz onde o evento NASCE, que é o que a D30 existe para
-    tornar irrelevante: todos são entregues pela notificadora. }
+    The [thread] column says where the event is BORN, which is what D30
+    exists to make irrelevant: all of them are delivered by the notifier. }
   TAMQPServerEventType = (
-    { --- ciclo de vida da conexão [thread de leitura] --- }
-    seConnectionEstablished,   // socket aceito, antes de qualquer byte AMQP
-    seConnectionAuthenticated, // SASL PLAIN OK e vhost aberto (Open-Ok)
-    seConnectionClosed,        // thread de leitura saiu (Code = reply-code)
+    { --- connection lifecycle [read thread] --- }
+    seConnectionEstablished,   // socket accepted, before any AMQP byte
+    seConnectionAuthenticated, // SASL PLAIN OK and vhost opened (Open-Ok)
+    seConnectionClosed,        // read thread exited (Code = reply-code)
 
-    { --- ciclo de vida do canal [thread de leitura] --- }
+    { --- channel lifecycle [read thread] --- }
     seChannelOpened,
-    seChannelClosed,           // Code = reply-code (0 = fechamento limpo)
+    seChannelClosed,           // Code = reply-code (0 = clean close)
 
-    { --- publicação [thread de leitura] --- }
-    seMessagePublished,        // conteúdo remontado e roteado
-    seMessagePublishRejected,  // sem rota (mandatory) ou reject-publish
+    { --- publishing [read thread] --- }
+    seMessagePublished,        // content reassembled and routed
+    seMessagePublishRejected,  // no route (mandatory) or reject-publish
 
-    { --- consumidores [thread de leitura] --- }
-    seConsumerRegistered,      // Basic.Consume aceito
-    seConsumerCancelled,       // Basic.Cancel, ou cancelamento pelo servidor
+    { --- consumers [read thread] --- }
+    seConsumerRegistered,      // Basic.Consume accepted
+    seConsumerCancelled,       // Basic.Cancel, or cancellation by the server
 
-    { --- reconhecimento [thread de leitura] --- }
+    { --- acknowledgement [read thread] --- }
     seMessageAcked,
     seMessageNacked,
     seMessageRejected,
 
-    { --- ciclo de vida da mensagem [ator da fila -- Inc. 2] --- }
+    { --- message lifecycle [queue actor -- Inc. 2] --- }
     seMessageEnqueued,
     seMessageDelivered,
-    seMessageExpired,          // TTL venceu (Reason = 'expired')
-    seMessageDeadLettered,     // foi para a DLX (Reason = razão do x-death)
-    seMessageDropped,          // descarte por teto (Reason = 'maxlen'...)
+    seMessageExpired,          // TTL ran out (Reason = 'expired')
+    seMessageDeadLettered,     // went to the DLX (Reason = x-death reason)
+    seMessageDropped,          // dropped by a cap (Reason = 'maxlen'...)
 
-    { --- durabilidade [thread do journal -- Inc. 2] --- }
-    seJournalFlushed           // um LOTE ficou durável (D25: nunca por registro)
+    { --- durability [journal thread -- Inc. 2] --- }
+    seJournalFlushed           // a BATCH became durable (D25: never per record)
   );
 
-  { Conjunto de tipos que um assinante quer. Vira máscara Cardinal dentro do
-    barramento -- ver AmqpEventMask. }
+  { Set of types a subscriber wants. Becomes a Cardinal mask inside the
+    bus -- see AmqpEventMask. }
   TAMQPServerEventTypes = set of TAMQPServerEventType;
 
-  { Um fato do broker, achatado. Ver o cabeçalho da unit para o porquê de
-    cada amarra; docs/observabilidade.md tem a tabela de quem popula o quê.
+  { A broker fact, flattened. See the unit header for the reason behind each
+    constraint; docs/observability.md has the table of who populates what.
 
-    Todo campo que o tipo do evento não popula sai ZERADO (string vazia,
-    numérico 0, Boolean False). }
+    Every field the event type does not populate comes out ZEROED (empty
+    string, numeric 0, Boolean False). }
   TAMQPServerEvent = record
     EventType: TAMQPServerEventType;
 
-    { Relógios. WallMs correlaciona com log externo; TickMs mede latência
-      (monotônico, não sobrevive a restart). }
+    { Clocks. WallMs correlates with external logs; TickMs measures latency
+      (monotonic, does not survive a restart). }
     WallMs: Int64;
     TickMs: Int64;
 
-    { Contexto da conexão. ConnectionId é o mesmo identificador que a fila
-      exclusiva usa para saber de quem ela é. }
+    { Connection context. ConnectionId is the same identifier an exclusive
+      queue uses to know whose it is. }
     ConnectionId: UInt64;
     RemoteAddr: string;
     Username: string;
     VHost: string;
 
-    { Contexto do canal. 0 = evento de conexão. }
+    { Channel context. 0 = connection event. }
     ChannelNumber: Word;
-    { reply-code do AMQP quando o evento é um fechamento (0 = limpo). }
+    { AMQP reply-code when the event is a close (0 = clean). }
     Code: Word;
 
-    { Contexto de fila / roteamento. }
+    { Queue / routing context. }
     QueueName: string;
     ConsumerTag: string;
     ExchangeName: string;
     RoutingKey: string;
 
-    { Mensagem. NUNCA o corpo (D34) -- só o tamanho dele. }
+    { Message. NEVER the body (D34) -- only its size. }
     DeliveryTag: UInt64;
     MessageSize: UInt64;
     Priority: Byte;
     Redelivered: Boolean;
-    Mandatory: Boolean;  // publish pediu Basic.Return se nao rotear
-    Multiple: Boolean;   // ack/nack com multiple=true
-    Requeue: Boolean;    // nack/reject com requeue=true
+    Mandatory: Boolean;  // publish asked for Basic.Return if unroutable
+    Multiple: Boolean;   // ack/nack with multiple=true
+    Requeue: Boolean;    // nack/reject with requeue=true
 
-    { LSN do journal (seJournalFlushed) e contagem genérica -- quantos
-      registros o lote levou, quantas mensagens o descarte comeu. }
+    { Journal LSN (seJournalFlushed) and a generic count -- how many records
+      the batch carried, how many messages the drop ate. }
     Lsn: UInt64;
     Count: Int64;
 
-    { Por que, quando o tipo sozinho não diz. }
+    { Why, when the type alone does not say. }
     Reason: string;
   end;
 
-  { Para onde vao os eventos de observabilidade (Fase 4.1, D32).
+  { Where the observability events go (Phase 4.1, D32).
 
-    Vive AQUI, e nao em AMQP.Server.Types como a D32 dizia primeiro,
-    porque o ator da fila e a thread do journal tambem emitem (Inc. 2) e
-    nenhuma das duas units usa Types -- declara-la la' obrigaria Queue e
-    Journal a puxar Auth, FrameIO e Basic.Methods para alcancar uma
-    interface. A regra da casa aponta para ca' de qualquer jeito: assim
-    como IAMQPMessageSink vive junto de TAMQPServerMessage, esta vive
-    junto de TAMQPServerEvent.
+    Lives HERE, and not in AMQP.Server.Types as D32 first said, because the
+    queue actor and the journal thread also emit (Inc. 2) and neither of
+    those units uses Types -- declaring it there would force Queue and
+    Journal to pull in Auth, FrameIO and Basic.Methods to reach an
+    interface. The house rule points here anyway: just as IAMQPMessageSink
+    lives next to TAMQPServerMessage, this one lives next to
+    TAMQPServerEvent.
 
-    E' a forma da casa -- interface aqui, como IAMQPMessageSink e
-    IAMQPConfirmRegistry --, e nao o TObject com cast que o WIP usava para
-    fugir de ciclo de unit. nil = observabilidade desligada, exatamente como
-    Confirms = nil significa "sem durabilidade".
+    It is the house shape -- an interface here, like IAMQPMessageSink and
+    IAMQPConfirmRegistry --, and not the TObject with a cast that the WIP
+    used to dodge a unit cycle. nil = observability off, exactly as
+    Confirms = nil means "no durability".
 
-    Implementada pelo TAMQPEventBus (AMQP.Server.EventBus), que e' quem sabe
-    o contrato de entrega da D31. Quem CHAMA so' precisa saber duas coisas:
+    Implemented by TAMQPEventBus (AMQP.Server.EventBus), which is the one
+    that knows D31's delivery contract. A CALLER only needs to know two
+    things:
 
-    - Wants e' baratissimo (leitura atomica de mascara) e serve para nao
-      montar o record quando ninguem quer o tipo. Chamar Emit sem Wants nao
-      e' erro, so' e' desperdicio;
-    - Emit NUNCA bloqueia, NUNCA levanta e PODE DESCARTAR. Nenhum chamador
-      precisa tratar erro, e nenhum chamador pode contar com a entrega. }
+    - Wants is very cheap (atomic mask read) and is there to avoid building
+      the record when nobody wants the type. Calling Emit without Wants is
+      not an error, only waste;
+    - Emit NEVER blocks, NEVER raises and MAY DROP. No caller needs to handle
+      an error, and no caller can count on delivery. }
   IAMQPEventSink = interface
     ['{7B3C1D48-0A62-4F95-8E17-2C5D9B4A6E03}']
-    /// True se algum assinante quer este tipo de evento.
+    /// True if some subscriber wants this event type.
     function Wants(AType: TAMQPServerEventType): Boolean;
-    /// Enfileira o evento para a thread notificadora. Ver o contrato acima.
+    /// Enqueues the event for the notifier thread. See the contract above.
     procedure Emit(const AEvent: TAMQPServerEvent);
   end;
 
-  { Assinante. Método de objeto (o FPC 3.2 não tem closure -- CLAUDE.md).
+  { Subscriber. An object method (FPC 3.2 has no closures -- CLAUDE.md).
 
-    CONTRATO DO HANDLER, em três linhas:
-    - roda na thread notificadora, NUNCA na de leitura nem num worker do
-      pool (D30). Não presuma qual é;
-    - pode demorar: enquanto ele roda, o ring enche e passa a DESCARTAR o
-      mais novo (D31). Handler lento perde evento, nunca segura o broker;
-    - se levantar, a exceção é contada e o laço segue (D33). Nada de
-      derrubar a notificadora, nada de engolir em silêncio. }
+    HANDLER CONTRACT, in three lines:
+    - runs on the notifier thread, NEVER on the read thread nor on a pool
+      worker (D30). Do not assume which one it is;
+    - may take its time: while it runs, the ring fills up and starts
+      DROPPING the newest (D31). A slow handler loses events, it never holds
+      up the broker;
+    - if it raises, the exception is counted and the loop goes on (D33). No
+      taking the notifier down, no silent swallowing. }
   TAMQPServerEventHandler = procedure(const AEvent: TAMQPServerEvent) of object;
 
 const
-  /// Todos os tipos -- o default de quem assina sem filtrar.
+  /// All types -- the default for whoever subscribes without filtering.
   AMQP_EVENT_ALL_TYPES = [Low(TAMQPServerEventType)..High(TAMQPServerEventType)];
 
-  /// Tamanho do ring do barramento, em EVENTOS (D31). Acima disto o emissor
-  /// descarta o mais novo e conta; ele nunca bloqueia e nunca levanta.
+  /// Size of the bus ring, in EVENTS (D31). Beyond this the emitter drops
+  /// the newest and counts; it never blocks and never raises.
   ///
-  /// 4096 é generoso de propósito: o custo é um array de records, e a única
-  /// coisa que o teto protege é a memória de um broker cujo handler parou de
-  /// drenar. Quem quiser outro valor mexe em TAMQPServer.EventQueueCapacity
-  /// ANTES do Start.
+  /// 4096 is generous on purpose: the cost is an array of records, and the
+  /// only thing the cap protects is the memory of a broker whose handler
+  /// stopped draining. Whoever wants another value sets
+  /// TAMQPServer.EventQueueCapacity BEFORE Start.
   AMQP_EVENT_QUEUE_CAPACITY = 4096;
 
-/// Record zerado, já com o tipo e os dois relógios. TODO emissor começa por
-/// aqui -- é o que garante a promessa da D34 de que campo não populado sai
-/// zerado, sem depender de o emissor lembrar de zerar.
+/// Zeroed record, already carrying the type and both clocks. EVERY emitter
+/// starts here -- it is what guarantees D34's promise that an unpopulated
+/// field comes out zeroed, without relying on the emitter remembering to zero it.
 function AmqpNewEvent(AType: TAMQPServerEventType): TAMQPServerEvent;
 
-/// Conjunto -> máscara de bits. O ordinal do enum é o número do bit, que é
-/// por que a ordem do enum é API.
+/// Set -> bit mask. The enum ordinal is the bit number, which is why the
+/// enum order is API.
 function AmqpEventMask(const ATypes: TAMQPServerEventTypes): Cardinal;
 
-/// Nome curto do tipo, para log e para mensagem de teste. Sem o prefixo
-/// 'se' -- 'ConnectionEstablished', não 'seConnectionEstablished'.
+/// Short type name, for logs and test messages. Without the 'se' prefix --
+/// 'ConnectionEstablished', not 'seConnectionEstablished'.
 function AmqpEventTypeName(AType: TAMQPServerEventType): string;
 
 implementation
 
 const
-  { Espelha o enum. Um tipo novo sem entrada aqui é pego pelo AssertNames do
-    teste, que compara a contagem com Ord(High(...)) + 1. }
+  { Mirrors the enum. A new type with no entry here is caught by the test's
+    AssertNames, which compares the count with Ord(High(...)) + 1. }
   EVENT_NAMES: array[TAMQPServerEventType] of string = (
     'ConnectionEstablished',
     'ConnectionAuthenticated',
@@ -245,9 +245,9 @@ const
 
 function AmqpNewEvent(AType: TAMQPServerEventType): TAMQPServerEvent;
 begin
-  // Finalize + FillChar seria mais rápido, e seria ERRADO: o Result pode vir
-  // de um slot com strings vivas. Um record local zerado por Default/Init é o
-  // jeito portátil de soltar as referências antigas nos dois compiladores.
+  // Finalize + FillChar would be faster, and it would be WRONG: Result may come
+  // from a slot with live strings. A local record zeroed by Default/Init is the
+  // portable way to release the old references on both compilers.
   Result := Default(TAMQPServerEvent);
   Result.EventType := AType;
   Result.WallMs := AmqpWallMs;
