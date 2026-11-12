@@ -15,7 +15,7 @@ Not loaded automatically — consult it when renaming or reviewing the effort.
 | Layer | What is translated | What is NOT translated |
 |---|---|---|
 | Client (`src/AMQP.*.pas`) | exception message text; comments (since 2026-11-12) | **public identifiers** — the API's type/method/property names stay as they are (it is a distributed lib; renaming is a breaking change and would diverge from the sibling `delphi-amqp-faa`) |
-| Server (`src/server/AMQP.Server.*.pas`) | identifiers (not stable public API) **and** message text; comments (since 2026-11-12) | test names (`Route_ExchangeParaExchange_Entrega` etc. — they are descriptions, not symbols) |
+| Server (`src/server/AMQP.Server.*.pas`) | identifiers (not stable public API) **and** message text; comments (since 2026-11-12) | test names (`Route_ExchangeToExchange_Delivers` etc. — they are descriptions, not symbols) |
 | Tests | follow the rename of server identifiers; comments (since 2026-11-12) | assertion messages and test names stay in Portuguese |
 | Samples | comments (since 2026-11-12) | identifiers and UI text (string literals) stay in Portuguese |
 | Documentation (`docs/`, README) | everything, prose included (since 2026-11-12; before that the prose stayed in Portuguese and only references to renamed identifiers were updated) | Portuguese identifiers quoted in backticks stay verbatim |
@@ -114,9 +114,9 @@ compiling, all suites green). Only item 9 below is left.
    stay — "recovery" as a noun in a type/unit/property name is
    correct.
 5. ~~Incomplete renames of locals.~~ **Done.** Sweep of `src/server/`:
-   `AErro`→`AError`, `LFila`→`LQueueName`, `LConteudo`→`LContent`,
-   `LTexto`→`LText`, `LChave`→`LKey`, `AOrigem`→`ASource`,
-   `ADetalhe`→`ADetail`, `ADestino`→`ADestination`, `LNomes`→`LNames`,
+   `AError`→`AError`, `LQueue`→`LQueueName`, `LConteudo`→`LContent`,
+   `LText`→`LText`, `LKey`→`LKey`, `ASource`→`ASource`,
+   `ADetalhe`→`ADetail`, `ADestination`→`ADestination`, `LNames`→`LNames`,
    `LExpOriginal`→`LOrigExpiration`, functions `ErroArg`→`ArgError` and
    `LerNumerico`→`ReadNumeric`, comment `FRecuperando`→`FRecovering`.
    **No Portuguese identifier left in the server.**

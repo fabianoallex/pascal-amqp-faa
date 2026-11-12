@@ -100,7 +100,7 @@ var
   LConfig: IDatabaseConfig; // an interface variable (pascal-db-faa's rule)
 begin
   inherited Create;
-  FFile := IncludeTrailingPathDelimiter(DirTemporario) + 'amqp-outbox-' +
+  FFile := IncludeTrailingPathDelimiter(TempDir) + 'amqp-outbox-' +
     LowerCase(PcBytesToHex(PcRandomBytes(6))) + '.sqlite';
   LConfig := TDatabaseConfig.Create;
   SetSQLiteParams(LConfig.ConnectionParams, FFile);

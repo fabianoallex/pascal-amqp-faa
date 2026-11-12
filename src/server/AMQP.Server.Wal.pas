@@ -258,7 +258,7 @@ type
     property Stop: TAMQPWalStop read FStop;
     /// How many bytes of torn tail the opening found (and truncated, if
     /// ATrim). Zero is the case of a cleanly closed segment.
-    property BytesDescartados: Int64 read FDiscarded;
+    property DiscardedBytes: Int64 read FDiscarded;
   end;
 
   { One owner per data directory.
@@ -319,7 +319,7 @@ uses
 var
   GCrcTable: array[0..255] of Cardinal;
 
-procedure MontaTabelaCrc;
+procedure BuildCrcTable;
 var
   I, J: Integer;
   C: Cardinal;
@@ -466,18 +466,18 @@ end;
 
 // --- little-endian packing (see "Format" in the header) --------------------
 
-procedure PoeU8(var ABuf: TBytes; AOffset: Integer; AValue: Byte);
+procedure PutU8(var ABuf: TBytes; AOffset: Integer; AValue: Byte);
 begin
   ABuf[AOffset] := AValue;
 end;
 
-procedure PoeU16(var ABuf: TBytes; AOffset: Integer; AValue: Word);
+procedure PutU16(var ABuf: TBytes; AOffset: Integer; AValue: Word);
 begin
   ABuf[AOffset] := Byte(AValue);
   ABuf[AOffset + 1] := Byte(AValue shr 8);
 end;
 
-procedure PoeU32(var ABuf: TBytes; AOffset: Integer; AValue: Cardinal);
+procedure PutU32(var ABuf: TBytes; AOffset: Integer; AValue: Cardinal);
 begin
   ABuf[AOffset] := Byte(AValue);
   ABuf[AOffset + 1] := Byte(AValue shr 8);
@@ -485,18 +485,18 @@ begin
   ABuf[AOffset + 3] := Byte(AValue shr 24);
 end;
 
-procedure PoeU64(var ABuf: TBytes; AOffset: Integer; AValue: UInt64);
+procedure PutU64(var ABuf: TBytes; AOffset: Integer; AValue: UInt64);
 begin
-  PoeU32(ABuf, AOffset, Cardinal(AValue and $FFFFFFFF));
-  PoeU32(ABuf, AOffset + 4, Cardinal(AValue shr 32));
+  PutU32(ABuf, AOffset, Cardinal(AValue and $FFFFFFFF));
+  PutU32(ABuf, AOffset + 4, Cardinal(AValue shr 32));
 end;
 
-function PegaU16(const ABuf: TBytes; AOffset: Integer): Word;
+function GetU16(const ABuf: TBytes; AOffset: Integer): Word;
 begin
   Result := Word(ABuf[AOffset]) or (Word(ABuf[AOffset + 1]) shl 8);
 end;
 
-function PegaU32(const ABuf: TBytes; AOffset: Integer): Cardinal;
+function GetU32(const ABuf: TBytes; AOffset: Integer): Cardinal;
 begin
   Result := Cardinal(ABuf[AOffset])
     or (Cardinal(ABuf[AOffset + 1]) shl 8)
@@ -504,10 +504,10 @@ begin
     or (Cardinal(ABuf[AOffset + 3]) shl 24);
 end;
 
-function PegaU64(const ABuf: TBytes; AOffset: Integer): UInt64;
+function GetU64(const ABuf: TBytes; AOffset: Integer): UInt64;
 begin
-  Result := UInt64(PegaU32(ABuf, AOffset))
-    or (UInt64(PegaU32(ABuf, AOffset + 4)) shl 32);
+  Result := UInt64(GetU32(ABuf, AOffset))
+    or (UInt64(GetU32(ABuf, AOffset + 4)) shl 32);
 end;
 
 { TAMQPWalOsFile }
@@ -648,9 +648,9 @@ begin
   SetLength(LBuf, AMQP_WAL_SEG_HEADER_SIZE);
   for I := 1 to Length(AMQP_WAL_MAGIC) do
     LBuf[I - 1] := Byte(AMQP_WAL_MAGIC[I]);
-  PoeU16(LBuf, 8, AMQP_WAL_VERSION);
-  PoeU16(LBuf, 10, 0);
-  PoeU32(LBuf, 12, FSegNo);
+  PutU16(LBuf, 8, AMQP_WAL_VERSION);
+  PutU16(LBuf, 10, 0);
+  PutU32(LBuf, 12, FSegNo);
   FFile.Append(LBuf);
   // The header is the only thing in the file that cannot be rebuilt by
   // replay: without it the whole segment is unrecognizable. It goes to disk now.
@@ -701,11 +701,11 @@ begin
     if Result[I - 1] <> Byte(AMQP_WAL_MAGIC[I]) then
       raise EAMQPWal.Create('not a WAL segment from this broker'
         + '(signature does not match)');
-  LVer := PegaU16(Result, 8);
+  LVer := GetU16(Result, 8);
   if LVer <> AMQP_WAL_VERSION then
     raise EAMQPWal.CreateFmt('segment version %d, expected %d',
       [LVer, AMQP_WAL_VERSION]);
-  FSegNo := PegaU32(Result, 12);
+  FSegNo := GetU32(Result, 12);
 end;
 
 function TAMQPWalSegment.Scan(const ABuf: TBytes; ACollect: Boolean;
@@ -739,9 +739,9 @@ begin
       Break;
     end;
 
-    LLsn := PegaU64(ABuf, LPos);
+    LLsn := GetU64(ABuf, LPos);
     LKind := ABuf[LPos + 8];
-    LLen := PegaU32(ABuf, LPos + 10);
+    LLen := GetU32(ABuf, LPos + 10);
 
     // Order of the checks: the size is validated BEFORE any read or
     // allocation driven by it, because it may itself be corrupted.
@@ -756,7 +756,7 @@ begin
       Break;
     end;
 
-    LCrcRead := PegaU32(ABuf, LPos + AMQP_WAL_REC_HEADER_SIZE + Integer(LLen));
+    LCrcRead := GetU32(ABuf, LPos + AMQP_WAL_REC_HEADER_SIZE + Integer(LLen));
     LCrcCalc := AmqpCrc32($FFFFFFFF, ABuf, LPos,
       AMQP_WAL_REC_HEADER_SIZE + Integer(LLen)) xor $FFFFFFFF;
     if LCrcRead <> LCrcCalc then
@@ -816,15 +816,15 @@ begin
       [LLen, AMQP_WAL_MAX_PAYLOAD]);
 
   SetLength(LBuf, AmqpWalRecordSize(LLen));
-  PoeU64(LBuf, 0, ALsn);
-  PoeU8(LBuf, 8, AKind);
-  PoeU8(LBuf, 9, 0);
-  PoeU32(LBuf, 10, Cardinal(LLen));
+  PutU64(LBuf, 0, ALsn);
+  PutU8(LBuf, 8, AKind);
+  PutU8(LBuf, 9, 0);
+  PutU32(LBuf, 10, Cardinal(LLen));
   if LLen > 0 then
     Move(APayload[0], LBuf[AMQP_WAL_REC_HEADER_SIZE], LLen);
   LCrc := AmqpCrc32($FFFFFFFF, LBuf, 0, AMQP_WAL_REC_HEADER_SIZE + LLen)
     xor $FFFFFFFF;
-  PoeU32(LBuf, AMQP_WAL_REC_HEADER_SIZE + LLen, LCrc);
+  PutU32(LBuf, AMQP_WAL_REC_HEADER_SIZE + LLen, LCrc);
 
   Result := FFile.Append(LBuf);
   // The end comes from the offset the file ITSELF returned, not from an
@@ -894,6 +894,6 @@ initialization
   // building the table on two threads at once would let one read entries the
   // other has not written yet -- a wrong CRC written to disk, with no symptom
   // at all until recovery drops the record.
-  MontaTabelaCrc;
+  BuildCrcTable;
 
 end.

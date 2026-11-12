@@ -38,7 +38,7 @@
   read thread, which sees the client's Basic.Ack, knows the tag but not the queue.
   Without this record, a consumer ack reaches no queue at all and the message
   hangs forever -- that was exactly the bug the test
-  AckRemoveDeVez_NaoVoltaAposQueda caught.
+  AckRemovesForGood_DoesNotReturnAfterCrash caught.
 
   So: the delivery (TryDeliver) and the FSM's Basic.Get (NoteGet) REGISTER;
   the read thread RESOLVES when processing

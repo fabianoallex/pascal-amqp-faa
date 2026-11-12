@@ -27,16 +27,16 @@ type
   [TestFixture]
   TVHostRegistryTests = class
   public
-    [Test] procedure Default_TemRaiz;
+    [Test] procedure Default_HasRoot;
     [Test] procedure Add_Contains_Remove;
   end;
 
   [TestFixture]
   TFrameWriterTests = class
   public
-    [Test] procedure OrdemFIFO;
-    [Test] procedure PostFrames_Atomico;
-    [Test] procedure FalhaDeEscrita_MarcaFailed;
+    [Test] procedure FifoOrder;
+    [Test] procedure PostFrames_Atomic;
+    [Test] procedure WriteFailure_SetsFailed;
   end;
 
   { The broker's listener, which comes from pascal-common-faa since 0.6.0.
@@ -45,22 +45,22 @@ type
   [TestFixture]
   TListenerTests = class
   public
-    [Test] procedure PortaZero_BrokerInformaAEfetiva;
-    [Test] procedure Accept_PeerPreenchido;
-    [Test] procedure PortaOcupada_StartLevantaEAMQPTransport;
-    [Test] procedure TcpOptions_NagleDesligado;
-    [Test] procedure PedidoResposta_SemAtrasoDeNagle;
+    [Test] procedure PortZero_BrokerReportsTheActualOne;
+    [Test] procedure Accept_PeerFilled;
+    [Test] procedure BusyPort_StartRaisesEAMQPTransport;
+    [Test] procedure TcpOptions_NagleOff;
+    [Test] procedure RequestReply_NoNagleDelay;
   end;
 
   [TestFixture]
   TServerSkeletonTests = class
   public
-    [Test] procedure StartStop_Idempotente;
-    [Test] procedure ConexaoRegistraEReap;
-    [Test] procedure ProtocolHeaderInvalido_Fecha;
-    [Test] procedure VariasConexoesConcorrentes;
-    [Test] procedure StopComConexoesAbertas_NaoTrava;
-    [Test] procedure HeartbeatRecebido_NaoDerrubaNemResponde;
+    [Test] procedure StartStop_Idempotent;
+    [Test] procedure ConnectionRegistersAndReaps;
+    [Test] procedure InvalidProtocolHeader_Closes;
+    [Test] procedure SeveralConcurrentConnections;
+    [Test] procedure StopWithOpenConnections_DoesNotHang;
+    [Test] procedure ReceivedHeartbeat_NeitherDropsNorReplies;
   end;
 
 implementation
@@ -245,7 +245,7 @@ end;
 
 { TVHostRegistryTests }
 
-procedure TVHostRegistryTests.Default_TemRaiz;
+procedure TVHostRegistryTests.Default_HasRoot;
 var
   R: TAMQPVirtualHostRegistry;
 begin
@@ -278,7 +278,7 @@ end;
 
 { TFrameWriterTests }
 
-procedure TFrameWriterTests.OrdemFIFO;
+procedure TFrameWriterTests.FifoOrder;
 var
   S: TRecStream;
   W: TAMQPFrameWriter;
@@ -310,7 +310,7 @@ begin
   end;
 end;
 
-procedure TFrameWriterTests.PostFrames_Atomico;
+procedure TFrameWriterTests.PostFrames_Atomic;
 var
   S: TRecStream;
   W: TAMQPFrameWriter;
@@ -342,7 +342,7 @@ begin
   end;
 end;
 
-procedure TFrameWriterTests.FalhaDeEscrita_MarcaFailed;
+procedure TFrameWriterTests.WriteFailure_SetsFailed;
 var
   S: TRecStream;
   W: TAMQPFrameWriter;
@@ -378,7 +378,7 @@ end;
 
 { TListenerTests }
 
-procedure TListenerTests.PortaZero_BrokerInformaAEfetiva;
+procedure TListenerTests.PortZero_BrokerReportsTheActualOne;
 var
   B: TAMQPServer;
   C: TPcEndpoint;
@@ -404,7 +404,7 @@ begin
   end;
 end;
 
-procedure TListenerTests.Accept_PeerPreenchido;
+procedure TListenerTests.Accept_PeerFilled;
 var
   B: TAMQPServer;
   C: TPcEndpoint;
@@ -432,7 +432,7 @@ begin
   end;
 end;
 
-procedure TListenerTests.PortaOcupada_StartLevantaEAMQPTransport;
+procedure TListenerTests.BusyPort_StartRaisesEAMQPTransport;
 var
   A, B: TAMQPServer;
   LRaised: string;
@@ -467,7 +467,7 @@ begin
   end;
 end;
 
-procedure TListenerTests.TcpOptions_NagleDesligado;
+procedure TListenerTests.TcpOptions_NagleOff;
 var
   O: TPcTcpOptions;
 begin
@@ -484,7 +484,7 @@ begin
     Integer(AmqpTcpOptions(1234).ConnectTimeoutMs));
 end;
 
-procedure TListenerTests.PedidoResposta_SemAtrasoDeNagle;
+procedure TListenerTests.RequestReply_NoNagleDelay;
 const
   ROUNDS = 20;
 var
@@ -495,7 +495,7 @@ var
   B: array[0..1] of Byte;
   LStart, LElapsed: UInt64;
 begin
-  // Measures what TcpOptions_NagleDesligado only states. Each side writes
+  // Measures what TcpOptions_NagleOff only states. Each side writes
   // two small pieces and then waits for the other's two: with Nagle on, the
   // second piece waits for the ACK of the first, and the peer delays that
   // ACK (it has nothing to send yet) -- ~40 ms per round on Linux, so 20
@@ -536,7 +536,7 @@ end;
 
 { TServerSkeletonTests }
 
-procedure TServerSkeletonTests.StartStop_Idempotente;
+procedure TServerSkeletonTests.StartStop_Idempotent;
 var
   B: TAMQPServer;
 begin
@@ -556,7 +556,7 @@ begin
   end;
 end;
 
-procedure TServerSkeletonTests.ConexaoRegistraEReap;
+procedure TServerSkeletonTests.ConnectionRegistersAndReaps;
 var
   B: TAMQPServer;
   C: TPcEndpoint;
@@ -580,7 +580,7 @@ begin
   end;
 end;
 
-procedure TServerSkeletonTests.ProtocolHeaderInvalido_Fecha;
+procedure TServerSkeletonTests.InvalidProtocolHeader_Closes;
 var
   B: TAMQPServer;
   C: TPcEndpoint;
@@ -606,7 +606,7 @@ begin
   end;
 end;
 
-procedure TServerSkeletonTests.VariasConexoesConcorrentes;
+procedure TServerSkeletonTests.SeveralConcurrentConnections;
 var
   B: TAMQPServer;
   Conns: array[0..9] of TPcEndpoint;
@@ -633,7 +633,7 @@ begin
   end;
 end;
 
-procedure TServerSkeletonTests.StopComConexoesAbertas_NaoTrava;
+procedure TServerSkeletonTests.StopWithOpenConnections_DoesNotHang;
 var
   B: TAMQPServer;
   Conns: array[0..4] of TPcEndpoint;
@@ -661,7 +661,7 @@ begin
   end;
 end;
 
-procedure TServerSkeletonTests.HeartbeatRecebido_NaoDerrubaNemResponde;
+procedure TServerSkeletonTests.ReceivedHeartbeat_NeitherDropsNorReplies;
 var
   B: TAMQPServer;
   C: TPcEndpoint;

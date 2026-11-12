@@ -1021,7 +1021,7 @@ var
   // the vhost, which is shared. It used to be a per-connection counter (every
   // connection started at 1), and two connections in the same millisecond
   // generated the same amq.gen-1-<tick> -- with the first exclusive queue
-  // alive, the second got 405 (test FilaAnonima_NomeNaoRepeteEntreConexoes).
+  // alive, the second got 405 (test AnonymousQueue_NameDoesNotRepeatAcrossConnections).
   GNameSeq: Integer = 0;
 
 // Names the server generates when the client sends an empty one (anonymous

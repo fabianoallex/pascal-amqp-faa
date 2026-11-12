@@ -137,7 +137,7 @@ const
   /// what was left, so a genuinely LIVE log is never recompacted for nothing
   /// -- it only fires again when it quadruples again. No time parameter, in
   /// the shape of D25.
-  AMQP_JOURNAL_COMPACT_FATOR = 4;
+  AMQP_JOURNAL_COMPACT_FACTOR = 4;
 
   /// How long Stop waits for the thread to drain what was already accepted.
   AMQP_JOURNAL_STOP_TIMEOUT_MS = 30000;
@@ -412,7 +412,7 @@ begin
   FPendings := TQueue<TAMQPJournalItem>.Create;
   FMaxPendingBytes := AMQP_JOURNAL_MAX_PENDING_BYTES;
   FMaxSegmentBytes := AMQP_WAL_SEGMENT_BYTES;
-  FCompactAbove := AMQP_WAL_SEGMENT_BYTES * AMQP_JOURNAL_COMPACT_FATOR;
+  FCompactAbove := AMQP_WAL_SEGMENT_BYTES * AMQP_JOURNAL_COMPACT_FACTOR;
   FNextLsn := 1;
 end;
 
@@ -553,11 +553,11 @@ end;
 procedure TAMQPJournal.MarkFailed(const AMsg: string);
 var
   LSink: IAMQPDurabilitySink;
-  LAvisar: Boolean;
+  LNotify: Boolean;
 begin
   FMon.Enter;
   try
-    LAvisar := not FFailed;
+    LNotify := not FFailed;
     FFailed := True;
     if FError = '' then
       FError := AMsg;
@@ -566,7 +566,7 @@ begin
     FMon.Leave;
   end;
   LSink := FSink;
-  if LAvisar and (LSink <> nil) then
+  if LNotify and (LSink <> nil) then
     try
       LSink.JournalFailed(AMsg);
     except

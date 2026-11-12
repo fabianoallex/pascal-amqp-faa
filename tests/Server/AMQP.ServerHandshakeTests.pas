@@ -49,13 +49,13 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure ClienteRealConecta;
-    [Test] procedure SenhaErrada_403;
-    [Test] procedure VhostInexistente_530;
-    [Test] procedure VhostExtraAceito;
-    [Test] procedure CanalAbreEFecha;
-    [Test] procedure DuasConexoesSimultaneas;
-    [Test] procedure ClienteFechaLimpo;
+    [Test] procedure RealClientConnects;
+    [Test] procedure WrongPassword_403;
+    [Test] procedure MissingVhost_530;
+    [Test] procedure ExtraVhostAccepted;
+    [Test] procedure ChannelOpensAndCloses;
+    [Test] procedure TwoSimultaneousConnections;
+    [Test] procedure ClientClosesCleanly;
   end;
 
   [TestFixture]
@@ -65,20 +65,20 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure StartAnunciaPlainEServerProperties;
-    [Test] procedure MetodoForaDeOrdem_503;
-    [Test] procedure ConnectionEmCanalNaoZero_503;
-    [Test] procedure TuneOkAcimaDoProposto_530;
-    [Test] procedure FrameMaxAbaixoDoMinimo_530;
-    [Test] procedure SegundoChannelOpen_504;
-    [Test] procedure CanalNaoAberto_504;
-    [Test] procedure TipoDeFrameDesconhecido_501;
-    [Test] procedure ConteudoSemPublish_505;
-    [Test] procedure ClienteFechaConexao_RecebeCloseOk;
-    [Test] procedure ClasseNaoImplementada_FechaSoOCanal;
+    [Test] procedure StartAdvertisesPlainAndServerProperties;
+    [Test] procedure MethodOutOfOrder_503;
+    [Test] procedure ConnectionOnNonZeroChannel_503;
+    [Test] procedure TuneOkAboveProposed_530;
+    [Test] procedure FrameMaxBelowMinimum_530;
+    [Test] procedure SecondChannelOpen_504;
+    [Test] procedure ChannelNotOpen_504;
+    [Test] procedure UnknownFrameType_501;
+    [Test] procedure ContentWithoutPublish_505;
+    [Test] procedure ClientClosesConnection_ReceivesCloseOk;
+    [Test] procedure UnimplementedClass_ClosesOnlyTheChannel;
     [Test] procedure NoLocalNoConsume_540;
-    [Test] procedure PrefetchSizeNaoZero_540;
-    [Test] procedure MandatorySemRota_ReturnAntesDoAck_312;
+    [Test] procedure PrefetchSizeNonZero_540;
+    [Test] procedure MandatoryNoRoute_ReturnBeforeAck_312;
   end;
 
   { Content (WS5): reassembly of Basic.Publish + content-header + body frames,
@@ -95,17 +95,17 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure ClientePublicaMensagemSimples;
-    [Test] procedure CorpoGrandeEmVariosFrames;
-    [Test] procedure PropriedadesEHeadersChegamIntactos;
-    [Test] procedure MensagemSemCorpo_Aceita;
-    [Test] procedure DoisCanaisIntercalados;
-    [Test] procedure MetodoNoMeioDoConteudo_505;
-    [Test] procedure BodySemHeader_505;
-    [Test] procedure CorpoMaiorQueOBodySize_505;
-    [Test] procedure ContentHeaderDeOutraClasse_505;
-    [Test] procedure ClienteDeclaraTopologia;
-    [Test] procedure HeaderPayloadCru_DecodificaIgual;
+    [Test] procedure ClientPublishesSimpleMessage;
+    [Test] procedure LargeBodyInSeveralFrames;
+    [Test] procedure PropertiesAndHeadersArriveIntact;
+    [Test] procedure MessageWithoutBody_Accepted;
+    [Test] procedure TwoInterleavedChannels;
+    [Test] procedure MethodInTheMiddleOfContent_505;
+    [Test] procedure BodyWithoutHeader_505;
+    [Test] procedure BodyLargerThanBodySize_505;
+    [Test] procedure ContentHeaderOfAnotherClass_505;
+    [Test] procedure ClientDeclaresTopology;
+    [Test] procedure RawHeaderPayload_DecodesTheSame;
   end;
 
   { Server-side TLS (WS3; pascal-common-faa's transport since 0.6.0). Every
@@ -144,15 +144,15 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure ClienteRealConectaSobreTls;
-    [Test] procedure PublicaSobreTls;
-    [Test] procedure ClientePlainNaPortaTls_Falha;
-    [Test] procedure CertInexistente_StartLevantaEAMQPTls;
-    [Test] procedure CaPrivadaErrada_ClienteRecusaComEAMQPTls;
-    [Test] procedure NomeErrado_ClienteRecusaComEAMQPTls;
-    [Test] procedure Mtls_ClienteComCertificadoDaCa_Conecta;
-    [Test] procedure Mtls_ClienteSemCertificado_Recusado;
-    [Test] procedure Mtls_ClienteDeOutraCa_Recusado;
+    [Test] procedure RealClientConnectsOverTls;
+    [Test] procedure PublishesOverTls;
+    [Test] procedure PlainClientOnTlsPort_Fails;
+    [Test] procedure MissingCert_StartRaisesEAMQPTls;
+    [Test] procedure WrongPrivateCa_ClientRejectsWithEAMQPTls;
+    [Test] procedure WrongName_ClientRejectsWithEAMQPTls;
+    [Test] procedure Mtls_ClientWithCaCertificate_Connects;
+    [Test] procedure Mtls_ClientWithoutCertificate_Rejected;
+    [Test] procedure Mtls_ClientFromAnotherCa_Rejected;
   end;
 
   {$IFDEF MSWINDOWS}
@@ -184,11 +184,11 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure BrokerEmiteHeartbeat;
-    [Test] procedure PeerMudo_EhDerrubado;
-    [Test] procedure HeartbeatZero_NaoDerruba;
-    [Test] procedure SemCloseOk_DerrubadoNoPrazo;
-    [Test] procedure ClienteRealSobreviveComHeartbeat;
+    [Test] procedure BrokerSendsHeartbeat;
+    [Test] procedure SilentPeer_IsDropped;
+    [Test] procedure HeartbeatZero_DoesNotDrop;
+    [Test] procedure NoCloseOk_DroppedAtTheDeadline;
+    [Test] procedure RealClientSurvivesWithHeartbeat;
   end;
 
 implementation
@@ -408,7 +408,7 @@ type
     constructor Create;
     destructor Destroy; override;
     function RouteMessage(const AVHost: string;
-      const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+      const AMessage: TAMQPServerMessage; out ARejected: Boolean;
       out ALsn: UInt64): Boolean;
     function Count: Integer;
     function Exchange: string;
@@ -437,12 +437,12 @@ begin
 end;
 
 function TRecordingSink.RouteMessage(const AVHost: string;
-  const AMessage: TAMQPServerMessage; out ARejeitada: Boolean;
+  const AMessage: TAMQPServerMessage; out ARejected: Boolean;
   out ALsn: UInt64): Boolean;
 var
   LValue: TValue;
 begin
-  ARejeitada := False; // this test double accepts everything
+  ARejected := False; // this test double accepts everything
   ALsn := 0;           // and writes no journal at all
   FLock.Enter;
   try
@@ -606,7 +606,7 @@ end;
   The mirror generator (tools/gen_fpc_mirror.py) does not accept inheritance
   between fixtures: each one keeps its own fields and calls the routines below. }
 
-procedure ServidorSetUp(var FBroker: TAMQPServer);
+procedure ServerSetUp(var FBroker: TAMQPServer);
 begin
   FBroker := TAMQPServer.Create;
   FBroker.BindAddress := '127.0.0.1';
@@ -614,7 +614,7 @@ begin
   FBroker.Start;
 end;
 
-procedure ServidorTearDown(var FBroker: TAMQPServer);
+procedure ServerTearDown(var FBroker: TAMQPServer);
 begin
   if FBroker <> nil then
   begin
@@ -672,52 +672,52 @@ begin
 end;
 
 { SetUp/TearDown of the fixtures with a broker: each one keeps its own FBroker and
-  calls ServidorSetUp/ServidorTearDown. The mirror generator does not accept
+  calls ServerSetUp/ServerTearDown. The mirror generator does not accept
   inheritance between fixtures, which is why there is no base class. }
 
 procedure TClientHandshakeTests.SetUp;
 begin
-  ServidorSetUp(FBroker);
+  ServerSetUp(FBroker);
 end;
 
 procedure TClientHandshakeTests.TearDown;
 begin
-  ServidorTearDown(FBroker);
+  ServerTearDown(FBroker);
 end;
 
 procedure TRawHandshakeTests.SetUp;
 begin
-  ServidorSetUp(FBroker);
+  ServerSetUp(FBroker);
 end;
 
 procedure TRawHandshakeTests.TearDown;
 begin
-  ServidorTearDown(FBroker);
+  ServerTearDown(FBroker);
 end;
 
 procedure TContentTests.SetUp;
 begin
-  ServidorSetUp(FBroker);
+  ServerSetUp(FBroker);
 end;
 
 procedure TContentTests.TearDown;
 begin
-  ServidorTearDown(FBroker);
+  ServerTearDown(FBroker);
 end;
 
 procedure THeartbeatTests.SetUp;
 begin
-  ServidorSetUp(FBroker);
+  ServerSetUp(FBroker);
 end;
 
 procedure THeartbeatTests.TearDown;
 begin
-  ServidorTearDown(FBroker);
+  ServerTearDown(FBroker);
 end;
 
 { TClientHandshakeTests }
 
-procedure TClientHandshakeTests.ClienteRealConecta;
+procedure TClientHandshakeTests.RealClientConnects;
 var
   LCli: TAMQPConnection;
   LConn: TAMQPServerConnection;
@@ -741,7 +741,7 @@ begin
   end;
 end;
 
-procedure TClientHandshakeTests.SenhaErrada_403;
+procedure TClientHandshakeTests.WrongPassword_403;
 var
   LCli: TAMQPConnection;
   LP: TAMQPConnectionParams;
@@ -765,7 +765,7 @@ begin
   end;
 end;
 
-procedure TClientHandshakeTests.VhostInexistente_530;
+procedure TClientHandshakeTests.MissingVhost_530;
 var
   LCli: TAMQPConnection;
   LP: TAMQPConnectionParams;
@@ -789,7 +789,7 @@ begin
   end;
 end;
 
-procedure TClientHandshakeTests.VhostExtraAceito;
+procedure TClientHandshakeTests.ExtraVhostAccepted;
 var
   LCli: TAMQPConnection;
   LP: TAMQPConnectionParams;
@@ -807,7 +807,7 @@ begin
   end;
 end;
 
-procedure TClientHandshakeTests.CanalAbreEFecha;
+procedure TClientHandshakeTests.ChannelOpensAndCloses;
 var
   LCli: TAMQPConnection;
   LConn: TAMQPServerConnection;
@@ -841,7 +841,7 @@ begin
   end;
 end;
 
-procedure TClientHandshakeTests.DuasConexoesSimultaneas;
+procedure TClientHandshakeTests.TwoSimultaneousConnections;
 var
   LA, LB: TAMQPConnection;
 begin
@@ -863,7 +863,7 @@ begin
   end;
 end;
 
-procedure TClientHandshakeTests.ClienteFechaLimpo;
+procedure TClientHandshakeTests.ClientClosesCleanly;
 var
   LCli: TAMQPConnection;
   LDeadline: UInt64;
@@ -886,7 +886,7 @@ end;
 
 { TRawHandshakeTests }
 
-procedure TRawHandshakeTests.StartAnunciaPlainEServerProperties;
+procedure TRawHandshakeTests.StartAdvertisesPlainAndServerProperties;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -912,7 +912,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.MetodoForaDeOrdem_503;
+procedure TRawHandshakeTests.MethodOutOfOrder_503;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -933,7 +933,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.ConnectionEmCanalNaoZero_503;
+procedure TRawHandshakeTests.ConnectionOnNonZeroChannel_503;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -956,7 +956,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.TuneOkAcimaDoProposto_530;
+procedure TRawHandshakeTests.TuneOkAboveProposed_530;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -980,7 +980,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.FrameMaxAbaixoDoMinimo_530;
+procedure TRawHandshakeTests.FrameMaxBelowMinimum_530;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1004,7 +1004,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.SegundoChannelOpen_504;
+procedure TRawHandshakeTests.SecondChannelOpen_504;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1027,7 +1027,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.CanalNaoAberto_504;
+procedure TRawHandshakeTests.ChannelNotOpen_504;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1047,7 +1047,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.TipoDeFrameDesconhecido_501;
+procedure TRawHandshakeTests.UnknownFrameType_501;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1070,7 +1070,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.ConteudoSemPublish_505;
+procedure TRawHandshakeTests.ContentWithoutPublish_505;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1098,7 +1098,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.ClienteFechaConexao_RecebeCloseOk;
+procedure TRawHandshakeTests.ClientClosesConnection_ReceivesCloseOk;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1123,7 +1123,7 @@ end;
 
 { THeartbeatTests }
 
-procedure THeartbeatTests.BrokerEmiteHeartbeat;
+procedure THeartbeatTests.BrokerSendsHeartbeat;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1151,7 +1151,7 @@ begin
   end;
 end;
 
-procedure THeartbeatTests.PeerMudo_EhDerrubado;
+procedure THeartbeatTests.SilentPeer_IsDropped;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1179,7 +1179,7 @@ begin
   end;
 end;
 
-procedure THeartbeatTests.HeartbeatZero_NaoDerruba;
+procedure THeartbeatTests.HeartbeatZero_DoesNotDrop;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1199,7 +1199,7 @@ begin
   end;
 end;
 
-procedure THeartbeatTests.SemCloseOk_DerrubadoNoPrazo;
+procedure THeartbeatTests.NoCloseOk_DroppedAtTheDeadline;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1236,7 +1236,7 @@ begin
   end;
 end;
 
-procedure THeartbeatTests.ClienteRealSobreviveComHeartbeat;
+procedure THeartbeatTests.RealClientSurvivesWithHeartbeat;
 var
   LCli: TAMQPConnection;
   LConn: TAMQPServerConnection;
@@ -1271,7 +1271,7 @@ end;
 
 { TRawHandshakeTests -- class outside Phase 1 }
 
-procedure TRawHandshakeTests.ClasseNaoImplementada_FechaSoOCanal;
+procedure TRawHandshakeTests.UnimplementedClass_ClosesOnlyTheChannel;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1313,7 +1313,7 @@ begin
   // nothing: Phase 1 delivers no message at all
 end;
 
-procedure TContentTests.ClientePublicaMensagemSimples;
+procedure TContentTests.ClientPublishesSimpleMessage;
 var
   LSink: TRecordingSink;
   LCli: TAMQPConnection;
@@ -1340,7 +1340,7 @@ begin
   end;
 end;
 
-procedure TContentTests.CorpoGrandeEmVariosFrames;
+procedure TContentTests.LargeBodyInSeveralFrames;
 var
   LSink: TRecordingSink;
   LCli: TAMQPConnection;
@@ -1376,7 +1376,7 @@ begin
   end;
 end;
 
-procedure TContentTests.PropriedadesEHeadersChegamIntactos;
+procedure TContentTests.PropertiesAndHeadersArriveIntact;
 var
   LSink: TRecordingSink;
   LCli: TAMQPConnection;
@@ -1392,7 +1392,7 @@ begin
     LCh := LCli.CreateChannel;
     try
       // The caller owns the table: SetHeaders does not copy and Publish does not
-      // free it (same convention as the EventosHeadersVcl sample).
+      // free it (same convention as the HeadersEventsVcl sample).
       LHeaders := TAMQPFieldTable.Create;
       try
         LHeaders.Put('foo', 'bar');
@@ -1417,7 +1417,7 @@ begin
   end;
 end;
 
-procedure TContentTests.MensagemSemCorpo_Aceita;
+procedure TContentTests.MessageWithoutBody_Accepted;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1445,7 +1445,7 @@ begin
   end;
 end;
 
-procedure TContentTests.DoisCanaisIntercalados;
+procedure TContentTests.TwoInterleavedChannels;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1485,7 +1485,7 @@ begin
   end;
 end;
 
-procedure TContentTests.MetodoNoMeioDoConteudo_505;
+procedure TContentTests.MethodInTheMiddleOfContent_505;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1508,7 +1508,7 @@ begin
   end;
 end;
 
-procedure TContentTests.BodySemHeader_505;
+procedure TContentTests.BodyWithoutHeader_505;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1530,7 +1530,7 @@ begin
   end;
 end;
 
-procedure TContentTests.CorpoMaiorQueOBodySize_505;
+procedure TContentTests.BodyLargerThanBodySize_505;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1552,7 +1552,7 @@ begin
   end;
 end;
 
-procedure TContentTests.ContentHeaderDeOutraClasse_505;
+procedure TContentTests.ContentHeaderOfAnotherClass_505;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -1575,7 +1575,7 @@ begin
   end;
 end;
 
-procedure TContentTests.ClienteDeclaraTopologia;
+procedure TContentTests.ClientDeclaresTopology;
 var
   LCli: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1637,7 +1637,7 @@ end;
 // (instead of the original TAMQPFieldTable) returns the same properties the
 // client published -- proves that faithful re-emission works without re-decoding
 // anything along the way.
-procedure TContentTests.HeaderPayloadCru_DecodificaIgual;
+procedure TContentTests.RawHeaderPayload_DecodesTheSame;
 var
   LSink: TRecordingSink;
   LCli: TAMQPConnection;
@@ -1790,8 +1790,8 @@ end;
 
 procedure TServerTlsTests.SetUp;
 begin
-  // On purpose this does NOT call ServidorSetUp: it brings up a plain broker, and here
-  // we want one with TLS. ServidorTearDown stops and frees this one.
+  // On purpose this does NOT call ServerSetUp: it brings up a plain broker, and here
+  // we want one with TLS. ServerTearDown stops and frees this one.
   FBroker := nil;
   FReady := Ready;
   if FReady then
@@ -1800,16 +1800,16 @@ end;
 
 procedure TServerTlsTests.TearDown;
 begin
-  ServidorTearDown(FBroker);
+  ServerTearDown(FBroker);
 end;
 
 procedure TServerTlsTests.RestartWithMtls;
 begin
-  ServidorTearDown(FBroker);
+  ServerTearDown(FBroker);
   FBroker := NewBroker('ca_cert.pem');
 end;
 
-procedure TServerTlsTests.ClienteRealConectaSobreTls;
+procedure TServerTlsTests.RealClientConnectsOverTls;
 var
   LCli: TAMQPConnection;
   LConn: TAMQPServerConnection;
@@ -1837,7 +1837,7 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.PublicaSobreTls;
+procedure TServerTlsTests.PublishesOverTls;
 var
   LSink: TRecordingSink;
   LCli: TAMQPConnection;
@@ -1875,11 +1875,11 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.ClientePlainNaPortaTls_Falha;
+procedure TServerTlsTests.PlainClientOnTlsPort_Fails;
 var
   LP: TAMQPConnectionParams;
   LCli: TAMQPConnection;
-  LFalhou: Boolean;
+  LFailed: Boolean;
 begin
   if not FReady then
     Exit;
@@ -1887,15 +1887,15 @@ begin
   LP.UseTls := False; // plaintext client against a port that expects TLS
   LCli := TAMQPConnection.Create(LP);
   try
-    LFalhou := False;
+    LFailed := False;
     try
       LCli.Open;
     except
       on Exception do
-        LFalhou := True;
+        LFailed := True;
     end;
     TAssert.AssertTrue('cliente plain nao pode abrir numa porta TLS',
-      LFalhou or (not LCli.IsOpen));
+      LFailed or (not LCli.IsOpen));
   finally
     LCli.Free;
   end;
@@ -1932,14 +1932,14 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.CertInexistente_StartLevantaEAMQPTls;
+procedure TServerTlsTests.MissingCert_StartRaisesEAMQPTls;
 begin
   if not FReady then
     Exit;
   // Since 0.6.0 the certificate is loaded once, at Start (the common's
   // PcTlsListen): a wrong file fails there, before any client, instead of
   // failing every handshake.
-  ChecaLevanta('certificado inexistente', EAMQPTls, StartWithMissingCert);
+  CheckRaises('certificado inexistente', EAMQPTls, StartWithMissingCert);
 end;
 
 procedure TServerTlsTests.OpenWithWrongCa;
@@ -1957,11 +1957,11 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.CaPrivadaErrada_ClienteRecusaComEAMQPTls;
+procedure TServerTlsTests.WrongPrivateCa_ClientRejectsWithEAMQPTls;
 begin
   if not FReady then
     Exit;
-  ChecaLevanta('servidor de outra CA', EAMQPTls, OpenWithWrongCa);
+  CheckRaises('servidor de outra CA', EAMQPTls, OpenWithWrongCa);
 end;
 
 procedure TServerTlsTests.OpenWithWrongName;
@@ -1980,14 +1980,14 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.NomeErrado_ClienteRecusaComEAMQPTls;
+procedure TServerTlsTests.WrongName_ClientRejectsWithEAMQPTls;
 begin
   if not FReady then
     Exit;
-  ChecaLevanta('nome que o certificado nao tem', EAMQPTls, OpenWithWrongName);
+  CheckRaises('nome que o certificado nao tem', EAMQPTls, OpenWithWrongName);
 end;
 
-procedure TServerTlsTests.Mtls_ClienteComCertificadoDaCa_Conecta;
+procedure TServerTlsTests.Mtls_ClientWithCaCertificate_Connects;
 var
   LCli: TAMQPConnection;
   LConn: TAMQPServerConnection;
@@ -2018,9 +2018,9 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.Mtls_ClienteSemCertificado_Recusado;
+procedure TServerTlsTests.Mtls_ClientWithoutCertificate_Rejected;
 var
-  LFalhou: Boolean;
+  LFailed: Boolean;
 begin
   if not FReady then
     Exit;
@@ -2029,14 +2029,14 @@ begin
   // server refuses, so the failure can surface as EAMQPTls or as the
   // connection dropping during the AMQP handshake: either way it must not
   // open.
-  LFalhou := False;
+  LFailed := False;
   try
     OpenWithoutClientCert;
   except
     on Exception do
-      LFalhou := True;
+      LFailed := True;
   end;
-  TAssert.AssertTrue('sem certificado de cliente, mTLS recusa', LFalhou);
+  TAssert.AssertTrue('sem certificado de cliente, mTLS recusa', LFailed);
 end;
 
 procedure TServerTlsTests.OpenWithRogueClientCert;
@@ -2051,21 +2051,21 @@ begin
   end;
 end;
 
-procedure TServerTlsTests.Mtls_ClienteDeOutraCa_Recusado;
+procedure TServerTlsTests.Mtls_ClientFromAnotherCa_Rejected;
 var
-  LFalhou: Boolean;
+  LFailed: Boolean;
 begin
   if not FReady then
     Exit;
   RestartWithMtls;
-  LFalhou := False;
+  LFailed := False;
   try
     OpenWithRogueClientCert;
   except
     on Exception do
-      LFalhou := True;
+      LFailed := True;
   end;
-  TAssert.AssertTrue('certificado de outra CA, mTLS recusa', LFalhou);
+  TAssert.AssertTrue('certificado de outra CA, mTLS recusa', LFailed);
 end;
 
 {$IFDEF MSWINDOWS}
@@ -2132,7 +2132,7 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.PrefetchSizeNaoZero_540;
+procedure TRawHandshakeTests.PrefetchSizeNonZero_540;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
@@ -2158,13 +2158,13 @@ begin
   end;
 end;
 
-procedure TRawHandshakeTests.MandatorySemRota_ReturnAntesDoAck_312;
+procedure TRawHandshakeTests.MandatoryNoRoute_ReturnBeforeAck_312;
 var
   LSock: TPcEndpoint;
   LStrm: TAMQPEndpointStream;
   LCh: Word;
   LDecl: TAMQPExchangeDeclare;
-  LCorpo: TBytes;
+  LMsgBody: TBytes;
   LFrame: TAMQPFrame;
   LR: TAMQPReader;
   LId: TAMQPMethodId;
@@ -2189,11 +2189,11 @@ begin
     ExpectMethodId(LStrm, AMQP_CLASS_CONFIRM, AMQP_CONFIRM_SELECT_OK, LCh);
 
     // Mandatory publish to an exchange with NO binding at all.
-    LCorpo := AmqpUtf8Encode('sem rota');
+    LMsgBody := AmqpUtf8Encode('sem rota');
     SendMethod(LStrm, 1, BuildBasicPublish('ex.ord', 'nada', True, False));
     SendFrameRaw(LStrm, AMQP_FRAME_HEADER, 1,
-      BuildContentHeader(Length(LCorpo), TAMQPBasicProperties.Empty));
-    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, LCorpo);
+      BuildContentHeader(Length(LMsgBody), TAMQPBasicProperties.Empty));
+    SendFrameRaw(LStrm, AMQP_FRAME_BODY, 1, LMsgBody);
 
     // 1st: the Basic.Return, with the content right behind it.
     LFrame := TAMQPFrame.ReadFrom(LStrm);

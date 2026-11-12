@@ -69,15 +69,15 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-    procedure Reconecta_E_ContinuaConsumindo;
-    procedure Confirm_PerdaNaQueda_WaitForConfirmsRetornaFalse;
-    procedure Confirm_Republish_ReenviaNaoConfirmadosAposQueda;
-    procedure Close_DuranteEsperaDeReconexao_NaoEsperaODelay;
-    procedure Close_ComReconnectDelayAlto_VoltaComAThreadEncerrada;
-    procedure Close_DeDentroDoOnDisconnect_NaoTrava;
-    procedure Reconexao_FilaDeclaradaSoNoutroCanal_Recupera;
-    procedure Reconexao_ReplayFalha_ReportaOMotivo_E_RecuperaQuandoAFilaVolta;
-    procedure SemAutoReconnect_PublishNaConexaoMorta_LevantaEAMQPConnection;
+    procedure Reconnects_And_KeepsConsuming;
+    procedure Confirm_LossOnDrop_WaitForConfirmsReturnsFalse;
+    procedure Confirm_Republish_ResendsUnconfirmedAfterDrop;
+    procedure Close_DuringReconnectWait_DoesNotWaitForTheDelay;
+    procedure Close_WithHighReconnectDelay_ReturnsWithTheThreadFinished;
+    procedure Close_FromInsideOnDisconnect_DoesNotHang;
+    procedure Reconnect_QueueDeclaredOnlyOnAnotherChannel_Recovers;
+    procedure Reconnect_ReplayFails_ReportsTheReason_And_RecoversWhenTheQueueReturns;
+    procedure NoAutoReconnect_PublishOnDeadConnection_RaisesEAMQPConnection;
   end;
 
 implementation
@@ -228,7 +228,7 @@ begin
   end;
 end;
 
-procedure TAMQPReconnectIntegrationTests.Reconecta_E_ContinuaConsumindo;
+procedure TAMQPReconnectIntegrationTests.Reconnects_And_KeepsConsuming;
 begin
   // 1) Publishes before the drop and confirms consumption.
   FControlChan.PublishText('', FQueue, 'antes-da-queda');
@@ -253,7 +253,7 @@ begin
     ReceivedContains('depois-da-recuperacao'));
 end;
 
-procedure TAMQPReconnectIntegrationTests.Confirm_PerdaNaQueda_WaitForConfirmsRetornaFalse;
+procedure TAMQPReconnectIntegrationTests.Confirm_LossOnDrop_WaitForConfirmsReturnsFalse;
 var
   LParams: TAMQPConnectionParams;
   LConn: TAMQPConnection;
@@ -297,7 +297,7 @@ begin
   end;
 end;
 
-procedure TAMQPReconnectIntegrationTests.Confirm_Republish_ReenviaNaoConfirmadosAposQueda;
+procedure TAMQPReconnectIntegrationTests.Confirm_Republish_ResendsUnconfirmedAfterDrop;
 var
   LPubParams: TAMQPConnectionParams;
   LPubConn: TAMQPConnection;
@@ -368,10 +368,10 @@ begin
   end;
 end;
 
-procedure TAMQPReconnectIntegrationTests.Close_DuranteEsperaDeReconexao_NaoEsperaODelay;
+procedure TAMQPReconnectIntegrationTests.Close_DuringReconnectWait_DoesNotWaitForTheDelay;
 var
   LConn: TAMQPConnection;
-  LInicio, LGasto: UInt64;
+  LStart, LElapsed: UInt64;
 begin
   // The connection drops and the reconnection enters the ReconnectDelayMs
   // wait (OnDisconnect fires right before it). Closing there has to be
@@ -384,20 +384,20 @@ begin
     LConn.DropConnectionForTest;
     WaitCounter(FCloseTestDisconnected, 10000);
     TAssert.AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
-    LInicio := PcTickMs;
+    LStart := PcTickMs;
     FreeAndNil(LConn);
-    LGasto := PcTickMs - LInicio;
+    LElapsed := PcTickMs - LStart;
   finally
     LConn.Free;
   end;
-  TAssert.AssertTrue('fechar na espera da reconexão não espera os 3000 ms (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+  TAssert.AssertTrue('fechar na espera da reconexão não espera os 3000 ms (' + IntToStr(LElapsed) + ' ms)', LElapsed < 1000);
   TAssert.AssertEquals('a thread de reconexão saiu', 0, AmqpReconnectThreadsAlive);
 end;
 
-procedure TAMQPReconnectIntegrationTests.Close_ComReconnectDelayAlto_VoltaComAThreadEncerrada;
+procedure TAMQPReconnectIntegrationTests.Close_WithHighReconnectDelay_ReturnsWithTheThreadFinished;
 var
   LConn: TAMQPConnection;
-  LInicio, LGasto: UInt64;
+  LStart, LElapsed: UInt64;
 begin
   // A delay larger than WaitReconnectStopped's old 12 s cap: before, Close
   // gave up waiting with the reconnection thread still sleeping, and it woke
@@ -409,20 +409,20 @@ begin
     LConn.DropConnectionForTest;
     WaitCounter(FCloseTestDisconnected, 10000);
     TAssert.AssertEquals('a queda foi percebida', 1, PcAtomicGet(FCloseTestDisconnected));
-    LInicio := PcTickMs;
+    LStart := PcTickMs;
     FreeAndNil(LConn);
-    LGasto := PcTickMs - LInicio;
+    LElapsed := PcTickMs - LStart;
   finally
     LConn.Free;
   end;
   TAssert.AssertEquals('Close/Destroy só voltam com a thread de reconexão encerrada', 0, AmqpReconnectThreadsAlive);
-  TAssert.AssertTrue('e voltam logo (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+  TAssert.AssertTrue('e voltam logo (' + IntToStr(LElapsed) + ' ms)', LElapsed < 1000);
 end;
 
-procedure TAMQPReconnectIntegrationTests.Close_DeDentroDoOnDisconnect_NaoTrava;
+procedure TAMQPReconnectIntegrationTests.Close_FromInsideOnDisconnect_DoesNotHang;
 var
   LConn: TAMQPConnection;
-  LInicio, LGasto: UInt64;
+  LStart, LElapsed: UInt64;
 begin
   // OnDisconnect runs on the reconnection thread. A Close called from there
   // cannot wait for itself: before, it got stuck on the 12 s cap. Now it
@@ -431,12 +431,12 @@ begin
   LConn := NewReconnectingConnection(60000, HandleSelfCloseDisconnect);
   try
     LConn.Open;
-    LInicio := PcTickMs;
+    LStart := PcTickMs;
     LConn.DropConnectionForTest;
     WaitCounter(FSelfCloseDone, 10000);
-    LGasto := PcTickMs - LInicio;
+    LElapsed := PcTickMs - LStart;
     TAssert.AssertEquals('o Close de dentro do OnDisconnect voltou', 1, PcAtomicGet(FSelfCloseDone));
-    TAssert.AssertTrue('e voltou logo (' + IntToStr(LGasto) + ' ms)', LGasto < 3000);
+    TAssert.AssertTrue('e voltou logo (' + IntToStr(LElapsed) + ' ms)', LElapsed < 3000);
     TAssert.AssertTrue('a conexão ficou fechada', not LConn.IsOpen);
   finally
     LConn.Free;
@@ -498,7 +498,7 @@ begin
   end;
 end;
 
-procedure TAMQPReconnectIntegrationTests.Reconexao_FilaDeclaradaSoNoutroCanal_Recupera;
+procedure TAMQPReconnectIntegrationTests.Reconnect_QueueDeclaredOnlyOnAnotherChannel_Recovers;
 var
   LConn: TAMQPConnection;
   LPub, LConf, LCons: TAMQPChannel;
@@ -544,12 +544,12 @@ begin
   end;
 end;
 
-procedure TAMQPReconnectIntegrationTests.Reconexao_ReplayFalha_ReportaOMotivo_E_RecuperaQuandoAFilaVolta;
+procedure TAMQPReconnectIntegrationTests.Reconnect_ReplayFails_ReportsTheReason_And_RecoversWhenTheQueueReturns;
 var
   LConn: TAMQPConnection;
   LChan: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
-  LQueue, LErro, LPubErro: string;
+  LQueue, LError, LPubError: string;
 begin
   // The queue belongs to the control connection (auto-delete) and the
   // reconnecting connection only consumes it: in the drop it goes away, and
@@ -572,17 +572,17 @@ begin
     LChan.Consume(LQueue, HandleConsumerDelivery);
 
     LConn.DropConnectionForTest;
-    WaitFor404(LErro, 15000);
-    TAssert.AssertTrue('OnReconnectError deveria trazer o 404 do replay', Pos('404', LErro) > 0);
+    WaitFor404(LError, 15000);
+    TAssert.AssertTrue('OnReconnectError deveria trazer o 404 do replay', Pos('404', LError) > 0);
     TAssert.AssertEquals('sem a fila, a reconexão não pode se dar por concluída', 0, PcAtomicGet(FCrossReconnected));
     TAssert.AssertTrue('LastReconnectError: ' + LConn.LastReconnectError, Pos('404', LConn.LastReconnectError) > 0);
 
     // Right after an attempt fails there are ReconnectDelayMs until the next
     // one: the publish lands on the unavailable connection and the exception
     // says why.
-    LPubErro := PublishError(LChan, LQueue);
-    TAssert.AssertTrue('publish durante a reconexão: ' + LPubErro, Pos('EAMQPConnection', LPubErro) = 1);
-    TAssert.AssertTrue('a exceção do publish deveria trazer o motivo: ' + LPubErro, Pos('404', LPubErro) > 0);
+    LPubError := PublishError(LChan, LQueue);
+    TAssert.AssertTrue('publish durante a reconexão: ' + LPubError, Pos('EAMQPConnection', LPubError) = 1);
+    TAssert.AssertTrue('a exceção do publish deveria trazer o motivo: ' + LPubError, Pos('404', LPubError) > 0);
 
     // The queue comes back (another process redeclares it, in the real
     // world): the next attempt recovers.
@@ -598,11 +598,11 @@ begin
   end;
 end;
 
-procedure TAMQPReconnectIntegrationTests.SemAutoReconnect_PublishNaConexaoMorta_LevantaEAMQPConnection;
+procedure TAMQPReconnectIntegrationTests.NoAutoReconnect_PublishOnDeadConnection_RaisesEAMQPConnection;
 var
   LConn: TAMQPConnection;
   LChan: TAMQPChannel;
-  LErro: string;
+  LError: string;
   LWaited: Integer;
 begin
   // Without AutoReconnect, a publish on a dead connection raised the RTL's
@@ -616,8 +616,8 @@ begin
     LChan.PublishText('', 'test-sem-reconexao', 'viva');
 
     LConn.DropConnectionForTest;
-    LErro := PublishError(LChan, 'test-sem-reconexao');
-    TAssert.AssertTrue('logo após a queda: ' + LErro, Pos('EAMQPConnection', LErro) = 1);
+    LError := PublishError(LChan, 'test-sem-reconexao');
+    TAssert.AssertTrue('logo após a queda: ' + LError, Pos('EAMQPConnection', LError) = 1);
 
     LWaited := 0;
     while LConn.IsOpen and (LWaited < 5000) do
@@ -626,9 +626,9 @@ begin
       Inc(LWaited, 20);
     end;
     TAssert.AssertTrue('a queda deveria ter sido percebida', not LConn.IsOpen);
-    LErro := PublishError(LChan, 'test-sem-reconexao');
-    TAssert.AssertTrue('depois de percebida: ' + LErro, Pos('EAMQPConnection', LErro) = 1);
-    TAssert.AssertTrue('a exceção diz que a conexão caiu: ' + LErro, Pos('connection closed', LErro) > 0);
+    LError := PublishError(LChan, 'test-sem-reconexao');
+    TAssert.AssertTrue('depois de percebida: ' + LError, Pos('EAMQPConnection', LError) = 1);
+    TAssert.AssertTrue('a exceção diz que a conexão caiu: ' + LError, Pos('connection closed', LError) > 0);
   finally
     LConn.Free;
   end;

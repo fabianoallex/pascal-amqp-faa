@@ -176,7 +176,7 @@ Defect found while measuring pascal-api-infra-faa's `docs/guide/dtos-json.md` gu
 
 ### Added
 
-- **`TAMQPChannel.OnConsumerError(Canal, Entrega, Erro, var Acao)`**, called when a consumer
+- **`TAMQPChannel.OnConsumerError(Canal, DeliveryAt, Erro, var Acao)`**, called when a consumer
   callback raises, on the same pool thread. `Acao` (`TAMQPConsumerErrorAction`)
   arrives as `ceaReject` if the delivery is pending, or `ceaNone` if it was already settled or if the
   consumer is no-ack; the handler can change it to `ceaRequeue` (Nack with requeue) or `ceaNone`
@@ -208,7 +208,7 @@ against RabbitMQ 3).
 
 ### Added
 
-- **`TAMQPConnection.OnReconnectError(Conn, Tentativa, Motivo)`**, fired on each reconnection
+- **`TAMQPConnection.OnReconnectError(Conn, Attempt, Reason)`**, fired on each reconnection
   attempt that fails, and **`TAMQPConnection.LastReconnectError`**, the message of the last one (cleared
   when the reconnection succeeds). The `EAMQPConnection` of a publish made during the reconnection carries
   the reason for the drop and that of the last attempt; the start of the text
@@ -262,7 +262,7 @@ client, on top of pascal-common-faa's `PascalCommon.Tracing`. Details and decisi
 
 ### Fixed
 
-- The intermittent failure of `ConsomeTodas_ComAck_E_Concorrencia` (concurrency peak 1) was the
+- The intermittent failure of `ConsumesAll_WithAck_And_Concurrency` (concurrency peak 1) was the
   burst above; it goes away with pascal-common-faa 1.1.3 or newer.
 
 ## [0.1.1] - 2026-10-05

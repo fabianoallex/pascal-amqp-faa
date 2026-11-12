@@ -57,35 +57,35 @@ type
     procedure HandleDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleError(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
       AError: Exception; var AAction: TAMQPConsumerErrorAction);
-    procedure PreparaConsumo(AMensagens: Integer);
+    procedure PrepareConsume(AMessageCount: Integer);
     /// Messages ready in the queue, through channel B (passive declare). Raises
     /// if the connection has dropped.
-    function ProntasNaFila: Cardinal;
-    /// Waits for the queue to have AEsperadas ready. On RabbitMQ the return of
+    function ReadyInQueue: Cardinal;
+    /// Waits for the queue to have AExpectedCount ready. On RabbitMQ the return of
     /// a delivery, when the channel closes, is asynchronous relative to channel B.
-    function EsperaProntas(AEsperadas: Cardinal): Cardinal;
+    function WaitForReady(AExpectedCount: Cardinal): Cardinal;
   protected
     procedure SetUp; override;
     procedure TearDown; override;
   published
-    procedure Close_ComCallbackEmVoo_AckValeEConexaoSobrevive;
-    procedure Close_ComVariasEntregasEmVoo_TodasConfirmadas;
-    procedure Free_ComCallbackEmVoo_ConexaoSobrevive;
-    procedure FechadoPeloBroker_AckAtrasadoNaoDerrubaAConexao;
-    procedure AckDepoisDoClose_NaoDerrubaAConexao;
+    procedure Close_WithInFlightCallback_AckCountsAndConnectionSurvives;
+    procedure Close_WithSeveralDeliveriesInFlight_AllAcked;
+    procedure Free_WithInFlightCallback_ConnectionSurvives;
+    procedure ClosedByBroker_LateAckDoesNotDropTheConnection;
+    procedure AckAfterClose_DoesNotDropTheConnection;
   end;
 
 implementation
 
 const
-  ESPERA_MS = 10000;
+  TIMEOUT_MS = 10000;
 
-procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Integer);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaOk(const AMsg: string; ACond: Boolean);
+procedure CheckOk(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertTrue(AMsg, ACond);
 end;
@@ -128,7 +128,7 @@ begin
   PcAtomicInc(FErrors);
 end;
 
-procedure TAMQPChannelCloseIntegrationTests.PreparaConsumo(AMensagens: Integer);
+procedure TAMQPChannelCloseIntegrationTests.PrepareConsume(AMessageCount: Integer);
 var
   LDecl: TAMQPQueueDeclare;
   I: Integer;
@@ -137,15 +137,15 @@ begin
   LDecl := Default(TAMQPQueueDeclare);
   LDecl.Exclusive := True;
   FQueue := FChanB.DeclareQueue(LDecl).QueueName;
-  for I := 1 to AMensagens do
+  for I := 1 to AMessageCount do
     FChanB.PublishText('', FQueue, 'msg-' + IntToStr(I));
   FChanA.OnConsumerError := HandleError;
-  FChanA.Qos(AMensagens);
+  FChanA.Qos(AMessageCount);
   FChanA.Consume(FQueue, HandleDelivery);
-  ChecaOk('o callback deveria ter começado', FStarted.WaitFor(ESPERA_MS) = wrSignaled);
+  CheckOk('o callback deveria ter começado', FStarted.WaitFor(TIMEOUT_MS) = wrSignaled);
 end;
 
-function TAMQPChannelCloseIntegrationTests.ProntasNaFila: Cardinal;
+function TAMQPChannelCloseIntegrationTests.ReadyInQueue: Cardinal;
 var
   LDecl: TAMQPQueueDeclare;
 begin
@@ -155,60 +155,60 @@ begin
   Result := FChanB.DeclareQueue(LDecl).MessageCount;
 end;
 
-function TAMQPChannelCloseIntegrationTests.EsperaProntas(AEsperadas: Cardinal): Cardinal;
+function TAMQPChannelCloseIntegrationTests.WaitForReady(AExpectedCount: Cardinal): Cardinal;
 var
   LWaited: Integer;
 begin
   LWaited := 0;
   repeat
-    Result := ProntasNaFila;
-    if (Result = AEsperadas) or (LWaited >= ESPERA_MS) then
+    Result := ReadyInQueue;
+    if (Result = AExpectedCount) or (LWaited >= TIMEOUT_MS) then
       Exit;
     TThread.Sleep(50);
     Inc(LWaited, 50);
   until False;
 end;
 
-procedure TAMQPChannelCloseIntegrationTests.Close_ComCallbackEmVoo_AckValeEConexaoSobrevive;
+procedure TAMQPChannelCloseIntegrationTests.Close_WithInFlightCallback_AckCountsAndConnectionSurvives;
 begin
   // The pascal-agenda-faa scenario: the consumer stops right after the
   // handler starts. Up to v0.4.1 the Ack went out after Close-Ok and the
   // broker dropped the connection (504).
-  PreparaConsumo(1);
+  PrepareConsume(1);
   FChanA.Close;
-  ChecaInt('o callback deveria ter terminado dentro do Close', 1, PcAtomicGet(FDone));
-  ChecaOk('o canal A deveria estar fechado', not FChanA.IsOpen);
+  CheckInt('o callback deveria ter terminado dentro do Close', 1, PcAtomicGet(FDone));
+  CheckOk('o canal A deveria estar fechado', not FChanA.IsOpen);
   // An RPC on B after the Ack: it only answers if the connection survived. And
   // the Ack counted (it went out before Channel.Close): nothing goes back to the queue.
-  ChecaInt('o Ack do callback deveria ter valido', 0, Integer(ProntasNaFila));
-  ChecaOk('a conexão deveria seguir aberta', FConn.IsOpen);
-  ChecaInt('o OnConsumerError não deveria ter sido chamado', 0, PcAtomicGet(FErrors));
+  CheckInt('o Ack do callback deveria ter valido', 0, Integer(ReadyInQueue));
+  CheckOk('a conexão deveria seguir aberta', FConn.IsOpen);
+  CheckInt('o OnConsumerError não deveria ter sido chamado', 0, PcAtomicGet(FErrors));
 end;
 
-procedure TAMQPChannelCloseIntegrationTests.Close_ComVariasEntregasEmVoo_TodasConfirmadas;
+procedure TAMQPChannelCloseIntegrationTests.Close_WithSeveralDeliveriesInFlight_AllAcked;
 begin
   // Deliveries already dispatched to the pool (running or still in its queue)
   // finish and ack: closing does not cause redelivery of what was already delivered.
   FSleepMs := 100;
-  PreparaConsumo(5);
+  PrepareConsume(5);
   FChanA.Close;
-  ChecaInt('todo callback entregue deveria ter terminado', PcAtomicGet(FCalls), PcAtomicGet(FDone));
-  ChecaInt('nada deveria voltar para a fila', 5 - PcAtomicGet(FDone), Integer(ProntasNaFila));
-  ChecaOk('a conexão deveria seguir aberta', FConn.IsOpen);
-  ChecaInt('o OnConsumerError não deveria ter sido chamado', 0, PcAtomicGet(FErrors));
+  CheckInt('todo callback entregue deveria ter terminado', PcAtomicGet(FCalls), PcAtomicGet(FDone));
+  CheckInt('nada deveria voltar para a fila', 5 - PcAtomicGet(FDone), Integer(ReadyInQueue));
+  CheckOk('a conexão deveria seguir aberta', FConn.IsOpen);
+  CheckInt('o OnConsumerError não deveria ter sido chamado', 0, PcAtomicGet(FErrors));
 end;
 
-procedure TAMQPChannelCloseIntegrationTests.Free_ComCallbackEmVoo_ConexaoSobrevive;
+procedure TAMQPChannelCloseIntegrationTests.Free_WithInFlightCallback_ConnectionSurvives;
 begin
   // The destructor closes through the same path.
-  PreparaConsumo(1);
+  PrepareConsume(1);
   FreeAndNil(FChanA);
-  ChecaInt('o callback deveria ter terminado dentro do Free', 1, PcAtomicGet(FDone));
-  ChecaInt('o Ack do callback deveria ter valido', 0, Integer(ProntasNaFila));
-  ChecaOk('a conexão deveria seguir aberta', FConn.IsOpen);
+  CheckInt('o callback deveria ter terminado dentro do Free', 1, PcAtomicGet(FDone));
+  CheckInt('o Ack do callback deveria ter valido', 0, Integer(ReadyInQueue));
+  CheckOk('a conexão deveria seguir aberta', FConn.IsOpen);
 end;
 
-procedure TAMQPChannelCloseIntegrationTests.FechadoPeloBroker_AckAtrasadoNaoDerrubaAConexao;
+procedure TAMQPChannelCloseIntegrationTests.ClosedByBroker_LateAckDoesNotDropTheConnection;
 var
   LDecl: TAMQPQueueDeclare;
   LRaised: Boolean;
@@ -217,7 +217,7 @@ var
 begin
   // The broker closes channel A (404) with a callback in flight. The Ack it
   // sends afterwards lands on a closed channel: it must not go out on the wire.
-  PreparaConsumo(1);
+  PrepareConsume(1);
   LDecl := Default(TAMQPQueueDeclare);
   LDecl.QueueName := 'amqp-faa-fila-que-nao-existe-' + IntToStr(PcTickMs);
   LDecl.Passive := True;
@@ -228,26 +228,26 @@ begin
     on EAMQPChannel do
       LRaised := True;
   end;
-  ChecaOk('o passive declare deveria ter dado 404', LRaised);
-  ChecaOk('o canal A deveria estar fechado pelo broker', not FChanA.IsOpen);
+  CheckOk('o passive declare deveria ter dado 404', LRaised);
+  CheckOk('o canal A deveria estar fechado pelo broker', not FChanA.IsOpen);
 
   LWaited := 0;
-  while (PcAtomicGet(FDone) < 1) and (LWaited < ESPERA_MS) do
+  while (PcAtomicGet(FDone) < 1) and (LWaited < TIMEOUT_MS) do
   begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
   end;
-  ChecaInt('o callback deveria ter terminado', 1, PcAtomicGet(FDone));
-  ChecaInt('o Ack num canal fechado não deveria levantar', 0, PcAtomicGet(FErrors));
+  CheckInt('o callback deveria ter terminado', 1, PcAtomicGet(FDone));
+  CheckInt('o Ack num canal fechado não deveria levantar', 0, PcAtomicGet(FErrors));
   // The channel closed with the delivery unacked: the broker returned it, flagged.
-  ChecaInt('a entrega sem Ack deveria ter voltado para a fila', 1, Integer(EsperaProntas(1)));
+  CheckInt('a entrega sem Ack deveria ter voltado para a fila', 1, Integer(WaitForReady(1)));
   LGet := FChanB.BasicGet(FQueue, True);
-  ChecaOk('a entrega sem Ack deveria ter voltado para a fila', LGet.Found);
-  ChecaOk('a entrega devolvida deveria vir como redelivered', LGet.Redelivered);
-  ChecaOk('a conexão deveria seguir aberta', FConn.IsOpen);
+  CheckOk('a entrega sem Ack deveria ter voltado para a fila', LGet.Found);
+  CheckOk('a entrega devolvida deveria vir como redelivered', LGet.Redelivered);
+  CheckOk('a conexão deveria seguir aberta', FConn.IsOpen);
 end;
 
-procedure TAMQPChannelCloseIntegrationTests.AckDepoisDoClose_NaoDerrubaAConexao;
+procedure TAMQPChannelCloseIntegrationTests.AckAfterClose_DoesNotDropTheConnection;
 var
   LGet: TAMQPGetResult;
   LDecl: TAMQPQueueDeclare;
@@ -258,9 +258,9 @@ begin
   FQueue := FChanB.DeclareQueue(LDecl).QueueName;
   FChanB.PublishText('', FQueue, 'manual');
   // Publish on B and Get on A have no order between them: wait for the message to arrive.
-  ChecaInt('a mensagem deveria ter chegado', 1, Integer(EsperaProntas(1)));
+  CheckInt('a mensagem deveria ter chegado', 1, Integer(WaitForReady(1)));
   LGet := FChanA.BasicGet(FQueue, False);
-  ChecaOk('deveria haver uma mensagem', LGet.Found);
+  CheckOk('deveria haver uma mensagem', LGet.Found);
   FChanA.Close;
   // Right after Close-Ok RabbitMQ still tolerates the frame (the channel stays
   // in "closing" on its side for an instant); with a callback's delay, it does not.
@@ -268,8 +268,8 @@ begin
   FChanA.Ack(LGet.DeliveryTag);
   FChanA.Nack(LGet.DeliveryTag, True);
   // The delivery came back with the Close (no Ack); the RPC proves the connection is up.
-  ChecaInt('a entrega sem Ack deveria ter voltado para a fila', 1, Integer(EsperaProntas(1)));
-  ChecaOk('a conexão deveria seguir aberta', FConn.IsOpen);
+  CheckInt('a entrega sem Ack deveria ter voltado para a fila', 1, Integer(WaitForReady(1)));
+  CheckOk('a conexão deveria seguir aberta', FConn.IsOpen);
 end;
 
 initialization

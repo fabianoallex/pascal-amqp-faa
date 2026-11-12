@@ -13,7 +13,7 @@ also where consumer callbacks run — amqp's own client, and pipes/redis in the 
 and those callbacks may block on I/O for seconds. `PcPool` has a ceiling
 (`max(16, 4 × cores)`), so blocking work can starve work that someone else is waiting on.
 
-**Measured** (amqp test `TPoolIsolationTests.PcPoolSaturado_BrokerContinuaRespondendo`: queue
+**Measured** (amqp test `TPoolIsolationTests.PcPoolSaturated_BrokerKeepsResponding`: queue
 `4 × ProcessorCount + 16` items that block on an event, wait until `QueueDepth > 0`, then
 declare/publish/get against the embedded broker):
 

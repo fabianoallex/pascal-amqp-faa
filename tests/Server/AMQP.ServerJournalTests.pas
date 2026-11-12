@@ -26,7 +26,7 @@
      first case the record is nowhere; in the second the bytes are already
      in the file and a later fsync covers them.
 
-  The file test double (TAMQPWalFileFalso) lives in AMQP.ServerTestDoubles, together
+  The file test double (TAMQPFakeWalFile) lives in AMQP.ServerTestDoubles, together
   with the delivery target -- same unit and same reason: two test files
   need the same object, and duplicated scaffolding is the surface where this
   codebase has already gone wrong (fixing one side and forgetting the twin).
@@ -49,59 +49,59 @@ uses
 
 type
   { Journal over the file test double, to count fsyncs and inject failures. }
-  TJournalSobreDuble = class(TAMQPJournal)
+  TJournalOverDouble = class(TAMQPJournal)
   private
-    FArq: TAMQPWalFileFalso;
+    FWalFile: TAMQPFakeWalFile;
     FIface: IAMQPWalFile;
   protected
     function CreateFile(const APath: string;
-      ACriar: Boolean): IAMQPWalFile; override;
+      ACreate: Boolean): IAMQPWalFile; override;
   public
     /// Only valid after Start.
-    property Arq: TAMQPWalFileFalso read FArq;
+    property WalFile: TAMQPFakeWalFile read FWalFile;
   end;
 
   { Injects ONE record in the window between "took the batch off the queue" and "wrote".
     Same idea as the queue actor's ActorRoundEnding: the window is unreachable by
     ordinary stress, because a record lost there would be resurrected by the
     next submit -- the bug is only fatal on the LAST one. }
-  TJournalComJanela = class(TAMQPJournal)
+  TJournalWithWindow = class(TAMQPJournal)
   private
-    FInjetou: Boolean;
-    FLsnInjetado: UInt64;
+    FDidInject: Boolean;
+    FInjectedLsn: UInt64;
   protected
     procedure BatchTaken; override;
   public
-    property LsnInjetado: UInt64 read FLsnInjetado;
+    property InjectedLsn: UInt64 read FInjectedLsn;
   end;
 
-  TSinkFalso = class(TInterfacedObject, IAMQPDurabilitySink)
+  TFakeSink = class(TInterfacedObject, IAMQPDurabilitySink)
   private
-    FUltimo: UInt64;
-    FAvisos: Integer;
-    FFalhas: Integer;
-    FMensagem: string;
+    FLast: UInt64;
+    FNotifications: Integer;
+    FFailures: Integer;
+    FMessage: string;
   public
     procedure Durable(ALsn: UInt64);
     procedure JournalFailed(const AMessage: string);
-    property Ultimo: UInt64 read FUltimo;
-    property Avisos: Integer read FAvisos;
-    property Falhas: Integer read FFalhas;
-    property Mensagem: string read FMensagem;
+    property Last: UInt64 read FLast;
+    property Notifications: Integer read FNotifications;
+    property Failures: Integer read FFailures;
+    property MessageText: string read FMessage;
   end;
 
   { Submits pairs (aN, bN) in a single call -- the material for the
     indivisibility test. }
-  TProdutorFalso = class(TThread)
+  TFakeProducer = class(TThread)
   private
     FJournal: TAMQPJournal;
-    FQuantos: Integer;
-    FErros: Integer;
+    FHowMany: Integer;
+    FErrors: Integer;
   protected
     procedure Execute; override;
   public
-    constructor Create(AJournal: TAMQPJournal; AQuantos: Integer);
-    property Erros: Integer read FErros;
+    constructor Create(AJournal: TAMQPJournal; AHowMany: Integer);
+    property Errors: Integer read FErrors;
   end;
 
   { The journal fixtures: a directory of its own per test, and cleanup
@@ -114,11 +114,11 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure Submit_DevolveOLsnDoUltimo;
-    [Test] procedure LsnsSaoContiguosEntreLotes;
-    [Test] procedure SubmitVazio_Levanta;
-    [Test] procedure SubmitAntesDoStart_Levanta;
-    [Test] procedure SubmitDepoisDoStop_Levanta;
+    [Test] procedure Submit_ReturnsTheLastLsn;
+    [Test] procedure LsnsAreContiguousAcrossBatches;
+    [Test] procedure EmptySubmit_Raises;
+    [Test] procedure SubmitBeforeStart_Raises;
+    [Test] procedure SubmitAfterStop_Raises;
   end;
 
   [TestFixture]
@@ -128,51 +128,51 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure CargaConcorrente_AgrupaEmMenosFsyncsQueRegistros;
-    [Test] procedure LoteEhIndivisivel_ParesSaemAdjacentes;
-    [Test] procedure SubmitNaJanelaDoLote_NaoSePerde;
+    [Test] procedure ConcurrentLoad_GroupsIntoFewerFsyncsThanRecords;
+    [Test] procedure BatchIsIndivisible_PairsComeOutAdjacent;
+    [Test] procedure SubmitInTheBatchWindow_IsNotLost;
   end;
 
   [TestFixture]
-  TJournalDurabilidadeTests = class
+  TJournalDurabilityTests = class
   private
     FDir: string;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure FsyncOk_AvancaAMarcaDagua;
-    [Test] procedure FsyncFalho_NaoAvancaAMarcaDagua;
-    [Test] procedure FsyncFalho_NaoDerrubaOJournal;
-    [Test] procedure FsyncSeguinte_CobreOLoteAnterior;
-    [Test] procedure Sink_EhAvisadoComOMaiorLsn;
+    [Test] procedure FsyncOk_AdvancesTheWatermark;
+    [Test] procedure FsyncFailed_DoesNotAdvanceTheWatermark;
+    [Test] procedure FsyncFailed_DoesNotKillTheJournal;
+    [Test] procedure NextFsync_CoversThePreviousBatch;
+    [Test] procedure Sink_IsNotifiedWithTheHighestLsn;
   end;
 
   [TestFixture]
-  TJournalFalhaTests = class
+  TJournalFailureTests = class
   private
     FDir: string;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure FalhaDeEscrita_FechaAPorta;
-    [Test] procedure FalhaDeEscrita_AvisaOSinkUmaVez;
-    [Test] procedure DepoisDaFalha_SubmitLevanta;
-    [Test] procedure DepoisDaFalha_WaitDurableDevolveFalse;
+    [Test] procedure WriteFailure_ClosesTheDoor;
+    [Test] procedure WriteFailure_NotifiesTheSinkOnce;
+    [Test] procedure AfterFailure_SubmitRaises;
+    [Test] procedure AfterFailure_WaitDurableReturnsFalse;
   end;
 
   [TestFixture]
-  TJournalCicloDeVidaTests = class
+  TJournalLifecycleTests = class
   private
     FDir: string;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure SubmitNoWait_NuncaBloqueia;
-    [Test] procedure Reinicio_LsnContinuaDeOndeParou;
-    [Test] procedure Reinicio_MarcaDaguaNasceNoQueJaEstava;
-    [Test] procedure Stop_DrenaOQueFoiAceito;
-    [Test] procedure StartDuasVezes_EhIdempotente;
-    [Test] procedure DoisJournalsNoMesmoDir_OSegundoEhRecusado;
+    [Test] procedure SubmitNoWait_NeverBlocks;
+    [Test] procedure Restart_LsnContinuesWhereItStopped;
+    [Test] procedure Restart_WatermarkStartsAtWhatWasAlreadyThere;
+    [Test] procedure Stop_DrainsWhatWasAccepted;
+    [Test] procedure StartTwice_IsIdempotent;
+    [Test] procedure TwoJournalsInTheSameDir_TheSecondIsRefused;
   end;
 
 implementation
@@ -180,7 +180,7 @@ implementation
 var
   GSeq: Integer = 0;
 
-function TextoDe(const B: TBytes): string;
+function TextOf(const B: TBytes): string;
 var
   I: Integer;
 begin
@@ -189,72 +189,72 @@ begin
     Result[I + 1] := Char(B[I]);
 end;
 
-{ TJournalSobreDuble }
+{ TJournalOverDouble }
 
-function TJournalSobreDuble.CreateFile(const APath: string;
-  ACriar: Boolean): IAMQPWalFile;
+function TJournalOverDouble.CreateFile(const APath: string;
+  ACreate: Boolean): IAMQPWalFile;
 begin
-  if FArq = nil then
+  if FWalFile = nil then
   begin
-    FArq := TAMQPWalFileFalso.Create;
-    FIface := FArq; // the INTERFACE reference is what keeps it alive
+    FWalFile := TAMQPFakeWalFile.Create;
+    FIface := FWalFile; // the INTERFACE reference is what keeps it alive
   end;
   Result := FIface;
 end;
 
-{ TJournalComJanela }
+{ TJournalWithWindow }
 
-procedure TJournalComJanela.BatchTaken;
+procedure TJournalWithWindow.BatchTaken;
 const
-  MARCA = 'injetado na janela';
+  MARKER = 'injetado na janela';
 var
   LRecs: TAMQPJournalRecords;
   I: Integer;
 begin
-  if FInjetou then
+  if FDidInject then
     Exit;
-  FInjetou := True;
+  FDidInject := True;
   SetLength(LRecs, 1);
   LRecs[0].Kind := 7;
-  SetLength(LRecs[0].Payload, Length(MARCA));
-  for I := 1 to Length(MARCA) do
-    LRecs[0].Payload[I - 1] := Byte(MARCA[I]);
+  SetLength(LRecs[0].Payload, Length(MARKER));
+  for I := 1 to Length(MARKER) do
+    LRecs[0].Payload[I - 1] := Byte(MARKER[I]);
   // SubmitNoWait, not Submit: we are ON the journal thread, and waiting for room
   // here would be waiting for ourselves.
-  FLsnInjetado := SubmitNoWait(LRecs);
+  FInjectedLsn := SubmitNoWait(LRecs);
 end;
 
-{ TSinkFalso }
+{ TFakeSink }
 
-procedure TSinkFalso.Durable(ALsn: UInt64);
+procedure TFakeSink.Durable(ALsn: UInt64);
 begin
-  FUltimo := ALsn;
-  Inc(FAvisos);
+  FLast := ALsn;
+  Inc(FNotifications);
 end;
 
-procedure TSinkFalso.JournalFailed(const AMessage: string);
+procedure TFakeSink.JournalFailed(const AMessage: string);
 begin
-  Inc(FFalhas);
-  FMensagem := AMessage;
+  Inc(FFailures);
+  FMessage := AMessage;
 end;
 
-{ TProdutorFalso }
+{ TFakeProducer }
 
-constructor TProdutorFalso.Create(AJournal: TAMQPJournal; AQuantos: Integer);
+constructor TFakeProducer.Create(AJournal: TAMQPJournal; AHowMany: Integer);
 begin
   FJournal := AJournal;
-  FQuantos := AQuantos;
+  FHowMany := AHowMany;
   inherited Create(False);
 end;
 
-procedure TProdutorFalso.Execute;
+procedure TFakeProducer.Execute;
 var
   I, K: Integer;
   LRecs: TAMQPJournalRecords;
   LTxt: string;
 begin
   SetLength(LRecs, 2);
-  for I := 1 to FQuantos do
+  for I := 1 to FHowMany do
   begin
     LTxt := 'a' + IntToStr(I);
     LRecs[0].Kind := 1;
@@ -269,7 +269,7 @@ begin
     try
       FJournal.Submit(LRecs);
     except
-      Inc(FErros);
+      Inc(FErrors);
     end;
   end;
 end;
@@ -298,7 +298,7 @@ end;
 procedure JournalSetUp(var FDir: string);
 begin
   Inc(GSeq);
-  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqpjournal-'
+  FDir := IncludeTrailingPathDelimiter(TempDir) + 'amqpjournal-'
     + IntToStr(GSeq);
   JournalTearDown(FDir); // ensures a clean directory even after an interrupted run
   ForceDirectories(FDir);
@@ -314,7 +314,7 @@ begin
     Result.Payload[I - 1] := Byte(S[I]);
 end;
 
-function Um(AKind: Byte; const S: string): TAMQPJournalRecords;
+function OneRecord(AKind: Byte; const S: string): TAMQPJournalRecords;
 begin
   SetLength(Result, 1);
   Result[0] := Rec(AKind, S);
@@ -342,37 +342,37 @@ begin
   JournalTearDown(FDir);
 end;
 
-procedure TJournalDurabilidadeTests.SetUp;
+procedure TJournalDurabilityTests.SetUp;
 begin
   JournalSetUp(FDir);
 end;
 
-procedure TJournalDurabilidadeTests.TearDown;
+procedure TJournalDurabilityTests.TearDown;
 begin
   JournalTearDown(FDir);
 end;
 
-procedure TJournalFalhaTests.SetUp;
+procedure TJournalFailureTests.SetUp;
 begin
   JournalSetUp(FDir);
 end;
 
-procedure TJournalFalhaTests.TearDown;
+procedure TJournalFailureTests.TearDown;
 begin
   JournalTearDown(FDir);
 end;
 
-procedure TJournalCicloDeVidaTests.SetUp;
+procedure TJournalLifecycleTests.SetUp;
 begin
   JournalSetUp(FDir);
 end;
 
-procedure TJournalCicloDeVidaTests.TearDown;
+procedure TJournalLifecycleTests.TearDown;
 begin
   JournalTearDown(FDir);
 end;
 
-procedure TJournalLsnTests.Submit_DevolveOLsnDoUltimo;
+procedure TJournalLsnTests.Submit_ReturnsTheLastLsn;
 var
   J: TAMQPJournal;
   LRecs: TAMQPJournalRecords;
@@ -393,83 +393,83 @@ begin
   end;
 end;
 
-procedure TJournalLsnTests.LsnsSaoContiguosEntreLotes;
+procedure TJournalLsnTests.LsnsAreContiguousAcrossBatches;
 var
   J: TAMQPJournal;
 begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    TAssert.AssertEquals('1o lote', Int64(1), Int64(J.Submit(Um(1, 'a'))));
-    TAssert.AssertEquals('2o lote continua', Int64(2), Int64(J.Submit(Um(1, 'b'))));
-    TAssert.AssertEquals('3o lote continua', Int64(3), Int64(J.Submit(Um(1, 'c'))));
+    TAssert.AssertEquals('1o lote', Int64(1), Int64(J.Submit(OneRecord(1, 'a'))));
+    TAssert.AssertEquals('2o lote continua', Int64(2), Int64(J.Submit(OneRecord(1, 'b'))));
+    TAssert.AssertEquals('3o lote continua', Int64(3), Int64(J.Submit(OneRecord(1, 'c'))));
     TAssert.AssertTrue('tudo duravel', J.WaitDurable(3, 5000));
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalLsnTests.SubmitVazio_Levanta;
+procedure TJournalLsnTests.EmptySubmit_Raises;
 var
   J: TAMQPJournal;
   LRecs: TAMQPJournalRecords;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
     LRecs := nil;
-    LLevantou := False;
+    LRaised := False;
     try
       J.Submit(LRecs);
     except
       on E: EAMQPJournal do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('submit sem registro tem de levantar', LLevantou);
+    TAssert.AssertTrue('submit sem registro tem de levantar', LRaised);
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalLsnTests.SubmitAntesDoStart_Levanta;
+procedure TJournalLsnTests.SubmitBeforeStart_Raises;
 var
   J: TAMQPJournal;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   J := TAMQPJournal.Create(FDir);
   try
-    LLevantou := False;
+    LRaised := False;
     try
-      J.Submit(Um(1, 'x'));
+      J.Submit(OneRecord(1, 'x'));
     except
       on E: EAMQPJournal do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('journal parado nao aceita submit', LLevantou);
+    TAssert.AssertTrue('journal parado nao aceita submit', LRaised);
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalLsnTests.SubmitDepoisDoStop_Levanta;
+procedure TJournalLsnTests.SubmitAfterStop_Raises;
 var
   J: TAMQPJournal;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    J.Submit(Um(1, 'x'));
+    J.Submit(OneRecord(1, 'x'));
     J.Stop;
-    LLevantou := False;
+    LRaised := False;
     try
-      J.Submit(Um(1, 'y'));
+      J.Submit(OneRecord(1, 'y'));
     except
       on E: EAMQPJournal do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('depois do Stop nao aceita mais', LLevantou);
+    TAssert.AssertTrue('depois do Stop nao aceita mais', LRaised);
   finally
     J.Free;
   end;
@@ -477,10 +477,10 @@ end;
 
 { TJournalGroupCommitTests }
 
-procedure TJournalGroupCommitTests.CargaConcorrente_AgrupaEmMenosFsyncsQueRegistros;
+procedure TJournalGroupCommitTests.ConcurrentLoad_GroupsIntoFewerFsyncsThanRecords;
 var
   J: TAMQPJournal;
-  P: array[0..3] of TProdutorFalso;
+  P: array[0..3] of TFakeProducer;
   I: Integer;
   LS: TAMQPJournalStats;
 begin
@@ -491,11 +491,11 @@ begin
   try
     J.Start;
     for I := 0 to 3 do
-      P[I] := TProdutorFalso.Create(J, 250);
+      P[I] := TFakeProducer.Create(J, 250);
     for I := 0 to 3 do
     begin
       P[I].WaitFor;
-      TAssert.AssertEquals('produtor sem erro', 0, P[I].Erros);
+      TAssert.AssertEquals('produtor sem erro', 0, P[I].Errors);
       P[I].Free;
     end;
     TAssert.AssertTrue('tudo duravel', J.WaitDurable(2000, 30000));
@@ -512,14 +512,14 @@ begin
   end;
 end;
 
-procedure TJournalGroupCommitTests.LoteEhIndivisivel_ParesSaemAdjacentes;
+procedure TJournalGroupCommitTests.BatchIsIndivisible_PairsComeOutAdjacent;
 var
   J: TAMQPJournal;
-  P: array[0..3] of TProdutorFalso;
-  I, LN, LPares, LQuebras: Integer;
-  LArq: IAMQPWalFile;
+  P: array[0..3] of TFakeProducer;
+  I, LN, LPairs, LBreaks: Integer;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
-  LRegs: TAMQPWalRecords;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
   LA, LB: string;
 begin
@@ -527,7 +527,7 @@ begin
   try
     J.Start;
     for I := 0 to 3 do
-      P[I] := TProdutorFalso.Create(J, 250);
+      P[I] := TFakeProducer.Create(J, 250);
     for I := 0 to 3 do
     begin
       P[I].WaitFor;
@@ -538,68 +538,68 @@ begin
     J.Free;
   end;
 
-  LArq := TAMQPWalOsFile.Create(
+  LWalFile := TAMQPWalOsFile.Create(
     IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(1), False);
-  LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+  LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
   try
-    LN := LSeg.ReadPrefix(LRegs, LStop);
+    LN := LSeg.ReadPrefix(LWalRecords, LStop);
     TAssert.AssertEquals('leu tudo do arquivo', 2000, LN);
-    LPares := 0;
-    LQuebras := 0;
+    LPairs := 0;
+    LBreaks := 0;
     I := 0;
     while I < LN - 1 do
     begin
-      if LRegs[I].Kind = 1 then
+      if LWalRecords[I].Kind = 1 then
       begin
-        LA := TextoDe(LRegs[I].Payload);
-        LB := TextoDe(LRegs[I + 1].Payload);
-        if (LRegs[I + 1].Kind <> 2)
+        LA := TextOf(LWalRecords[I].Payload);
+        LB := TextOf(LWalRecords[I + 1].Payload);
+        if (LWalRecords[I + 1].Kind <> 2)
           or (Copy(LA, 2, MaxInt) <> Copy(LB, 2, MaxInt))
-          or (LRegs[I + 1].Lsn <> LRegs[I].Lsn + 1) then
-          Inc(LQuebras)
+          or (LWalRecords[I + 1].Lsn <> LWalRecords[I].Lsn + 1) then
+          Inc(LBreaks)
         else
-          Inc(LPares);
+          Inc(LPairs);
         Inc(I, 2);
       end
       else
         Inc(I);
     end;
-    TAssert.AssertEquals('nenhum par quebrado', 0, LQuebras);
-    TAssert.AssertEquals('os 1000 pares adjacentes', 1000, LPares);
+    TAssert.AssertEquals('nenhum par quebrado', 0, LBreaks);
+    TAssert.AssertEquals('os 1000 pares adjacentes', 1000, LPairs);
   finally
     LSeg.Free;
-    LArq := nil;
+    LWalFile := nil;
   end;
 end;
 
-procedure TJournalGroupCommitTests.SubmitNaJanelaDoLote_NaoSePerde;
+procedure TJournalGroupCommitTests.SubmitInTheBatchWindow_IsNotLost;
 var
-  J: TJournalComJanela;
+  J: TJournalWithWindow;
 begin
-  J := TJournalComJanela.Create(FDir);
+  J := TJournalWithWindow.Create(FDir);
   try
     J.Start;
-    TAssert.AssertTrue('o gatilho fica duravel', J.WaitDurable(J.Submit(Um(1, 'gatilho')),
+    TAssert.AssertTrue('o gatilho fica duravel', J.WaitDurable(J.Submit(OneRecord(1, 'gatilho')),
       5000));
     TAssert.AssertTrue('o injetado NA JANELA tambem',
-      J.WaitDurable(J.LsnInjetado, 5000));
+      J.WaitDurable(J.InjectedLsn, 5000));
     TAssert.AssertEquals('e nada se perdeu', Int64(2), J.Stats.Records);
   finally
     J.Free;
   end;
 end;
 
-{ TJournalDurabilidadeTests }
+{ TJournalDurabilityTests }
 
-procedure TJournalDurabilidadeTests.FsyncOk_AvancaAMarcaDagua;
+procedure TJournalDurabilityTests.FsyncOk_AdvancesTheWatermark;
 var
-  J: TJournalSobreDuble;
+  J: TJournalOverDouble;
   LSN: UInt64;
 begin
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(Um(1, 'a'));
+    LSN := J.Submit(OneRecord(1, 'a'));
     TAssert.AssertTrue('ficou duravel', J.WaitDurable(LSN, 5000));
     TAssert.AssertTrue('marca d agua alcancou o LSN', J.DurableLsn >= LSN);
   finally
@@ -607,39 +607,39 @@ begin
   end;
 end;
 
-procedure TJournalDurabilidadeTests.FsyncFalho_NaoAvancaAMarcaDagua;
+procedure TJournalDurabilityTests.FsyncFailed_DoesNotAdvanceTheWatermark;
 var
-  J: TJournalSobreDuble;
-  LAntes, LSN: UInt64;
+  J: TJournalOverDouble;
+  LBefore, LSN: UInt64;
 begin
   // The difference between promising durability and lying about it.
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(Um(1, 'antes'));
+    LSN := J.Submit(OneRecord(1, 'antes'));
     J.WaitDurable(LSN, 5000);
-    LAntes := J.DurableLsn;
+    LBefore := J.DurableLsn;
 
-    J.Arq.SetSyncOk(False);
-    LSN := J.Submit(Um(1, 'com fsync falhando'));
+    J.WalFile.SetSyncOk(False);
+    LSN := J.Submit(OneRecord(1, 'com fsync falhando'));
     TAssert.AssertFalse('nao pode ficar duravel', J.WaitDurable(LSN, 800));
-    TAssert.AssertEquals('marca d agua nao andou', Int64(LAntes), Int64(J.DurableLsn));
+    TAssert.AssertEquals('marca d agua nao andou', Int64(LBefore), Int64(J.DurableLsn));
     TAssert.AssertTrue('e o fsync falho foi contado', J.Stats.FailedSyncs > 0);
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalDurabilidadeTests.FsyncFalho_NaoDerrubaOJournal;
+procedure TJournalDurabilityTests.FsyncFailed_DoesNotKillTheJournal;
 var
-  J: TJournalSobreDuble;
+  J: TJournalOverDouble;
 begin
   // A failing fsync is RECOVERABLE: the bytes are already in the file.
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    J.Arq.SetSyncOk(False);
-    J.Submit(Um(1, 'x'));
+    J.WalFile.SetSyncOk(False);
+    J.Submit(OneRecord(1, 'x'));
     Sleep(300);
     TAssert.AssertFalse('journal continua de pe', J.Failed);
   finally
@@ -647,19 +647,19 @@ begin
   end;
 end;
 
-procedure TJournalDurabilidadeTests.FsyncSeguinte_CobreOLoteAnterior;
+procedure TJournalDurabilityTests.NextFsync_CoversThePreviousBatch;
 var
-  J: TJournalSobreDuble;
+  J: TJournalOverDouble;
   LSN: UInt64;
 begin
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    J.Arq.SetSyncOk(False);
-    LSN := J.Submit(Um(1, 'no escuro'));
+    J.WalFile.SetSyncOk(False);
+    LSN := J.Submit(OneRecord(1, 'no escuro'));
     TAssert.AssertFalse('ainda nao', J.WaitDurable(LSN, 500));
-    J.Arq.SetSyncOk(True);
-    J.Submit(Um(1, 'com fsync de novo'));
+    J.WalFile.SetSyncOk(True);
+    J.Submit(OneRecord(1, 'com fsync de novo'));
     TAssert.AssertTrue('o fsync seguinte cobre o lote anterior',
       J.WaitDurable(LSN, 5000));
   finally
@@ -667,54 +667,54 @@ begin
   end;
 end;
 
-procedure TJournalDurabilidadeTests.Sink_EhAvisadoComOMaiorLsn;
+procedure TJournalDurabilityTests.Sink_IsNotifiedWithTheHighestLsn;
 var
-  J: TJournalSobreDuble;
-  S: TSinkFalso;
+  J: TJournalOverDouble;
+  S: TFakeSink;
   ISink: IAMQPDurabilitySink;
-  LSN, LPrazo: UInt64;
+  LSN, LDeadline: UInt64;
 begin
-  J := TJournalSobreDuble.Create(FDir);
-  S := TSinkFalso.Create;
+  J := TJournalOverDouble.Create(FDir);
+  S := TFakeSink.Create;
   ISink := S;
   try
     J.DurabilitySink := ISink;
     J.Start;
-    LSN := J.Submit(Um(1, 'a'));
+    LSN := J.Submit(OneRecord(1, 'a'));
     TAssert.AssertTrue('duravel', J.WaitDurable(LSN, 5000));
     // WAITS for the notice, instead of demanding it right when WaitDurable returns: the
     // watermark advances BEFORE the sink is called, and that order is deliberate --
     // inverting it would put an outside callback ahead of waking the waiters. They are
     // two independent signals, and the test that treated them as one failed
     // once every eight runs.
-    LPrazo := PcTickMs + 5000;
-    while (S.Avisos = 0) and (PcTickMs < LPrazo) do
+    LDeadline := PcTickMs + 5000;
+    while (S.Notifications = 0) and (PcTickMs < LDeadline) do
       Sleep(2);
-    TAssert.AssertTrue('sink foi avisado', S.Avisos > 0);
-    TAssert.AssertEquals('com o MAIOR LSN do lote', Int64(LSN), Int64(S.Ultimo));
+    TAssert.AssertTrue('sink foi avisado', S.Notifications > 0);
+    TAssert.AssertEquals('com o MAIOR LSN do lote', Int64(LSN), Int64(S.Last));
   finally
     J.Free;
   end;
 end;
 
-{ TJournalFalhaTests }
+{ TJournalFailureTests }
 
-procedure TJournalFalhaTests.FalhaDeEscrita_FechaAPorta;
+procedure TJournalFailureTests.WriteFailure_ClosesTheDoor;
 var
-  J: TJournalSobreDuble;
-  LPrazo: UInt64;
+  J: TJournalOverDouble;
+  LDeadline: UInt64;
 begin
   // A failed write cannot be made up for: the record is
   // nowhere. A broker that can no longer write must SAY so.
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    J.Submit(Um(1, 'ok'));
+    J.Submit(OneRecord(1, 'ok'));
     J.WaitDurable(1, 5000);
-    J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
-    J.Submit(Um(1, 'vai falhar'));
-    LPrazo := PcTickMs + 5000;
-    while (not J.Failed) and (PcTickMs < LPrazo) do
+    J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
+    J.Submit(OneRecord(1, 'vai falhar'));
+    LDeadline := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
     TAssert.AssertTrue('journal em falha', J.Failed);
     TAssert.AssertTrue('com mensagem', J.LastError <> '');
@@ -723,69 +723,69 @@ begin
   end;
 end;
 
-procedure TJournalFalhaTests.FalhaDeEscrita_AvisaOSinkUmaVez;
+procedure TJournalFailureTests.WriteFailure_NotifiesTheSinkOnce;
 var
-  J: TJournalSobreDuble;
-  S: TSinkFalso;
+  J: TJournalOverDouble;
+  S: TFakeSink;
   ISink: IAMQPDurabilitySink;
-  LPrazo: UInt64;
+  LDeadline: UInt64;
 begin
-  J := TJournalSobreDuble.Create(FDir);
-  S := TSinkFalso.Create;
+  J := TJournalOverDouble.Create(FDir);
+  S := TFakeSink.Create;
   ISink := S;
   try
     J.DurabilitySink := ISink;
     J.Start;
-    J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
-    J.Submit(Um(1, 'vai falhar'));
-    LPrazo := PcTickMs + 5000;
-    while (not J.Failed) and (PcTickMs < LPrazo) do
+    J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
+    J.Submit(OneRecord(1, 'vai falhar'));
+    LDeadline := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
-    TAssert.AssertEquals('avisado exatamente uma vez', 1, S.Falhas);
+    TAssert.AssertEquals('avisado exatamente uma vez', 1, S.Failures);
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalFalhaTests.DepoisDaFalha_SubmitLevanta;
+procedure TJournalFailureTests.AfterFailure_SubmitRaises;
 var
-  J: TJournalSobreDuble;
-  LPrazo: UInt64;
-  LLevantou: Boolean;
+  J: TJournalOverDouble;
+  LDeadline: UInt64;
+  LRaised: Boolean;
 begin
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
-    J.Submit(Um(1, 'vai falhar'));
-    LPrazo := PcTickMs + 5000;
-    while (not J.Failed) and (PcTickMs < LPrazo) do
+    J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
+    J.Submit(OneRecord(1, 'vai falhar'));
+    LDeadline := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
-    LLevantou := False;
+    LRaised := False;
     try
-      J.Submit(Um(1, 'depois'));
+      J.Submit(OneRecord(1, 'depois'));
     except
       on E: EAMQPJournal do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('submit depois da falha tem de levantar', LLevantou);
+    TAssert.AssertTrue('submit depois da falha tem de levantar', LRaised);
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalFalhaTests.DepoisDaFalha_WaitDurableDevolveFalse;
+procedure TJournalFailureTests.AfterFailure_WaitDurableReturnsFalse;
 var
-  J: TJournalSobreDuble;
-  LPrazo: UInt64;
+  J: TJournalOverDouble;
+  LDeadline: UInt64;
 begin
-  J := TJournalSobreDuble.Create(FDir);
+  J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    J.Arq.SetFalharEscritaNa(J.Arq.Escritas + 1);
-    J.Submit(Um(1, 'vai falhar'));
-    LPrazo := PcTickMs + 5000;
-    while (not J.Failed) and (PcTickMs < LPrazo) do
+    J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
+    J.Submit(OneRecord(1, 'vai falhar'));
+    LDeadline := PcTickMs + 5000;
+    while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
     TAssert.AssertFalse('quem esperava durabilidade e' + ' liberado com False',
       J.WaitDurable(99, 300));
@@ -794,9 +794,9 @@ begin
   end;
 end;
 
-{ TJournalCicloDeVidaTests }
+{ TJournalLifecycleTests }
 
-procedure TJournalCicloDeVidaTests.SubmitNoWait_NuncaBloqueia;
+procedure TJournalLifecycleTests.SubmitNoWait_NeverBlocks;
 var
   J: TAMQPJournal;
   I: Integer;
@@ -810,7 +810,7 @@ begin
     J.Start;
     LSN := 0;
     for I := 1 to 200 do
-      LSN := J.SubmitNoWait(Um(9, StringOfChar('z', 64)));
+      LSN := J.SubmitNoWait(OneRecord(9, StringOfChar('z', 64)));
     TAssert.AssertEquals('os 200 foram aceitos', Int64(200), Int64(LSN));
     TAssert.AssertTrue('e todos ficam duraveis', J.WaitDurable(LSN, 20000));
   finally
@@ -818,7 +818,7 @@ begin
   end;
 end;
 
-procedure TJournalCicloDeVidaTests.Reinicio_LsnContinuaDeOndeParou;
+procedure TJournalLifecycleTests.Restart_LsnContinuesWhereItStopped;
 var
   J: TAMQPJournal;
   LSN: UInt64;
@@ -827,7 +827,7 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(Um(1, 'antes'));
+    LSN := J.Submit(OneRecord(1, 'antes'));
     J.WaitDurable(LSN, 5000);
   finally
     J.Free;
@@ -839,13 +839,13 @@ begin
     TAssert.AssertEquals('proximo LSN continua', Int64(LSN + 1),
       Int64(J.Stats.NextLsn));
     TAssert.AssertTrue('e grava depois do restart',
-      J.WaitDurable(J.Submit(Um(1, 'depois')), 5000));
+      J.WaitDurable(J.Submit(OneRecord(1, 'depois')), 5000));
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalCicloDeVidaTests.Reinicio_MarcaDaguaNasceNoQueJaEstava;
+procedure TJournalLifecycleTests.Restart_WatermarkStartsAtWhatWasAlreadyThere;
 var
   J: TAMQPJournal;
   LSN: UInt64;
@@ -853,7 +853,7 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(Um(1, 'antes'));
+    LSN := J.Submit(OneRecord(1, 'antes'));
     J.WaitDurable(LSN, 5000);
   finally
     J.Free;
@@ -871,13 +871,13 @@ begin
   end;
 end;
 
-procedure TJournalCicloDeVidaTests.Stop_DrenaOQueFoiAceito;
+procedure TJournalLifecycleTests.Stop_DrainsWhatWasAccepted;
 var
   J: TAMQPJournal;
   I: Integer;
-  LArq: IAMQPWalFile;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
-  LRegs: TAMQPWalRecords;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
 begin
   // There is no "stop command" in the queue precisely because of this: what was
@@ -886,26 +886,26 @@ begin
   try
     J.Start;
     for I := 1 to 300 do
-      J.SubmitNoWait(Um(1, 'r' + IntToStr(I)));
+      J.SubmitNoWait(OneRecord(1, 'r' + IntToStr(I)));
     J.Stop; // without waiting for durability, on purpose
   finally
     J.Free;
   end;
 
-  LArq := TAMQPWalOsFile.Create(
+  LWalFile := TAMQPWalOsFile.Create(
     IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(1), False);
-  LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+  LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
   try
     TAssert.AssertEquals('os 300 aceitos foram ao disco', 300,
-      LSeg.ReadPrefix(LRegs, LStop));
+      LSeg.ReadPrefix(LWalRecords, LStop));
     TAssert.AssertTrue('integro', LStop = awsEnd);
   finally
     LSeg.Free;
-    LArq := nil;
+    LWalFile := nil;
   end;
 end;
 
-procedure TJournalCicloDeVidaTests.StartDuasVezes_EhIdempotente;
+procedure TJournalLifecycleTests.StartTwice_IsIdempotent;
 var
   J: TAMQPJournal;
 begin
@@ -914,16 +914,16 @@ begin
     J.Start;
     J.Start; // must neither steal its own lock nor start two threads
     TAssert.AssertTrue('continua rodando', J.Running);
-    TAssert.AssertTrue('e grava', J.WaitDurable(J.Submit(Um(1, 'x')), 5000));
+    TAssert.AssertTrue('e grava', J.WaitDurable(J.Submit(OneRecord(1, 'x')), 5000));
   finally
     J.Free;
   end;
 end;
 
-procedure TJournalCicloDeVidaTests.DoisJournalsNoMesmoDir_OSegundoEhRecusado;
+procedure TJournalLifecycleTests.TwoJournalsInTheSameDir_TheSecondIsRefused;
 var
   J1, J2: TAMQPJournal;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   // Two brokers over the same DataDir would write their own LSNs into the same
   // files and silently corrupt the log (the lock is from WS1).
@@ -931,14 +931,14 @@ begin
   J2 := TAMQPJournal.Create(FDir);
   try
     J1.Start;
-    LLevantou := False;
+    LRaised := False;
     try
       J2.Start;
     except
       on E: Exception do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('o segundo journal tem de ser recusado', LLevantou);
+    TAssert.AssertTrue('o segundo journal tem de ser recusado', LRaised);
   finally
     J2.Free;
     J1.Free;
@@ -948,8 +948,8 @@ end;
 initialization
   TDUnitX.RegisterTestFixture(TJournalLsnTests);
   TDUnitX.RegisterTestFixture(TJournalGroupCommitTests);
-  TDUnitX.RegisterTestFixture(TJournalDurabilidadeTests);
-  TDUnitX.RegisterTestFixture(TJournalFalhaTests);
-  TDUnitX.RegisterTestFixture(TJournalCicloDeVidaTests);
+  TDUnitX.RegisterTestFixture(TJournalDurabilityTests);
+  TDUnitX.RegisterTestFixture(TJournalFailureTests);
+  TDUnitX.RegisterTestFixture(TJournalLifecycleTests);
 
 end.

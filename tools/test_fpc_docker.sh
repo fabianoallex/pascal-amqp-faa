@@ -11,7 +11,7 @@
 #
 # Before compiling, checks the generated mirrors (tools/gen_fpc_mirror.py
 # --check) and runs the checker for what the generator does not cover
-# (tests/tools/verifica_espelhos.py).
+# (tests/tools/check_mirrors.py).
 #
 # The integration suite needs a RabbitMQ: the container runs on the network of
 # RABBIT_CONTAINER (default: delphi-amqp-faa-rabbitmq, from delphi-amqp-faa's
@@ -35,7 +35,7 @@ command -v cygpath >/dev/null 2>&1 && MOUNT="$(cygpath -w "$ROOT")"
 
 cd "$ROOT"
 python tools/gen_fpc_mirror.py --check --suite tests/Unit --suite tests/Integration --suite tests/Server --suite tests/Outbox
-python tests/tools/verifica_espelhos.py > /dev/null || { python tests/tools/verifica_espelhos.py; exit 1; }
+python tests/tools/check_mirrors.py > /dev/null || { python tests/tools/check_mirrors.py; exit 1; }
 [ -f external/pascal-common-faa/src/PascalCommon.Threading.pas ] \
   || { echo "external/pascal-common-faa vazio: git submodule update --init"; exit 1; }
 
@@ -80,7 +80,7 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
       -Fu$(dirname $2) -Fu/t/tests/Integration/fpc -FU/t/u/$1 -gh -gl -o/t/bin/$1 $2 \
       > /t/log/build-$1.log 2>&1 || { grep -iE "error|fatal" /t/log/build-$1.log | head -30; exit 1; }
   }
-  FALHOU=0
+  FAILED=0
   # run <name> <binary> [VAR=value ...]
   run() {
     N=$1; B=$2; shift 2
@@ -93,7 +93,7 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
     if ! grep -qE "^Number of errors: +0$" /t/log/run-$N.log \
        || ! grep -qE "^Number of failures: +0$" /t/log/run-$N.log \
        || ! grep -qE "^0 unfreed memory blocks" /t/log/heap-$N.txt; then
-      FALHOU=1
+      FAILED=1
       grep -A6 -E "^ +(Error|Failure)|Message:" /t/log/run-$N.log | head -40 || true
     fi
   }
@@ -117,9 +117,9 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
         build acceptance /t/tests/Acceptance/fpc/AMQPAcceptanceFpc.lpr
         build acceptance-openssl /t/tests/Acceptance/fpc/AMQPAcceptanceFpc.lpr -dAMQP_OPENSSL
         run acceptance acceptance
-        run acceptance-durable acceptance AMQP_ACEITACAO_DURAVEL=1
+        run acceptance-durable acceptance AMQP_ACCEPTANCE_DURABLE=1
         run acceptance-openssl acceptance-openssl
-        run acceptance-openssl-durable acceptance-openssl AMQP_ACEITACAO_DURAVEL=1 ;;
+        run acceptance-openssl-durable acceptance-openssl AMQP_ACCEPTANCE_DURABLE=1 ;;
       outbox)
         D=/t/external/pascal-db-faa
         build outbox /t/tests/Outbox/fpc/AMQPOutboxTestsFpc.lpr \
@@ -127,4 +127,4 @@ MSYS_NO_PATHCONV=1 docker run --rm $NET -e SUITES="$SUITES" -v "$MOUNT:/src:ro" 
         run outbox outbox ;;
     esac
   done
-  exit $FALHOU'
+  exit $FAILED'

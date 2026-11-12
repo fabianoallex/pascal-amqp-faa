@@ -54,8 +54,8 @@ type
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure CloseDoCanal_EsperaCallbackEmVoo;   // bug_006
-    [Test] procedure CreateChannelConcorrente_IdsDistintos; // bug_002
+    [Test] procedure ChannelClose_WaitsForInFlightCallback;   // bug_006
+    [Test] procedure ConcurrentCreateChannel_DistinctIds; // bug_002
   end;
 
 implementation
@@ -107,7 +107,7 @@ begin
   PcAtomicSet(FFinished, 1);
 end;
 
-procedure TAMQPReviewRegressionTests.CloseDoCanal_EsperaCallbackEmVoo;
+procedure TAMQPReviewRegressionTests.ChannelClose_WaitsForInFlightCallback;
 var
   LChan: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
@@ -150,7 +150,7 @@ begin
   end;
 end;
 
-procedure TAMQPReviewRegressionTests.CreateChannelConcorrente_IdsDistintos;
+procedure TAMQPReviewRegressionTests.ConcurrentCreateChannel_DistinctIds;
 const
   N = 8;
 var

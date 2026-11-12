@@ -139,10 +139,10 @@ type
     /// a pending persistent one waits and goes out collapsed in the same
     /// multiple=true.
     function TryDefer(ASeq, ALsn: UInt64; ANack: Boolean): Boolean;
-    /// Releases every pending confirm with Lsn <= AMarca, collapsed per channel
+    /// Releases every pending confirm with Lsn <= AMark, collapsed per channel
     /// into a single Basic.Ack(highestSeq, multiple=true). Never blocks; what
     /// the write queue refuses waits for the next round (the shape of D3).
-    procedure Release(AMarca: UInt64);
+    procedure Release(AMark: UInt64);
     /// The journal failed for good: every pending confirm becomes Basic.Nack,
     /// because the durability promise can no longer be kept.
     procedure FailAll;

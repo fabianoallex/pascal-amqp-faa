@@ -36,61 +36,61 @@ uses
 type
   TTopicMatchTests = class(TTestCase)
   published
-    procedure Vetores;
-    procedure DezMilCasamentos_SemEstourarTempo;
-    procedure MuitosHash_NaoExplode;
+    procedure Vectors;
+    procedure TenThousandMatches_WithinTime;
+    procedure ManyHashes_DoesNotExplode;
   end;
 
   THeadersMatchTests = class(TTestCase)
   published
     // Vectors 1-12 of the "Matcher headers" table.
-    procedure V1_Ausente_DefaultAll_TodosBatem;
-    procedure V2_All_ExtrasNaoEstorvam;
-    procedure V3_All_CriterioFaltando;
+    procedure V1_Absent_DefaultAll_AllMatch;
+    procedure V2_All_ExtrasDoNotInterfere;
+    procedure V3_All_MissingCriterion;
     procedure V4_All_CaseSensitive;
-    procedure V5_All_TipoConta;
-    procedure V6_Any_UmCriterioBasta;
-    procedure V7_Any_NenhumBate;
-    procedure V8_All_SemCriterios_VerdadeVacua;
-    procedure V9_Any_SemCriterios_FalsoVacuo;
-    procedure V10_All_ChaveXIgnorada;
-    procedure V11_Any_SemHeadersNaMensagem;
-    procedure V12_All_Booleano_TkBool;
-    procedure ParseHeadersMatch_AusenteAllAnyInvalido;
+    procedure V5_All_TypeMatters;
+    procedure V6_Any_OneCriterionSuffices;
+    procedure V7_Any_NoneMatches;
+    procedure V8_All_NoCriteria_VacuouslyTrue;
+    procedure V9_Any_NoCriteria_VacuouslyFalse;
+    procedure V10_All_XKeyIgnored;
+    procedure V11_Any_NoHeadersInTheMessage;
+    procedure V12_All_Boolean_TkBool;
+    procedure ParseHeadersMatch_AbsentAllAnyInvalid;
   end;
 
   TVHostTests = class(TTestCase)
   published
-    procedure Predefinidos_Existem;
-    procedure DeclareExchange_Idempotente;
-    procedure DeclareExchange_Divergente;
-    procedure DeclareExchange_TipoInvalido;
-    procedure DeclareQueue_Idempotente;
-    procedure DeclareQueue_Divergente;
-    procedure BindQueue_ExchangeInexistente;
-    procedure BindQueue_FilaInexistente;
-    procedure BindQueue_HeadersXMatchInvalido;
-    procedure BindQueue_Idempotente;
-    procedure UnbindQueue_RemoveOBinding;
-    procedure UnbindQueue_InexistenteNaoEncontrado;
+    procedure Predefined_Exist;
+    procedure DeclareExchange_Idempotent;
+    procedure DeclareExchange_Divergent;
+    procedure DeclareExchange_InvalidType;
+    procedure DeclareQueue_Idempotent;
+    procedure DeclareQueue_Divergent;
+    procedure BindQueue_MissingExchange;
+    procedure BindQueue_MissingQueue;
+    procedure BindQueue_InvalidHeadersXMatch;
+    procedure BindQueue_Idempotent;
+    procedure UnbindQueue_RemovesTheBinding;
+    procedure UnbindQueue_MissingNotFound;
     procedure Route_Direct;
     procedure Route_Fanout;
     procedure Route_Topic;
     procedure Route_Headers;
-    procedure Route_DefaultExchange_EntregaPelaFilaDeMesmoNome;
-    procedure Route_FilaEmNBindings_RecebeUmaVezSo;
-    procedure Route_SemRota_ArrayVazio;
-    procedure Route_ExchangeParaExchange_Entrega;
-    procedure Ae_RecebeOQueNaoCasou;
-    procedure Ae_NaoDisparaSeUmBindingCasou;
-    procedure Ae_EmCadeia;
-    procedure Ae_CicloNaoTrava;
-    procedure Ae_Inexistente_SemRota;
-    procedure Ae_PodeSerDeOutroTipo;
-    procedure Route_GrafoDenso_NaoExplode;
-    procedure Route_Ciclo_NaoTravaNaoDuplica;
-    procedure DeleteQueue_RemoveOsBindings;
-    procedure DeleteExchange_RemoveBindingsPendurados;
+    procedure Route_DefaultExchange_DeliversToTheQueueWithTheSameName;
+    procedure Route_QueueInNBindings_ReceivesOnlyOnce;
+    procedure Route_NoRoute_EmptyArray;
+    procedure Route_ExchangeToExchange_Delivers;
+    procedure Ae_ReceivesWhatDidNotMatch;
+    procedure Ae_DoesNotFireIfABindingMatched;
+    procedure Ae_Chained;
+    procedure Ae_CycleDoesNotHang;
+    procedure Ae_Missing_NoRoute;
+    procedure Ae_CanBeOfAnotherType;
+    procedure Route_DenseGraph_DoesNotExplode;
+    procedure Route_Cycle_DoesNotHangOrDuplicate;
+    procedure DeleteQueue_RemovesTheBindings;
+    procedure DeleteExchange_RemovesDanglingBindings;
   end;
 
 implementation
@@ -142,7 +142,7 @@ const
     (Binding: 'nota.#';    Routing: 'nota.aprovada.fiscal';   Expected: True)   // 35
   );
 
-procedure TTopicMatchTests.Vetores;
+procedure TTopicMatchTests.Vectors;
 var
   I: Integer;
   LGot: Boolean;
@@ -156,7 +156,7 @@ begin
   end;
 end;
 
-procedure TTopicMatchTests.DezMilCasamentos_SemEstourarTempo;
+procedure TTopicMatchTests.TenThousandMatches_WithinTime;
 var
   I: Integer;
   LStart, LElapsedMs: Int64;
@@ -177,7 +177,7 @@ end;
 // match runs on the publisher thread holding the read RWLock, a
 // single declare brought the broker down. With iterative matching (backtracking
 // only on the last '#') this is instantaneous.
-procedure TTopicMatchTests.MuitosHash_NaoExplode;
+procedure TTopicMatchTests.ManyHashes_DoesNotExplode;
 var
   LBind, LRoute: string;
   I: Integer;
@@ -200,7 +200,7 @@ end;
 
 { THeadersMatchTests }
 
-procedure THeadersMatchTests.V1_Ausente_DefaultAll_TodosBatem;
+procedure THeadersMatchTests.V1_Absent_DefaultAll_AllMatch;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -219,7 +219,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V2_All_ExtrasNaoEstorvam;
+procedure THeadersMatchTests.V2_All_ExtrasDoNotInterfere;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -239,7 +239,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V3_All_CriterioFaltando;
+procedure THeadersMatchTests.V3_All_MissingCriterion;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -274,7 +274,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V5_All_TipoConta;
+procedure THeadersMatchTests.V5_All_TypeMatters;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -291,7 +291,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V6_Any_UmCriterioBasta;
+procedure THeadersMatchTests.V6_Any_OneCriterionSuffices;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -309,7 +309,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V7_Any_NenhumBate;
+procedure THeadersMatchTests.V7_Any_NoneMatches;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -328,13 +328,13 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V8_All_SemCriterios_VerdadeVacua;
+procedure THeadersMatchTests.V8_All_NoCriteria_VacuouslyTrue;
 begin
   TAssert.AssertTrue('all sem nenhum criterio -- verdade vacua',
     AmqpHeadersMatch(nil, nil, amqhmAll));
 end;
 
-procedure THeadersMatchTests.V9_Any_SemCriterios_FalsoVacuo;
+procedure THeadersMatchTests.V9_Any_NoCriteria_VacuouslyFalse;
 var
   LMsg: TAMQPFieldTable;
 begin
@@ -348,7 +348,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V10_All_ChaveXIgnorada;
+procedure THeadersMatchTests.V10_All_XKeyIgnored;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -366,7 +366,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V11_Any_SemHeadersNaMensagem;
+procedure THeadersMatchTests.V11_Any_NoHeadersInTheMessage;
 var
   LBind: TAMQPFieldTable;
 begin
@@ -380,7 +380,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.V12_All_Booleano_TkBool;
+procedure THeadersMatchTests.V12_All_Boolean_TkBool;
 var
   LBind, LMsg: TAMQPFieldTable;
 begin
@@ -397,7 +397,7 @@ begin
   end;
 end;
 
-procedure THeadersMatchTests.ParseHeadersMatch_AusenteAllAnyInvalido;
+procedure THeadersMatchTests.ParseHeadersMatch_AbsentAllAnyInvalid;
 var
   LArgs: TAMQPFieldTable;
   LMode: TAMQPHeadersMatch;
@@ -436,7 +436,7 @@ end;
 
 { TVHostTests }
 
-procedure TVHostTests.Predefinidos_Existem;
+procedure TVHostTests.Predefined_Exist;
 var
   LVHost: TAMQPVHost;
   LDef: TAMQPExchangeDef;
@@ -461,7 +461,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeclareExchange_Idempotente;
+procedure TVHostTests.DeclareExchange_Idempotent;
 var
   LVHost: TAMQPVHost;
 begin
@@ -476,7 +476,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeclareExchange_Divergente;
+procedure TVHostTests.DeclareExchange_Divergent;
 var
   LVHost: TAMQPVHost;
 begin
@@ -495,7 +495,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeclareExchange_TipoInvalido;
+procedure TVHostTests.DeclareExchange_InvalidType;
 var
   LVHost: TAMQPVHost;
 begin
@@ -510,7 +510,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeclareQueue_Idempotente;
+procedure TVHostTests.DeclareQueue_Idempotent;
 var
   LVHost: TAMQPVHost;
 begin
@@ -525,7 +525,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeclareQueue_Divergente;
+procedure TVHostTests.DeclareQueue_Divergent;
 var
   LVHost: TAMQPVHost;
 begin
@@ -540,7 +540,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.BindQueue_ExchangeInexistente;
+procedure TVHostTests.BindQueue_MissingExchange;
 var
   LVHost: TAMQPVHost;
 begin
@@ -554,7 +554,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.BindQueue_FilaInexistente;
+procedure TVHostTests.BindQueue_MissingQueue;
 var
   LVHost: TAMQPVHost;
 begin
@@ -569,7 +569,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.BindQueue_HeadersXMatchInvalido;
+procedure TVHostTests.BindQueue_InvalidHeadersXMatch;
 var
   LVHost: TAMQPVHost;
   LArgs: TAMQPFieldTable;
@@ -588,7 +588,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.BindQueue_Idempotente;
+procedure TVHostTests.BindQueue_Idempotent;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -609,7 +609,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.UnbindQueue_RemoveOBinding;
+procedure TVHostTests.UnbindQueue_RemovesTheBinding;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -628,7 +628,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.UnbindQueue_InexistenteNaoEncontrado;
+procedure TVHostTests.UnbindQueue_MissingNotFound;
 var
   LVHost: TAMQPVHost;
 begin
@@ -753,7 +753,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.Route_DefaultExchange_EntregaPelaFilaDeMesmoNome;
+procedure TVHostTests.Route_DefaultExchange_DeliversToTheQueueWithTheSameName;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -773,7 +773,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.Route_FilaEmNBindings_RecebeUmaVezSo;
+procedure TVHostTests.Route_QueueInNBindings_ReceivesOnlyOnce;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -796,7 +796,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.Route_SemRota_ArrayVazio;
+procedure TVHostTests.Route_NoRoute_EmptyArray;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -816,7 +816,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.Route_ExchangeParaExchange_Entrega;
+procedure TVHostTests.Route_ExchangeToExchange_Delivers;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -840,7 +840,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.Route_Ciclo_NaoTravaNaoDuplica;
+procedure TVHostTests.Route_Cycle_DoesNotHangOrDuplicate;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -866,7 +866,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeleteQueue_RemoveOsBindings;
+procedure TVHostTests.DeleteQueue_RemovesTheBindings;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -895,7 +895,7 @@ begin
   end;
 end;
 
-procedure TVHostTests.DeleteExchange_RemoveBindingsPendurados;
+procedure TVHostTests.DeleteExchange_RemovesDanglingBindings;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -924,16 +924,16 @@ end;
 // --- alternate exchange (WS7 of Phase 3) -----------------------------------
 
 // Builds the declare arguments with alternate-exchange.
-function ArgsAe(const ANome: string): TAMQPFieldTable;
+function AeArgs(const AName: string): TAMQPFieldTable;
 var
   LVal: TValue;
 begin
   Result := TAMQPFieldTable.Create;
-  LVal := TValue.From<string>(ANome);
+  LVal := TValue.From<string>(AName);
   Result.Put('alternate-exchange', LVal);
 end;
 
-procedure TVHostTests.Ae_RecebeOQueNaoCasou;
+procedure TVHostTests.Ae_ReceivesWhatDidNotMatch;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -943,7 +943,7 @@ begin
     LVHost.DeclareExchange('ae', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, nil);
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('ae'));
+      False, AeArgs('ae'));
     LVHost.DeclareQueue('q.normal', True, False, False, nil);
     LVHost.DeclareQueue('q.ae', True, False, False, nil);
     LVHost.BindQueue('ex', 'q.normal', 'certa', nil);
@@ -965,7 +965,7 @@ end;
 // final result came out empty. Here a binding of 'ex' MATCHES and leads to 'meio',
 // which has no binding at all: the result is empty, but the AE of 'ex' must NOT
 // fire, because 'ex' routed. The one that failed to route was 'meio'.
-procedure TVHostTests.Ae_NaoDisparaSeUmBindingCasou;
+procedure TVHostTests.Ae_DoesNotFireIfABindingMatched;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -977,7 +977,7 @@ begin
     LVHost.DeclareExchange('meio', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, nil);
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
-      False, ArgsAe('ae'));
+      False, AeArgs('ae'));
     LVHost.DeclareQueue('q.ae', True, False, False, nil);
     LVHost.BindQueue('ae', 'q.ae', '', nil);
     // Exchange.Bind is (DESTINATION, SOURCE): messages from 'ex' go to 'meio'.
@@ -992,7 +992,7 @@ begin
 end;
 
 // AE of an AE: the chain goes down while nobody matches.
-procedure TVHostTests.Ae_EmCadeia;
+procedure TVHostTests.Ae_Chained;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -1002,9 +1002,9 @@ begin
     LVHost.DeclareExchange('ae2', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, nil);
     LVHost.DeclareExchange('ae1', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('ae2'));
+      False, AeArgs('ae2'));
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('ae1'));
+      False, AeArgs('ae1'));
     LVHost.DeclareQueue('q.fim', True, False, False, nil);
     LVHost.BindQueue('ae2', 'q.fim', '', nil);
 
@@ -1018,7 +1018,7 @@ end;
 
 // A cycle through an AE (ex -> ae -> ex) must neither hang nor duplicate: the visited
 // set is the same as on the exchange->exchange path.
-procedure TVHostTests.Ae_CicloNaoTrava;
+procedure TVHostTests.Ae_CycleDoesNotHang;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -1026,9 +1026,9 @@ begin
   LVHost := TAMQPVHost.Create;
   try
     LVHost.DeclareExchange('a', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('b'));
+      False, AeArgs('b'));
     LVHost.DeclareExchange('b', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('a'));
+      False, AeArgs('a'));
 
     LResult := LVHost.Route('a', 'nada', nil);
     TAssert.AssertEquals('ciclo de AE termina, sem rota', 0, Length(LResult));
@@ -1039,7 +1039,7 @@ end;
 
 // An AE pointing at a nonexistent exchange is not an error: declaring the AE before
 // it exists is legitimate, and on publish the message simply has no route.
-procedure TVHostTests.Ae_Inexistente_SemRota;
+procedure TVHostTests.Ae_Missing_NoRoute;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
@@ -1047,7 +1047,7 @@ begin
   LVHost := TAMQPVHost.Create;
   try
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('nao-existe'));
+      False, AeArgs('nao-existe'));
     LResult := LVHost.Route('ex', 'nada', nil);
     TAssert.AssertEquals('sem rota, e sem travar', 0, Length(LResult));
   finally
@@ -1056,7 +1056,7 @@ begin
 end;
 
 // The AE can be of any type -- including headers, which matches on the table.
-procedure TVHostTests.Ae_PodeSerDeOutroTipo;
+procedure TVHostTests.Ae_CanBeOfAnotherType;
 var
   LVHost: TAMQPVHost;
   LArgs, LHeaders: TAMQPFieldTable;
@@ -1068,7 +1068,7 @@ begin
     LVHost.DeclareExchange('ae', AMQP_EXCHANGE_TYPE_HEADERS, True, False,
       False, nil);
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, ArgsAe('ae'));
+      False, AeArgs('ae'));
     LVHost.DeclareQueue('q.ae', True, False, False, nil);
     LArgs := TAMQPFieldTable.Create;
     LVal := TValue.From<string>('sul');
@@ -1097,15 +1097,15 @@ end;
 // traversal with no memory of visited nodes costs N^D. Measured: without the visited set this
 // test takes seconds; with it, milliseconds.
 //
-// It is the same family as the topic matcher's MuitosHash_NaoExplode: the match
+// It is the same family as the topic matcher's ManyHashes_DoesNotExplode: the match
 // runs on the PUBLISHER thread holding the read RWLock, so a
 // hostile declare would turn into a hang of the whole broker.
-procedure TVHostTests.Route_GrafoDenso_NaoExplode;
+procedure TVHostTests.Route_DenseGraph_DoesNotExplode;
 var
   LVHost: TAMQPVHost;
   LResult: TArray<string>;
   I: Integer;
-  LIni: UInt64;
+  LStart: UInt64;
 begin
   LVHost := TAMQPVHost.Create;
   try
@@ -1123,11 +1123,11 @@ begin
     LVHost.DeclareQueue('q.fim', True, False, False, nil);
     LVHost.BindQueue('e15', 'q.fim', '', nil);
 
-    LIni := PcTickMs;
+    LStart := PcTickMs;
     LResult := LVHost.Route('e0', 'qualquer', nil);
     TAssert.AssertEquals('chegou ao fim', 1, Length(LResult));
     TAssert.AssertTrue('travessia tem de ser linear, nao exponencial (levou '
-      + IntToStr(PcTickMs - LIni) + ' ms)', (PcTickMs - LIni) < 500);
+      + IntToStr(PcTickMs - LStart) + ' ms)', (PcTickMs - LStart) < 500);
   finally
     LVHost.Free;
   end;

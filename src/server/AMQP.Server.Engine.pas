@@ -1145,7 +1145,7 @@ end;
 // Returns the REMAINING TTL in ms, or -1 for "no deadline". Zero means
 // "already expired": the message goes in and dies through the NORMAL
 // expiration path, dead-letter and all, on the actor's first touch.
-function TtlRestante(const AEnq: TAMQPRecEnqueue; ANowWall: Int64): Int64;
+function RemainingTtl(const AEnq: TAMQPRecEnqueue; ANowWall: Int64): Int64;
 var
   LElapsed: Int64;
 begin
@@ -1253,7 +1253,7 @@ begin
         // the remaining is by construction <= the effective, so the minimum
         // returns the remaining. One rule, one implementation -- there is no
         // separate enqueue path for recovery.
-        LQueue.PostMessage(LMsg, LEnq.Priority, TtlRestante(LEnq, LNowWall),
+        LQueue.PostMessage(LMsg, LEnq.Priority, RemainingTtl(LEnq, LNowWall),
           LEnq.EntryId, LEnq.ContentId, True); // True = D27, comes back redelivered
       finally
         LMsg.Release; // the queue did its own AddRef
@@ -1441,7 +1441,7 @@ var
   LPairs: TArray<TPair<string, TAMQPServerQueue>>;
   LNames: TArray<string>;
   LVHosts: TArray<string>;
-  I, N, LBarra: Integer;
+  I, N, LSlash: Integer;
   LStats: TAMQPQueueStats;
   LMsgs: Integer;
   LKey: string;
@@ -1476,14 +1476,14 @@ begin
     // The key is 'vhost/name'; the name may contain a slash, the vhost does
     // not start with one, so the FIRST slash is the separator.
     LKey := LPairs[I].Key;
-    LBarra := Pos('/', LKey);
-    if LBarra <= 0 then
+    LSlash := Pos('/', LKey);
+    if LSlash <= 0 then
       Continue;
     N := Length(LNames);
     SetLength(LNames, N + 1);
     SetLength(LVHosts, N + 1);
-    LVHosts[N] := Copy(LKey, 1, LBarra - 1);
-    LNames[N] := Copy(LKey, LBarra + 1, MaxInt);
+    LVHosts[N] := Copy(LKey, 1, LSlash - 1);
+    LNames[N] := Copy(LKey, LSlash + 1, MaxInt);
   end;
 
   for I := 0 to High(LNames) do

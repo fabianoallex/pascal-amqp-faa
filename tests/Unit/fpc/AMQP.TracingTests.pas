@@ -30,25 +30,25 @@ uses
 type
   TTracingCodecTests = class(TTestCase)
   published
-    procedure ContentHeader_SemTraceParent_IgualAoDeSempre;
-    procedure ContentHeader_SemHeaders_InjetaTraceParent;
-    procedure ContentHeader_ComHeaders_AcrescentaSemMexerNaTabela;
-    procedure ContentHeader_TraceParentDoChamador_Vence;
-    procedure ContentHeader_TraceStateDoChamador_NaoDuplica;
-    procedure TraceParentOf_SemHeaders_False;
-    procedure TraceParentOf_LeTraceParentETraceState;
-    procedure TraceParentOf_ValorQueNaoEString_False;
-    procedure SpanDestination_NomesDoSpan;
-    procedure TracerDesligado_NaoAbreSpan;
+    procedure ContentHeader_NoTraceParent_SameAsAlways;
+    procedure ContentHeader_NoHeaders_InjectsTraceParent;
+    procedure ContentHeader_WithHeaders_AppendsWithoutTouchingTheTable;
+    procedure ContentHeader_CallerTraceParent_Wins;
+    procedure ContentHeader_CallerTraceState_NotDuplicated;
+    procedure TraceParentOf_NoHeaders_False;
+    procedure TraceParentOf_ReadsTraceParentAndTraceState;
+    procedure TraceParentOf_NonStringValue_False;
+    procedure SpanDestination_SpanNames;
+    procedure TracerDisabled_DoesNotOpenSpan;
   end;
 
 implementation
 
 const
   TP = '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01';
-  TP_DO_CHAMADOR = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+  TP_FROM_CALLER = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
 
-function Decodifica(const ABytes: TBytes): TAMQPContentHeader;
+function DecodeHeader(const ABytes: TBytes): TAMQPContentHeader;
 var
   LReader: TAMQPReader;
 begin
@@ -60,7 +60,7 @@ begin
   end;
 end;
 
-function TextoDe(ATable: TAMQPFieldTable; const AName: string): string;
+function TextOf(ATable: TAMQPFieldTable; const AName: string): string;
 var
   LValue: TValue;
 begin
@@ -69,135 +69,135 @@ begin
     Result := LValue.AsString;
 end;
 
-procedure LiberaHeaders(const AHeader: TAMQPContentHeader);
+procedure FreeHeaders(const AHeader: TAMQPContentHeader);
 begin
   if bpHeaders in AHeader.Properties.Flags then
     AHeader.Properties.Headers.Free;
 end;
 
-function MesmosBytes(const A, B: TBytes): Boolean;
+function SameBytes(const A, B: TBytes): Boolean;
 begin
   Result := (Length(A) = Length(B)) and
     ((Length(A) = 0) or CompareMem(@A[0], @B[0], Length(A)));
 end;
 
-procedure TTracingCodecTests.ContentHeader_SemTraceParent_IgualAoDeSempre;
+procedure TTracingCodecTests.ContentHeader_NoTraceParent_SameAsAlways;
 var
   LProps: TAMQPBasicProperties;
 begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
   TAssert.AssertTrue('sem traceparent, os mesmos bytes',
-    MesmosBytes(BuildContentHeader(3, LProps), BuildContentHeader(3, LProps, '', 'x=1')));
+    SameBytes(BuildContentHeader(3, LProps), BuildContentHeader(3, LProps, '', 'x=1')));
 end;
 
-procedure TTracingCodecTests.ContentHeader_SemHeaders_InjetaTraceParent;
+procedure TTracingCodecTests.ContentHeader_NoHeaders_InjectsTraceParent;
 var
   LProps: TAMQPBasicProperties;
   LHeader: TAMQPContentHeader;
 begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
-  LHeader := Decodifica(BuildContentHeader(3, LProps, TP, ''));
+  LHeader := DecodeHeader(BuildContentHeader(3, LProps, TP, ''));
   try
     TAssert.AssertTrue('ganhou headers', bpHeaders in LHeader.Properties.Flags);
     TAssert.AssertEquals('so o traceparent', 1, Integer(LHeader.Properties.Headers.Count));
-    TAssert.AssertEquals('traceparent', TP, TextoDe(LHeader.Properties.Headers, 'traceparent'));
+    TAssert.AssertEquals('traceparent', TP, TextOf(LHeader.Properties.Headers, 'traceparent'));
     TAssert.AssertEquals('o resto intacto', 'text/plain', LHeader.Properties.ContentType);
     TAssert.AssertEquals('body size', 3, Integer(LHeader.BodySize));
   finally
-    LiberaHeaders(LHeader);
+    FreeHeaders(LHeader);
   end;
 end;
 
-procedure TTracingCodecTests.ContentHeader_ComHeaders_AcrescentaSemMexerNaTabela;
+procedure TTracingCodecTests.ContentHeader_WithHeaders_AppendsWithoutTouchingTheTable;
 var
   LProps: TAMQPBasicProperties;
-  LTabela: TAMQPFieldTable;
+  LTable: TAMQPFieldTable;
   LValue: TValue;
   LHeader: TAMQPContentHeader;
 begin
-  LTabela := TAMQPFieldTable.Create;
+  LTable := TAMQPFieldTable.Create;
   try
     LValue := TValue.From<string>('pedido');
-    LTabela.Put('tipo', LValue);
+    LTable.Put('tipo', LValue);
     LProps := TAMQPBasicProperties.Empty;
-    LProps.SetHeaders(LTabela);
-    LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
+    LProps.SetHeaders(LTable);
+    LHeader := DecodeHeader(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
     try
       TAssert.AssertEquals('tres entradas', 3, Integer(LHeader.Properties.Headers.Count));
-      TAssert.AssertEquals('a do chamador', 'pedido', TextoDe(LHeader.Properties.Headers, 'tipo'));
-      TAssert.AssertEquals('traceparent', TP, TextoDe(LHeader.Properties.Headers, 'traceparent'));
+      TAssert.AssertEquals('a do chamador', 'pedido', TextOf(LHeader.Properties.Headers, 'tipo'));
+      TAssert.AssertEquals('traceparent', TP, TextOf(LHeader.Properties.Headers, 'traceparent'));
       TAssert.AssertEquals('tracestate', 'vendor=abc',
-        TextoDe(LHeader.Properties.Headers, 'tracestate'));
+        TextOf(LHeader.Properties.Headers, 'tracestate'));
     finally
-      LiberaHeaders(LHeader);
+      FreeHeaders(LHeader);
     end;
-    TAssert.AssertEquals('a tabela do chamador nao mudou', 1, Integer(LTabela.Count));
-    TAssert.AssertFalse('sem traceparent nela', LTabela.ContainsKey('traceparent'));
+    TAssert.AssertEquals('a tabela do chamador nao mudou', 1, Integer(LTable.Count));
+    TAssert.AssertFalse('sem traceparent nela', LTable.ContainsKey('traceparent'));
   finally
-    LTabela.Free;
+    LTable.Free;
   end;
 end;
 
-procedure TTracingCodecTests.ContentHeader_TraceParentDoChamador_Vence;
+procedure TTracingCodecTests.ContentHeader_CallerTraceParent_Wins;
 var
   LProps: TAMQPBasicProperties;
-  LTabela: TAMQPFieldTable;
+  LTable: TAMQPFieldTable;
   LValue: TValue;
   LHeader: TAMQPContentHeader;
 begin
-  LTabela := TAMQPFieldTable.Create;
+  LTable := TAMQPFieldTable.Create;
   try
-    LValue := TValue.From<string>(TP_DO_CHAMADOR);
-    LTabela.Put('traceparent', LValue);
+    LValue := TValue.From<string>(TP_FROM_CALLER);
+    LTable.Put('traceparent', LValue);
     LProps := TAMQPBasicProperties.Empty;
-    LProps.SetHeaders(LTabela);
+    LProps.SetHeaders(LTable);
     TAssert.AssertTrue('nada acrescentado: os mesmos bytes',
-      MesmosBytes(BuildContentHeader(0, LProps), BuildContentHeader(0, LProps, TP, 'x=1')));
-    LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'x=1'));
+      SameBytes(BuildContentHeader(0, LProps), BuildContentHeader(0, LProps, TP, 'x=1')));
+    LHeader := DecodeHeader(BuildContentHeader(0, LProps, TP, 'x=1'));
     try
       TAssert.AssertEquals('uma entrada', 1, Integer(LHeader.Properties.Headers.Count));
-      TAssert.AssertEquals('o do chamador', TP_DO_CHAMADOR,
-        TextoDe(LHeader.Properties.Headers, 'traceparent'));
+      TAssert.AssertEquals('o do chamador', TP_FROM_CALLER,
+        TextOf(LHeader.Properties.Headers, 'traceparent'));
     finally
-      LiberaHeaders(LHeader);
+      FreeHeaders(LHeader);
     end;
   finally
-    LTabela.Free;
+    LTable.Free;
   end;
 end;
 
-procedure TTracingCodecTests.ContentHeader_TraceStateDoChamador_NaoDuplica;
+procedure TTracingCodecTests.ContentHeader_CallerTraceState_NotDuplicated;
 var
   LProps: TAMQPBasicProperties;
-  LTabela: TAMQPFieldTable;
+  LTable: TAMQPFieldTable;
   LValue: TValue;
   LHeader: TAMQPContentHeader;
 begin
-  LTabela := TAMQPFieldTable.Create;
+  LTable := TAMQPFieldTable.Create;
   try
     LValue := TValue.From<string>('meu=1');
-    LTabela.Put('tracestate', LValue);
+    LTable.Put('tracestate', LValue);
     LProps := TAMQPBasicProperties.Empty;
-    LProps.SetHeaders(LTabela);
-    LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
+    LProps.SetHeaders(LTable);
+    LHeader := DecodeHeader(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
     try
       TAssert.AssertEquals('duas entradas, sem nome repetido', 2,
         Integer(LHeader.Properties.Headers.Count));
       TAssert.AssertEquals('traceparent injetado', TP,
-        TextoDe(LHeader.Properties.Headers, 'traceparent'));
+        TextOf(LHeader.Properties.Headers, 'traceparent'));
       TAssert.AssertEquals('tracestate do chamador', 'meu=1',
-        TextoDe(LHeader.Properties.Headers, 'tracestate'));
+        TextOf(LHeader.Properties.Headers, 'tracestate'));
     finally
-      LiberaHeaders(LHeader);
+      FreeHeaders(LHeader);
     end;
   finally
-    LTabela.Free;
+    LTable.Free;
   end;
 end;
 
-procedure TTracingCodecTests.TraceParentOf_SemHeaders_False;
+procedure TTracingCodecTests.TraceParentOf_NoHeaders_False;
 var
   LProps: TAMQPBasicProperties;
   LParent, LState: string;
@@ -208,7 +208,7 @@ begin
   TAssert.AssertEquals('tracestate vazio', '', LState);
 end;
 
-procedure TTracingCodecTests.TraceParentOf_LeTraceParentETraceState;
+procedure TTracingCodecTests.TraceParentOf_ReadsTraceParentAndTraceState;
 var
   LProps: TAMQPBasicProperties;
   LHeader: TAMQPContentHeader;
@@ -216,37 +216,37 @@ var
 begin
   LProps := TAMQPBasicProperties.Empty;
   // The real path: the table decoded from the wire.
-  LHeader := Decodifica(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
+  LHeader := DecodeHeader(BuildContentHeader(0, LProps, TP, 'vendor=abc'));
   try
     TAssert.AssertTrue('achou', AmqpTraceParentOf(LHeader.Properties, LParent, LState));
     TAssert.AssertEquals('traceparent', TP, LParent);
     TAssert.AssertEquals('tracestate', 'vendor=abc', LState);
   finally
-    LiberaHeaders(LHeader);
+    FreeHeaders(LHeader);
   end;
 end;
 
-procedure TTracingCodecTests.TraceParentOf_ValorQueNaoEString_False;
+procedure TTracingCodecTests.TraceParentOf_NonStringValue_False;
 var
   LProps: TAMQPBasicProperties;
-  LTabela: TAMQPFieldTable;
+  LTable: TAMQPFieldTable;
   LValue: TValue;
   LParent, LState: string;
 begin
-  LTabela := TAMQPFieldTable.Create;
+  LTable := TAMQPFieldTable.Create;
   try
     LValue := TValue.From<Int64>(42);
-    LTabela.Put('traceparent', LValue);
+    LTable.Put('traceparent', LValue);
     LProps := TAMQPBasicProperties.Empty;
-    LProps.SetHeaders(LTabela);
+    LProps.SetHeaders(LTable);
     TAssert.AssertFalse('numero nao e traceparent', AmqpTraceParentOf(LProps, LParent, LState));
     TAssert.AssertEquals('traceparent vazio', '', LParent);
   finally
-    LTabela.Free;
+    LTable.Free;
   end;
 end;
 
-procedure TTracingCodecTests.SpanDestination_NomesDoSpan;
+procedure TTracingCodecTests.SpanDestination_SpanNames;
 begin
   TAssert.AssertEquals('exchange padrao', 'amq.default', AmqpSpanDestination('', True));
   TAssert.AssertEquals('exchange com nome', 'pedidos', AmqpSpanDestination('pedidos', True));
@@ -255,7 +255,7 @@ begin
   TAssert.AssertEquals('fila vazia nao e exchange', '', AmqpSpanDestination('', False));
 end;
 
-procedure TTracingCodecTests.TracerDesligado_NaoAbreSpan;
+procedure TTracingCodecTests.TracerDisabled_DoesNotOpenSpan;
 var
   LProps: TAMQPBasicProperties;
 begin

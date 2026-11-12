@@ -24,11 +24,11 @@ type
     FParams: TAMQPConnectionParams;
     procedure DoOpenWithParams;
   public
-    [Test] procedure Conecta_FazHandshake_E_Fecha;
-    [Test] procedure TuneNegociado_TemLimitesRazoaveis;
-    [Test] procedure CredenciaisInvalidas_Levanta;
-    [Test] procedure VirtualHostInexistente_Levanta;
-    [Test] procedure Heartbeat_MantemConexaoViva;
+    [Test] procedure Connects_DoesHandshake_And_Closes;
+    [Test] procedure NegotiatedTune_HasReasonableLimits;
+    [Test] procedure InvalidCredentials_Raises;
+    [Test] procedure NonexistentVirtualHost_Raises;
+    [Test] procedure Heartbeat_KeepsConnectionAlive;
   end;
 
 implementation
@@ -47,7 +47,7 @@ begin
   end;
 end;
 
-procedure TAMQPHandshakeIntegrationTests.Conecta_FazHandshake_E_Fecha;
+procedure TAMQPHandshakeIntegrationTests.Connects_DoesHandshake_And_Closes;
 var
   LConn: TAMQPConnection;
 begin
@@ -62,7 +62,7 @@ begin
   end;
 end;
 
-procedure TAMQPHandshakeIntegrationTests.TuneNegociado_TemLimitesRazoaveis;
+procedure TAMQPHandshakeIntegrationTests.NegotiatedTune_HasReasonableLimits;
 var
   LConn: TAMQPConnection;
   LTune: TAMQPConnectionTune;
@@ -83,7 +83,7 @@ begin
   end;
 end;
 
-procedure TAMQPHandshakeIntegrationTests.CredenciaisInvalidas_Levanta;
+procedure TAMQPHandshakeIntegrationTests.InvalidCredentials_Raises;
 var
   LRaised: Boolean;
 begin
@@ -91,7 +91,7 @@ begin
   FParams.Password := 'senha-obviamente-errada';
   // With the authentication_failure_close capability, the server replies
   // Connection.Close (403) — but we accept any exception (in old versions the
-  // broker may just drop the socket). ChecaLevanta requires the EXACT class,
+  // broker may just drop the socket). CheckRaises requires the EXACT class,
   // so "any exception" needs a manual try/except (Fail() inside the try would
   // be caught by the except itself, since an assertion failure is also an
   // Exception).
@@ -105,14 +105,14 @@ begin
   TAssert.AssertTrue('deveria ter levantado uma exceção para credenciais inválidas', LRaised);
 end;
 
-procedure TAMQPHandshakeIntegrationTests.VirtualHostInexistente_Levanta;
+procedure TAMQPHandshakeIntegrationTests.NonexistentVirtualHost_Raises;
 begin
   FParams := IntegrationParams;
   FParams.VirtualHost := '/vhost-que-nao-existe';
-  ChecaLevanta(EAMQPConnection, DoOpenWithParams);
+  CheckRaises(EAMQPConnection, DoOpenWithParams);
 end;
 
-procedure TAMQPHandshakeIntegrationTests.Heartbeat_MantemConexaoViva;
+procedure TAMQPHandshakeIntegrationTests.Heartbeat_KeepsConnectionAlive;
 var
   LParams: TAMQPConnectionParams;
   LConn: TAMQPConnection;

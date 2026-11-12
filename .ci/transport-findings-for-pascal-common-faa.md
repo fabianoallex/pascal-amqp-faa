@@ -8,7 +8,7 @@ The earlier findings are in `f8-findings-for-pascal-common-faa.md` and
 
 ## 1. SChannel server: a client that isn't speaking TLS waits out the whole handshake deadline
 
-**What happened.** amqp's broker test `ClientePlainNaPortaTls_Falha` connects a plain AMQP client
+**What happened.** amqp's broker test `PlainClientOnTlsPort_Fails` connects a plain AMQP client
 to the broker's TLS port. The client sends the 8-byte protocol-header (`AMQP\0\0\9\1`) and waits
 for `Connection.Start`. With an **OpenSSL** server the handshake fails at once and the connection
 drops (0.04 s). With an **SChannel** server it takes **15.08 s**, the default handshake deadline:

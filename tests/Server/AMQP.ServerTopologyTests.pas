@@ -18,7 +18,7 @@
      a transient end must NOT produce a record. An implementation that wrote
      everything would pass any test that only looked at what was written.
 
-  3. D19 (TTopoSemDataDirTests): with an empty DataDir the broker writes NO
+  3. D19 (TTopoNoDataDirTests): with an empty DataDir the broker writes NO
      file at all -- it does not even create the directory. It is what guarantees that
      Phase 3's path stays intact for whoever did not ask for durability.
 
@@ -51,9 +51,9 @@ type
     [Test] procedure Queue_RoundTrip;
     [Test] procedure Binding_RoundTrip;
     [Test] procedure Name_RoundTrip;
-    [Test] procedure ArgumentosVazios_VoltamComoNil;
-    [Test] procedure ArgumentosNil_CodificamIgualATabelaVazia;
-    [Test] procedure KindsDeTopologia_SaoReconhecidos;
+    [Test] procedure EmptyArguments_ReturnAsNil;
+    [Test] procedure NilArguments_EncodeLikeAnEmptyTable;
+    [Test] procedure TopologyKinds_AreRecognized;
   end;
 
   { Starts a broker with its own DataDir, lets the test declare topology with the
@@ -67,44 +67,44 @@ type
     FChan: TAMQPChannel;
     FDir: string;
     /// Closes the client, stops the broker and returns the WAL records, one per
-    /// line, in the 'kind:detalhe' format (see MontaLinha).
-    function FechaELeWal: TStringList;
-    function DeclaraFila(const ANome: string; ADurable, AExclusive,
+    /// line, in the 'kind:detalhe' format (see BuildLine).
+    function CloseAndReadWal: TStringList;
+    function MakeQueue(const AName: string; ADurable, AExclusive,
       AAutoDelete: Boolean; AArgs: TAMQPFieldTable = nil): string;
-    procedure DeclaraExchange(const ANome, ATipo: string;
+    procedure MakeExchange(const AName, AType: string;
       ADurable, AAutoDelete: Boolean);
-    procedure Liga(const AFila, AExchange, AChave: string);
-    /// How many lines start with APrefixo.
-    function Conta(L: TStringList; const APrefixo: string): Integer;
+    procedure MakeBinding(const AQueue, AExchange, AKey: string);
+    /// How many lines start with APrefix.
+    function CountWithPrefix(L: TStringList; const APrefix: string): Integer;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure ExchangeDuravel_EhGravado;
-    [Test] procedure ExchangeTransiente_NaoEhGravado;
-    [Test] procedure FilaDuravel_EhGravada;
-    [Test] procedure FilaTransiente_NaoEhGravada;
-    [Test] procedure FilaExclusiva_NaoEhGravadaMesmoDuravel;
-    [Test] procedure Redeclare_NaoGeraSegundoRegistro;
-    [Test] procedure Bind_SoQuandoAsDuasPontasSaoDuraveis;
-    [Test] procedure ArgumentosDaFila_SobrevivemNoRegistro;
-    [Test] procedure DeleteDeFilaDuravel_EhGravado;
-    [Test] procedure AutoDeleteDeFilaDuravel_EhGravado;
-    [Test] procedure AutoDeleteDeExchangeDuravel_EhGravado;
+    [Test] procedure DurableExchange_IsWritten;
+    [Test] procedure TransientExchange_IsNotWritten;
+    [Test] procedure DurableQueue_IsWritten;
+    [Test] procedure TransientQueue_IsNotWritten;
+    [Test] procedure ExclusiveQueue_IsNotWrittenEvenIfDurable;
+    [Test] procedure Redeclare_DoesNotCreateASecondRecord;
+    [Test] procedure Bind_OnlyWhenBothEndsAreDurable;
+    [Test] procedure QueueArguments_SurviveInTheRecord;
+    [Test] procedure DeleteOfDurableQueue_IsWritten;
+    [Test] procedure AutoDeleteOfDurableQueue_IsWritten;
+    [Test] procedure AutoDeleteOfDurableExchange_IsWritten;
   end;
 
   [TestFixture]
-  TTopoSemDataDirTests = class
+  TTopoNoDataDirTests = class
   public
-    [Test] procedure SemDataDir_NaoHaJournal;
-    [Test] procedure SemDataDir_NenhumArquivoEscrito;
-    [Test] procedure DataDir_NaoMudaComBrokerNoAr;
+    [Test] procedure NoDataDir_NoJournal;
+    [Test] procedure NoDataDir_NoFileWritten;
+    [Test] procedure DataDir_DoesNotChangeWhileBrokerRuns;
   end;
 
   [TestFixture]
-  TTopoFalhaTests = class
+  TTopoFailureTests = class
   public
-    [Test] procedure JournalParado_DeclareDuravel_DaSemDurabilidade;
-    [Test] procedure JournalParado_DeclareTransiente_ContinuaFuncionando;
+    [Test] procedure StoppedJournal_DurableDeclare_GivesNoDurability;
+    [Test] procedure StoppedJournal_TransientDeclare_KeepsWorking;
   end;
 
 implementation
@@ -112,14 +112,14 @@ implementation
 var
   GSeq: Integer = 0;
 
-function DirNovo(const APrefixo: string): string;
+function NewDir(const APrefix: string): string;
 begin
   Inc(GSeq);
-  Result := IncludeTrailingPathDelimiter(DirTemporario) + APrefixo + '-'
+  Result := IncludeTrailingPathDelimiter(TempDir) + APrefix + '-'
     + IntToStr(GSeq);
 end;
 
-procedure LimpaDir(const ADir: string);
+procedure ClearDir(const ADir: string);
 var
   LRec: TSearchRec;
 begin
@@ -136,7 +136,7 @@ begin
   end;
 end;
 
-function ContaArquivos(const ADir: string): Integer;
+function CountFiles(const ADir: string): Integer;
 var
   LRec: TSearchRec;
 begin
@@ -156,7 +156,7 @@ end;
 
 // One line per record, in a format the test can compare by
 // prefix -- deliberately readable, so the failure says what showed up.
-function MontaLinha(const ARec: TAMQPWalRecord): string;
+function BuildLine(const ARec: TAMQPWalRecord): string;
 var
   LQ: TAMQPRecQueue;
   LE: TAMQPRecExchange;
@@ -206,11 +206,11 @@ begin
   end;
 end;
 
-function LeWal(const ADir: string): TStringList;
+function ReadWal(const ADir: string): TStringList;
 var
-  LArq: IAMQPWalFile;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
-  LRegs: TAMQPWalRecords;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
   LSegs: TArray<Cardinal>;
   I, LN: Integer;
@@ -219,16 +219,16 @@ begin
   LSegs := AmqpWalListSegments(ADir);
   if Length(LSegs) = 0 then
     Exit;
-  LArq := TAMQPWalOsFile.Create(
+  LWalFile := TAMQPWalOsFile.Create(
     IncludeTrailingPathDelimiter(ADir) + AmqpWalSegmentName(LSegs[0]), False);
-  LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+  LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
   try
-    LN := LSeg.ReadPrefix(LRegs, LStop);
+    LN := LSeg.ReadPrefix(LWalRecords, LStop);
     for I := 0 to LN - 1 do
-      Result.Add(MontaLinha(LRegs[I]));
+      Result.Add(BuildLine(LWalRecords[I]));
   finally
     LSeg.Free;
-    LArq := nil;
+    LWalFile := nil;
   end;
 end;
 
@@ -321,7 +321,7 @@ begin
   TAssert.AssertEquals('nome', 'q.apagada', R2.Name);
 end;
 
-procedure TTopoRecordTests.ArgumentosVazios_VoltamComoNil;
+procedure TTopoRecordTests.EmptyArguments_ReturnAsNil;
 var
   R, R2: TAMQPRecQueue;
 begin
@@ -341,36 +341,36 @@ begin
   TAssert.AssertTrue('tabela vazia volta como nil', R2.Arguments = nil);
 end;
 
-procedure TTopoRecordTests.ArgumentosNil_CodificamIgualATabelaVazia;
+procedure TTopoRecordTests.NilArguments_EncodeLikeAnEmptyTable;
 var
   R: TAMQPRecQueue;
-  LComNil, LComVazia: TBytes;
+  LWithNil, LWithEmpty: TBytes;
   LTab: TAMQPFieldTable;
   I: Integer;
-  LIgual: Boolean;
+  LEqual: Boolean;
 begin
   R.VHost := '/';
   R.Name := 'q';
   R.Durable := True;
   R.AutoDelete := False;
   R.Arguments := nil;
-  LComNil := AmqpEncodeRecQueue(R);
+  LWithNil := AmqpEncodeRecQueue(R);
   LTab := TAMQPFieldTable.Create;
   try
     R.Arguments := LTab;
-    LComVazia := AmqpEncodeRecQueue(R);
+    LWithEmpty := AmqpEncodeRecQueue(R);
   finally
     LTab.Free;
   end;
-  LIgual := Length(LComNil) = Length(LComVazia);
-  if LIgual then
-    for I := 0 to High(LComNil) do
-      if LComNil[I] <> LComVazia[I] then
-        LIgual := False;
-  TAssert.AssertTrue('nil e tabela vazia dao o MESMO byte', LIgual);
+  LEqual := Length(LWithNil) = Length(LWithEmpty);
+  if LEqual then
+    for I := 0 to High(LWithNil) do
+      if LWithNil[I] <> LWithEmpty[I] then
+        LEqual := False;
+  TAssert.AssertTrue('nil e tabela vazia dao o MESMO byte', LEqual);
 end;
 
-procedure TTopoRecordTests.KindsDeTopologia_SaoReconhecidos;
+procedure TTopoRecordTests.TopologyKinds_AreRecognized;
 begin
   TAssert.AssertTrue('declare de exchange', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_DECLARE));
   TAssert.AssertTrue('unbind de exchange', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_UNBIND));
@@ -386,9 +386,9 @@ procedure TTopoPersistTests.SetUp;
 var
   LParams: TAMQPConnectionParams;
 begin
-  FDir := DirNovo('amqptopo');
+  FDir := NewDir('amqptopo');
   ForceDirectories(FDir);
-  LimpaDir(FDir);
+  ClearDir(FDir);
   FBroker := TAMQPServer.Create;
   FBroker.BindAddress := '127.0.0.1';
   FBroker.Port := 0;
@@ -421,177 +421,177 @@ begin
     end;
     FreeAndNil(FBroker);
   end;
-  LimpaDir(FDir);
+  ClearDir(FDir);
 end;
 
-function TTopoPersistTests.FechaELeWal: TStringList;
+function TTopoPersistTests.CloseAndReadWal: TStringList;
 begin
   FConn.Close;
   FreeAndNil(FConn);
   FBroker.Stop;
   FreeAndNil(FBroker);
-  Result := LeWal(FDir);
+  Result := ReadWal(FDir);
 end;
 
-function TTopoPersistTests.DeclaraFila(const ANome: string; ADurable, AExclusive,
+function TTopoPersistTests.MakeQueue(const AName: string; ADurable, AExclusive,
   AAutoDelete: Boolean; AArgs: TAMQPFieldTable): string;
 var
   LDecl: TAMQPQueueDeclare;
 begin
-  LDecl := TAMQPQueueDeclare.Create(ANome, ADurable);
+  LDecl := TAMQPQueueDeclare.Create(AName, ADurable);
   LDecl.Exclusive := AExclusive;
   LDecl.AutoDelete := AAutoDelete;
   LDecl.Arguments := AArgs;
   Result := FChan.DeclareQueue(LDecl).QueueName;
 end;
 
-procedure TTopoPersistTests.DeclaraExchange(const ANome, ATipo: string;
+procedure TTopoPersistTests.MakeExchange(const AName, AType: string;
   ADurable, AAutoDelete: Boolean);
 var
   LDecl: TAMQPExchangeDeclare;
 begin
-  LDecl := TAMQPExchangeDeclare.Create(ANome, ATipo, ADurable);
+  LDecl := TAMQPExchangeDeclare.Create(AName, AType, ADurable);
   LDecl.AutoDelete := AAutoDelete;
   FChan.DeclareExchange(LDecl);
 end;
 
-procedure TTopoPersistTests.Liga(const AFila, AExchange, AChave: string);
+procedure TTopoPersistTests.MakeBinding(const AQueue, AExchange, AKey: string);
 var
   LBind: TAMQPQueueBind;
 begin
-  LBind.QueueName := AFila;
+  LBind.QueueName := AQueue;
   LBind.ExchangeName := AExchange;
-  LBind.RoutingKey := AChave;
+  LBind.RoutingKey := AKey;
   LBind.NoWait := False;
   LBind.Arguments := nil;
   FChan.BindQueue(LBind);
 end;
 
-function TTopoPersistTests.Conta(L: TStringList; const APrefixo: string): Integer;
+function TTopoPersistTests.CountWithPrefix(L: TStringList; const APrefix: string): Integer;
 var
   I: Integer;
 begin
   Result := 0;
   for I := 0 to L.Count - 1 do
-    if Pos(APrefixo, L[I]) = 1 then
+    if Pos(APrefix, L[I]) = 1 then
       Inc(Result);
 end;
 
 { TTopoPersistTests }
 
-procedure TTopoPersistTests.ExchangeDuravel_EhGravado;
+procedure TTopoPersistTests.DurableExchange_IsWritten;
 var
   L: TStringList;
 begin
-  DeclaraExchange('ex.dur', 'topic', True, False);
-  L := FechaELeWal;
+  MakeExchange('ex.dur', 'topic', True, False);
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('um registro do exchange', 1,
-      Conta(L, 'exchange.declare:ex.dur'));
+      CountWithPrefix(L, 'exchange.declare:ex.dur'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.ExchangeTransiente_NaoEhGravado;
+procedure TTopoPersistTests.TransientExchange_IsNotWritten;
 var
   L: TStringList;
 begin
-  DeclaraExchange('ex.tra', 'direct', False, False);
-  L := FechaELeWal;
+  MakeExchange('ex.tra', 'direct', False, False);
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('exchange transiente nao vai para o disco', 0,
-      Conta(L, 'exchange.declare:ex.tra'));
+      CountWithPrefix(L, 'exchange.declare:ex.tra'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.FilaDuravel_EhGravada;
+procedure TTopoPersistTests.DurableQueue_IsWritten;
 var
   L: TStringList;
 begin
-  DeclaraFila('q.dur', True, False, False);
-  L := FechaELeWal;
+  MakeQueue('q.dur', True, False, False);
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('um registro da fila', 1, Conta(L, 'queue.declare:q.dur'));
+    TAssert.AssertEquals('um registro da fila', 1, CountWithPrefix(L, 'queue.declare:q.dur'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.FilaTransiente_NaoEhGravada;
+procedure TTopoPersistTests.TransientQueue_IsNotWritten;
 var
   L: TStringList;
 begin
-  DeclaraFila('q.tra', False, False, False);
-  L := FechaELeWal;
+  MakeQueue('q.tra', False, False, False);
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('fila transiente nao vai para o disco', 0,
-      Conta(L, 'queue.declare:q.tra'));
+      CountWithPrefix(L, 'queue.declare:q.tra'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.FilaExclusiva_NaoEhGravadaMesmoDuravel;
+procedure TTopoPersistTests.ExclusiveQueue_IsNotWrittenEvenIfDurable;
 var
   L: TStringList;
 begin
   // D20: an exclusive queue dies with its owning connection, and after a restart there
   // is no owning connection. The record does not even CARRY the exclusive flag -- the format
   // cannot express a thing that should not exist.
-  DeclaraFila('q.exc', True, True, False);
-  L := FechaELeWal;
+  MakeQueue('q.exc', True, True, False);
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('exclusiva nao vai, mesmo declarada duravel', 0,
-      Conta(L, 'queue.declare:q.exc'));
+      CountWithPrefix(L, 'queue.declare:q.exc'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.Redeclare_NaoGeraSegundoRegistro;
+procedure TTopoPersistTests.Redeclare_DoesNotCreateASecondRecord;
 var
   L: TStringList;
 begin
   // An identical redeclare is idempotent: writing again would only fill the log with
   // records that recovery would have to reapply on top of themselves.
-  DeclaraFila('q.dur', True, False, False);
-  DeclaraFila('q.dur', True, False, False);
-  DeclaraFila('q.dur', True, False, False);
-  L := FechaELeWal;
+  MakeQueue('q.dur', True, False, False);
+  MakeQueue('q.dur', True, False, False);
+  MakeQueue('q.dur', True, False, False);
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('tres declares, UM registro', 1,
-      Conta(L, 'queue.declare:q.dur'));
+      CountWithPrefix(L, 'queue.declare:q.dur'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.Bind_SoQuandoAsDuasPontasSaoDuraveis;
+procedure TTopoPersistTests.Bind_OnlyWhenBothEndsAreDurable;
 var
   L: TStringList;
 begin
   // A binding is as durable as the more fragile of its two ends.
-  DeclaraExchange('ex.dur', 'direct', True, False);
-  DeclaraExchange('ex.tra', 'direct', False, False);
-  DeclaraFila('q.dur', True, False, False);
-  DeclaraFila('q.tra', False, False, False);
-  Liga('q.dur', 'ex.dur', 'k');  // durable x durable  -> written
-  Liga('q.tra', 'ex.dur', 'k');  // transient queue    -> not written
-  Liga('q.dur', 'ex.tra', 'k');  // transient exchange -> not written
-  L := FechaELeWal;
+  MakeExchange('ex.dur', 'direct', True, False);
+  MakeExchange('ex.tra', 'direct', False, False);
+  MakeQueue('q.dur', True, False, False);
+  MakeQueue('q.tra', False, False, False);
+  MakeBinding('q.dur', 'ex.dur', 'k');  // durable x durable  -> written
+  MakeBinding('q.tra', 'ex.dur', 'k');  // transient queue    -> not written
+  MakeBinding('q.dur', 'ex.tra', 'k');  // transient exchange -> not written
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('duravel x duravel', 1, Conta(L, 'queue.bind:ex.dur->q.dur'));
-    TAssert.AssertEquals('fila transiente', 0, Conta(L, 'queue.bind:ex.dur->q.tra'));
-    TAssert.AssertEquals('exchange transiente', 0, Conta(L, 'queue.bind:ex.tra->q.dur'));
+    TAssert.AssertEquals('duravel x duravel', 1, CountWithPrefix(L, 'queue.bind:ex.dur->q.dur'));
+    TAssert.AssertEquals('fila transiente', 0, CountWithPrefix(L, 'queue.bind:ex.dur->q.tra'));
+    TAssert.AssertEquals('exchange transiente', 0, CountWithPrefix(L, 'queue.bind:ex.tra->q.dur'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.ArgumentosDaFila_SobrevivemNoRegistro;
+procedure TTopoPersistTests.QueueArguments_SurviveInTheRecord;
 var
   L: TStringList;
   LArgs: TAMQPFieldTable;
@@ -602,60 +602,60 @@ begin
     // The table is owned by the CALLER -- the client only reads it to build the
     // frame. It was heaptrc that flagged it: the first version of this test leaked
     // two blocks, and the leak was the test's, not the code's.
-    DeclaraFila('q.args', True, False, False, LArgs);
+    MakeQueue('q.args', True, False, False, LArgs);
   finally
     LArgs.Free;
   end;
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('registro com argumentos', 1,
-      Conta(L, 'queue.declare:q.args:dur=True:ad=False:args=1'));
+      CountWithPrefix(L, 'queue.declare:q.args:dur=True:ad=False:args=1'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.DeleteDeFilaDuravel_EhGravado;
+procedure TTopoPersistTests.DeleteOfDurableQueue_IsWritten;
 var
   L: TStringList;
   LDel: TAMQPQueueDelete;
 begin
-  DeclaraFila('q.dur', True, False, False);
+  MakeQueue('q.dur', True, False, False);
   LDel.QueueName := 'q.dur';
   LDel.IfUnused := False;
   LDel.IfEmpty := False;
   LDel.NoWait := False;
   FChan.DeleteQueue(LDel);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('o sumico foi registrado', 1, Conta(L, 'queue.delete:q.dur'));
+    TAssert.AssertEquals('o sumico foi registrado', 1, CountWithPrefix(L, 'queue.delete:q.dur'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.AutoDeleteDeFilaDuravel_EhGravado;
+procedure TTopoPersistTests.AutoDeleteOfDurableQueue_IsWritten;
 var
   L: TStringList;
   LTag: string;
 begin
   // AUTOMATIC path: nobody called Queue.Delete. Without a record,
   // recovery would resurrect a queue the broker had already collected.
-  DeclaraFila('q.ad', True, False, True);
+  MakeQueue('q.ad', True, False, True);
   LTag := FChan.Consume('q.ad', nil);
   Sleep(150);
   FChan.Cancel(LTag);
   Sleep(400);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('auto-delete de fila duravel registrado', 1,
-      Conta(L, 'queue.delete:q.ad'));
+      CountWithPrefix(L, 'queue.delete:q.ad'));
   finally
     L.Free;
   end;
 end;
 
-procedure TTopoPersistTests.AutoDeleteDeExchangeDuravel_EhGravado;
+procedure TTopoPersistTests.AutoDeleteOfDurableExchange_IsWritten;
 var
   L: TStringList;
   LTag: string;
@@ -663,25 +663,25 @@ begin
   // The auto-delete exchange loses its last binding when the queue goes away. This
   // path went DIRECTLY through the vhost and wrote nothing -- it was the hole
   // WS3 found while following the auto-delete trail.
-  DeclaraExchange('ex.ad', 'direct', True, True);
-  DeclaraFila('q.ad', True, False, True);
-  Liga('q.ad', 'ex.ad', 'k');
+  MakeExchange('ex.ad', 'direct', True, True);
+  MakeQueue('q.ad', True, False, True);
+  MakeBinding('q.ad', 'ex.ad', 'k');
   LTag := FChan.Consume('q.ad', nil);
   Sleep(150);
   FChan.Cancel(LTag);
   Sleep(400);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
     TAssert.AssertEquals('auto-delete de exchange duravel registrado', 1,
-      Conta(L, 'exchange.delete:ex.ad'));
+      CountWithPrefix(L, 'exchange.delete:ex.ad'));
   finally
     L.Free;
   end;
 end;
 
-{ TTopoSemDataDirTests }
+{ TTopoNoDataDirTests }
 
-procedure TTopoSemDataDirTests.SemDataDir_NaoHaJournal;
+procedure TTopoNoDataDirTests.NoDataDir_NoJournal;
 var
   B: TAMQPServer;
 begin
@@ -697,7 +697,7 @@ begin
   end;
 end;
 
-procedure TTopoSemDataDirTests.SemDataDir_NenhumArquivoEscrito;
+procedure TTopoNoDataDirTests.NoDataDir_NoFileWritten;
 var
   B: TAMQPServer;
   C: TAMQPConnection;
@@ -708,9 +708,9 @@ var
 begin
   // D19: with an empty DataDir the broker is EXACTLY Phase 3's. Declaring
   // durable topology still works and writes nothing.
-  LDir := DirNovo('amqpsemdd');
+  LDir := NewDir('amqpsemdd');
   ForceDirectories(LDir);
-  LimpaDir(LDir);
+  ClearDir(LDir);
   B := TAMQPServer.Create;
   try
     B.BindAddress := '127.0.0.1';
@@ -733,36 +733,36 @@ begin
   finally
     B.Free;
   end;
-  TAssert.AssertEquals('nenhum arquivo no diretorio', 0, ContaArquivos(LDir));
+  TAssert.AssertEquals('nenhum arquivo no diretorio', 0, CountFiles(LDir));
 end;
 
-procedure TTopoSemDataDirTests.DataDir_NaoMudaComBrokerNoAr;
+procedure TTopoNoDataDirTests.DataDir_DoesNotChangeWhileBrokerRuns;
 var
   B: TAMQPServer;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   B := TAMQPServer.Create;
   try
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    LLevantou := False;
+    LRaised := False;
     try
-      B.DataDir := DirNovo('amqpnaomuda');
+      B.DataDir := NewDir('amqpnaomuda');
     except
       on E: Exception do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('trocar DataDir com o broker no ar tem de levantar', LLevantou);
+    TAssert.AssertTrue('trocar DataDir com o broker no ar tem de levantar', LRaised);
     B.Stop;
   finally
     B.Free;
   end;
 end;
 
-{ TTopoFalhaTests }
+{ TTopoFailureTests }
 
-procedure TTopoFalhaTests.JournalParado_DeclareDuravel_DaSemDurabilidade;
+procedure TTopoFailureTests.StoppedJournal_DurableDeclare_GivesNoDurability;
 var
   LEngine: TAMQPEngine;
   LJournal: TAMQPJournal;
@@ -772,7 +772,7 @@ begin
   // A journal that no longer accepts submits is the same situation as a failed journal
   // from the declarer's point of view: there is no way to record, and answering
   // Declare-Ok would be lying about durability.
-  LDir := DirNovo('amqpfalha');
+  LDir := NewDir('amqpfalha');
   LEngine := TAMQPEngine.Create;
   LJournal := TAMQPJournal.Create(LDir);
   try
@@ -785,11 +785,11 @@ begin
   finally
     LEngine.Free;
     LJournal.Free;
-    LimpaDir(LDir);
+    ClearDir(LDir);
   end;
 end;
 
-procedure TTopoFalhaTests.JournalParado_DeclareTransiente_ContinuaFuncionando;
+procedure TTopoFailureTests.StoppedJournal_TransientDeclare_KeepsWorking;
 var
   LEngine: TAMQPEngine;
   LJournal: TAMQPJournal;
@@ -797,7 +797,7 @@ var
   LMsg, LCons: Integer;
 begin
   // Whoever did not ask for durability must not be punished for it being broken.
-  LDir := DirNovo('amqpfalha');
+  LDir := NewDir('amqpfalha');
   LEngine := TAMQPEngine.Create;
   LJournal := TAMQPJournal.Create(LDir);
   try
@@ -810,14 +810,14 @@ begin
   finally
     LEngine.Free;
     LJournal.Free;
-    LimpaDir(LDir);
+    ClearDir(LDir);
   end;
 end;
 
 initialization
   TDUnitX.RegisterTestFixture(TTopoRecordTests);
   TDUnitX.RegisterTestFixture(TTopoPersistTests);
-  TDUnitX.RegisterTestFixture(TTopoSemDataDirTests);
-  TDUnitX.RegisterTestFixture(TTopoFalhaTests);
+  TDUnitX.RegisterTestFixture(TTopoNoDataDirTests);
+  TDUnitX.RegisterTestFixture(TTopoFailureTests);
 
 end.

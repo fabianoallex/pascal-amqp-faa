@@ -235,7 +235,7 @@ begin
   end;
 end;
 
-function LeArgs(AReader: TAMQPReader): TAMQPFieldTable;
+function ReadArgs(AReader: TAMQPReader): TAMQPFieldTable;
 begin
   Result := AReader.ReadFieldTable;
   if (Result <> nil) and (Result.Count = 0) then
@@ -275,7 +275,7 @@ begin
     Result.Durable := LR.ReadBit;
     Result.AutoDelete := LR.ReadBit;
     Result.Internal := LR.ReadBit;
-    Result.Arguments := LeArgs(LR);
+    Result.Arguments := ReadArgs(LR);
   finally
     LR.Free;
   end;
@@ -310,7 +310,7 @@ begin
     Result.Name := LR.ReadShortStr;
     Result.Durable := LR.ReadBit;
     Result.AutoDelete := LR.ReadBit;
-    Result.Arguments := LeArgs(LR);
+    Result.Arguments := ReadArgs(LR);
   finally
     LR.Free;
   end;
@@ -345,7 +345,7 @@ begin
     Result.Source := LR.ReadShortStr;
     Result.Destination := LR.ReadShortStr;
     Result.RoutingKey := LR.ReadShortStr;
-    Result.Arguments := LeArgs(LR);
+    Result.Arguments := ReadArgs(LR);
   finally
     LR.Free;
   end;

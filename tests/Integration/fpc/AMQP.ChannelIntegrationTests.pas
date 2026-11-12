@@ -46,16 +46,16 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-    procedure PublicaEBuscaComPropriedades;
-    procedure PublishText_EBusca;
-    procedure GetEmpty_QuandoFilaVazia;
-    procedure DeclareQueue_RetornaNomeGerado;
-    procedure Unbind_ParaDeRotearParaAFila;
-    procedure ExchangeBind_RoteiaSourceParaDest;
-    procedure PublishMandatory_SemRota_DisparaOnBasicReturn;
-    procedure Confirm_PublishRoteavel_Ackado;
-    procedure Confirm_WaitForConfirms_VariosPublishes;
-    procedure Confirm_WaitForConfirms_DetectaNackJaResolvido;
+    procedure PublishesAndGetsWithProperties;
+    procedure PublishText_AndGet;
+    procedure GetEmpty_WhenQueueEmpty;
+    procedure DeclareQueue_ReturnsGeneratedName;
+    procedure Unbind_StopsRoutingToTheQueue;
+    procedure ExchangeBind_RoutesSourceToDest;
+    procedure PublishMandatory_NoRoute_FiresOnBasicReturn;
+    procedure Confirm_RoutablePublish_Acked;
+    procedure Confirm_WaitForConfirms_SeveralPublishes;
+    procedure Confirm_WaitForConfirms_DetectsAlreadyResolvedNack;
   end;
 
 implementation
@@ -126,7 +126,7 @@ begin
     PcAtomicInc(FNackCount);
 end;
 
-procedure TAMQPChannelIntegrationTests.PublicaEBuscaComPropriedades;
+procedure TAMQPChannelIntegrationTests.PublishesAndGetsWithProperties;
 var
   LQueue: string;
   LProps: TAMQPBasicProperties;
@@ -152,7 +152,7 @@ begin
   TAssert.AssertEquals('delivery-mode persistente', 2, Integer(LResult.Properties.DeliveryMode));
 end;
 
-procedure TAMQPChannelIntegrationTests.PublishText_EBusca;
+procedure TAMQPChannelIntegrationTests.PublishText_AndGet;
 var
   LQueue: string;
   LResult: TAMQPGetResult;
@@ -166,7 +166,7 @@ begin
   TAssert.AssertEquals('text/plain', LResult.Properties.ContentType);
 end;
 
-procedure TAMQPChannelIntegrationTests.GetEmpty_QuandoFilaVazia;
+procedure TAMQPChannelIntegrationTests.GetEmpty_WhenQueueEmpty;
 var
   LQueue: string;
   LResult: TAMQPGetResult;
@@ -176,7 +176,7 @@ begin
   TAssert.AssertFalse('fila recém-criada deveria estar vazia', LResult.Found);
 end;
 
-procedure TAMQPChannelIntegrationTests.DeclareQueue_RetornaNomeGerado;
+procedure TAMQPChannelIntegrationTests.DeclareQueue_ReturnsGeneratedName;
 var
   LQueue: string;
 begin
@@ -184,7 +184,7 @@ begin
   TAssert.AssertTrue('servidor deveria gerar um nome de fila', LQueue <> '');
 end;
 
-procedure TAMQPChannelIntegrationTests.Unbind_ParaDeRotearParaAFila;
+procedure TAMQPChannelIntegrationTests.Unbind_StopsRoutingToTheQueue;
 var
   LExchange, LQueue, LRk: string;
   LEx: TAMQPExchangeDeclare;
@@ -231,7 +231,7 @@ begin
   TAssert.AssertFalse('após o unbind, a fila não deveria mais receber', LResult.Found);
 end;
 
-procedure TAMQPChannelIntegrationTests.ExchangeBind_RoteiaSourceParaDest;
+procedure TAMQPChannelIntegrationTests.ExchangeBind_RoutesSourceToDest;
 var
   LSource, LDest, LQueue, LRk: string;
   LEx: TAMQPExchangeDeclare;
@@ -276,7 +276,7 @@ begin
   TAssert.AssertEquals('via-exchange-bind', LResult.BodyAsText);
 end;
 
-procedure TAMQPChannelIntegrationTests.PublishMandatory_SemRota_DisparaOnBasicReturn;
+procedure TAMQPChannelIntegrationTests.PublishMandatory_NoRoute_FiresOnBasicReturn;
 var
   I: Integer;
 begin
@@ -297,7 +297,7 @@ begin
   TAssert.AssertEquals('sem destino', FReturned.BodyAsText);
 end;
 
-procedure TAMQPChannelIntegrationTests.Confirm_PublishRoteavel_Ackado;
+procedure TAMQPChannelIntegrationTests.Confirm_RoutablePublish_Acked;
 var
   LQueue: string;
   LSeq: UInt64;
@@ -322,7 +322,7 @@ begin
   TAssert.AssertTrue('OnConfirm deveria trazer o seq-no 1', UInt64(1) = FConfirmedSeq);
 end;
 
-procedure TAMQPChannelIntegrationTests.Confirm_WaitForConfirms_VariosPublishes;
+procedure TAMQPChannelIntegrationTests.Confirm_WaitForConfirms_SeveralPublishes;
 var
   LQueue: string;
   I: Integer;
@@ -340,7 +340,7 @@ begin
     FChan.WaitForConfirms(5000));
 end;
 
-procedure TAMQPChannelIntegrationTests.Confirm_WaitForConfirms_DetectaNackJaResolvido;
+procedure TAMQPChannelIntegrationTests.Confirm_WaitForConfirms_DetectsAlreadyResolvedNack;
 var
   LArgs: TAMQPFieldTable;
   LDecl: TAMQPQueueDeclare;

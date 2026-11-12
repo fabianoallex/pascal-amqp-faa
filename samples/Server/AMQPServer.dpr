@@ -4,10 +4,10 @@
 
   Same source for FPC and Delphi, like the SmokeTest. Brings up a broker on
   127.0.0.1:5672, subscribes to the events and prints each one. It stops on its
-  own after --segundos (default 20), to serve as a verification step and not
+  own after --seconds (default 20), to serve as a verification step and not
   only as a demo.
 
-    AMQPServer.exe [--porta N] [--segundos N] [--tipos lifecycle|todos]
+    AMQPServer.exe [--port N] [--seconds N] [--types lifecycle|todos]
 
   FPC:     lazbuild samples\Server\AMQPServer.lpi
   Delphi:  open samples\Server\AMQPServer.dproj in the IDE (the CE has no CLI).
@@ -42,31 +42,31 @@ type
     thread, so the handler never runs concurrently with itself (D30). A
     handler that talks to state shared with OTHER threads, on the other hand,
     must protect itself. }
-  TImpressor = class
+  TEventPrinter = class
   private
     FTotal: Integer;
   public
-    procedure AoEvento(const AEvent: TAMQPServerEvent);
+    procedure HandleServerEvent(const AEvent: TAMQPServerEvent);
     property Total: Integer read FTotal;
   end;
 
 var
   GBroker: TAMQPServer;
-  GImpressor: TImpressor;
-  GPorta: Integer = 5672;
-  GSegundos: Integer = 20;
-  GTodos: Boolean = False;
+  GEventPrinter: TEventPrinter;
+  GPort: Integer = 5672;
+  GSeconds: Integer = 20;
+  GAllEvents: Boolean = False;
 
-procedure TImpressor.AoEvento(const AEvent: TAMQPServerEvent);
+procedure TEventPrinter.HandleServerEvent(const AEvent: TAMQPServerEvent);
 var
-  LOnde: string;
+  LWhere: string;
 begin
   Inc(FTotal);
-  LOnde := AmqpEventTypeName(AEvent.EventType);
+  LWhere := AmqpEventTypeName(AEvent.EventType);
   if AEvent.ChannelNumber > 0 then
-    LOnde := LOnde + Format(' [canal %d]', [AEvent.ChannelNumber]);
+    LWhere := LWhere + Format(' [canal %d]', [AEvent.ChannelNumber]);
 
-  Write(Format('%4d  %-34s conn=%d', [FTotal, LOnde, AEvent.ConnectionId]));
+  Write(Format('%4d  %-34s conn=%d', [FTotal, LWhere, AEvent.ConnectionId]));
   if AEvent.RemoteAddr <> '' then
     Write(' de ', AEvent.RemoteAddr);
   if AEvent.Username <> '' then
@@ -86,7 +86,7 @@ begin
   Writeln;
 end;
 
-procedure LeArgumentos;
+procedure ReadArguments;
 var
   I: Integer;
   LArg: string;
@@ -95,27 +95,27 @@ begin
   while I <= ParamCount do
   begin
     LArg := ParamStr(I);
-    if (LArg = '--porta') and (I < ParamCount) then
+    if (LArg = '--port') and (I < ParamCount) then
     begin
       Inc(I);
-      GPorta := StrToIntDef(ParamStr(I), GPorta);
+      GPort := StrToIntDef(ParamStr(I), GPort);
     end
-    else if (LArg = '--segundos') and (I < ParamCount) then
+    else if (LArg = '--seconds') and (I < ParamCount) then
     begin
       Inc(I);
-      GSegundos := StrToIntDef(ParamStr(I), GSegundos);
+      GSeconds := StrToIntDef(ParamStr(I), GSeconds);
     end
-    else if (LArg = '--tipos') and (I < ParamCount) then
+    else if (LArg = '--types') and (I < ParamCount) then
     begin
       Inc(I);
-      GTodos := ParamStr(I) = 'todos';
+      GAllEvents := ParamStr(I) = 'todos';
     end;
     Inc(I);
   end;
 end;
 
 var
-  LFim: UInt64;
+  LEnd: UInt64;
 begin
   {$IFNDEF FPC}
   ReportMemoryLeaksOnShutdown := True;
@@ -123,22 +123,22 @@ begin
   {$IFDEF FPC}
   SetMultiByteConversionCodePage(CP_UTF8);
   {$ENDIF}
-  LeArgumentos;
+  ReadArguments;
 
-  GImpressor := TImpressor.Create;
+  GEventPrinter := TEventPrinter.Create;
   GBroker := TAMQPServer.Create;
   try
     GBroker.BindAddress := '127.0.0.1';
-    GBroker.Port := GPorta;
+    GBroker.Port := GPort;
 
     // Subscribing BEFORE Start is the normal case: whoever observes wants the first
     // event, not the second.
-    if GTodos then
-      GBroker.Subscribe(GImpressor.AoEvento)
+    if GAllEvents then
+      GBroker.Subscribe(GEventPrinter.HandleServerEvent)
     else
       // Filtering by type costs a mask and avoids building a record nobody
       // will look at -- it is what D32 exists to allow.
-      GBroker.Subscribe(GImpressor.AoEvento,
+      GBroker.Subscribe(GEventPrinter.HandleServerEvent,
         [seConnectionEstablished, seConnectionAuthenticated,
          seConnectionClosed, seChannelOpened, seChannelClosed,
          seMessagePublished, seMessagePublishRejected,
@@ -147,18 +147,18 @@ begin
 
     GBroker.Start;
     Writeln(Format('broker em 127.0.0.1:%d por %d s -- aponte um cliente nele',
-      [GBroker.Port, GSegundos]));
+      [GBroker.Port, GSeconds]));
     Writeln('');
 
-    LFim := PcTickMs + UInt64(GSegundos) * 1000;
-    while PcTickMs < LFim do
+    LEnd := PcTickMs + UInt64(GSeconds) * 1000;
+    while PcTickMs < LEnd do
       Sleep(200);
 
     // Drain before reporting: delivery is asynchronous (D30), so without the
     // barrier the report would come out ahead of the last events.
     GBroker.DrainEvents(2000);
     Writeln('');
-    Writeln(Format('eventos entregues:  %d', [GImpressor.Total]));
+    Writeln(Format('eventos entregues:  %d', [GEventPrinter.Total]));
     Writeln(Format('eventos emitidos:   %d', [GBroker.EventsEmitted]));
     // If this number is not zero, the handler did not keep up with the load -- it is
     // D31's best-effort charging its price, and the only way to know it was
@@ -171,9 +171,9 @@ begin
     GBroker.Stop;
     // Unsubscribe BEFORE freeing the method's owner: it is D33's contract, and the
     // sample follows what the documentation tells the user to do.
-    GBroker.Unsubscribe(GImpressor.AoEvento);
+    GBroker.Unsubscribe(GEventPrinter.HandleServerEvent);
   finally
     GBroker.Free;
-    GImpressor.Free;
+    GEventPrinter.Free;
   end;
 end.

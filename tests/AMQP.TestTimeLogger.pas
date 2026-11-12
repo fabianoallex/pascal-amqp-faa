@@ -48,10 +48,10 @@ uses
 type
   /// One row of the table: what was measured for a test.
   TAMQPTestTiming = record
-    Nome: string;
-    Segundos: Double;
-    Resultado: string;
-    Mensagem: string;
+    TestName: string;
+    Seconds: Double;
+    Outcome: string;
+    MessageText: string;
   end;
 
   TAMQPTestTimeLogger = class(TInterfacedObject, ITestLogger)
@@ -62,11 +62,11 @@ type
     /// embedded broker, tests that really run finish in less than that —
     /// measured, 3 false positives in a run of 28. Time is a heuristic; the
     /// message is fact.
-    const MARCA_IGNORADO = 'IGNORADO';
+    const IGNORED_MARK = 'IGNORADO';
   private
-    FLinhas: TList<TAMQPTestTiming>;
-    procedure Anota(const AResultado: string; const ATest: ITestResult);
-    procedure Despeja;
+    FLines: TList<TAMQPTestTiming>;
+    procedure AddLine(const AOutcome: string; const ATest: ITestResult);
+    procedure Dump;
   public
     constructor Create;
     destructor Destroy; override;
@@ -108,41 +108,41 @@ implementation
 constructor TAMQPTestTimeLogger.Create;
 begin
   inherited Create;
-  FLinhas := TList<TAMQPTestTiming>.Create;
+  FLines := TList<TAMQPTestTiming>.Create;
 end;
 
 destructor TAMQPTestTimeLogger.Destroy;
 begin
-  FLinhas.Free;
+  FLines.Free;
   inherited;
 end;
 
 // Stores; does not print. See "How to use" in the unit header.
-procedure TAMQPTestTimeLogger.Anota(const AResultado: string;
+procedure TAMQPTestTimeLogger.AddLine(const AOutcome: string;
   const ATest: ITestResult);
 var
-  LLinha: TAMQPTestTiming;
+  LLine: TAMQPTestTiming;
 begin
   if ATest = nil then
     Exit;
-  LLinha.Segundos := ATest.Duration.TotalSeconds;
-  LLinha.Resultado := AResultado;
-  LLinha.Nome := '';
+  LLine.Seconds := ATest.Duration.TotalSeconds;
+  LLine.Outcome := AOutcome;
+  LLine.TestName := '';
   if ATest.Test <> nil then
-    LLinha.Nome := ATest.Test.FullName;
-  LLinha.Mensagem := ATest.Message;
-  FLinhas.Add(LLinha);
+    LLine.TestName := ATest.Test.FullName;
+  LLine.MessageText := ATest.Message;
+  FLines.Add(LLine);
 end;
 
-procedure TAMQPTestTimeLogger.Despeja;
+procedure TAMQPTestTimeLogger.Dump;
 var
   I: Integer;
-  LLinha: TAMQPTestTiming;
-  LMarca, LMsg: string;
+  LLine: TAMQPTestTiming;
+  LMark, LMsg: string;
   LTotal: Double;
-  LSuspeitos: Integer;
+  LSuspects: Integer;
 begin
-  if FLinhas.Count = 0 then
+  if FLines.Count = 0 then
     Exit;
 
   System.Writeln;
@@ -150,68 +150,68 @@ begin
   System.Writeln('---------------');
 
   LTotal := 0;
-  LSuspeitos := 0;
-  for I := 0 to FLinhas.Count - 1 do
+  LSuspects := 0;
+  for I := 0 to FLines.Count - 1 do
   begin
-    LLinha := FLinhas[I];
-    LTotal := LTotal + LLinha.Segundos;
+    LLine := FLines[I];
+    LTotal := LTotal + LLine.Seconds;
     // '~' marks the test that ignored itself -- by the MESSAGE, not by the time.
-    if Pos(MARCA_IGNORADO, UpperCase(LLinha.Mensagem)) > 0 then
+    if Pos(IGNORED_MARK, UpperCase(LLine.MessageText)) > 0 then
     begin
-      LMarca := '~';
-      Inc(LSuspeitos);
+      LMark := '~';
+      Inc(LSuspects);
     end
     else
-      LMarca := ' ';
+      LMark := ' ';
 
-    LMsg := LLinha.Mensagem;
+    LMsg := LLine.MessageText;
     if LMsg <> '' then
       LMsg := '  <- ' + LMsg;
 
     System.Writeln(Format('%s%8.3fs  %-5s %s%s',
-      [LMarca, LLinha.Segundos, LLinha.Resultado, LLinha.Nome, LMsg]));
+      [LMark, LLine.Seconds, LLine.Outcome, LLine.TestName, LMsg]));
   end;
 
   System.Writeln(Format('---------------  %d testes, %.3fs somados',
-    [FLinhas.Count, LTotal]));
-  if LSuspeitos = 1 then
+    [FLines.Count, LTotal]));
+  if LSuspects = 1 then
     System.Writeln('1 auto-ignorado (~): NAO exercitou o alvo, apesar de contar '
       + 'como Passed no rodape -- ver a mensagem ao lado')
-  else if LSuspeitos > 1 then
+  else if LSuspects > 1 then
     System.Writeln(Format('%d auto-ignorados (~): NAO exercitaram o alvo, apesar '
       + 'de contarem como Passed no rodape -- ver a mensagem de cada um',
-      [LSuspeitos]));
-  FLinhas.Clear;
+      [LSuspects]));
+  FLines.Clear;
 end;
 
 procedure TAMQPTestTimeLogger.OnTestSuccess(const threadId: TThreadID;
   const Test: ITestResult);
 begin
-  Anota('ok', Test);
+  AddLine('ok', Test);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestFailure(const threadId: TThreadID;
   const Failure: ITestError);
 begin
-  Anota('FALHA', Failure);
+  AddLine('FALHA', Failure);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestError(const threadId: TThreadID;
   const Error: ITestError);
 begin
-  Anota('ERRO', Error);
+  AddLine('ERRO', Error);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestIgnored(const threadId: TThreadID;
   const AIgnored: ITestResult);
 begin
-  Anota('IGN', AIgnored);
+  AddLine('IGN', AIgnored);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestMemoryLeak(const threadId: TThreadID;
   const Test: ITestResult);
 begin
-  Anota('LEAK', Test);
+  AddLine('LEAK', Test);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestingEnds(const RunResults: IRunResults);
@@ -219,7 +219,7 @@ begin
   // This logger is registered BEFORE the console one, so this comes out before the
   // "Done testing / Tests Found: ..." footer -- which is exactly where the table
   // is useful: right above the summary it qualifies.
-  Despeja;
+  Dump;
   System.Writeln(Format('tempo total da execucao: %.3fs',
     [RunResults.Duration.TotalSeconds]));
 end;

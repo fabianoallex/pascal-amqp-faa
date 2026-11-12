@@ -51,7 +51,7 @@ would produce (a reply consumed on the same pool, for instance), it waits until 
 `Queue` call happens to start a worker. It is a liveness problem, not only throughput.
 
 **It already showed up in amqp's client, unexplained.** The F8 worklog recorded an intermittent
-failure of the integration test `ConsomeTodas_ComAck_E_Concorrencia` on Linux under load ("peak
+failure of the integration test `ConsumesAll_WithAck_And_Concurrency` on Linux under load ("peak
 concurrency 1: no two callbacks overlapped", cause not found). The test publishes 8 messages,
 consumes them with callbacks that take a while and asserts a peak above 1. This is the burst:
 the 8 deliveries are queued on `PcPool` in a row, `PcPool` has one idle worker left by earlier

@@ -435,9 +435,9 @@ end;
 function AmqpReplayWal(const ADir: string): TAMQPRecoveredState;
 var
   LSegs: TArray<Cardinal>;
-  LArq: IAMQPWalFile;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
-  LRegs: TAMQPWalRecords;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
   LN, I, J: Integer;
   LDir: string;
@@ -455,18 +455,18 @@ begin
   // over time -- so walking in the given order IS walking in LSN order.
   for I := 0 to High(LSegs) do
   begin
-    LArq := TAMQPWalOsFile.Create(LDir + AmqpWalSegmentName(LSegs[I]), False);
-    LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+    LWalFile := TAMQPWalOsFile.Create(LDir + AmqpWalSegmentName(LSegs[I]), False);
+    LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
     try
-      LN := LSeg.ReadPrefix(LRegs, LStop);
+      LN := LSeg.ReadPrefix(LWalRecords, LStop);
       Inc(Result.FStats.Segments);
       Inc(Result.FStats.Records, LN);
       Result.FStats.StopReason := LStop;
       for J := 0 to LN - 1 do
-        Result.Apply(LRegs[J]);
+        Result.Apply(LWalRecords[J]);
     finally
       LSeg.Free;
-      LArq := nil;
+      LWalFile := nil;
     end;
   end;
 

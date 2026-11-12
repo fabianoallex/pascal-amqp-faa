@@ -17,16 +17,16 @@ type
   TConnectionMethodsTests = class
   public
     [Test] procedure StartOk_RoundTrip;
-    [Test] procedure DecodeStart_LeArgumentos;
+    [Test] procedure DecodeStart_ReadsArguments;
     [Test] procedure Start_SupportsMechanism;
-    [Test] procedure Tune_DecodeEBuildTuneOk;
+    [Test] procedure Tune_DecodeAndBuildTuneOk;
     [Test] procedure Open_RoundTrip;
     [Test] procedure OpenOk_Decode;
     [Test] procedure Close_RoundTrip;
     [Test] procedure Blocked_Decode;
-    [Test] procedure PlainAuth_Formato;
-    [Test] procedure DefaultClientProperties_TemProduct;
-    [Test] procedure DefaultClientProperties_AnunciaConnectionBlocked;
+    [Test] procedure PlainAuth_Format;
+    [Test] procedure DefaultClientProperties_HasProduct;
+    [Test] procedure DefaultClientProperties_AnnouncesConnectionBlocked;
   end;
 
   { Server side (broker sub-module): build of the server->client methods and
@@ -37,29 +37,29 @@ type
   TConnectionServerCodecTests = class
   public
     [Test] procedure Start_RoundTrip;
-    [Test] procedure StartOk_DecodeDoBuildDoCliente;
-    [Test] procedure StartOk_ResponseComNulPreservada;
-    [Test] procedure TuneOk_DecodeDoBuildDoCliente;
-    [Test] procedure Open_DecodeDoBuildDoCliente;
-    [Test] procedure OpenOk_DecodeDoClienteConsome;
-    [Test] procedure Blocked_ClienteDecodificaOBuildDoServidor;
-    [Test] procedure Unblocked_SoCabecalho;
+    [Test] procedure StartOk_DecodeOfClientBuild;
+    [Test] procedure StartOk_ResponseWithNulPreserved;
+    [Test] procedure TuneOk_DecodeOfClientBuild;
+    [Test] procedure Open_DecodeOfClientBuild;
+    [Test] procedure OpenOk_DecodeConsumedByClient;
+    [Test] procedure Blocked_ClientDecodesTheServerBuild;
+    [Test] procedure Unblocked_HeaderOnly;
     [Test] procedure Secure_RoundTrip;
     [Test] procedure CloseOk_RoundTrip;
-    [Test] procedure DefaultServerProperties_TemProductECapabilities;
+    [Test] procedure DefaultServerProperties_HasProductAndCapabilities;
   end;
 
   [TestFixture]
   TTuneNegotiationTests = class
   public
     // channel-max gotcha (see CLAUDE.md)
-    [Test] procedure ChannelMax_ClienteZero_AdotaServidor;
-    [Test] procedure ChannelMax_NuncaExcedeServidor;
-    [Test] procedure ChannelMax_ServidorZero_UsaCliente;
-    [Test] procedure ChannelMax_AmbosZero_FicaZero;
-    [Test] procedure ChannelMax_AmbosFinitos_MenorVence;
-    [Test] procedure FrameMax_Negocia;
-    [Test] procedure NegotiateTune_Combina;
+    [Test] procedure ChannelMax_ClientZero_AdoptsServer;
+    [Test] procedure ChannelMax_NeverExceedsServer;
+    [Test] procedure ChannelMax_ServerZero_UsesClient;
+    [Test] procedure ChannelMax_BothZero_StaysZero;
+    [Test] procedure ChannelMax_BothFinite_SmallerWins;
+    [Test] procedure FrameMax_Negotiates;
+    [Test] procedure NegotiateTune_Combines;
   end;
 
 implementation
@@ -72,7 +72,7 @@ var
   LPayload: TBytes;
   R: TAMQPReader;
   LId: TAMQPMethodId;
-  LProdutoVal: TValue;
+  LProductVal: TValue;
 begin
   LProps := DefaultClientProperties;
   try
@@ -87,8 +87,8 @@ begin
 
       LDecoded := R.ReadFieldTable;
       try
-        LProdutoVal := LDecoded['product'];
-        TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+        LProductVal := LDecoded['product'];
+        TAssert.AssertEquals('pascal-amqp-faa', LProductVal.AsString);
       finally
         LDecoded.Free;
       end;
@@ -105,14 +105,14 @@ begin
   end;
 end;
 
-procedure TConnectionMethodsTests.DecodeStart_LeArgumentos;
+procedure TConnectionMethodsTests.DecodeStart_ReadsArguments;
 var
   W: TAMQPWriter;
   LServerProps: TAMQPFieldTable;
   R: TAMQPReader;
   LId: TAMQPMethodId;
   LStart: TAMQPConnectionStart;
-  LProdutoVal: TValue;
+  LProductVal: TValue;
 begin
   // Builds a Start as the server would send it.
   LServerProps := TAMQPFieldTable.Create;
@@ -136,8 +136,8 @@ begin
         TAssert.AssertEquals(9, Integer(LStart.VersionMinor));
         TAssert.AssertEquals('PLAIN AMQPLAIN', LStart.Mechanisms);
         TAssert.AssertEquals('en_US', LStart.Locales);
-        LProdutoVal := LStart.ServerProperties['product'];
-        TAssert.AssertEquals('RabbitMQ', LProdutoVal.AsString);
+        LProductVal := LStart.ServerProperties['product'];
+        TAssert.AssertEquals('RabbitMQ', LProductVal.AsString);
       finally
         LStart.ServerProperties.Free;
       end;
@@ -162,7 +162,7 @@ begin
   TAssert.AssertFalse(LStart.SupportsMechanism('EXTERNAL'));
 end;
 
-procedure TConnectionMethodsTests.Tune_DecodeEBuildTuneOk;
+procedure TConnectionMethodsTests.Tune_DecodeAndBuildTuneOk;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -306,7 +306,7 @@ begin
   end;
 end;
 
-procedure TConnectionMethodsTests.PlainAuth_Formato;
+procedure TConnectionMethodsTests.PlainAuth_Format;
 var
   S: string;
 begin
@@ -317,22 +317,22 @@ begin
   TAssert.AssertTrue('separador entre usuario e senha', S[7] = #0);
 end;
 
-procedure TConnectionMethodsTests.DefaultClientProperties_TemProduct;
+procedure TConnectionMethodsTests.DefaultClientProperties_HasProduct;
 var
   P: TAMQPFieldTable;
-  LProdutoVal: TValue;
+  LProductVal: TValue;
 begin
   P := DefaultClientProperties;
   try
-    LProdutoVal := P['product'];
-    TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+    LProductVal := P['product'];
+    TAssert.AssertEquals('pascal-amqp-faa', LProductVal.AsString);
     TAssert.AssertTrue(P.ContainsKey('capabilities'));
   finally
     P.Free;
   end;
 end;
 
-procedure TConnectionMethodsTests.DefaultClientProperties_AnunciaConnectionBlocked;
+procedure TConnectionMethodsTests.DefaultClientProperties_AnnouncesConnectionBlocked;
 var
   P, LCaps: TAMQPFieldTable;
   LCapsVal, LBlockedVal: TValue;
@@ -361,7 +361,7 @@ var
   R: TAMQPReader;
   LId: TAMQPMethodId;
   LStart: TAMQPConnectionStart;
-  LProdutoVal: TValue;
+  LProductVal: TValue;
 begin
   LProps := DefaultServerProperties;
   try
@@ -382,8 +382,8 @@ begin
       TAssert.AssertEquals(9, Integer(LStart.VersionMinor));
       TAssert.AssertEquals('PLAIN', LStart.Mechanisms);
       TAssert.AssertEquals('en_US', LStart.Locales);
-      LProdutoVal := LStart.ServerProperties['product'];
-      TAssert.AssertEquals('pascal-amqp-faa (broker)', LProdutoVal.AsString);
+      LProductVal := LStart.ServerProperties['product'];
+      TAssert.AssertEquals('pascal-amqp-faa (broker)', LProductVal.AsString);
       TAssert.AssertTrue(R.EndOfData);
     finally
       LStart.ServerProperties.Free;
@@ -393,14 +393,14 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.StartOk_DecodeDoBuildDoCliente;
+procedure TConnectionServerCodecTests.StartOk_DecodeOfClientBuild;
 var
   LClientProps: TAMQPFieldTable;
   LPayload: TBytes;
   R: TAMQPReader;
   LId: TAMQPMethodId;
   LStartOk: TAMQPConnectionStartOk;
-  LProdutoVal: TValue;
+  LProductVal: TValue;
 begin
   LClientProps := DefaultClientProperties;
   try
@@ -418,8 +418,8 @@ begin
     try
       TAssert.AssertEquals('mechanism', AMQP_AUTH_PLAIN, LStartOk.Mechanism);
       TAssert.AssertEquals('locale', AMQP_LOCALE_DEFAULT, LStartOk.Locale);
-      LProdutoVal := LStartOk.ClientProperties['product'];
-      TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+      LProductVal := LStartOk.ClientProperties['product'];
+      TAssert.AssertEquals('pascal-amqp-faa', LProductVal.AsString);
       TAssert.AssertTrue(R.EndOfData);
     finally
       LStartOk.ClientProperties.Free;
@@ -429,15 +429,15 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.StartOk_ResponseComNulPreservada;
+procedure TConnectionServerCodecTests.StartOk_ResponseWithNulPreserved;
 var
   LClientProps: TAMQPFieldTable;
-  LPayload, LEsperado: TBytes;
+  LPayload, LExpected: TBytes;
   R: TAMQPReader;
   LStartOk: TAMQPConnectionStartOk;
   I: Integer;
 begin
-  LEsperado := AmqpUtf8Encode(PlainAuthResponse('guest', 'secret'));
+  LExpected := AmqpUtf8Encode(PlainAuthResponse('guest', 'secret'));
   LClientProps := DefaultClientProperties;
   try
     LPayload := BuildStartOk(LClientProps, AMQP_AUTH_PLAIN,
@@ -453,10 +453,10 @@ begin
     try
       // The SASL response (#0 guest #0 secret) must survive byte for byte:
       // no going through AmqpUtf8Decode and losing the #0s.
-      TAssert.AssertEquals('tamanho da resposta', Length(LEsperado), Length(LStartOk.Response));
-      for I := 0 to High(LEsperado) do
+      TAssert.AssertEquals('tamanho da resposta', Length(LExpected), Length(LStartOk.Response));
+      for I := 0 to High(LExpected) do
         TAssert.AssertEquals('byte ' + IntToStr(I),
-          Integer(LEsperado[I]), Integer(LStartOk.Response[I]));
+          Integer(LExpected[I]), Integer(LStartOk.Response[I]));
       TAssert.AssertEquals('separador inicial', 0, Integer(LStartOk.Response[0]));
       TAssert.AssertEquals('separador do meio', 0, Integer(LStartOk.Response[6]));
     finally
@@ -467,7 +467,7 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.TuneOk_DecodeDoBuildDoCliente;
+procedure TConnectionServerCodecTests.TuneOk_DecodeOfClientBuild;
 var
   LTune, LDecoded: TAMQPConnectionTune;
   LPayload: TBytes;
@@ -506,7 +506,7 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.Open_DecodeDoBuildDoCliente;
+procedure TConnectionServerCodecTests.Open_DecodeOfClientBuild;
 var
   LPayload: TBytes;
   R: TAMQPReader;
@@ -526,7 +526,7 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.OpenOk_DecodeDoClienteConsome;
+procedure TConnectionServerCodecTests.OpenOk_DecodeConsumedByClient;
 var
   LPayload: TBytes;
   R: TAMQPReader;
@@ -544,7 +544,7 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.Blocked_ClienteDecodificaOBuildDoServidor;
+procedure TConnectionServerCodecTests.Blocked_ClientDecodesTheServerBuild;
 var
   LPayload: TBytes;
   R: TAMQPReader;
@@ -562,7 +562,7 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.Unblocked_SoCabecalho;
+procedure TConnectionServerCodecTests.Unblocked_HeaderOnly;
 var
   LPayload: TBytes;
   R: TAMQPReader;
@@ -586,7 +586,7 @@ var
   LId: TAMQPMethodId;
   W: TAMQPWriter;
   I: Integer;
-  LEsperado: TBytes;
+  LExpected: TBytes;
 begin
   LPayload := BuildSecure('rabbit-challenge');
   R := TAMQPReader.Create(LPayload);
@@ -607,14 +607,14 @@ begin
   finally
     W.Free;
   end;
-  LEsperado := AmqpUtf8Encode(#0'u'#0'p');
+  LExpected := AmqpUtf8Encode(#0'u'#0'p');
   R := TAMQPReader.Create(LPayload);
   try
     ReadMethodHeader(R);
     LResp := DecodeSecureOk(R);
-    TAssert.AssertEquals(Length(LEsperado), Length(LResp));
-    for I := 0 to High(LEsperado) do
-      TAssert.AssertEquals(Integer(LEsperado[I]), Integer(LResp[I]));
+    TAssert.AssertEquals(Length(LExpected), Length(LResp));
+    for I := 0 to High(LExpected) do
+      TAssert.AssertEquals(Integer(LExpected[I]), Integer(LResp[I]));
   finally
     R.Free;
   end;
@@ -638,15 +638,15 @@ begin
   end;
 end;
 
-procedure TConnectionServerCodecTests.DefaultServerProperties_TemProductECapabilities;
+procedure TConnectionServerCodecTests.DefaultServerProperties_HasProductAndCapabilities;
 var
   P, LCaps: TAMQPFieldTable;
-  LProdutoVal, LCapsVal, LConfirmsVal: TValue;
+  LProductVal, LCapsVal, LConfirmsVal: TValue;
 begin
   P := DefaultServerProperties;
   try
-    LProdutoVal := P['product'];
-    TAssert.AssertEquals('pascal-amqp-faa (broker)', LProdutoVal.AsString);
+    LProductVal := P['product'];
+    TAssert.AssertEquals('pascal-amqp-faa (broker)', LProductVal.AsString);
     TAssert.AssertTrue(P.ContainsKey('capabilities'));
     LCapsVal := P['capabilities'];
     LCaps := TAMQPFieldTable(LCapsVal.AsObject);
@@ -661,41 +661,41 @@ end;
 
 { TTuneNegotiationTests }
 
-procedure TTuneNegotiationTests.ChannelMax_ClienteZero_AdotaServidor;
+procedure TTuneNegotiationTests.ChannelMax_ClientZero_AdoptsServer;
 begin
   // Client wants "no limit" (0), server proposes 2047 -> uses 2047, never 0.
   TAssert.AssertEquals(2047, Integer(NegotiateChannelMax(2047, 0)));
 end;
 
-procedure TTuneNegotiationTests.ChannelMax_NuncaExcedeServidor;
+procedure TTuneNegotiationTests.ChannelMax_NeverExceedsServer;
 begin
   // Client asks for more than the server allows -> capped at the server's value.
   TAssert.AssertEquals(2047, Integer(NegotiateChannelMax(2047, 5000)));
 end;
 
-procedure TTuneNegotiationTests.ChannelMax_ServidorZero_UsaCliente;
+procedure TTuneNegotiationTests.ChannelMax_ServerZero_UsesClient;
 begin
   TAssert.AssertEquals(100, Integer(NegotiateChannelMax(0, 100)));
 end;
 
-procedure TTuneNegotiationTests.ChannelMax_AmbosZero_FicaZero;
+procedure TTuneNegotiationTests.ChannelMax_BothZero_StaysZero;
 begin
   TAssert.AssertEquals(0, Integer(NegotiateChannelMax(0, 0)));
 end;
 
-procedure TTuneNegotiationTests.ChannelMax_AmbosFinitos_MenorVence;
+procedure TTuneNegotiationTests.ChannelMax_BothFinite_SmallerWins;
 begin
   TAssert.AssertEquals(100, Integer(NegotiateChannelMax(2047, 100)));
 end;
 
-procedure TTuneNegotiationTests.FrameMax_Negocia;
+procedure TTuneNegotiationTests.FrameMax_Negotiates;
 begin
   TAssert.AssertEquals(Int64(131072), Int64(NegotiateFrameMax(131072, 0)));
   TAssert.AssertEquals(Int64(65536), Int64(NegotiateFrameMax(131072, 65536)));
   TAssert.AssertEquals(Int64(131072), Int64(NegotiateFrameMax(0, 131072)));
 end;
 
-procedure TTuneNegotiationTests.NegotiateTune_Combina;
+procedure TTuneNegotiationTests.NegotiateTune_Combines;
 var
   LServer, LResult: TAMQPConnectionTune;
 begin

@@ -38,14 +38,14 @@ type
   TDataRecordTests = class
   public
     [Test] procedure Content_RoundTrip;
-    [Test] procedure Content_CorpoBinarioSobreviveIntacto;
-    [Test] procedure Content_CorpoBinario_NaoDependeDoCodepageDaApp;
-    [Test] procedure Content_CorpoVazio;
+    [Test] procedure Content_BinaryBodySurvivesIntact;
+    [Test] procedure Content_BinaryBody_DoesNotDependOnAppCodepage;
+    [Test] procedure Content_EmptyBody;
     [Test] procedure Enqueue_RoundTrip;
-    [Test] procedure Enqueue_TtlAusenteSobreviveComoMenosUm;
-    [Test] procedure Enqueue_HeaderBinarioSobreviveIntacto;
+    [Test] procedure Enqueue_AbsentTtlSurvivesAsMinusOne;
+    [Test] procedure Enqueue_BinaryHeaderSurvivesIntact;
     [Test] procedure Dequeue_RoundTrip;
-    [Test] procedure KindsDeDados_SaoReconhecidos;
+    [Test] procedure DataKinds_AreRecognized;
   end;
 
 
@@ -61,79 +61,79 @@ type
     FConn: TAMQPConnection;
     FChan: TAMQPChannel;
     FDir: string;
-    /// WAL cap that AbreBroker applies. 0 = unlimited (the default),
+    /// WAL cap that StartBroker applies. 0 = unlimited (the default),
     /// which is what every test except the cap ones uses.
-    FTetoWal: Int64;
-    function DeclaraFila(const ANome: string; ADurable: Boolean;
+    FWalCap: Int64;
+    function MakeQueue(const AName: string; ADurable: Boolean;
       AArgs: TAMQPFieldTable = nil): string;
     /// Closes the client, stops the broker and returns a summary of the WAL.
-    function FechaELeWal: TStringList;
-    function Conta(L: TStringList; const APrefixo: string): Integer;
-    /// Index of the first line that starts with APrefixo, or -1.
-    function Indice(L: TStringList; const APrefixo: string): Integer;
+    function CloseAndReadWal: TStringList;
+    function CountWithPrefix(L: TStringList; const APrefix: string): Integer;
+    /// Index of the first line that starts with APrefix, or -1.
+    function IndexWithPrefix(L: TStringList; const APrefix: string): Integer;
     /// Brings up a new broker pointing at FDir and reconnects the client.
-    procedure AbreBroker;
+    procedure StartBroker;
     /// Brings down the broker and brings up another in the SAME directory -- which is
     /// what a restart is, from the disk's point of view.
-    procedure Reabre;
+    procedure Reopen;
     /// Sums the size of all the WAL segments.
-    function TamanhoDoWal: Int64;
+    function WalSize: Int64;
     /// Publishes persistent with the 'priority' property filled in.
-    procedure PublicaComPrioridade(const AFila, ACorpo: string; APrio: Byte);
+    procedure PublishWithPriority(const AQueue, ABody: string; APriority: Byte);
     /// True if the queue exists (passive declare on a throwaway channel).
-    function FilaExiste(const AFila: string): Boolean;
+    function QueueExists(const AQueue: string): Boolean;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure Persistente_EmFilaDuravel_GravaConteudoEColocacao;
-    [Test] procedure Transiente_EmFilaDuravel_NaoGravaNada;
-    [Test] procedure Persistente_EmFilaTransiente_NaoGravaNada;
-    [Test] procedure DuasFilasDuraveis_UmConteudoDuasColocacoes;
-    [Test] procedure Ack_AposentaAColocacao;
-    [Test] procedure GetSemAck_AposentaNaHora;
-    [Test] procedure DeadLetter_ColocacaoNovaAntesDeAposentarAVelha;
-    [Test] procedure Confirm_ComDataDir_OCanalPassaAAdiar;
-    [Test] procedure Confirm_PublishPersistente_ChegaComOJournalJaDuravel;
-    [Test] procedure Confirm_LoteDePersistentes_TodosConfirmam;
-    [Test] procedure Confirm_PersistenteETransienteMisturados_TodosConfirmam;
+    [Test] procedure Persistent_InDurableQueue_WritesContentAndPlacement;
+    [Test] procedure Transient_InDurableQueue_WritesNothing;
+    [Test] procedure Persistent_InTransientQueue_WritesNothing;
+    [Test] procedure TwoDurableQueues_OneContentTwoPlacements;
+    [Test] procedure Ack_RetiresThePlacement;
+    [Test] procedure GetWithoutAck_RetiresImmediately;
+    [Test] procedure DeadLetter_NewPlacementBeforeRetiringTheOld;
+    [Test] procedure Confirm_WithDataDir_ChannelStartsDeferring;
+    [Test] procedure Confirm_PersistentPublish_ArrivesWithJournalAlreadyDurable;
+    [Test] procedure Confirm_BatchOfPersistent_AllConfirm;
+    [Test] procedure Confirm_PersistentAndTransientMixed_AllConfirm;
     // --- WS6: the broker goes down and comes back up in the SAME directory ---
-    [Test] procedure Restart_MensagemPersistente_Sobrevive;
-    [Test] procedure Restart_Transiente_NaoSobrevive;
-    [Test] procedure Restart_TopologiaDuravel_Sobrevive;
-    [Test] procedure Restart_MensagemVolta_ComRedelivered;
-    [Test] procedure Restart_OrdemDePrioridade_Preservada;
-    [Test] procedure Restart_Consumida_NaoRessuscita;
-    [Test] procedure Restart_NaoReescreveOLog;
-    [Test] procedure Restart_IdNovoNaoColideComRecuperado;
-    [Test] procedure Restart_PrazoDescontaOTempoDecorrido;
-    [Test] procedure Teto_PublishPersistenteAcimaDoTeto_LevaNack;
-    [Test] procedure Teto_PublishTransiente_PassaMesmoComOLogCheio;
-    [Test] procedure Teto_PublishRecusado_NaoEntraNaFila;
+    [Test] procedure Restart_PersistentMessage_Survives;
+    [Test] procedure Restart_Transient_DoesNotSurvive;
+    [Test] procedure Restart_DurableTopology_Survives;
+    [Test] procedure Restart_MessageReturns_WithRedelivered;
+    [Test] procedure Restart_PriorityOrder_Preserved;
+    [Test] procedure Restart_Consumed_DoesNotResurrect;
+    [Test] procedure Restart_DoesNotRewriteTheLog;
+    [Test] procedure Restart_NewIdDoesNotCollideWithRecovered;
+    [Test] procedure Restart_DeadlineDeductsElapsedTime;
+    [Test] procedure Cap_PersistentPublishAboveTheCap_GetsNack;
+    [Test] procedure Cap_TransientPublish_PassesEvenWithAFullLog;
+    [Test] procedure Cap_RefusedPublish_DoesNotEnterTheQueue;
   end;
 
 implementation
 
 // Assertions with the type fixed: the value comes in already converted, and the
 // TAssert overload is the same on both compilers.
-procedure ChecaOk(const AMsg: string; ACond: Boolean);
+procedure CheckOk(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertTrue(AMsg, ACond);
 end;
-procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Integer);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
-procedure ChecaStr(const AMsg, AEsperado, AObtido: string);
+procedure CheckStr(const AMsg, AExpected, AActual: string);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaNao(const AMsg: string; ACond: Boolean);
+procedure CheckNot(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertFalse(AMsg, ACond);
 end;
 
-function BytesIguais(const A, B: TBytes): Boolean;
+function SameBytes(const A, B: TBytes): Boolean;
 var
   I: Integer;
 begin
@@ -145,7 +145,7 @@ begin
       Exit(False);
 end;
 
-function TodosOsBytes: TBytes;
+function AllBytes: TBytes;
 var
   I: Integer;
 begin
@@ -172,10 +172,10 @@ begin
   TAssert.AssertEquals('content-id de 64 bits', Int64($0102030405060708),
     Int64(R2.ContentId));
   TAssert.AssertEquals('user-id', 'guest', R2.UserId);
-  TAssert.AssertTrue('corpo igual', BytesIguais(LB, R2.Body));
+  TAssert.AssertTrue('corpo igual', SameBytes(LB, R2.Body));
 end;
 
-procedure TDataRecordTests.Content_CorpoBinarioSobreviveIntacto;
+procedure TDataRecordTests.Content_BinaryBodySurvivesIntact;
 var
   R, R2: TAMQPRecContent;
   LB: TBytes;
@@ -183,22 +183,22 @@ begin
   // The 256 byte values, including zero and everything above 127. If someone
   // "simplifies" the blob to WriteLongStr, the body goes through AmqpUtf8Encode and
   // this test fails -- which is exactly its point.
-  LB := TodosOsBytes;
+  LB := AllBytes;
   R.ContentId := 1;
   R.UserId := '';
   R.Body := LB;
   R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
   TAssert.AssertEquals('256 bytes de volta', 256, Length(R2.Body));
   TAssert.AssertTrue('todos os 256 valores de byte sobrevivem',
-    BytesIguais(LB, R2.Body));
+    SameBytes(LB, R2.Body));
 end;
 
-procedure TDataRecordTests.Content_CorpoBinario_NaoDependeDoCodepageDaApp;
+procedure TDataRecordTests.Content_BinaryBody_DoesNotDependOnAppCodepage;
 var
   R, R2: TAMQPRecContent;
   LB: TBytes;
   {$IFDEF FPC}
-  LCpAntes: TSystemCodePage;
+  LCpBefore: TSystemCodePage;
   {$ENDIF}
 begin
   // THIS test exists because of a mutation that SURVIVED.
@@ -213,27 +213,27 @@ begin
   // case, measured, the same 256 bytes become 401 and the body comes out corrupted.
   // So the test fixes the codepage the way the real world can hand it over,
   // instead of trusting what the runner set up for itself.
-  LB := TodosOsBytes;
+  LB := AllBytes;
   R.ContentId := 1;
   R.UserId := 'guest';
   R.Body := LB;
   {$IFDEF FPC}
-  LCpAntes := DefaultSystemCodePage;
+  LCpBefore := DefaultSystemCodePage;
   DefaultSystemCodePage := 1252;
   try
   {$ENDIF}
     R2 := AmqpDecodeRecContent(AmqpEncodeRecContent(R));
   {$IFDEF FPC}
   finally
-    DefaultSystemCodePage := LCpAntes;
+    DefaultSystemCodePage := LCpBefore;
   end;
   {$ENDIF}
   TAssert.AssertEquals('256 bytes de volta', 256, Length(R2.Body));
   TAssert.AssertTrue('o corpo nao depende do codepage da app',
-    BytesIguais(LB, R2.Body));
+    SameBytes(LB, R2.Body));
 end;
 
-procedure TDataRecordTests.Content_CorpoVazio;
+procedure TDataRecordTests.Content_EmptyBody;
 var
   R, R2: TAMQPRecContent;
 begin
@@ -274,10 +274,10 @@ begin
   TAssert.AssertEquals('prioridade', 5, Integer(R2.Priority));
   TAssert.AssertEquals('instante de parede', Int64(1788533217385), R2.EnqueuedAtWall);
   TAssert.AssertEquals('ttl', Int64(60000), R2.TtlMs);
-  TAssert.AssertTrue('header igual', BytesIguais(LH, R2.HeaderPayload));
+  TAssert.AssertTrue('header igual', SameBytes(LH, R2.HeaderPayload));
 end;
 
-procedure TDataRecordTests.Enqueue_TtlAusenteSobreviveComoMenosUm;
+procedure TDataRecordTests.Enqueue_AbsentTtlSurvivesAsMinusOne;
 var
   R, R2: TAMQPRecEnqueue;
 begin
@@ -298,13 +298,13 @@ begin
   TAssert.AssertEquals('ttl -1 continua -1', Int64(-1), R2.TtlMs);
 end;
 
-procedure TDataRecordTests.Enqueue_HeaderBinarioSobreviveIntacto;
+procedure TDataRecordTests.Enqueue_BinaryHeaderSurvivesIntact;
 var
   R, R2: TAMQPRecEnqueue;
   LH: TBytes;
 begin
   // Same reason as the body: the raw content-header (decision D1) is binary.
-  LH := TodosOsBytes;
+  LH := AllBytes;
   R.VHost := '/';
   R.Queue := 'q';
   R.EntryId := 1;
@@ -316,7 +316,7 @@ begin
   R.TtlMs := -1;
   R.HeaderPayload := LH;
   R2 := AmqpDecodeRecEnqueue(AmqpEncodeRecEnqueue(R));
-  TAssert.AssertTrue('header binario intacto', BytesIguais(LH, R2.HeaderPayload));
+  TAssert.AssertTrue('header binario intacto', SameBytes(LH, R2.HeaderPayload));
 end;
 
 procedure TDataRecordTests.Dequeue_RoundTrip;
@@ -333,7 +333,7 @@ begin
     Int64(R2.EntryId));
 end;
 
-procedure TDataRecordTests.KindsDeDados_SaoReconhecidos;
+procedure TDataRecordTests.DataKinds_AreRecognized;
 begin
   TAssert.AssertTrue('conteudo', AmqpIsDataRecord(AMQP_REC_CONTENT));
   TAssert.AssertTrue('colocacao', AmqpIsDataRecord(AMQP_REC_ENQUEUE));
@@ -348,7 +348,7 @@ end;
 var
   GSeq: Integer = 0;
 
-procedure LimpaDir(const ADir: string);
+procedure ClearDir(const ADir: string);
 var
   LRec: TSearchRec;
 begin
@@ -366,7 +366,7 @@ begin
 end;
 
 // One line per record, readable, so the failure says what showed up.
-function LinhaDe(const ARec: TAMQPWalRecord): string;
+function LineOf(const ARec: TAMQPWalRecord): string;
 var
   LC: TAMQPRecContent;
   LE: TAMQPRecEnqueue;
@@ -396,11 +396,11 @@ begin
   end;
 end;
 
-function LeWal(const ADir: string): TStringList;
+function ReadWal(const ADir: string): TStringList;
 var
-  LArq: IAMQPWalFile;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
-  LRegs: TAMQPWalRecords;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
   LSegs: TArray<Cardinal>;
   I, LN: Integer;
@@ -409,16 +409,16 @@ begin
   LSegs := AmqpWalListSegments(ADir);
   if Length(LSegs) = 0 then
     Exit;
-  LArq := TAMQPWalOsFile.Create(
+  LWalFile := TAMQPWalOsFile.Create(
     IncludeTrailingPathDelimiter(ADir) + AmqpWalSegmentName(LSegs[0]), False);
-  LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+  LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
   try
-    LN := LSeg.ReadPrefix(LRegs, LStop);
+    LN := LSeg.ReadPrefix(LWalRecords, LStop);
     for I := 0 to LN - 1 do
-      Result.Add(LinhaDe(LRegs[I]));
+      Result.Add(LineOf(LWalRecords[I]));
   finally
     LSeg.Free;
-    LArq := nil;
+    LWalFile := nil;
   end;
 end;
 
@@ -427,13 +427,13 @@ end;
 procedure TPersistWiringTests.SetUp;
 begin
   Inc(GSeq);
-  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqppersist-'
+  FDir := IncludeTrailingPathDelimiter(TempDir) + 'amqppersist-'
     + IntToStr(GSeq);
   ForceDirectories(FDir);
-  LimpaDir(FDir);
-  // A single implementation of bringing up the broker: WS6's Reabre calls the SAME one,
+  ClearDir(FDir);
+  // A single implementation of bringing up the broker: WS6's Reopen calls the SAME one,
   // and two copies would be two chances for the restart not to be what SetUp does.
-  AbreBroker;
+  StartBroker;
 end;
 
 procedure TPersistWiringTests.TearDown;
@@ -454,111 +454,111 @@ begin
     end;
     FreeAndNil(FBroker);
   end;
-  LimpaDir(FDir);
+  ClearDir(FDir);
 end;
 
-function TPersistWiringTests.DeclaraFila(const ANome: string; ADurable: Boolean;
+function TPersistWiringTests.MakeQueue(const AName: string; ADurable: Boolean;
   AArgs: TAMQPFieldTable): string;
 var
   LDecl: TAMQPQueueDeclare;
 begin
-  LDecl := TAMQPQueueDeclare.Create(ANome, ADurable);
+  LDecl := TAMQPQueueDeclare.Create(AName, ADurable);
   LDecl.Arguments := AArgs;
   Result := FChan.DeclareQueue(LDecl).QueueName;
 end;
 
-function TPersistWiringTests.FechaELeWal: TStringList;
+function TPersistWiringTests.CloseAndReadWal: TStringList;
 begin
   FConn.Close;
   FreeAndNil(FConn);
   FBroker.Stop;
   FreeAndNil(FBroker);
-  Result := LeWal(FDir);
+  Result := ReadWal(FDir);
 end;
 
-function TPersistWiringTests.Conta(L: TStringList;
-  const APrefixo: string): Integer;
+function TPersistWiringTests.CountWithPrefix(L: TStringList;
+  const APrefix: string): Integer;
 var
   I: Integer;
 begin
   Result := 0;
   for I := 0 to L.Count - 1 do
-    if Pos(APrefixo, L[I]) = 1 then
+    if Pos(APrefix, L[I]) = 1 then
       Inc(Result);
 end;
 
-function TPersistWiringTests.Indice(L: TStringList;
-  const APrefixo: string): Integer;
+function TPersistWiringTests.IndexWithPrefix(L: TStringList;
+  const APrefix: string): Integer;
 var
   I: Integer;
 begin
   Result := -1;
   for I := 0 to L.Count - 1 do
-    if Pos(APrefixo, L[I]) = 1 then
+    if Pos(APrefix, L[I]) = 1 then
       Exit(I);
 end;
 
 { TPersistWiringTests }
 
-procedure TPersistWiringTests.Persistente_EmFilaDuravel_GravaConteudoEColocacao;
+procedure TPersistWiringTests.Persistent_InDurableQueue_WritesContentAndPlacement;
 var
   L: TStringList;
 begin
   // D20's rule of three, in the case where it says YES.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'carga', True);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('um conteudo', 1, Conta(L, 'content:'));
-    TAssert.AssertEquals('uma colocacao na fila', 1, Conta(L, 'enqueue:q.dur:'));
-    TAssert.AssertEquals('e nada foi aposentado', 0, Conta(L, 'dequeue:'));
+    TAssert.AssertEquals('um conteudo', 1, CountWithPrefix(L, 'content:'));
+    TAssert.AssertEquals('uma colocacao na fila', 1, CountWithPrefix(L, 'enqueue:q.dur:'));
+    TAssert.AssertEquals('e nada foi aposentado', 0, CountWithPrefix(L, 'dequeue:'));
   finally
     L.Free;
   end;
 end;
 
-procedure TPersistWiringTests.Transiente_EmFilaDuravel_NaoGravaNada;
+procedure TPersistWiringTests.Transient_InDurableQueue_WritesNothing;
 var
   L: TStringList;
 begin
   // delivery-mode 1 on a DURABLE queue: the queue is durable, the message is not.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'carga', False);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('nenhum conteudo', 0, Conta(L, 'content:'));
-    TAssert.AssertEquals('nenhuma colocacao', 0, Conta(L, 'enqueue:'));
+    TAssert.AssertEquals('nenhum conteudo', 0, CountWithPrefix(L, 'content:'));
+    TAssert.AssertEquals('nenhuma colocacao', 0, CountWithPrefix(L, 'enqueue:'));
   finally
     L.Free;
   end;
 end;
 
-procedure TPersistWiringTests.Persistente_EmFilaTransiente_NaoGravaNada;
+procedure TPersistWiringTests.Persistent_InTransientQueue_WritesNothing;
 var
   L: TStringList;
 begin
   // The opposite: the MESSAGE is persistent, the queue is not. A transient queue does
   // not touch the journal, and its hot path stays identical to Phase 3's.
-  DeclaraFila('q.tra', False);
+  MakeQueue('q.tra', False);
   FChan.PublishText('', 'q.tra', 'carga', True);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('nenhum conteudo', 0, Conta(L, 'content:'));
-    TAssert.AssertEquals('nenhuma colocacao', 0, Conta(L, 'enqueue:'));
+    TAssert.AssertEquals('nenhum conteudo', 0, CountWithPrefix(L, 'content:'));
+    TAssert.AssertEquals('nenhuma colocacao', 0, CountWithPrefix(L, 'enqueue:'));
   finally
     L.Free;
   end;
 end;
 
-procedure TPersistWiringTests.DuasFilasDuraveis_UmConteudoDuasColocacoes;
+procedure TPersistWiringTests.TwoDurableQueues_OneContentTwoPlacements;
 var
   L: TStringList;
   LBind: TAMQPQueueBind;
 begin
   // The PAYOFF of D22: the body goes ONCE, the placement goes per queue. It is
   // what keeps a fan-out to N queues from multiplying the body by N on disk.
-  DeclaraFila('q.a', True);
-  DeclaraFila('q.b', True);
+  MakeQueue('q.a', True);
+  MakeQueue('q.b', True);
   FChan.DeclareExchange(TAMQPExchangeDeclare.Create('ex.fan', 'fanout', True));
   LBind.ExchangeName := 'ex.fan';
   LBind.RoutingKey := '';
@@ -570,71 +570,71 @@ begin
   FChan.BindQueue(LBind);
 
   FChan.PublishText('ex.fan', '', 'carga', True);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('UM conteudo para as duas filas', 1, Conta(L, 'content:'));
-    TAssert.AssertEquals('colocacao na q.a', 1, Conta(L, 'enqueue:q.a:'));
-    TAssert.AssertEquals('colocacao na q.b', 1, Conta(L, 'enqueue:q.b:'));
+    TAssert.AssertEquals('UM conteudo para as duas filas', 1, CountWithPrefix(L, 'content:'));
+    TAssert.AssertEquals('colocacao na q.a', 1, CountWithPrefix(L, 'enqueue:q.a:'));
+    TAssert.AssertEquals('colocacao na q.b', 1, CountWithPrefix(L, 'enqueue:q.b:'));
   finally
     L.Free;
   end;
 end;
 
-procedure TPersistWiringTests.Ack_AposentaAColocacao;
+procedure TPersistWiringTests.Ack_RetiresThePlacement;
 var
   L: TStringList;
   LGet: TAMQPGetResult;
 begin
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'carga', True);
   LGet := FChan.BasicGet('q.dur', False); // ack mode
   TAssert.AssertTrue('achou a mensagem', LGet.Found);
   FChan.Ack(LGet.DeliveryTag);
   Sleep(300); // the ack travels and the actor still has to process it
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('a colocacao existiu', 1, Conta(L, 'enqueue:q.dur:'));
-    TAssert.AssertEquals('e foi aposentada no ack', 1, Conta(L, 'dequeue:q.dur:'));
+    TAssert.AssertEquals('a colocacao existiu', 1, CountWithPrefix(L, 'enqueue:q.dur:'));
+    TAssert.AssertEquals('e foi aposentada no ack', 1, CountWithPrefix(L, 'dequeue:q.dur:'));
   finally
     L.Free;
   end;
 end;
 
-procedure TPersistWiringTests.GetSemAck_AposentaNaHora;
+procedure TPersistWiringTests.GetWithoutAck_RetiresImmediately;
 var
   L: TStringList;
   LGet: TAMQPGetResult;
 begin
   // Without ack there is no way back: the placement ends on the spot, on disk too.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'carga', True);
   LGet := FChan.BasicGet('q.dur', True); // no-ack
   TAssert.AssertTrue('achou a mensagem', LGet.Found);
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('aposentada sem precisar de ack', 1, Conta(L, 'dequeue:q.dur:'));
+    TAssert.AssertEquals('aposentada sem precisar de ack', 1, CountWithPrefix(L, 'dequeue:q.dur:'));
   finally
     L.Free;
   end;
 end;
 
-procedure TPersistWiringTests.DeadLetter_ColocacaoNovaAntesDeAposentarAVelha;
+procedure TPersistWiringTests.DeadLetter_NewPlacementBeforeRetiringTheOld;
 var
   L: TStringList;
   LArgs: TAMQPFieldTable;
-  LIdxNova, LIdxVelha: Integer;
+  LIdxNew, LIdxOld: Integer;
 begin
   // D23 TURNED INTO A TEST. Dead-lettering writes the NEW placement before
   // retiring the old one, so that failing in the middle produces a duplicate and never
   // a loss. The order in the file is the proof -- and it is verifiable precisely
   // because the log is append-only.
-  DeclaraFila('q.dlq', True);
+  MakeQueue('q.dlq', True);
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-message-ttl', TValue.From<Integer>(150));
     LArgs.Put('x-dead-letter-exchange', TValue.From<string>(''));
     LArgs.Put('x-dead-letter-routing-key', TValue.From<string>('q.dlq'));
-    DeclaraFila('q.src', True, LArgs);
+    MakeQueue('q.src', True, LArgs);
   finally
     LArgs.Free;
   end;
@@ -642,18 +642,18 @@ begin
   FChan.PublishText('', 'q.src', 'carga', True);
   Sleep(1200); // 150 ms TTL + the monitor passing by (200 ms tick)
 
-  L := FechaELeWal;
+  L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('a colocacao original', 1, Conta(L, 'enqueue:q.src:'));
-    TAssert.AssertEquals('a colocacao na fila morta', 1, Conta(L, 'enqueue:q.dlq:'));
-    TAssert.AssertEquals('o corpo NAO foi reescrito', 1, Conta(L, 'content:'));
-    TAssert.AssertEquals('a original foi aposentada', 1, Conta(L, 'dequeue:q.src:'));
+    TAssert.AssertEquals('a colocacao original', 1, CountWithPrefix(L, 'enqueue:q.src:'));
+    TAssert.AssertEquals('a colocacao na fila morta', 1, CountWithPrefix(L, 'enqueue:q.dlq:'));
+    TAssert.AssertEquals('o corpo NAO foi reescrito', 1, CountWithPrefix(L, 'content:'));
+    TAssert.AssertEquals('a original foi aposentada', 1, CountWithPrefix(L, 'dequeue:q.src:'));
 
-    LIdxNova := Indice(L, 'enqueue:q.dlq:');
-    LIdxVelha := Indice(L, 'dequeue:q.src:');
+    LIdxNew := IndexWithPrefix(L, 'enqueue:q.dlq:');
+    LIdxOld := IndexWithPrefix(L, 'dequeue:q.src:');
     TAssert.AssertTrue('a colocacao nova aparece ANTES da aposentadoria da velha '
       + '(D23: falhar no meio produz duplicata, nunca perda)',
-      (LIdxNova >= 0) and (LIdxVelha >= 0) and (LIdxNova < LIdxVelha));
+      (LIdxNew >= 0) and (LIdxOld >= 0) and (LIdxNew < LIdxOld));
   finally
     L.Free;
   end;
@@ -670,7 +670,7 @@ end;
 // What pins those two properties down is AMQP.ServerConfirmTests, which reads the
 // frames on the wire with the watermark coming in as a parameter.
 
-procedure TPersistWiringTests.Confirm_ComDataDir_OCanalPassaAAdiar;
+procedure TPersistWiringTests.Confirm_WithDataDir_ChannelStartsDeferring;
 var
   I: Integer;
 begin
@@ -678,14 +678,14 @@ begin
   // keeping on emitting the confirm inline, as in Phase 3. All the rest of the suite
   // would stay green -- the client would get the acks just the same, only
   // before the disk had answered. Here the wiring is observed directly.
-  ChecaOk('o broker tem registro de confirms', FBroker.Confirms <> nil);
-  ChecaOk('e nenhum canal adia nada antes do Confirm.Select',
+  CheckOk('o broker tem registro de confirms', FBroker.Confirms <> nil);
+  CheckOk('e nenhum canal adia nada antes do Confirm.Select',
     FBroker.Confirms.TrackerCount = 0);
 
   // Confirm.Select is an RPC: when it returns, the Select-Ok has already gone out, and the
   // tracker was created BEFORE it. There is nothing to wait for here.
   FChan.ConfirmSelect;
-  ChecaOk('o Confirm.Select registrou o rastreador do canal',
+  CheckOk('o Confirm.Select registrou o rastreador do canal',
     FBroker.Confirms.TrackerCount = 1);
 
   // And the tracker LEAVES the registry when the channel dies -- otherwise the
@@ -699,27 +699,27 @@ begin
       Break;
     Sleep(10);
   end;
-  ChecaOk('o canal fechado saiu do registro',
+  CheckOk('o canal fechado saiu do registro',
     FBroker.Confirms.TrackerCount = 0);
   FreeAndNil(FChan); // Close unregisters: ownership comes back to us (see CLAUDE.md)
 end;
 
-procedure TPersistWiringTests.Confirm_PublishPersistente_ChegaComOJournalJaDuravel;
+procedure TPersistWiringTests.Confirm_PersistentPublish_ArrivesWithJournalAlreadyDurable;
 var
-  LMarca: UInt64;
+  LMark: UInt64;
 begin
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.ConfirmSelect;
   FChan.PublishText('', 'q.dur', 'carga', True);
-  ChecaOk('o confirm chegou', FChan.WaitForConfirms(10000));
+  CheckOk('o confirm chegou', FChan.WaitForConfirms(10000));
   // When the ack arrives, what it PROMISES has to be fulfilled already: the journal's
   // watermark covers at least the two records of this publish
   // (CONTENT + ENQ). With the confirm going out inline, this number could be 0.
-  LMarca := FBroker.Journal.DurableLsn;
-  ChecaOk('a marca d agua ja passou do lote deste publish', LMarca >= 2);
+  LMark := FBroker.Journal.DurableLsn;
+  CheckOk('a marca d agua ja passou do lote deste publish', LMark >= 2);
 end;
 
-procedure TPersistWiringTests.Confirm_LoteDePersistentes_TodosConfirmam;
+procedure TPersistWiringTests.Confirm_BatchOfPersistent_AllConfirm;
 var
   I: Integer;
 begin
@@ -727,28 +727,28 @@ begin
   // go through few fsyncs and come back collapsed. If the release lost a
   // pending one -- or deleted it without having managed to post --, this test would NOT
   // FAIL: it would HANG until the timeout. That is the symptom to recognize.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.ConfirmSelect;
   for I := 1 to 200 do
     FChan.PublishText('', 'q.dur', 'm' + IntToStr(I), True);
-  ChecaOk('os 200 confirmaram', FChan.WaitForConfirms(20000));
+  CheckOk('os 200 confirmaram', FChan.WaitForConfirms(20000));
 end;
 
-procedure TPersistWiringTests.Confirm_PersistenteETransienteMisturados_TodosConfirmam;
+procedure TPersistWiringTests.Confirm_PersistentAndTransientMixed_AllConfirm;
 var
   I: Integer;
 begin
   // Half do not touch the disk. By corollary (a) of D24 the transient ones stay
   // BEHIND the pending persistent ones instead of jumping ahead -- and what
   // this test ensures is that staying behind is not being stuck.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.ConfirmSelect;
   for I := 1 to 100 do
     FChan.PublishText('', 'q.dur', 'm' + IntToStr(I), (I mod 2) = 0);
-  ChecaOk('os 100 confirmaram', FChan.WaitForConfirms(20000));
+  CheckOk('os 100 confirmaram', FChan.WaitForConfirms(20000));
 end;
 
-procedure TPersistWiringTests.AbreBroker;
+procedure TPersistWiringTests.StartBroker;
 var
   LParams: TAMQPConnectionParams;
 begin
@@ -756,7 +756,7 @@ begin
   FBroker.BindAddress := '127.0.0.1';
   FBroker.Port := 0;
   FBroker.DataDir := FDir;
-  FBroker.MaxJournalBytes := FTetoWal;
+  FBroker.MaxJournalBytes := FWalCap;
   FBroker.Start;
   LParams := TAMQPConnectionParams.Localhost;
   LParams.Host := '127.0.0.1';
@@ -766,7 +766,7 @@ begin
   FChan := FConn.CreateChannel;
 end;
 
-procedure TPersistWiringTests.Reabre;
+procedure TPersistWiringTests.Reopen;
 begin
   FChan := nil; // the connection's destructor collects the registered channels
   if FConn <> nil then
@@ -779,10 +779,10 @@ begin
   end;
   FBroker.Stop;
   FreeAndNil(FBroker);
-  AbreBroker;
+  StartBroker;
 end;
 
-function TPersistWiringTests.TamanhoDoWal: Int64;
+function TPersistWiringTests.WalSize: Int64;
 var
   LSegs: TArray<Cardinal>;
   I: Integer;
@@ -803,18 +803,18 @@ begin
   end;
 end;
 
-procedure TPersistWiringTests.PublicaComPrioridade(const AFila, ACorpo: string;
-  APrio: Byte);
+procedure TPersistWiringTests.PublishWithPriority(const AQueue, ABody: string;
+  APriority: Byte);
 var
   LProps: TAMQPBasicProperties;
 begin
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetDeliveryMode(2);
-  LProps.SetPriority(APrio);
-  FChan.Publish('', AFila, AmqpUtf8Encode(ACorpo), LProps);
+  LProps.SetPriority(APriority);
+  FChan.Publish('', AQueue, AmqpUtf8Encode(ABody), LProps);
 end;
 
-function TPersistWiringTests.FilaExiste(const AFila: string): Boolean;
+function TPersistWiringTests.QueueExists(const AQueue: string): Boolean;
 var
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
@@ -823,7 +823,7 @@ begin
   // and a dead channel is good for nothing else.
   LCh := FConn.CreateChannel;
   try
-    LDecl := TAMQPQueueDeclare.Create(AFila);
+    LDecl := TAMQPQueueDeclare.Create(AQueue);
     LDecl.Passive := True;
     Result := True;
     try
@@ -847,37 +847,37 @@ end;
 // they prove is RECOVERY: that the written log is enough to rebuild the
 // state, and -- just as important -- that what should NOT be there does not come back.
 
-procedure TPersistWiringTests.Restart_MensagemPersistente_Sobrevive;
+procedure TPersistWiringTests.Restart_PersistentMessage_Survives;
 var
   LGet: TAMQPGetResult;
 begin
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'sobrevivi', True);
-  Reabre;
+  Reopen;
   LGet := FChan.BasicGet('q.dur', True);
-  ChecaOk('a mensagem voltou', LGet.Found);
-  ChecaStr('com o corpo intacto', 'sobrevivi', LGet.BodyAsText);
+  CheckOk('a mensagem voltou', LGet.Found);
+  CheckStr('com o corpo intacto', 'sobrevivi', LGet.BodyAsText);
 end;
 
-procedure TPersistWiringTests.Restart_Transiente_NaoSobrevive;
+procedure TPersistWiringTests.Restart_Transient_DoesNotSurvive;
 var
   LGet: TAMQPGetResult;
 begin
   // The other half of the rule of three (D20): what did not go to disk does not come back.
   // Without this assertion, a broker that persisted EVERYTHING would pass the test above.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'efemera', False);
-  Reabre;
+  Reopen;
   LGet := FChan.BasicGet('q.dur', True);
-  ChecaNao('a transiente NAO voltou', LGet.Found);
+  CheckNot('a transiente NAO voltou', LGet.Found);
 end;
 
-procedure TPersistWiringTests.Restart_TopologiaDuravel_Sobrevive;
+procedure TPersistWiringTests.Restart_DurableTopology_Survives;
 var
   LGet: TAMQPGetResult;
   LBind: TAMQPQueueBind;
 begin
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.DeclareExchange(TAMQPExchangeDeclare.Create('ex.dur', 'direct', True));
   LBind.QueueName := 'q.dur';
   LBind.ExchangeName := 'ex.dur';
@@ -885,32 +885,32 @@ begin
   LBind.NoWait := False;
   LBind.Arguments := nil;
   FChan.BindQueue(LBind);
-  Reabre;
-  ChecaOk('a fila voltou', FilaExiste('q.dur'));
+  Reopen;
+  CheckOk('a fila voltou', QueueExists('q.dur'));
   // And the BINDING came back too -- the real proof, because a recovery that
-  // only brought back queue and exchange would pass FilaExiste above.
+  // only brought back queue and exchange would pass QueueExists above.
   FChan.PublishText('ex.dur', 'rk', 'roteada', True);
   Sleep(300);
   LGet := FChan.BasicGet('q.dur', True);
-  ChecaOk('o binding sobreviveu', LGet.Found);
+  CheckOk('o binding sobreviveu', LGet.Found);
 end;
 
-procedure TPersistWiringTests.Restart_MensagemVolta_ComRedelivered;
+procedure TPersistWiringTests.Restart_MessageReturns_WithRedelivered;
 var
   LGet: TAMQPGetResult;
 begin
   // D27: every recovered entry comes back redelivered=True. Persisting the flag
   // would cost a write on the hottest path there is, and would be FALSE
   // precision -- after a crash the broker does not know whether the consumer got to see it.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'x', True);
-  Reabre;
+  Reopen;
   LGet := FChan.BasicGet('q.dur', True);
-  ChecaOk('voltou', LGet.Found);
-  ChecaOk('e marcada como reentregue', LGet.Redelivered);
+  CheckOk('voltou', LGet.Found);
+  CheckOk('e marcada como reentregue', LGet.Redelivered);
 end;
 
-procedure TPersistWiringTests.Restart_OrdemDePrioridade_Preservada;
+procedure TPersistWiringTests.Restart_PriorityOrder_Preserved;
 var
   LArgs: TAMQPFieldTable;
   LGet: TAMQPGetResult;
@@ -923,61 +923,61 @@ begin
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-max-priority', 5);
-    DeclaraFila('q.pri', True, LArgs);
+    MakeQueue('q.pri', True, LArgs);
   finally
     LArgs.Free;
   end;
-  PublicaComPrioridade('q.pri', 'baixa', 1);
-  PublicaComPrioridade('q.pri', 'alta', 4);
+  PublishWithPriority('q.pri', 'baixa', 1);
+  PublishWithPriority('q.pri', 'alta', 4);
   Sleep(300);
-  Reabre;
+  Reopen;
   LGet := FChan.BasicGet('q.pri', True);
-  ChecaOk('veio alguma', LGet.Found);
-  ChecaStr('e a de MAIOR prioridade vem primeiro, como antes da queda',
+  CheckOk('veio alguma', LGet.Found);
+  CheckStr('e a de MAIOR prioridade vem primeiro, como antes da queda',
     'alta', LGet.BodyAsText);
 end;
 
-procedure TPersistWiringTests.Restart_Consumida_NaoRessuscita;
+procedure TPersistWiringTests.Restart_Consumed_DoesNotResurrect;
 var
   LGet: TAMQPGetResult;
 begin
   // The live placement is the one that has an ENQ and NO DEQ. Without the ack's DEQ, every
   // message already consumed would come back on each restart -- the worst failure mode
   // possible, because it grows without bound and nobody notices right away.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'consumida', True);
   LGet := FChan.BasicGet('q.dur', False); // ack mode
-  ChecaOk('pegou antes da queda', LGet.Found);
+  CheckOk('pegou antes da queda', LGet.Found);
   FChan.Ack(LGet.DeliveryTag);
   Sleep(300); // the ack travels and the actor still has to process it
-  Reabre;
+  Reopen;
   LGet := FChan.BasicGet('q.dur', True);
-  ChecaNao('a consumida NAO ressuscitou', LGet.Found);
+  CheckNot('a consumida NAO ressuscitou', LGet.Found);
 end;
 
-procedure TPersistWiringTests.Restart_NaoReescreveOLog;
+procedure TPersistWiringTests.Restart_DoesNotRewriteTheLog;
 var
-  LTamanho1, LTamanho2: Int64;
+  LSize1, LSize2: Int64;
 begin
   // The journal stays MUTED during recovery. Without that, every boot would rewrite
   // the whole topology and placements: the WAL would grow one copy per
   // restart, FOREVER, and WS7's compaction would never catch up. No other
   // test catches this -- they would all pass with the log bloating.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'x', True);
   Sleep(300);
-  Reabre;
-  LTamanho1 := TamanhoDoWal;
-  Reabre;
-  LTamanho2 := TamanhoDoWal;
-  ChecaOk('o segundo restart nao acrescentou nada ao log',
-    LTamanho2 = LTamanho1);
+  Reopen;
+  LSize1 := WalSize;
+  Reopen;
+  LSize2 := WalSize;
+  CheckOk('o segundo restart nao acrescentou nada ao log',
+    LSize2 = LSize1);
 end;
 
-procedure TPersistWiringTests.Restart_IdNovoNaoColideComRecuperado;
+procedure TPersistWiringTests.Restart_NewIdDoesNotCollideWithRecovered;
 var
   LGet: TAMQPGetResult;
-  I, LVivas: Integer;
+  I, LLive: Integer;
 begin
   // THE ID COUNTER HAS TO CONTINUE AFTER THE HIGHEST ID IN THE LOG. If it
   // restarted from zero, the placement of the NEW publish below would get an
@@ -986,35 +986,35 @@ begin
   //
   // No other test in this suite catches this: they all pass with the counter
   // zeroed, because only the SECOND restart reveals the damage.
-  DeclaraFila('q.dur', True);
+  MakeQueue('q.dur', True);
   FChan.PublishText('', 'q.dur', 'velha-1', True);
   FChan.PublishText('', 'q.dur', 'velha-2', True);
   Sleep(300);
-  Reabre;
+  Reopen;
 
   // Publishes AFTER recovery, consumes and acks only this one.
   FChan.PublishText('', 'q.dur', 'nova', True);
   Sleep(300);
   LGet := FChan.BasicGet('q.dur', False); // ack mode
-  ChecaOk('pegou alguma', LGet.Found);
+  CheckOk('pegou alguma', LGet.Found);
   FChan.Ack(LGet.DeliveryTag);
   Sleep(300);
-  Reabre;
+  Reopen;
 
   // ONE fewer than the three published is left -- and the two remaining ones have to
   // be there. With the counter zeroed, the ack above would have taken two.
-  LVivas := 0;
+  LLive := 0;
   for I := 1 to 3 do
   begin
     LGet := FChan.BasicGet('q.dur', True);
     if not LGet.Found then
       Break;
-    Inc(LVivas);
+    Inc(LLive);
   end;
-  ChecaInt('duas mensagens sobreviveram ao ack de UMA', 2, LVivas);
+  CheckInt('duas mensagens sobreviveram ao ack de UMA', 2, LLive);
 end;
 
-procedure TPersistWiringTests.Restart_PrazoDescontaOTempoDecorrido;
+procedure TPersistWiringTests.Restart_DeadlineDeductsElapsedTime;
 var
   LArgs: TAMQPFieldTable;
   LGet: TAMQPGetResult;
@@ -1031,52 +1031,52 @@ begin
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-message-ttl', Int64(1200));
-    DeclaraFila('q.ttl', True, LArgs);
+    MakeQueue('q.ttl', True, LArgs);
   finally
     LArgs.Free;
   end;
   FChan.PublishText('', 'q.ttl', 'vence', True);
   Sleep(900); // still ALIVE when the broker goes down -- the log takes it along
-  Reabre;
+  Reopen;
   Sleep(600); // what was left of the deadline (~300 ms) runs out here
   LGet := FChan.BasicGet('q.ttl', True);
-  ChecaNao('o prazo continuou correndo por cima do restart', LGet.Found);
+  CheckNot('o prazo continuou correndo por cima do restart', LGet.Found);
 end;
 
 // ---------------------------------------------------------- WS7: hard cap ---
 
-procedure TPersistWiringTests.Teto_PublishPersistenteAcimaDoTeto_LevaNack;
+procedure TPersistWiringTests.Cap_PersistentPublishAboveTheCap_GetsNack;
 var
   I: Integer;
-  LTodosOk: Boolean;
+  LAllOk: Boolean;
 begin
   // The difference D26 marks relative to D7: the MEMORY cap drops from the
   // head, the DISK cap REFUSES. Dropping here would be deleting data the
   // broker has already confirmed as durable -- the promise Phase 4 exists to
   // keep. Refusing hands the decision back to whoever publishes, who still has the
   // message in hand.
-  FTetoWal := 40000; // small on purpose: the test does not measure performance
-  Reabre;
-  DeclaraFila('q.dur', True);
+  FWalCap := 40000; // small on purpose: the test does not measure performance
+  Reopen;
+  MakeQueue('q.dur', True);
   FChan.ConfirmSelect;
-  LTodosOk := True;
+  LAllOk := True;
   for I := 1 to 300 do
   begin
     FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
     if (I mod 50) = 0 then
       if not FChan.WaitForConfirms(10000) then
       begin
-        LTodosOk := False;
+        LAllOk := False;
         Break;
       end;
   end;
-  if LTodosOk then
-    LTodosOk := FChan.WaitForConfirms(10000);
-  ChecaNao('algum publish foi NACK-ado depois de o log encher', LTodosOk);
-  ChecaOk('e a recusa foi contada', FBroker.Journal.Stats.Refused > 0);
+  if LAllOk then
+    LAllOk := FChan.WaitForConfirms(10000);
+  CheckNot('algum publish foi NACK-ado depois de o log encher', LAllOk);
+  CheckOk('e a recusa foi contada', FBroker.Journal.Stats.Refused > 0);
 end;
 
-procedure TPersistWiringTests.Teto_PublishTransiente_PassaMesmoComOLogCheio;
+procedure TPersistWiringTests.Cap_TransientPublish_PassesEvenWithAFullLog;
 var
   I: Integer;
   LGet: TAMQPGetResult;
@@ -1085,25 +1085,25 @@ begin
   // assertion, an implementation that refused EVERY publish with the log full
   // would pass the test above -- and would take the whole broker down because of one
   // full durable queue.
-  FTetoWal := 40000;
-  Reabre;
-  DeclaraFila('q.dur', True);
-  DeclaraFila('q.tra', False);
+  FWalCap := 40000;
+  Reopen;
+  MakeQueue('q.dur', True);
+  MakeQueue('q.tra', False);
   for I := 1 to 300 do
     FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
   Sleep(500);
-  ChecaOk('o log encheu', FBroker.Journal.IsFull);
+  CheckOk('o log encheu', FBroker.Journal.IsFull);
 
   FChan.PublishText('', 'q.tra', 'transiente', False);
   Sleep(300);
   LGet := FChan.BasicGet('q.tra', True);
-  ChecaOk('o publish transiente passou', LGet.Found);
-  ChecaStr('com o corpo certo', 'transiente', LGet.BodyAsText);
+  CheckOk('o publish transiente passou', LGet.Found);
+  CheckStr('com o corpo certo', 'transiente', LGet.BodyAsText);
 end;
 
-procedure TPersistWiringTests.Teto_PublishRecusado_NaoEntraNaFila;
+procedure TPersistWiringTests.Cap_RefusedPublish_DoesNotEnterTheQueue;
 var
-  I, LAntes, LDepois: Integer;
+  I, LBefore, LAfter: Integer;
   LDecl: TAMQPQueueDeclare;
 begin
   // THERE CAN BE NO HALF-DONE PUBLISH. Refusing with Nack and at the same time
@@ -1111,27 +1111,27 @@ begin
   // resends, while a consumer receives the copy that "failed". The refusal
   // happens BEFORE writing or posting anything at all, and that is what this
   // test pins down -- the "refuses but posts" mutation passed all the others.
-  FTetoWal := 40000;
-  Reabre;
-  DeclaraFila('q.dur', True);
+  FWalCap := 40000;
+  Reopen;
+  MakeQueue('q.dur', True);
   FChan.ConfirmSelect;
   for I := 1 to 300 do
     FChan.PublishText('', 'q.dur', StringOfChar('x', 500), True);
   FChan.WaitForConfirms(10000); // some will get a Nack: the log filled up
   Sleep(500);                   // the actor finishes enqueueing what got through
-  ChecaOk('o log encheu mesmo', FBroker.Journal.IsFull);
+  CheckOk('o log encheu mesmo', FBroker.Journal.IsFull);
 
   LDecl := TAMQPQueueDeclare.Create('q.dur');
   LDecl.Passive := True;
-  LAntes := Integer(FChan.DeclareQueue(LDecl).MessageCount);
+  LBefore := Integer(FChan.DeclareQueue(LDecl).MessageCount);
 
   // This one is born refused.
   FChan.PublishText('', 'q.dur', StringOfChar('y', 500), True);
   FChan.WaitForConfirms(5000);
   Sleep(500);
-  LDepois := Integer(FChan.DeclareQueue(LDecl).MessageCount);
+  LAfter := Integer(FChan.DeclareQueue(LDecl).MessageCount);
 
-  ChecaInt('o publish recusado NAO entrou na fila', LAntes, LDepois);
+  CheckInt('o publish recusado NAO entrou na fila', LBefore, LAfter);
 end;
 
 initialization

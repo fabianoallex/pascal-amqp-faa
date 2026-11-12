@@ -32,7 +32,7 @@
   6. A broken tail replays the PREFIX (D23). It is the NORMAL case after a crash,
      not an error.
 
-  The three Checa* functions exist so the test bodies are IDENTICAL in the
+  The three Check* functions exist so the test bodies are IDENTICAL in the
   two dialects: only their implementation changes sides.
 
   DUnitX master in the FPCUnit dialect (TAssert.*); the FPCUnit mirror in
@@ -61,56 +61,56 @@ type
     FDir: string;
     FJournal: TAMQPJournal;
     /// Writes ONE record and returns the LSN.
-    function Grava(AKind: Byte; const APayload: TBytes): UInt64;
-    procedure DeclaraExchange(const ANome, ATipo: string);
-    procedure DeclaraFila(const ANome: string; AAutoDelete: Boolean = False);
-    procedure Liga(const AExchange, AFila, ARk: string);
-    procedure Desliga(const AExchange, AFila, ARk: string);
-    procedure LigaExchanges(const AOrigem, ADestino, ARk: string);
-    procedure ApagaFila(const ANome: string);
-    procedure ApagaExchange(const ANome: string);
-    procedure Conteudo(AId: UInt64; const ACorpo: string);
-    procedure Coloca(AId, AConteudo: UInt64; const AFila: string;
-      APrioridade: Byte = 0);
-    procedure Aposenta(AId: UInt64; const AFila: string);
+    function WriteRecord(AKind: Byte; const APayload: TBytes): UInt64;
+    procedure MakeExchange(const AName, AType: string);
+    procedure MakeQueue(const AName: string; AAutoDelete: Boolean = False);
+    procedure MakeBinding(const AExchange, AQueue, ARk: string);
+    procedure RemoveBinding(const AExchange, AQueue, ARk: string);
+    procedure MakeExchangeBinding(const ASource, ADestination, ARk: string);
+    procedure RemoveQueue(const AName: string);
+    procedure RemoveExchange(const AName: string);
+    procedure AddContent(AId: UInt64; const ABody: string);
+    procedure AddPlacement(AId, AContent: UInt64; const AQueue: string;
+      APriority: Byte = 0);
+    procedure RetirePlacement(AId: UInt64; const AQueue: string);
     /// Closes the journal (the log stays on disk) and replays.
-    function Replica: TAMQPRecoveredState;
+    function ReplayLog: TAMQPRecoveredState;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-     [Test] procedure LogVazio_EstadoVazio;
-     [Test] procedure TopologiaDuravel_Sobrevive;
-     [Test] procedure Redeclare_OUltimoVale;
-     [Test] procedure Unbind_TiraOBinding;
-     [Test] procedure ApagarFila_LevaBindingsEColocacoes;
-     [Test] procedure ApagarExchange_LevaBindingsDosDoisLados;
-     [Test] procedure EnqSemDeq_FicaVivo;
-     [Test] procedure EnqComDeq_Some;
-     [Test] procedure OrdemDasColocacoes_EAOrdemDoLog;
-     [Test] procedure UmConteudoDuasColocacoes;
-     [Test] procedure ConteudoSemColocacaoViva_ESoltado;
-     [Test] procedure MaxId_EOMaiorVisto;
-     [Test] procedure PrazoEPrioridade_ChegamIntactos;
-     [Test] procedure CaudaTorta_ReplicaOPrefixo;
+     [Test] procedure EmptyLog_EmptyState;
+     [Test] procedure DurableTopology_Survives;
+     [Test] procedure Redeclare_TheLastOneWins;
+     [Test] procedure Unbind_RemovesTheBinding;
+     [Test] procedure DeletingQueue_TakesBindingsAndPlacements;
+     [Test] procedure DeletingExchange_TakesBindingsFromBothSides;
+     [Test] procedure EnqWithoutDeq_StaysAlive;
+     [Test] procedure EnqWithDeq_Disappears;
+     [Test] procedure PlacementOrder_IsTheLogOrder;
+     [Test] procedure OneContentTwoPlacements;
+     [Test] procedure ContentWithoutLivePlacement_IsReleased;
+     [Test] procedure MaxId_IsTheLargestSeen;
+     [Test] procedure DeadlineAndPriority_ArriveIntact;
+     [Test] procedure TornTail_ReplaysThePrefix;
     // --- WS7: segment rotation ---
-    [Test] procedure Rotaciona_QuandoOSegmentoEnche;
-    [Test] procedure Rotaciona_NaoParteOLoteEntreDoisArquivos;
-    [Test] procedure Rotaciona_LsnContinuaEntreSegmentos;
-    [Test] procedure Rotaciona_ReplayLeTodosOsSegmentosComoUmLogSo;
-    [Test] procedure Rotaciona_ReabrirContinuaNoUltimoSegmento;
+    [Test] procedure Rotate_WhenTheSegmentFills;
+    [Test] procedure Rotate_DoesNotSplitABatchAcrossTwoFiles;
+    [Test] procedure Rotate_LsnContinuesAcrossSegments;
+    [Test] procedure Rotate_ReplayReadsAllSegmentsAsOneLog;
+    [Test] procedure Rotate_ReopenContinuesInTheLastSegment;
     // --- WS7: compaction ---
-    [Test] procedure Compacta_EncolheOLogSemMudarOEstado;
-    [Test] procedure Compacta_ApagaOsSegmentosVelhos;
-    [Test] procedure Compacta_PreservaOsIdentificadores;
-    [Test] procedure Compacta_NaoDuplicaSeOsVelhosSobrarem;
-    [Test] procedure Compacta_PreservaAOrdemEOsPrazos;
-    [Test] procedure Compacta_LogInteiroMorto_NaoSobraColocacao;
-    [Test] procedure Compacta_NoStart_QuandoOLogPassaDoLimiar;
-    [Test] procedure Compacta_FsyncReprovado_NaoApagaNada;
-    [Test] procedure Compacta_FanOut_GravaOCorpoUmaVezSo;
-    [Test] procedure Teto_ZeroEIlimitado;
-    [Test] procedure Teto_Estourado_MarcaCheio;
-    [Test] procedure Teto_RetiradaNuncaERecusada;
+    [Test] procedure Compact_ShrinksTheLogWithoutChangingState;
+    [Test] procedure Compact_DeletesTheOldSegments;
+    [Test] procedure Compact_PreservesTheIdentifiers;
+    [Test] procedure Compact_DoesNotDuplicateIfTheOldOnesRemain;
+    [Test] procedure Compact_PreservesOrderAndDeadlines;
+    [Test] procedure Compact_WholeLogDead_NoPlacementLeft;
+    [Test] procedure Compact_OnStart_WhenTheLogExceedsTheThreshold;
+    [Test] procedure Compact_FsyncFailed_DeletesNothing;
+    [Test] procedure Compact_FanOut_WritesTheBodyOnlyOnce;
+    [Test] procedure Cap_ZeroIsUnlimited;
+    [Test] procedure Cap_Exceeded_SetsFull;
+    [Test] procedure Cap_RetirementIsNeverRefused;
   end;
 
 implementation
@@ -118,7 +118,7 @@ implementation
 var
   GRecSeq: Integer = 0;
 
-procedure LimpaDirRec(const ADir: string);
+procedure ClearRecDir(const ADir: string);
 var
   LRec: TSearchRec;
 begin
@@ -137,22 +137,22 @@ end;
 
 // Assertions with the type fixed: the value comes in already converted, and the
 // TAssert overload is the same on both compilers.
-procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Integer);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaStr(const AMsg, AEsperado, AObtido: string);
+procedure CheckStr(const AMsg, AExpected, AActual: string);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaOk(const AMsg: string; ACond: Boolean);
+procedure CheckOk(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertTrue(AMsg, ACond);
 end;
 
-procedure ChecaNao(const AMsg: string; ACond: Boolean);
+procedure CheckNot(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertFalse(AMsg, ACond);
 end;
@@ -160,58 +160,58 @@ end;
 /// Builds a content record (both rotation suites need the same one).
 type
   { Journal whose fsync can be failed, over REAL files. }
-  TJournalComSyncFalho = class(TAMQPJournal)
+  TJournalWithFailingSync = class(TAMQPJournal)
   private
-    FUltimo: TAMQPWalFileComFalha;
-    FRefUltimo: IAMQPWalFile; // keeps FUltimo alive while the test uses it
-    FReprovando: Boolean;
+    FLast: TAMQPFailingWalFile;
+    FLastRef: IAMQPWalFile; // keeps FLast alive while the test uses it
+    FFailing: Boolean;
   protected
     function CreateFile(const APath: string;
-      ACriar: Boolean): IAMQPWalFile; override;
+      ACreate: Boolean): IAMQPWalFile; override;
   public
     /// From here on every fsync fails -- including the compaction's.
-    procedure ReprovaOSync;
+    procedure FailTheSync;
   end;
 
-function TJournalComSyncFalho.CreateFile(const APath: string;
-  ACriar: Boolean): IAMQPWalFile;
+function TJournalWithFailingSync.CreateFile(const APath: string;
+  ACreate: Boolean): IAMQPWalFile;
 begin
-  FUltimo := TAMQPWalFileComFalha.Create(TAMQPWalOsFile.Create(APath, ACriar));
-  FUltimo.SetSyncOk(not FReprovando);
-  FRefUltimo := FUltimo;
-  Result := FRefUltimo;
+  FLast := TAMQPFailingWalFile.Create(TAMQPWalOsFile.Create(APath, ACreate));
+  FLast.SetSyncOk(not FFailing);
+  FLastRef := FLast;
+  Result := FLastRef;
 end;
 
-procedure TJournalComSyncFalho.ReprovaOSync;
+procedure TJournalWithFailingSync.FailTheSync;
 begin
-  FReprovando := True;
-  if FUltimo <> nil then
-    FUltimo.SetSyncOk(False);
+  FFailing := True;
+  if FLast <> nil then
+    FLast.SetSyncOk(False);
 end;
 
 /// A batch of ONE record (SubmitNoWait takes an array).
-function RegistroDe(AKind: Byte; const APayload: TBytes): TAMQPJournalRecords;
+function JournalRecordsOf(AKind: Byte; const APayload: TBytes): TAMQPJournalRecords;
 begin
   SetLength(Result, 1);
   Result[0].Kind := AKind;
   Result[0].Payload := APayload;
 end;
 
-function DequeueDe(AId: UInt64; const AFila: string): TAMQPRecDequeue;
+function DequeueRecord(AId: UInt64; const AQueue: string): TAMQPRecDequeue;
 begin
   Result.VHost := '/';
-  Result.Queue := AFila;
+  Result.Queue := AQueue;
   Result.EntryId := AId;
 end;
 
-function ConteudoDe(AId: UInt64; const ACorpo: string): TAMQPRecContent;
+function ContentRecord(AId: UInt64; const ABody: string): TAMQPRecContent;
 begin
   Result.ContentId := AId;
   Result.UserId := 'guest';
-  Result.Body := AmqpUtf8Encode(ACorpo);
+  Result.Body := AmqpUtf8Encode(ABody);
 end;
 
-function TRecoveryReplayTests.Grava(AKind: Byte;
+function TRecoveryReplayTests.WriteRecord(AKind: Byte;
   const APayload: TBytes): UInt64;
 var
   LRecs: TAMQPJournalRecords;
@@ -222,127 +222,127 @@ begin
   Result := FJournal.Submit(LRecs);
 end;
 
-procedure TRecoveryReplayTests.DeclaraExchange(const ANome, ATipo: string);
+procedure TRecoveryReplayTests.MakeExchange(const AName, AType: string);
 var
   LEx: TAMQPRecExchange;
 begin
   LEx.VHost := '/';
-  LEx.Name := ANome;
-  LEx.ExchangeType := ATipo;
+  LEx.Name := AName;
+  LEx.ExchangeType := AType;
   LEx.Durable := True;
   LEx.AutoDelete := False;
   LEx.Internal := False;
   LEx.Arguments := nil;
-  Grava(AMQP_REC_EXCHANGE_DECLARE, AmqpEncodeRecExchange(LEx));
+  WriteRecord(AMQP_REC_EXCHANGE_DECLARE, AmqpEncodeRecExchange(LEx));
 end;
 
-procedure TRecoveryReplayTests.DeclaraFila(const ANome: string;
+procedure TRecoveryReplayTests.MakeQueue(const AName: string;
   AAutoDelete: Boolean);
 var
   LQ: TAMQPRecQueue;
 begin
   LQ.VHost := '/';
-  LQ.Name := ANome;
+  LQ.Name := AName;
   LQ.Durable := True;
   LQ.AutoDelete := AAutoDelete;
   LQ.Arguments := nil;
-  Grava(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LQ));
+  WriteRecord(AMQP_REC_QUEUE_DECLARE, AmqpEncodeRecQueue(LQ));
 end;
 
-procedure TRecoveryReplayTests.Liga(const AExchange, AFila, ARk: string);
+procedure TRecoveryReplayTests.MakeBinding(const AExchange, AQueue, ARk: string);
 var
   LB: TAMQPRecBinding;
 begin
   LB.VHost := '/';
   LB.Source := AExchange;
-  LB.Destination := AFila;
+  LB.Destination := AQueue;
   LB.RoutingKey := ARk;
   LB.Arguments := nil;
-  Grava(AMQP_REC_QUEUE_BIND, AmqpEncodeRecBinding(LB));
+  WriteRecord(AMQP_REC_QUEUE_BIND, AmqpEncodeRecBinding(LB));
 end;
 
-procedure TRecoveryReplayTests.Desliga(const AExchange, AFila, ARk: string);
+procedure TRecoveryReplayTests.RemoveBinding(const AExchange, AQueue, ARk: string);
 var
   LB: TAMQPRecBinding;
 begin
   LB.VHost := '/';
   LB.Source := AExchange;
-  LB.Destination := AFila;
+  LB.Destination := AQueue;
   LB.RoutingKey := ARk;
   LB.Arguments := nil;
-  Grava(AMQP_REC_QUEUE_UNBIND, AmqpEncodeRecBinding(LB));
+  WriteRecord(AMQP_REC_QUEUE_UNBIND, AmqpEncodeRecBinding(LB));
 end;
 
-procedure TRecoveryReplayTests.LigaExchanges(const AOrigem, ADestino,
+procedure TRecoveryReplayTests.MakeExchangeBinding(const ASource, ADestination,
   ARk: string);
 var
   LB: TAMQPRecBinding;
 begin
   LB.VHost := '/';
-  LB.Source := AOrigem;
-  LB.Destination := ADestino;
+  LB.Source := ASource;
+  LB.Destination := ADestination;
   LB.RoutingKey := ARk;
   LB.Arguments := nil;
-  Grava(AMQP_REC_EXCHANGE_BIND, AmqpEncodeRecBinding(LB));
+  WriteRecord(AMQP_REC_EXCHANGE_BIND, AmqpEncodeRecBinding(LB));
 end;
 
-procedure TRecoveryReplayTests.ApagaFila(const ANome: string);
+procedure TRecoveryReplayTests.RemoveQueue(const AName: string);
 var
   LN: TAMQPRecName;
 begin
   LN.VHost := '/';
-  LN.Name := ANome;
-  Grava(AMQP_REC_QUEUE_DELETE, AmqpEncodeRecName(LN));
+  LN.Name := AName;
+  WriteRecord(AMQP_REC_QUEUE_DELETE, AmqpEncodeRecName(LN));
 end;
 
-procedure TRecoveryReplayTests.ApagaExchange(const ANome: string);
+procedure TRecoveryReplayTests.RemoveExchange(const AName: string);
 var
   LN: TAMQPRecName;
 begin
   LN.VHost := '/';
-  LN.Name := ANome;
-  Grava(AMQP_REC_EXCHANGE_DELETE, AmqpEncodeRecName(LN));
+  LN.Name := AName;
+  WriteRecord(AMQP_REC_EXCHANGE_DELETE, AmqpEncodeRecName(LN));
 end;
 
-procedure TRecoveryReplayTests.Conteudo(AId: UInt64; const ACorpo: string);
+procedure TRecoveryReplayTests.AddContent(AId: UInt64; const ABody: string);
 var
   LC: TAMQPRecContent;
 begin
   LC.ContentId := AId;
   LC.UserId := 'guest';
-  LC.Body := AmqpUtf8Encode(ACorpo);
-  Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(LC));
+  LC.Body := AmqpUtf8Encode(ABody);
+  WriteRecord(AMQP_REC_CONTENT, AmqpEncodeRecContent(LC));
 end;
 
-procedure TRecoveryReplayTests.Coloca(AId, AConteudo: UInt64;
-  const AFila: string; APrioridade: Byte);
+procedure TRecoveryReplayTests.AddPlacement(AId, AContent: UInt64;
+  const AQueue: string; APriority: Byte);
 var
   LE: TAMQPRecEnqueue;
 begin
   LE.VHost := '/';
-  LE.Queue := AFila;
+  LE.Queue := AQueue;
   LE.EntryId := AId;
-  LE.ContentId := AConteudo;
+  LE.ContentId := AContent;
   LE.Exchange := '';
-  LE.RoutingKey := AFila;
-  LE.Priority := APrioridade;
+  LE.RoutingKey := AQueue;
+  LE.Priority := APriority;
   LE.EnqueuedAtWall := 1700000000000;
   LE.TtlMs := -1;
   LE.HeaderPayload := nil;
-  Grava(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LE));
+  WriteRecord(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LE));
 end;
 
-procedure TRecoveryReplayTests.Aposenta(AId: UInt64; const AFila: string);
+procedure TRecoveryReplayTests.RetirePlacement(AId: UInt64; const AQueue: string);
 var
   LD: TAMQPRecDequeue;
 begin
   LD.VHost := '/';
-  LD.Queue := AFila;
+  LD.Queue := AQueue;
   LD.EntryId := AId;
-  Grava(AMQP_REC_DEQUEUE, AmqpEncodeRecDequeue(LD));
+  WriteRecord(AMQP_REC_DEQUEUE, AmqpEncodeRecDequeue(LD));
 end;
 
-function TRecoveryReplayTests.Replica: TAMQPRecoveredState;
+function TRecoveryReplayTests.ReplayLog: TAMQPRecoveredState;
 begin
   FJournal.Stop;
   FreeAndNil(FJournal);
@@ -352,10 +352,10 @@ end;
 procedure TRecoveryReplayTests.SetUp;
 begin
   Inc(GRecSeq);
-  FDir := IncludeTrailingPathDelimiter(DirTemporario) + 'amqprec-'
+  FDir := IncludeTrailingPathDelimiter(TempDir) + 'amqprec-'
     + IntToStr(GRecSeq);
   ForceDirectories(FDir);
-  LimpaDirRec(FDir);
+  ClearRecDir(FDir);
   FJournal := TAMQPJournal.Create(FDir);
   FJournal.Start;
 end;
@@ -370,299 +370,299 @@ begin
     end;
     FreeAndNil(FJournal);
   end;
-  LimpaDirRec(FDir);
+  ClearRecDir(FDir);
 end;
 
-procedure TRecoveryReplayTests.LogVazio_EstadoVazio;
+procedure TRecoveryReplayTests.EmptyLog_EmptyState;
 var
   E: TAMQPRecoveredState;
 begin
-  E := Replica;
+  E := ReplayLog;
   try
-    ChecaInt('sem exchange', 0, E.Exchanges.Count);
-    ChecaInt('sem fila', 0, E.Queues.Count);
-    ChecaInt('sem colocacao', 0, E.Entries.Count);
-    ChecaInt('maior id', 0, Integer(E.MaxId));
+    CheckInt('sem exchange', 0, E.Exchanges.Count);
+    CheckInt('sem fila', 0, E.Queues.Count);
+    CheckInt('sem colocacao', 0, E.Entries.Count);
+    CheckInt('maior id', 0, Integer(E.MaxId));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.TopologiaDuravel_Sobrevive;
+procedure TRecoveryReplayTests.DurableTopology_Survives;
 var
   E: TAMQPRecoveredState;
 begin
-  DeclaraExchange('ex.a', 'direct');
-  DeclaraFila('q.a');
-  Liga('ex.a', 'q.a', 'rk');
-  E := Replica;
+  MakeExchange('ex.a', 'direct');
+  MakeQueue('q.a');
+  MakeBinding('ex.a', 'q.a', 'rk');
+  E := ReplayLog;
   try
-    ChecaInt('um exchange', 1, E.Exchanges.Count);
-    ChecaStr('nome do exchange', 'ex.a', E.Exchanges[0].Name);
-    ChecaStr('tipo do exchange', 'direct', E.Exchanges[0].ExchangeType);
-    ChecaInt('uma fila', 1, E.Queues.Count);
-    ChecaStr('nome da fila', 'q.a', E.Queues[0].Name);
-    ChecaInt('um binding', 1, E.Bindings.Count);
-    ChecaStr('routing key', 'rk', E.Bindings[0].Binding.RoutingKey);
-    ChecaNao('e o destino e uma FILA', E.Bindings[0].DestinationIsExchange);
+    CheckInt('um exchange', 1, E.Exchanges.Count);
+    CheckStr('nome do exchange', 'ex.a', E.Exchanges[0].Name);
+    CheckStr('tipo do exchange', 'direct', E.Exchanges[0].ExchangeType);
+    CheckInt('uma fila', 1, E.Queues.Count);
+    CheckStr('nome da fila', 'q.a', E.Queues[0].Name);
+    CheckInt('um binding', 1, E.Bindings.Count);
+    CheckStr('routing key', 'rk', E.Bindings[0].Binding.RoutingKey);
+    CheckNot('e o destino e uma FILA', E.Bindings[0].DestinationIsExchange);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Redeclare_OUltimoVale;
+procedure TRecoveryReplayTests.Redeclare_TheLastOneWins;
 var
   E: TAMQPRecoveredState;
 begin
   // Redeclaring does not duplicate: the log is of operations, the state is the final one.
-  DeclaraFila('q.a');
-  DeclaraFila('q.a', True);
-  E := Replica;
+  MakeQueue('q.a');
+  MakeQueue('q.a', True);
+  E := ReplayLog;
   try
-    ChecaInt('uma fila, nao duas', 1, E.Queues.Count);
-    ChecaOk('e com o auto-delete do ULTIMO declare', E.Queues[0].AutoDelete);
+    CheckInt('uma fila, nao duas', 1, E.Queues.Count);
+    CheckOk('e com o auto-delete do ULTIMO declare', E.Queues[0].AutoDelete);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Unbind_TiraOBinding;
+procedure TRecoveryReplayTests.Unbind_RemovesTheBinding;
 var
   E: TAMQPRecoveredState;
 begin
-  DeclaraExchange('ex.a', 'direct');
-  DeclaraFila('q.a');
-  Liga('ex.a', 'q.a', 'rk');
-  Desliga('ex.a', 'q.a', 'rk');
-  E := Replica;
+  MakeExchange('ex.a', 'direct');
+  MakeQueue('q.a');
+  MakeBinding('ex.a', 'q.a', 'rk');
+  RemoveBinding('ex.a', 'q.a', 'rk');
+  E := ReplayLog;
   try
-    ChecaInt('nenhum binding', 0, E.Bindings.Count);
-    ChecaInt('mas a fila fica', 1, E.Queues.Count);
-    ChecaInt('e o exchange tambem', 1, E.Exchanges.Count);
+    CheckInt('nenhum binding', 0, E.Bindings.Count);
+    CheckInt('mas a fila fica', 1, E.Queues.Count);
+    CheckInt('e o exchange tambem', 1, E.Exchanges.Count);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.ApagarFila_LevaBindingsEColocacoes;
+procedure TRecoveryReplayTests.DeletingQueue_TakesBindingsAndPlacements;
 var
   E: TAMQPRecoveredState;
 begin
   // The test a naive implementation does NOT pass: taking the queue off the list and
   // forgetting the rest would resurrect messages of a queue that no longer exists.
-  DeclaraExchange('ex.a', 'direct');
-  DeclaraFila('q.a');
-  DeclaraFila('q.b');
-  Liga('ex.a', 'q.a', 'rk');
-  Liga('ex.a', 'q.b', 'rk');
-  Conteudo(1, 'corpo');
-  Coloca(2, 1, 'q.a');
-  Coloca(3, 1, 'q.b');
-  ApagaFila('q.a');
-  E := Replica;
+  MakeExchange('ex.a', 'direct');
+  MakeQueue('q.a');
+  MakeQueue('q.b');
+  MakeBinding('ex.a', 'q.a', 'rk');
+  MakeBinding('ex.a', 'q.b', 'rk');
+  AddContent(1, 'corpo');
+  AddPlacement(2, 1, 'q.a');
+  AddPlacement(3, 1, 'q.b');
+  RemoveQueue('q.a');
+  E := ReplayLog;
   try
-    ChecaInt('sobrou uma fila', 1, E.Queues.Count);
-    ChecaStr('a que nao foi apagada', 'q.b', E.Queues[0].Name);
-    ChecaInt('sobrou um binding', 1, E.Bindings.Count);
-    ChecaStr('o da fila viva', 'q.b', E.Bindings[0].Binding.Destination);
-    ChecaInt('e uma colocacao so', 1, E.Entries.Count);
-    ChecaStr('a da fila viva', 'q.b', E.Entries[0].Queue);
-    ChecaInt('a outra contou como orfa de fila', 1, E.Stats.OrphanedFromQueue);
+    CheckInt('sobrou uma fila', 1, E.Queues.Count);
+    CheckStr('a que nao foi apagada', 'q.b', E.Queues[0].Name);
+    CheckInt('sobrou um binding', 1, E.Bindings.Count);
+    CheckStr('o da fila viva', 'q.b', E.Bindings[0].Binding.Destination);
+    CheckInt('e uma colocacao so', 1, E.Entries.Count);
+    CheckStr('a da fila viva', 'q.b', E.Entries[0].Queue);
+    CheckInt('a outra contou como orfa de fila', 1, E.Stats.OrphanedFromQueue);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.ApagarExchange_LevaBindingsDosDoisLados;
+procedure TRecoveryReplayTests.DeletingExchange_TakesBindingsFromBothSides;
 var
   E: TAMQPRecoveredState;
 begin
   // The middle exchange is the DESTINATION of one binding and the SOURCE of another (D5).
   // Looking only at Source would leave the first one orphaned, pointing at what vanished.
-  DeclaraExchange('ex.orig', 'fanout');
-  DeclaraExchange('ex.meio', 'fanout');
-  DeclaraFila('q.a');
-  LigaExchanges('ex.orig', 'ex.meio', '');
-  Liga('ex.meio', 'q.a', '');
-  ApagaExchange('ex.meio');
-  E := Replica;
+  MakeExchange('ex.orig', 'fanout');
+  MakeExchange('ex.meio', 'fanout');
+  MakeQueue('q.a');
+  MakeExchangeBinding('ex.orig', 'ex.meio', '');
+  MakeBinding('ex.meio', 'q.a', '');
+  RemoveExchange('ex.meio');
+  E := ReplayLog;
   try
-    ChecaInt('sobrou um exchange', 1, E.Exchanges.Count);
-    ChecaStr('o de origem', 'ex.orig', E.Exchanges[0].Name);
-    ChecaInt('e NENHUM binding: os dois tocavam o que sumiu', 0,
+    CheckInt('sobrou um exchange', 1, E.Exchanges.Count);
+    CheckStr('o de origem', 'ex.orig', E.Exchanges[0].Name);
+    CheckInt('e NENHUM binding: os dois tocavam o que sumiu', 0,
       E.Bindings.Count);
-    ChecaInt('a fila continua de pe', 1, E.Queues.Count);
+    CheckInt('a fila continua de pe', 1, E.Queues.Count);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.EnqSemDeq_FicaVivo;
+procedure TRecoveryReplayTests.EnqWithoutDeq_StaysAlive;
 var
   E: TAMQPRecoveredState;
 begin
   // D27 in one line: the DELIVERY is not journaled, so a message
   // delivered and not acked is still a live ENQ and comes back ready.
-  DeclaraFila('q.a');
-  Conteudo(1, 'corpo');
-  Coloca(2, 1, 'q.a');
-  E := Replica;
+  MakeQueue('q.a');
+  AddContent(1, 'corpo');
+  AddPlacement(2, 1, 'q.a');
+  E := ReplayLog;
   try
-    ChecaInt('uma colocacao viva', 1, E.Entries.Count);
-    ChecaInt('nas contagens tambem', 1, E.Stats.Live);
-    ChecaInt('nada aposentado', 0, E.Stats.Retired);
-    ChecaStr('o corpo veio junto', 'corpo',
+    CheckInt('uma colocacao viva', 1, E.Entries.Count);
+    CheckInt('nas contagens tambem', 1, E.Stats.Live);
+    CheckInt('nada aposentado', 0, E.Stats.Retired);
+    CheckStr('o corpo veio junto', 'corpo',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.EnqComDeq_Some;
+procedure TRecoveryReplayTests.EnqWithDeq_Disappears;
 var
   E: TAMQPRecoveredState;
 begin
-  DeclaraFila('q.a');
-  Conteudo(1, 'corpo');
-  Coloca(2, 1, 'q.a');
-  Aposenta(2, 'q.a');
-  E := Replica;
+  MakeQueue('q.a');
+  AddContent(1, 'corpo');
+  AddPlacement(2, 1, 'q.a');
+  RetirePlacement(2, 'q.a');
+  E := ReplayLog;
   try
-    ChecaInt('nada vivo', 0, E.Entries.Count);
-    ChecaInt('uma aposentadoria', 1, E.Stats.Retired);
+    CheckInt('nada vivo', 0, E.Entries.Count);
+    CheckInt('uma aposentadoria', 1, E.Stats.Retired);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.OrdemDasColocacoes_EAOrdemDoLog;
+procedure TRecoveryReplayTests.PlacementOrder_IsTheLogOrder;
 var
   E: TAMQPRecoveredState;
 begin
   // The order of the log IS the enqueue order, and the priority bucket is
   // inside the ENQ -- that is what makes D27 need no extra record at all.
-  DeclaraFila('q.a');
-  Conteudo(1, 'a');
-  Coloca(2, 1, 'q.a');
-  Conteudo(3, 'b');
-  Coloca(4, 3, 'q.a');
-  Conteudo(5, 'c');
-  Coloca(6, 5, 'q.a');
-  Aposenta(4, 'q.a'); // the middle one goes
-  E := Replica;
+  MakeQueue('q.a');
+  AddContent(1, 'a');
+  AddPlacement(2, 1, 'q.a');
+  AddContent(3, 'b');
+  AddPlacement(4, 3, 'q.a');
+  AddContent(5, 'c');
+  AddPlacement(6, 5, 'q.a');
+  RetirePlacement(4, 'q.a'); // the middle one goes
+  E := ReplayLog;
   try
-    ChecaInt('duas vivas', 2, E.Entries.Count);
-    ChecaStr('1a: a mais antiga', 'a',
+    CheckInt('duas vivas', 2, E.Entries.Count);
+    CheckStr('1a: a mais antiga', 'a',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    ChecaStr('2a: a mais nova', 'c',
+    CheckStr('2a: a mais nova', 'c',
       AmqpUtf8Decode(E.Contents[E.Entries[1].ContentId].Body));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.UmConteudoDuasColocacoes;
+procedure TRecoveryReplayTests.OneContentTwoPlacements;
 var
   E: TAMQPRecoveredState;
 begin
   // The payoff of D22, on the read side: a fan-out to N queues has ONE
   // body in the file and N placements pointing at it.
-  DeclaraFila('q.a');
-  DeclaraFila('q.b');
-  Conteudo(1, 'corpo');
-  Coloca(2, 1, 'q.a');
-  Coloca(3, 1, 'q.b');
-  E := Replica;
+  MakeQueue('q.a');
+  MakeQueue('q.b');
+  AddContent(1, 'corpo');
+  AddPlacement(2, 1, 'q.a');
+  AddPlacement(3, 1, 'q.b');
+  E := ReplayLog;
   try
-    ChecaInt('duas colocacoes', 2, E.Entries.Count);
-    ChecaInt('um conteudo so', 1, E.Contents.Count);
-    ChecaOk('e as duas apontam para ele',
+    CheckInt('duas colocacoes', 2, E.Entries.Count);
+    CheckInt('um conteudo so', 1, E.Contents.Count);
+    CheckOk('e as duas apontam para ele',
       (E.Entries[0].ContentId = 1) and (E.Entries[1].ContentId = 1));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.ConteudoSemColocacaoViva_ESoltado;
+procedure TRecoveryReplayTests.ContentWithoutLivePlacement_IsReleased;
 var
   E: TAMQPRecoveredState;
 begin
   // Without this, recovery would load into memory the body of EVERY message
   // the broker has ever seen -- the log is append-only, the bodies stay there.
-  DeclaraFila('q.a');
-  Conteudo(1, 'consumida');
-  Coloca(2, 1, 'q.a');
-  Aposenta(2, 'q.a');
-  Conteudo(3, 'viva');
-  Coloca(4, 3, 'q.a');
-  E := Replica;
+  MakeQueue('q.a');
+  AddContent(1, 'consumida');
+  AddPlacement(2, 1, 'q.a');
+  RetirePlacement(2, 'q.a');
+  AddContent(3, 'viva');
+  AddPlacement(4, 3, 'q.a');
+  E := ReplayLog;
   try
-    ChecaInt('uma colocacao viva', 1, E.Entries.Count);
-    ChecaInt('e UM conteudo, nao dois', 1, E.Contents.Count);
-    ChecaOk('o que ficou e o da viva', E.Contents.ContainsKey(3));
-    ChecaNao('o da consumida foi solto', E.Contents.ContainsKey(1));
+    CheckInt('uma colocacao viva', 1, E.Entries.Count);
+    CheckInt('e UM conteudo, nao dois', 1, E.Contents.Count);
+    CheckOk('o que ficou e o da viva', E.Contents.ContainsKey(3));
+    CheckNot('o da consumida foi solto', E.Contents.ContainsKey(1));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.MaxId_EOMaiorVisto;
+procedure TRecoveryReplayTests.MaxId_IsTheLargestSeen;
 var
   E: TAMQPRecoveredState;
 begin
   // If the engine's counter restarted from zero, a new placement would collide
   // with a recovered one, and the DEQ of one would retire the other. Silent and fatal.
-  DeclaraFila('q.a');
-  Conteudo(7, 'x');
-  Coloca(9, 7, 'q.a');
-  Aposenta(9, 'q.a'); // retired, but the id HAS ALREADY BEEN USED
+  MakeQueue('q.a');
+  AddContent(7, 'x');
+  AddPlacement(9, 7, 'q.a');
+  RetirePlacement(9, 'q.a'); // retired, but the id HAS ALREADY BEEN USED
   // The highest id may be in a CONTENT and not in an ENQ -- both come out of the SAME
   // engine counter. Looking only at the placements would let this one slip.
-  Conteudo(20, 'y');
-  Coloca(12, 20, 'q.a');
-  E := Replica;
+  AddContent(20, 'y');
+  AddPlacement(12, 20, 'q.a');
+  E := ReplayLog;
   try
-    ChecaInt('uma viva', 1, E.Entries.Count);
-    ChecaInt('e o maior id e o do CONTENT, nao o da colocacao', 20,
+    CheckInt('uma viva', 1, E.Entries.Count);
+    CheckInt('e o maior id e o do CONTENT, nao o da colocacao', 20,
       Integer(E.MaxId));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.PrazoEPrioridade_ChegamIntactos;
+procedure TRecoveryReplayTests.DeadlineAndPriority_ArriveIntact;
 var
   E: TAMQPRecoveredState;
 begin
   // D21: the replay does NOT decide the deadline. It hands over the wall-clock instant
   // and the TTL as they are, and whoever holds the live queue rebuilds the monotonic one.
-  DeclaraFila('q.a');
-  Conteudo(1, 'x');
-  Coloca(2, 1, 'q.a', 5);
-  E := Replica;
+  MakeQueue('q.a');
+  AddContent(1, 'x');
+  AddPlacement(2, 1, 'q.a', 5);
+  E := ReplayLog;
   try
-    ChecaInt('a prioridade veio', 5, Integer(E.Entries[0].Priority));
-    ChecaOk('e o instante de parede tambem',
+    CheckInt('a prioridade veio', 5, Integer(E.Entries[0].Priority));
+    CheckOk('e o instante de parede tambem',
       E.Entries[0].EnqueuedAtWall = 1700000000000);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.CaudaTorta_ReplicaOPrefixo;
+procedure TRecoveryReplayTests.TornTail_ReplaysThePrefix;
 var
   E: TAMQPRecoveredState;
-  LArq: string;
+  LWalFile: string;
   LStream: TFileStream;
   LSegs: TArray<Cardinal>;
 begin
   // The NORMAL case after a crash, not an error (D23). The valid prefix
   // is exactly what recovery replays.
-  DeclaraFila('q.a');
-  Conteudo(1, 'a');
-  Coloca(2, 1, 'q.a');
-  Conteudo(3, 'b');
-  Coloca(4, 3, 'q.a');
+  MakeQueue('q.a');
+  AddContent(1, 'a');
+  AddPlacement(2, 1, 'q.a');
+  AddContent(3, 'b');
+  AddPlacement(4, 3, 'q.a');
   FJournal.Stop;
   FreeAndNil(FJournal);
 
@@ -670,9 +670,9 @@ begin
   // NUMBER comes from the listing, not from a literal: the journal starts at 1, and
   // guessing the name would make the test fail for the wrong reason.
   LSegs := AmqpWalListSegments(FDir);
-  ChecaInt('um segmento', 1, Length(LSegs));
-  LArq := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[0]);
-  LStream := TFileStream.Create(LArq, fmOpenReadWrite or fmShareDenyNone);
+  CheckInt('um segmento', 1, Length(LSegs));
+  LWalFile := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[0]);
+  LStream := TFileStream.Create(LWalFile, fmOpenReadWrite or fmShareDenyNone);
   try
     LStream.Size := LStream.Size - 12;
   finally
@@ -681,11 +681,11 @@ begin
 
   E := AmqpReplayWal(FDir);
   try
-    ChecaNao('a leitura NAO chegou ao fim inteira', E.Stats.StopReason = awsEnd);
-    ChecaInt('a fila do prefixo sobreviveu', 1, E.Queues.Count);
+    CheckNot('a leitura NAO chegou ao fim inteira', E.Stats.StopReason = awsEnd);
+    CheckInt('a fila do prefixo sobreviveu', 1, E.Queues.Count);
     // The last placement fell with the tail; the first one is still there.
-    ChecaInt('uma colocacao viva', 1, E.Entries.Count);
-    ChecaStr('a do prefixo', 'a',
+    CheckInt('uma colocacao viva', 1, E.Entries.Count);
+    CheckStr('a do prefixo', 'a',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
   finally
     E.Free;
@@ -694,22 +694,22 @@ end;
 
 { --- segment rotation (WS7 of Phase 4, D26) --- }
 
-procedure TRecoveryReplayTests.Rotaciona_QuandoOSegmentoEnche;
+procedure TRecoveryReplayTests.Rotate_WhenTheSegmentFills;
 var
   I: Integer;
-  LUltimo: UInt64;
+  LLast: UInt64;
 begin
   // A tiny cap so rotation happens with few records: the real value
   // (16 MB) only makes the test slow, not more true.
   FJournal.MaxSegmentBytes := 600;
-  DeclaraFila('q.a');
+  MakeQueue('q.a');
   for I := 1 to 40 do
-    LUltimo := Grava(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ConteudoDe(I, 'corpo-' + IntToStr(I))));
+    LLast := WriteRecord(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ContentRecord(I, 'corpo-' + IntToStr(I))));
   // BARRIER: Submit only ENQUEUES -- whoever writes (and whoever rotates) is the
   // journal thread. Without waiting for the watermark, the test would look at the segment
   // before the first byte had gone out.
-  ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
+  CheckOk('o lote ficou duravel', FJournal.WaitDurable(LLast, 5000));
   // Rotation runs AFTER the watermark advances (batch boundary, after the
   // fsync -- D24), and Rotate opens the new segment before counting the rotation.
   // So WaitDurable is not a barrier for either of the two reads: it waits
@@ -722,20 +722,20 @@ begin
     Sleep(10);
     Inc(I);
   end;
-  ChecaOk('o segmento ativo passou do primeiro',
+  CheckOk('o segmento ativo passou do primeiro',
     FJournal.ActiveSegment > 1);
-  ChecaOk('e as rotacoes foram contadas',
+  CheckOk('e as rotacoes foram contadas',
     FJournal.Stats.Rotations >= 1);
 end;
 
-procedure TRecoveryReplayTests.Rotaciona_NaoParteOLoteEntreDoisArquivos;
+procedure TRecoveryReplayTests.Rotate_DoesNotSplitABatchAcrossTwoFiles;
 var
   LRecs: TAMQPJournalRecords;
   LSegs: TArray<Cardinal>;
-  I, LAchou: Integer;
-  LRegs: TAMQPWalRecords;
+  I, LFound: Integer;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
-  LArq: IAMQPWalFile;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
   LN: Integer;
 begin
@@ -759,40 +759,40 @@ begin
   begin
     LRecs[0].Kind := AMQP_REC_CONTENT;
     LRecs[0].Payload := AmqpEncodeRecContent(
-      ConteudoDe(I * 2 - 1, StringOfChar('a', 400)));
+      ContentRecord(I * 2 - 1, StringOfChar('a', 400)));
     LRecs[1].Kind := AMQP_REC_CONTENT;
-    LRecs[1].Payload := AmqpEncodeRecContent(ConteudoDe(I * 2, 'b'));
-    ChecaOk('o lote ficou duravel',
+    LRecs[1].Payload := AmqpEncodeRecContent(ContentRecord(I * 2, 'b'));
+    CheckOk('o lote ficou duravel',
       FJournal.WaitDurable(FJournal.Submit(LRecs), 5000));
   end;
   FJournal.Stop;
   FreeAndNil(FJournal);
 
   LSegs := AmqpWalListSegments(FDir);
-  ChecaOk('rotacionou mesmo', Length(LSegs) > 1);
-  LAchou := 0;
+  CheckOk('rotacionou mesmo', Length(LSegs) > 1);
+  LFound := 0;
   for I := 0 to High(LSegs) do
   begin
-    LArq := TAMQPWalOsFile.Create(
+    LWalFile := TAMQPWalOsFile.Create(
       IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]), False);
-    LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+    LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
     try
-      LN := LSeg.ReadPrefix(LRegs, LStop);
-      Inc(LAchou, LN);
-      ChecaInt('nenhum segmento termina com meio lote (segmento '
+      LN := LSeg.ReadPrefix(LWalRecords, LStop);
+      Inc(LFound, LN);
+      CheckInt('nenhum segmento termina com meio lote (segmento '
         + IntToStr(LSegs[I]) + ')', 0, LN mod 2);
     finally
       LSeg.Free;
-      LArq := nil;
+      LWalFile := nil;
     end;
   end;
-  ChecaInt('e nenhum registro se perdeu na troca', 16, LAchou);
+  CheckInt('e nenhum registro se perdeu na troca', 16, LFound);
 end;
 
-procedure TRecoveryReplayTests.Rotaciona_LsnContinuaEntreSegmentos;
+procedure TRecoveryReplayTests.Rotate_LsnContinuesAcrossSegments;
 var
   I: Integer;
-  LUltimo, LDepois: UInt64;
+  LLast, LAfter: UInt64;
 begin
   // The LSN belongs to the JOURNAL, not to the file. If it restarted on each segment, the
   // increasing-LSN invariant of WS1 would refuse the first append of the new
@@ -805,21 +805,21 @@ begin
   // zeroed the counter on rotation SURVIVED. Here the rotation happens (with a
   // barrier), and only then is the next number asked for.
   FJournal.MaxSegmentBytes := 600;
-  LUltimo := 0;
+  LLast := 0;
   for I := 1 to 40 do
-    LUltimo := Grava(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ConteudoDe(I, 'x')));
-  ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
-  ChecaOk('rotacionou', FJournal.ActiveSegment > 1);
+    LLast := WriteRecord(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ContentRecord(I, 'x')));
+  CheckOk('o lote ficou duravel', FJournal.WaitDurable(LLast, 5000));
+  CheckOk('rotacionou', FJournal.ActiveSegment > 1);
 
-  LDepois := Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(ConteudoDe(99, 'y')));
-  ChecaOk('o registro de depois da rotacao ficou duravel',
-    FJournal.WaitDurable(LDepois, 5000));
-  ChecaOk('o LSN CONTINUOU do outro lado da rotacao, em vez de reiniciar',
-    LDepois > LUltimo);
+  LAfter := WriteRecord(AMQP_REC_CONTENT, AmqpEncodeRecContent(ContentRecord(99, 'y')));
+  CheckOk('o registro de depois da rotacao ficou duravel',
+    FJournal.WaitDurable(LAfter, 5000));
+  CheckOk('o LSN CONTINUOU do outro lado da rotacao, em vez de reiniciar',
+    LAfter > LLast);
 end;
 
-procedure TRecoveryReplayTests.Rotaciona_ReplayLeTodosOsSegmentosComoUmLogSo;
+procedure TRecoveryReplayTests.Rotate_ReplayReadsAllSegmentsAsOneLog;
 var
   E: TAMQPRecoveredState;
   I: Integer;
@@ -828,94 +828,94 @@ begin
   // what ties the two WSs together: with rotation on, the state has to come out
   // IDENTICAL to that of a single-file log.
   FJournal.MaxSegmentBytes := 700;
-  DeclaraFila('q.a');
+  MakeQueue('q.a');
   for I := 1 to 20 do
   begin
-    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
-    Coloca(I * 2, I * 2 - 1, 'q.a');
+    AddContent(I * 2 - 1, 'corpo-' + IntToStr(I));
+    AddPlacement(I * 2, I * 2 - 1, 'q.a');
   end;
-  E := Replica;
+  E := ReplayLog;
   try
-    ChecaOk('leu mais de um segmento', E.Stats.Segments > 1);
-    ChecaInt('a fila veio', 1, E.Queues.Count);
-    ChecaInt('e as 20 colocacoes tambem', 20, E.Entries.Count);
-    ChecaStr('na ordem do log, da primeira', 'corpo-1',
+    CheckOk('leu mais de um segmento', E.Stats.Segments > 1);
+    CheckInt('a fila veio', 1, E.Queues.Count);
+    CheckInt('e as 20 colocacoes tambem', 20, E.Entries.Count);
+    CheckStr('na ordem do log, da primeira', 'corpo-1',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    ChecaStr('a' + ' ultima', 'corpo-20',
+    CheckStr('a' + ' ultima', 'corpo-20',
       AmqpUtf8Decode(E.Contents[E.Entries[19].ContentId].Body));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Rotaciona_ReabrirContinuaNoUltimoSegmento;
+procedure TRecoveryReplayTests.Rotate_ReopenContinuesInTheLastSegment;
 var
   I: Integer;
-  LSegDepois: Cardinal;
-  LUltimo: UInt64;
+  LSegAfter: Cardinal;
+  LLast: UInt64;
 begin
   // A restart must not go back to writing into the FIRST segment: it would overwrite
   // live records. The journal reopens on the LAST one, which is the active one.
   FJournal.MaxSegmentBytes := 600;
   for I := 1 to 40 do
-    LUltimo := Grava(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ConteudoDe(I, 'x')));
-  ChecaOk('o lote ficou duravel', FJournal.WaitDurable(LUltimo, 5000));
-  LSegDepois := FJournal.ActiveSegment;
-  ChecaOk('rotacionou antes de fechar', LSegDepois > 1);
+    LLast := WriteRecord(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ContentRecord(I, 'x')));
+  CheckOk('o lote ficou duravel', FJournal.WaitDurable(LLast, 5000));
+  LSegAfter := FJournal.ActiveSegment;
+  CheckOk('rotacionou antes de fechar', LSegAfter > 1);
   FJournal.Stop;
   FreeAndNil(FJournal);
 
   FJournal := TAMQPJournal.Create(FDir);
   FJournal.Start;
-  ChecaInt('reabriu no ultimo segmento, nao no primeiro',
-    Integer(LSegDepois), Integer(FJournal.ActiveSegment));
+  CheckInt('reabriu no ultimo segmento, nao no primeiro',
+    Integer(LSegAfter), Integer(FJournal.ActiveSegment));
 end;
 
 { --- compaction (WS7 of Phase 4, D26) --- }
 
-procedure TRecoveryReplayTests.Compacta_EncolheOLogSemMudarOEstado;
+procedure TRecoveryReplayTests.Compact_ShrinksTheLogWithoutChangingState;
 var
   E: TAMQPRecoveredState;
   I: Integer;
-  LAntes, LDepois: Int64;
+  LBefore, LAfter: Int64;
 begin
   // What compaction promises: FEWER BYTES, SAME STATE. Publishes 30 and
   // retires 28 -- it is the case D26 describes, a large log and small live
   // content.
-  DeclaraFila('q.a');
+  MakeQueue('q.a');
   for I := 1 to 30 do
   begin
-    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
-    Coloca(I * 2, I * 2 - 1, 'q.a');
+    AddContent(I * 2 - 1, 'corpo-' + IntToStr(I));
+    AddPlacement(I * 2, I * 2 - 1, 'q.a');
   end;
   for I := 1 to 28 do
-    Aposenta(I * 2, 'q.a');
-  ChecaOk('tudo duravel',
+    RetirePlacement(I * 2, 'q.a');
+  CheckOk('tudo duravel',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  LAntes := FJournal.TotalSize;
+  LBefore := FJournal.TotalSize;
 
-  ChecaOk('compactou', FJournal.Compact);
-  LDepois := FJournal.TotalSize;
-  ChecaOk('o log encolheu', LDepois < LAntes);
+  CheckOk('compactou', FJournal.Compact);
+  LAfter := FJournal.TotalSize;
+  CheckOk('o log encolheu', LAfter < LBefore);
 
-  E := Replica;
+  E := ReplayLog;
   try
-    ChecaInt('a fila continua la', 1, E.Queues.Count);
-    ChecaInt('e as duas vivas tambem', 2, E.Entries.Count);
-    ChecaStr('a primeira viva e a de numero 29', 'corpo-29',
+    CheckInt('a fila continua la', 1, E.Queues.Count);
+    CheckInt('e as duas vivas tambem', 2, E.Entries.Count);
+    CheckStr('a primeira viva e a de numero 29', 'corpo-29',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    ChecaInt('e o conteudo das aposentadas foi embora', 2, E.Contents.Count);
+    CheckInt('e o conteudo das aposentadas foi embora', 2, E.Contents.Count);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Compacta_ApagaOsSegmentosVelhos;
+procedure TRecoveryReplayTests.Compact_DeletesTheOldSegments;
 var
   I: Integer;
   LLsn: UInt64;
-  LSegsAntes, LSegsDepois: TArray<Cardinal>;
+  LSegsBefore, LSegsAfter: TArray<Cardinal>;
 begin
   // ONE BARRIER PER RECORD, and not one at the end. Group commit puts everything
   // in the queue into a single batch, and rotation happens at the BATCH
@@ -925,55 +925,55 @@ begin
   // on Delphi. Waiting for each record to become durable, each one is its own
   // batch and the segment count becomes a function of size, not of the scheduler.
   FJournal.MaxSegmentBytes := 300;
-  DeclaraFila('q.a');
+  MakeQueue('q.a');
   for I := 1 to 30 do
   begin
-    LLsn := Grava(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ConteudoDe(I, 'corpo-' + IntToStr(I))));
-    ChecaOk('registro duravel', FJournal.WaitDurable(LLsn, 5000));
+    LLsn := WriteRecord(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ContentRecord(I, 'corpo-' + IntToStr(I))));
+    CheckOk('registro duravel', FJournal.WaitDurable(LLsn, 5000));
   end;
-  LSegsAntes := AmqpWalListSegments(FDir);
-  ChecaOk('havia varios segmentos', Length(LSegsAntes) > 2);
+  LSegsBefore := AmqpWalListSegments(FDir);
+  CheckOk('havia varios segmentos', Length(LSegsBefore) > 2);
 
-  ChecaOk('compactou', FJournal.Compact);
-  LSegsDepois := AmqpWalListSegments(FDir);
+  CheckOk('compactou', FJournal.Compact);
+  LSegsAfter := AmqpWalListSegments(FDir);
   // No live placement (only loose content, which nobody references): what is left is
   // the new segment with the topology and nothing else.
-  ChecaInt('sobrou UM segmento', 1, Length(LSegsDepois));
-  ChecaOk('e ele e mais novo que todos os apagados',
-    LSegsDepois[0] > LSegsAntes[High(LSegsAntes)]);
-  ChecaOk('os apagados foram contados',
-    FJournal.Stats.DeletedSegments >= Length(LSegsAntes));
+  CheckInt('sobrou UM segmento', 1, Length(LSegsAfter));
+  CheckOk('e ele e mais novo que todos os apagados',
+    LSegsAfter[0] > LSegsBefore[High(LSegsBefore)]);
+  CheckOk('os apagados foram contados',
+    FJournal.Stats.DeletedSegments >= Length(LSegsBefore));
 end;
 
-procedure TRecoveryReplayTests.Compacta_PreservaOsIdentificadores;
+procedure TRecoveryReplayTests.Compact_PreservesTheIdentifiers;
 var
   E: TAMQPRecoveredState;
 begin
   // THE IDENTIFIERS ARE WHAT MAKES THE REWRITE IDEMPOTENT. If
   // compaction renumbered, a log with both copies (a crash between writing the
   // new one and deleting the old one) would describe TWO messages instead of one.
-  DeclaraFila('q.a');
-  Conteudo(7, 'x');
-  Coloca(9, 7, 'q.a');
-  ChecaOk('tudo duravel',
+  MakeQueue('q.a');
+  AddContent(7, 'x');
+  AddPlacement(9, 7, 'q.a');
+  CheckOk('tudo duravel',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compact);
-  E := Replica;
+  CheckOk('compactou', FJournal.Compact);
+  E := ReplayLog;
   try
-    ChecaInt('uma colocacao', 1, E.Entries.Count);
-    ChecaInt('com o MESMO EntryId de antes', 9, Integer(E.Entries[0].EntryId));
-    ChecaInt('e o MESMO ContentId', 7, Integer(E.Entries[0].ContentId));
+    CheckInt('uma colocacao', 1, E.Entries.Count);
+    CheckInt('com o MESMO EntryId de antes', 9, Integer(E.Entries[0].EntryId));
+    CheckInt('e o MESMO ContentId', 7, Integer(E.Entries[0].ContentId));
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Compacta_NaoDuplicaSeOsVelhosSobrarem;
+procedure TRecoveryReplayTests.Compact_DoesNotDuplicateIfTheOldOnesRemain;
 var
   E: TAMQPRecoveredState;
   LEnq: TAMQPRecEnqueue;
-  LCont: TAMQPRecContent;
+  LContentRec: TAMQPRecContent;
   LLsn: UInt64;
 begin
   // THE CRASH BETWEEN STEP 4 AND 5, simulated: the new segment is already on
@@ -984,12 +984,12 @@ begin
   // Instead of bringing down the process (which does not test fsync, D28), I build the
   // situation by hand: I write the SAME placement twice, which is exactly the
   // file an interrupted compaction would leave behind.
-  DeclaraFila('q.a');
-  Conteudo(5, 'unica');
-  Coloca(6, 5, 'q.a');
-  LCont.ContentId := 5;
-  LCont.UserId := 'guest';
-  LCont.Body := AmqpUtf8Encode('unica');
+  MakeQueue('q.a');
+  AddContent(5, 'unica');
+  AddPlacement(6, 5, 'q.a');
+  LContentRec.ContentId := 5;
+  LContentRec.UserId := 'guest';
+  LContentRec.Body := AmqpUtf8Encode('unica');
   LEnq.VHost := '/';
   LEnq.Queue := 'q.a';
   LEnq.EntryId := 6;      // The SAME id
@@ -1000,20 +1000,20 @@ begin
   LEnq.EnqueuedAtWall := 1700000000000;
   LEnq.TtlMs := -1;
   LEnq.HeaderPayload := nil;
-  Grava(AMQP_REC_CONTENT, AmqpEncodeRecContent(LCont));
-  LLsn := Grava(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
-  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  WriteRecord(AMQP_REC_CONTENT, AmqpEncodeRecContent(LContentRec));
+  LLsn := WriteRecord(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
+  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
 
-  E := Replica;
+  E := ReplayLog;
   try
-    ChecaInt('UMA colocacao, nao duas', 1, E.Entries.Count);
-    ChecaInt('e a repetida foi contada', 1, E.Stats.Duplicates);
+    CheckInt('UMA colocacao, nao duas', 1, E.Entries.Count);
+    CheckInt('e a repetida foi contada', 1, E.Stats.Duplicates);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Compacta_PreservaAOrdemEOsPrazos;
+procedure TRecoveryReplayTests.Compact_PreservesOrderAndDeadlines;
 var
   E: TAMQPRecoveredState;
 begin
@@ -1021,59 +1021,59 @@ begin
   // lost the wall-clock instant or the bucket, the message would come back from the restart
   // with a renewed deadline (D21) or at the wrong priority (D12) -- and no
   // "the message survived" test would notice.
-  DeclaraFila('q.a');
-  Conteudo(1, 'primeira');
-  Coloca(2, 1, 'q.a', 3);
-  Conteudo(3, 'segunda');
-  Coloca(4, 3, 'q.a', 7);
-  ChecaOk('tudo duravel',
+  MakeQueue('q.a');
+  AddContent(1, 'primeira');
+  AddPlacement(2, 1, 'q.a', 3);
+  AddContent(3, 'segunda');
+  AddPlacement(4, 3, 'q.a', 7);
+  CheckOk('tudo duravel',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compact);
-  E := Replica;
+  CheckOk('compactou', FJournal.Compact);
+  E := ReplayLog;
   try
-    ChecaInt('as duas', 2, E.Entries.Count);
-    ChecaStr('na ordem do log original', 'primeira',
+    CheckInt('as duas', 2, E.Entries.Count);
+    CheckStr('na ordem do log original', 'primeira',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    ChecaInt('com a prioridade da primeira', 3, Integer(E.Entries[0].Priority));
-    ChecaInt('e a da segunda', 7, Integer(E.Entries[1].Priority));
-    ChecaOk('e o instante de parede intacto',
+    CheckInt('com a prioridade da primeira', 3, Integer(E.Entries[0].Priority));
+    CheckInt('e a da segunda', 7, Integer(E.Entries[1].Priority));
+    CheckOk('e o instante de parede intacto',
       E.Entries[0].EnqueuedAtWall = 1700000000000);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Compacta_LogInteiroMorto_NaoSobraColocacao;
+procedure TRecoveryReplayTests.Compact_WholeLogDead_NoPlacementLeft;
 var
   E: TAMQPRecoveredState;
   I: Integer;
 begin
-  DeclaraFila('q.a');
+  MakeQueue('q.a');
   for I := 1 to 10 do
   begin
-    Conteudo(I * 2 - 1, 'x');
-    Coloca(I * 2, I * 2 - 1, 'q.a');
-    Aposenta(I * 2, 'q.a');
+    AddContent(I * 2 - 1, 'x');
+    AddPlacement(I * 2, I * 2 - 1, 'q.a');
+    RetirePlacement(I * 2, 'q.a');
   end;
-  ChecaOk('tudo duravel',
+  CheckOk('tudo duravel',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compact);
-  E := Replica;
+  CheckOk('compactou', FJournal.Compact);
+  E := ReplayLog;
   try
-    ChecaInt('nenhuma colocacao', 0, E.Entries.Count);
-    ChecaInt('nenhum conteudo', 0, E.Contents.Count);
-    ChecaInt('mas a TOPOLOGIA fica -- ela nao morre com as mensagens', 1,
+    CheckInt('nenhuma colocacao', 0, E.Entries.Count);
+    CheckInt('nenhum conteudo', 0, E.Contents.Count);
+    CheckInt('mas a TOPOLOGIA fica -- ela nao morre com as mensagens', 1,
       E.Queues.Count);
   finally
     E.Free;
   end;
 end;
 
-procedure TRecoveryReplayTests.Compacta_NoStart_QuandoOLogPassaDoLimiar;
+procedure TRecoveryReplayTests.Compact_OnStart_WhenTheLogExceedsTheThreshold;
 var
   I: Integer;
   LLsn: UInt64;
-  LAntes, LDepois: Int64;
+  LBefore, LAfter: Int64;
   J: TAMQPJournal;
 begin
   // Compaction ONLY runs with the journal quiescent -- today, inside Start.
@@ -1085,27 +1085,27 @@ begin
   //
   // Here, the equivalent of Start: writes, closes the journal, reopens and compacts
   // with nobody else submitting.
-  DeclaraFila('q.a');
+  MakeQueue('q.a');
   for I := 1 to 30 do
   begin
-    Conteudo(I * 2 - 1, 'corpo-' + IntToStr(I));
-    Coloca(I * 2, I * 2 - 1, 'q.a');
-    LLsn := Grava(AMQP_REC_DEQUEUE,
-      AmqpEncodeRecDequeue(DequeueDe(I * 2, 'q.a')));
+    AddContent(I * 2 - 1, 'corpo-' + IntToStr(I));
+    AddPlacement(I * 2, I * 2 - 1, 'q.a');
+    LLsn := WriteRecord(AMQP_REC_DEQUEUE,
+      AmqpEncodeRecDequeue(DequeueRecord(I * 2, 'q.a')));
   end;
-  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  LAntes := FJournal.TotalSize;
+  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  LBefore := FJournal.TotalSize;
   FJournal.Stop;
   FreeAndNil(FJournal);
 
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    ChecaOk('o log esta acima do limiar', J.TotalSize >= 1500);
-    ChecaOk('compactou', J.Compact);
-    LDepois := J.TotalSize;
-    ChecaOk('e encolheu', LDepois < LAntes);
-    ChecaOk('apagando segmento', J.Stats.DeletedSegments >= 1);
+    CheckOk('o log esta acima do limiar', J.TotalSize >= 1500);
+    CheckOk('compactou', J.Compact);
+    LAfter := J.TotalSize;
+    CheckOk('e encolheu', LAfter < LBefore);
+    CheckOk('apagando segmento', J.Stats.DeletedSegments >= 1);
   finally
     J.Stop;
     J.Free;
@@ -1113,10 +1113,10 @@ begin
   FJournal := nil;
 end;
 
-procedure TRecoveryReplayTests.Compacta_FsyncReprovado_NaoApagaNada;
+procedure TRecoveryReplayTests.Compact_FsyncFailed_DeletesNothing;
 var
-  J: TJournalComSyncFalho;
-  LSegsAntes, LSegsDepois: TArray<Cardinal>;
+  J: TJournalWithFailingSync;
+  LSegsBefore, LSegsAfter: TArray<Cardinal>;
   LRecs: TAMQPJournalRecords;
   I: Integer;
 begin
@@ -1129,7 +1129,7 @@ begin
   // this test existed -- in-process, fsync never fails on its own.
   FJournal.Stop;
   FreeAndNil(FJournal);
-  J := TJournalComSyncFalho.Create(FDir);
+  J := TJournalWithFailingSync.Create(FDir);
   try
     J.Start;
     J.MaxSegmentBytes := 300;
@@ -1137,18 +1137,18 @@ begin
     for I := 1 to 40 do
     begin
       LRecs[0].Kind := AMQP_REC_CONTENT;
-      LRecs[0].Payload := AmqpEncodeRecContent(ConteudoDe(I, 'x'));
+      LRecs[0].Payload := AmqpEncodeRecContent(ContentRecord(I, 'x'));
       J.Submit(LRecs);
     end;
-    ChecaOk('tudo duravel', J.WaitDurable(J.Stats.NextLsn - 1, 5000));
-    LSegsAntes := AmqpWalListSegments(FDir);
-    ChecaOk('havia varios segmentos', Length(LSegsAntes) > 1);
+    CheckOk('tudo duravel', J.WaitDurable(J.Stats.NextLsn - 1, 5000));
+    LSegsBefore := AmqpWalListSegments(FDir);
+    CheckOk('havia varios segmentos', Length(LSegsBefore) > 1);
 
-    J.ReprovaOSync;
-    ChecaNao('a compactacao se recusa a concluir', J.Compact);
-    LSegsDepois := AmqpWalListSegments(FDir);
-    ChecaOk('e NENHUM segmento velho foi apagado',
-      Length(LSegsDepois) >= Length(LSegsAntes));
+    J.FailTheSync;
+    CheckNot('a compactacao se recusa a concluir', J.Compact);
+    LSegsAfter := AmqpWalListSegments(FDir);
+    CheckOk('e NENHUM segmento velho foi apagado',
+      Length(LSegsAfter) >= Length(LSegsBefore));
   finally
     try
       J.Stop;
@@ -1160,90 +1160,90 @@ begin
   FJournal := nil;
 end;
 
-procedure TRecoveryReplayTests.Compacta_FanOut_GravaOCorpoUmaVezSo;
+procedure TRecoveryReplayTests.Compact_FanOut_WritesTheBodyOnlyOnce;
 var
   LSegs: TArray<Cardinal>;
-  LArq: IAMQPWalFile;
+  LWalFile: IAMQPWalFile;
   LSeg: TAMQPWalSegment;
-  LRegs: TAMQPWalRecords;
+  LWalRecords: TAMQPWalRecords;
   LStop: TAMQPWalStop;
-  LN, I, J, LConteudos, LColocacoes: Integer;
+  LN, I, J, LContents, LPlacements: Integer;
 begin
   // THE PAYOFF OF D22, on the compaction side: a fan-out to three queues has
   // ONE body and THREE placements. If the rewrite wrote the body per placement,
   // the state would come out the same -- and the log three times bigger, which is exactly what
   // compaction exists to avoid. No state test notices.
-  DeclaraFila('q.a');
-  DeclaraFila('q.b');
-  DeclaraFila('q.c');
-  Conteudo(1, 'compartilhado');
-  Coloca(2, 1, 'q.a');
-  Coloca(3, 1, 'q.b');
-  Coloca(4, 1, 'q.c');
-  ChecaOk('tudo duravel',
+  MakeQueue('q.a');
+  MakeQueue('q.b');
+  MakeQueue('q.c');
+  AddContent(1, 'compartilhado');
+  AddPlacement(2, 1, 'q.a');
+  AddPlacement(3, 1, 'q.b');
+  AddPlacement(4, 1, 'q.c');
+  CheckOk('tudo duravel',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  ChecaOk('compactou', FJournal.Compact);
+  CheckOk('compactou', FJournal.Compact);
   FJournal.Stop;
   FreeAndNil(FJournal);
 
-  LConteudos := 0;
-  LColocacoes := 0;
+  LContents := 0;
+  LPlacements := 0;
   LSegs := AmqpWalListSegments(FDir);
   for I := 0 to High(LSegs) do
   begin
-    LArq := TAMQPWalOsFile.Create(
+    LWalFile := TAMQPWalOsFile.Create(
       IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[I]), False);
-    LSeg := TAMQPWalSegment.OpenExisting(LArq, False);
+    LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
     try
-      LN := LSeg.ReadPrefix(LRegs, LStop);
+      LN := LSeg.ReadPrefix(LWalRecords, LStop);
       for J := 0 to LN - 1 do
-        if LRegs[J].Kind = AMQP_REC_CONTENT then
-          Inc(LConteudos)
-        else if LRegs[J].Kind = AMQP_REC_ENQUEUE then
-          Inc(LColocacoes);
+        if LWalRecords[J].Kind = AMQP_REC_CONTENT then
+          Inc(LContents)
+        else if LWalRecords[J].Kind = AMQP_REC_ENQUEUE then
+          Inc(LPlacements);
     finally
       LSeg.Free;
-      LArq := nil;
+      LWalFile := nil;
     end;
   end;
-  ChecaInt('UM registro de conteudo no log compactado', 1, LConteudos);
-  ChecaInt('e tres colocacoes', 3, LColocacoes);
+  CheckInt('UM registro de conteudo no log compactado', 1, LContents);
+  CheckInt('e tres colocacoes', 3, LPlacements);
 end;
 
 { --- hard cap on the log (WS7 of Phase 4, D26) --- }
 
-procedure TRecoveryReplayTests.Teto_ZeroEIlimitado;
+procedure TRecoveryReplayTests.Cap_ZeroIsUnlimited;
 var
   I: Integer;
   LLsn: UInt64;
 begin
   // 0 = unlimited, the shape of D7's MaxQueueLength. It is the DEFAULT: nobody
   // gets a disk cap for having turned durability on.
-  ChecaInt('o default e zero', 0, Integer(FJournal.MaxJournalBytes));
+  CheckInt('o default e zero', 0, Integer(FJournal.MaxJournalBytes));
   for I := 1 to 40 do
-    LLsn := Grava(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ConteudoDe(I, StringOfChar('x', 200))));
-  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  ChecaNao('e o journal nunca se declara cheio', FJournal.IsFull);
+    LLsn := WriteRecord(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ContentRecord(I, StringOfChar('x', 200))));
+  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  CheckNot('e o journal nunca se declara cheio', FJournal.IsFull);
 end;
 
-procedure TRecoveryReplayTests.Teto_Estourado_MarcaCheio;
+procedure TRecoveryReplayTests.Cap_Exceeded_SetsFull;
 var
   I: Integer;
   LLsn: UInt64;
 begin
   FJournal.MaxJournalBytes := 2000;
-  ChecaNao('comeca vazio', FJournal.IsFull);
+  CheckNot('comeca vazio', FJournal.IsFull);
   for I := 1 to 40 do
-    LLsn := Grava(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ConteudoDe(I, StringOfChar('x', 200))));
-  ChecaOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  ChecaOk('passou do teto e se declara cheio', FJournal.IsFull);
-  ChecaOk('e o tamanho relatado bate com o teto',
+    LLsn := WriteRecord(AMQP_REC_CONTENT,
+      AmqpEncodeRecContent(ContentRecord(I, StringOfChar('x', 200))));
+  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  CheckOk('passou do teto e se declara cheio', FJournal.IsFull);
+  CheckOk('e o tamanho relatado bate com o teto',
     FJournal.Stats.Bytes >= 2000);
 end;
 
-procedure TRecoveryReplayTests.Teto_RetiradaNuncaERecusada;
+procedure TRecoveryReplayTests.Cap_RetirementIsNeverRefused;
 var
   I: Integer;
   LLsn: UInt64;
@@ -1254,18 +1254,18 @@ begin
   // blocking the actor, refusing a DEQ would resurrect the message on the next boot, and
   // it is precisely the DEQs that let compaction shrink the log and GET OUT
   // of this situation. Refusing them would be closing the only door.
-  DeclaraFila('q.a');
-  Conteudo(1, 'x');
-  Coloca(2, 1, 'q.a');
+  MakeQueue('q.a');
+  AddContent(1, 'x');
+  AddPlacement(2, 1, 'q.a');
   FJournal.MaxJournalBytes := 1; // full from the start
-  ChecaOk('cheio', FJournal.IsFull);
-  LLsn := FJournal.SubmitNoWait(RegistroDe(AMQP_REC_DEQUEUE,
-    AmqpEncodeRecDequeue(DequeueDe(2, 'q.a'))));
-  ChecaOk('o DEQ foi aceito mesmo com o log cheio', LLsn > 0);
-  ChecaOk('e ficou duravel', FJournal.WaitDurable(LLsn, 5000));
-  E := Replica;
+  CheckOk('cheio', FJournal.IsFull);
+  LLsn := FJournal.SubmitNoWait(JournalRecordsOf(AMQP_REC_DEQUEUE,
+    AmqpEncodeRecDequeue(DequeueRecord(2, 'q.a'))));
+  CheckOk('o DEQ foi aceito mesmo com o log cheio', LLsn > 0);
+  CheckOk('e ficou duravel', FJournal.WaitDurable(LLsn, 5000));
+  E := ReplayLog;
   try
-    ChecaInt('a colocacao foi mesmo aposentada', 0, E.Entries.Count);
+    CheckInt('a colocacao foi mesmo aposentada', 0, E.Entries.Count);
   finally
     E.Free;
   end;

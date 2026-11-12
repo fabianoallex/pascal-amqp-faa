@@ -36,12 +36,12 @@ uses
   AMQP.Server.Broker;
 
 const
-  PORTA_PADRAO = 5673;
-  SEGUNDOS_PADRAO = 120;
+  DEFAULT_PORT = 5673;
+  DEFAULT_SECONDS = 120;
 
 // The test PKI of pascal-common-faa (external/pascal-common-faa/tests/pki),
 // looked for upwards from the executable. '' when not found.
-function AchaPki: string;
+function FindPki: string;
 var
   LDir: string;
   I: Integer;
@@ -60,18 +60,18 @@ end;
 
 var
   LBroker: TAMQPServer;
-  LPorta, LPortaTls: Word;
+  LPorta, LTlsPort: Word;
   LDataDir: string;
-  LSegundos, I: Integer;
+  LSeconds, I: Integer;
   LArg, LPki: string;
   LDeadline: UInt64;
-  LLinha: string;
+  LLine: string;
   LBrokerTls: TAMQPServer;
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
-  LPorta := PORTA_PADRAO;
-  LPortaTls := 0;
-  LSegundos := SEGUNDOS_PADRAO;
+  LPorta := DEFAULT_PORT;
+  LTlsPort := 0;
+  LSeconds := DEFAULT_SECONDS;
   LDataDir := '';
 
   I := 1;
@@ -80,12 +80,12 @@ begin
     LArg := ParamStr(I);
     if SameText(LArg, '--tls') and (I < ParamCount) then
     begin
-      LPortaTls := StrToIntDef(ParamStr(I + 1), 0);
+      LTlsPort := StrToIntDef(ParamStr(I + 1), 0);
       Inc(I);
     end
     else if SameText(LArg, '--seconds') and (I < ParamCount) then
     begin
-      LSegundos := StrToIntDef(ParamStr(I + 1), SEGUNDOS_PADRAO);
+      LSeconds := StrToIntDef(ParamStr(I + 1), DEFAULT_SECONDS);
       Inc(I);
     end
     else if SameText(LArg, '--datadir') and (I < ParamCount) then
@@ -109,16 +109,16 @@ begin
     LBroker.Start;
     WriteLn('broker embutido ouvindo em 127.0.0.1:', LBroker.Port);
 
-    if LPortaTls <> 0 then
+    if LTlsPort <> 0 then
     begin
       // Every build has TLS since 0.6.0: PEM pair on OpenSSL, PFX on
       // SChannel (the default on Windows outside the `openssl` mode).
-      LPki := AchaPki;
+      LPki := FindPki;
       if LPki <> '' then
       begin
         LBrokerTls := TAMQPServer.Create;
         LBrokerTls.BindAddress := '127.0.0.1';
-        LBrokerTls.Port := LPortaTls;
+        LBrokerTls.Port := LTlsPort;
         LBrokerTls.UseTls := True;
         if AmqpResolveTlsBackend(tbDefault) = tbOpenSsl then
         begin
@@ -138,18 +138,18 @@ begin
         WriteLn('AVISO: external/pascal-common-faa/tests/pki nao encontrado -- sem porta TLS');
     end;
 
-    WriteLn('no ar por ate ', LSegundos, 's (ou ate uma linha na entrada padrao)');
+    WriteLn('no ar por ate ', LSeconds, 's (ou ate uma linha na entrada padrao)');
     Flush(Output);
 
     // Exits on a deadline OR on a line on standard input: with the deadline
     // the script does not hang if something goes wrong; with standard input
     // the caller shuts it down as soon as the SmokeTest finishes.
-    LDeadline := PcTickMs + UInt64(LSegundos) * 1000;
+    LDeadline := PcTickMs + UInt64(LSeconds) * 1000;
     while PcTickMs < LDeadline do
     begin
       if not Eof(Input) then
       begin
-        ReadLn(LLinha);
+        ReadLn(LLine);
         Break;
       end;
       Sleep(100);

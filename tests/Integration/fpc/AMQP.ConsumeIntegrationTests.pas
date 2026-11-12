@@ -41,9 +41,9 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-    procedure ConsomeUmaMensagem_CorpoCorreto;
-    procedure ConsomeTodas_ComAck_E_Concorrencia;
-    procedure CanalDedicado_ProcessaSequencialEEmOrdem;
+    procedure ConsumesOneMessage_CorrectBody;
+    procedure ConsumesAll_WithAck_And_Concurrency;
+    procedure DedicatedChannel_ProcessesSequentiallyAndInOrder;
   end;
 
 implementation
@@ -152,7 +152,7 @@ begin
   PcAtomicInc(FCount);
 end;
 
-procedure TAMQPConsumeIntegrationTests.ConsomeUmaMensagem_CorpoCorreto;
+procedure TAMQPConsumeIntegrationTests.ConsumesOneMessage_CorrectBody;
 var
   LQueue: string;
   LList: TList<string>;
@@ -173,7 +173,7 @@ begin
   end;
 end;
 
-procedure TAMQPConsumeIntegrationTests.ConsomeTodas_ComAck_E_Concorrencia;
+procedure TAMQPConsumeIntegrationTests.ConsumesAll_WithAck_And_Concurrency;
 const
   N = 8;
 var
@@ -203,7 +203,7 @@ begin
     PcAtomicGet(FPeak) > 1);
 end;
 
-procedure TAMQPConsumeIntegrationTests.CanalDedicado_ProcessaSequencialEEmOrdem;
+procedure TAMQPConsumeIntegrationTests.DedicatedChannel_ProcessesSequentiallyAndInOrder;
 const
   N = 8;
 var

@@ -35,8 +35,8 @@ var
   ConsoleApp: TTestRunner;
 begin
   // Plain FPC console (outside a Lazarus app): DefaultSystemCodePage is not UTF-8
-  // by default, so accented strings in the tests (ShortStr_UsaUTF8,
-  // ShortStr_ComAcentos etc.) would be transcoded wrongly. See CLAUDE.md.
+  // by default, so accented strings in the tests (ShortStr_UsesUTF8,
+  // ShortStr_WithAccents etc.) would be transcoded wrongly. See CLAUDE.md.
   SetMultiByteConversionCodePage(CP_UTF8);
 
   {$IFDEF MSWINDOWS}

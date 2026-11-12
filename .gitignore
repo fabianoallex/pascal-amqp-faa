@@ -18,14 +18,14 @@ linux/
 *.res
 
 # ELF binaries (no extension) produced by lazbuild on Linux in the project directory
-samples/AutorizadorSim/AutorizadorSim
-samples/AutorizadorSimVcl/AutorizadorSimVcl
-samples/Retaguarda/Retaguarda
-samples/RetaguardaVcl/RetaguardaVcl
-samples/PublicadorConfiavelVcl/PublicadorConfiavelVcl
-samples/ConsultaStatusVcl/ConsultaStatusVcl
+samples/AuthorizerSim/AuthorizerSim
+samples/AuthorizerSimVcl/AuthorizerSimVcl
+samples/BackOffice/BackOffice
+samples/BackOfficeVcl/BackOfficeVcl
+samples/ReliablePublisherVcl/ReliablePublisherVcl
+samples/StatusQueryVcl/StatusQueryVcl
 samples/RetryDlqVcl/RetryDlqVcl
-samples/EventosTopicVcl/EventosTopicVcl
+samples/TopicEventsVcl/TopicEventsVcl
 samples/SmokeTest/SmokeTest
 tests/Unit/fpc/AMQPUnitTestsFpc
 tests/Integration/fpc/AMQPIntegrationTestsFpc

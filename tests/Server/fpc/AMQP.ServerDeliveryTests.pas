@@ -11,7 +11,7 @@
   Two fixtures, because they are two distinct subjects:
 
   - TQueueDeliveryTests: the queue actor's ROUND-ROBIN, with a FAKE target
-    (TAlvoFalso). What is tested here is the policy -- who receives, in what
+    (TFakeTarget). What is tested here is the policy -- who receives, in what
     order, what happens when a consumer refuses (D3) and where the
     unacknowledged ones go. Not a single wire byte.
   - TDeliveryTargetTests: the REAL target (TAMQPChannelDeliveryTarget) over
@@ -47,51 +47,51 @@ uses
 type
   TQueueDeliveryTests = class(TTestCase)
   published
-    procedure Consumidor_RecebeAoPublicar;
-    procedure ConsumidorNovo_RecebeOQueJaEstavaNaFila;
-    procedure NoAck_NaoDeixaNaoConfirmada;
-    procedure Rodizio_AlternaEntreConsumidores;
-    procedure ConsumidorQueRecusa_NaoTravaOsOutros;
-    procedure TodosRecusam_MensagemFicaNaFila;
-    procedure DeliverTick_RetomaDepoisDaRecusa;
-    procedure AlvoMorto_ConsumidorSaiEMensagemFica;
-    procedure Entrega_MarcaRedeliveredNaSegundaVez;
-    procedure RemoveChannel_DevolveEntregaNaoConfirmada;
+    procedure Consumer_ReceivesOnPublish;
+    procedure NewConsumer_ReceivesWhatWasAlreadyQueued;
+    procedure NoAck_LeavesNoUnacked;
+    procedure RoundRobin_AlternatesBetweenConsumers;
+    procedure RefusingConsumer_DoesNotBlockTheOthers;
+    procedure AllRefuse_MessageStaysInTheQueue;
+    procedure DeliverTick_ResumesAfterRefusal;
+    procedure DeadTarget_ConsumerLeavesAndMessageStays;
+    procedure Delivery_SetsRedeliveredTheSecondTime;
+    procedure RemoveChannel_ReturnsUnackedDelivery;
   end;
 
   TDeliveryTargetTests = class(TTestCase)
   published
-    procedure Emite_DeliverHeaderEBody;
-    procedure FatiaCorpoPeloFrameMax;
-    procedure TagsMonotonicasPorCanal;
-    procedure PrefetchBloqueia_AckLibera;
-    procedure RecusaNaoConsomeTag;
-    procedure NoAck_NaoContaPrefetch;
-    procedure FlowDesligado_Recusa;
-    procedure NoteResolved_MultipleResolvePrefixo;
-    procedure Detach_RecusaEDeixaDeEstarVivo;
-    procedure FilaDeEscritaCheia_RecusaSemBloquear;
-    procedure TryPostFrames_LoteAtomicoOuNada;
-    procedure Canal_LiberadoDetachaOAlvo;
-    procedure Canal_PropagaFlowEPrefetchParaOAlvo;
+    procedure Emits_DeliverHeaderAndBody;
+    procedure SlicesBodyByFrameMax;
+    procedure MonotonicTagsPerChannel;
+    procedure PrefetchBlocks_AckReleases;
+    procedure RefusalDoesNotConsumeTag;
+    procedure NoAck_DoesNotCountPrefetch;
+    procedure FlowOff_Refuses;
+    procedure NoteResolved_MultipleResolvesPrefix;
+    procedure Detach_RefusesAndStopsBeingAlive;
+    procedure FullWriteQueue_RefusesWithoutBlocking;
+    procedure TryPostFrames_AtomicBatchOrNothing;
+    procedure Channel_FreedDetachesTheTarget;
+    procedure Channel_PropagatesFlowAndPrefetchToTheTarget;
   end;
 
 implementation
 
 { --- common helpers --- }
 
-function NovaMensagem(const ATexto: string): TAMQPMessage;
+function NewMessage(const AText: string): TAMQPMessage;
 begin
   Result := TAMQPMessage.Create('ex', 'rk', 'guest', nil,
-    AmqpUtf8Encode(ATexto));
+    AmqpUtf8Encode(AText));
 end;
 
-// Publishes ATexto to the queue and drops the publisher's reference.
-procedure Publicar(AQueue: TAMQPServerQueue; const ATexto: string);
+// Publishes AText to the queue and drops the publisher's reference.
+procedure PublishText(AQueue: TAMQPServerQueue; const AText: string);
 var
   LMsg: TAMQPMessage;
 begin
-  LMsg := NovaMensagem(ATexto);
+  LMsg := NewMessage(AText);
   try
     AQueue.PostMessage(LMsg);
   finally
@@ -101,26 +101,26 @@ end;
 
 { --- TQueueDeliveryTests --- }
 
-procedure TQueueDeliveryTests.Consumidor_RecebeAoPublicar;
+procedure TQueueDeliveryTests.Consumer_ReceivesOnPublish;
 var
   LQ: TAMQPServerQueue;
-  LAlvo: TAlvoFalso;
+  LTarget: TFakeTarget;
   LRef: IAMQPDeliveryTarget;
   LStats: TAMQPQueueStats;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LAlvo := TAlvoFalso.Create(1);
-    LRef := LAlvo;
+    LTarget := TFakeTarget.Create(1);
+    LRef := LTarget;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False, LRef));
-    Publicar(LQ, 'a');
+    PublishText(LQ, 'a');
 
     LStats := LQ.Stats; // barrier: the mailbox is serial
-    TAssert.AssertEquals('entregou', 1, LAlvo.Count);
-    TAssert.AssertEquals('corpo', 'a', LAlvo.Entrega(0).Corpo);
-    TAssert.AssertEquals('consumer tag', 'ct', LAlvo.Entrega(0).ConsumerTag);
-    TAssert.AssertEquals('nome da fila', 'q', LAlvo.Entrega(0).QueueName);
-    TAssert.AssertFalse('primeira entrega', LAlvo.Entrega(0).Redelivered);
+    TAssert.AssertEquals('entregou', 1, LTarget.Count);
+    TAssert.AssertEquals('corpo', 'a', LTarget.DeliveryAt(0).BodyText);
+    TAssert.AssertEquals('consumer tag', 'ct', LTarget.DeliveryAt(0).ConsumerTag);
+    TAssert.AssertEquals('nome da fila', 'q', LTarget.DeliveryAt(0).QueueName);
+    TAssert.AssertFalse('primeira entrega', LTarget.DeliveryAt(0).Redelivered);
     TAssert.AssertEquals('saiu das prontas', 0, LStats.MessageCount);
     TAssert.AssertEquals('virou nao-confirmada', 1, LStats.UnackedCount);
     TAssert.AssertEquals('contou a entrega', 1, Integer(LStats.DeliveredCount));
@@ -129,46 +129,46 @@ begin
   end;
 end;
 
-procedure TQueueDeliveryTests.ConsumidorNovo_RecebeOQueJaEstavaNaFila;
+procedure TQueueDeliveryTests.NewConsumer_ReceivesWhatWasAlreadyQueued;
 var
   LQ: TAMQPServerQueue;
-  LAlvo: TAlvoFalso;
+  LTarget: TFakeTarget;
   LRef: IAMQPDeliveryTarget;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    Publicar(LQ, 'a');
-    Publicar(LQ, 'b');
+    PublishText(LQ, 'a');
+    PublishText(LQ, 'b');
     TAssert.AssertEquals('acumulou sem consumidor', 2, LQ.Stats.MessageCount);
 
-    LAlvo := TAlvoFalso.Create(1);
-    LRef := LAlvo;
+    LTarget := TFakeTarget.Create(1);
+    LRef := LTarget;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LRef));
     TAssert.AssertEquals('drenou ao entrar o consumidor', 0, LQ.Stats.MessageCount);
-    TAssert.AssertEquals('na ordem da fila', 'a|b', LAlvo.Corpos);
+    TAssert.AssertEquals('na ordem da fila', 'a|b', LTarget.Bodies);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueDeliveryTests.NoAck_NaoDeixaNaoConfirmada;
+procedure TQueueDeliveryTests.NoAck_LeavesNoUnacked;
 var
   LQ: TAMQPServerQueue;
-  LAlvo: TAlvoFalso;
+  LTarget: TFakeTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LAlvo := TAlvoFalso.Create(1);
-    LRef := LAlvo;
+    LTarget := TFakeTarget.Create(1);
+    LRef := LTarget;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LRef));
 
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
       TAssert.AssertEquals('no-ack nao gera pendencia', 0, LQ.Stats.UnackedCount);
-      TAssert.AssertEquals('entregou', 1, LAlvo.Count);
+      TAssert.AssertEquals('entregou', 1, LTarget.Count);
       TAssert.AssertEquals('a fila soltou a referencia dela', 1, LMsg.RefCount);
     finally
       LMsg.Release;
@@ -178,78 +178,78 @@ begin
   end;
 end;
 
-procedure TQueueDeliveryTests.Rodizio_AlternaEntreConsumidores;
+procedure TQueueDeliveryTests.RoundRobin_AlternatesBetweenConsumers;
 var
   LQ: TAMQPServerQueue;
-  LA, LB: TAlvoFalso;
+  LA, LB: TFakeTarget;
   LRefA, LRefB: IAMQPDeliveryTarget;
   I: Integer;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(1);
+    LA := TFakeTarget.Create(1);
     LRefA := LA;
-    LB := TAlvoFalso.Create(2);
+    LB := TFakeTarget.Create(2);
     LRefB := LB;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', True, False, LRefA));
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('cb', True, False, LRefB));
 
     for I := 1 to 4 do
-      Publicar(LQ, 'm' + IntToStr(I));
+      PublishText(LQ, 'm' + IntToStr(I));
     LQ.Stats; // barreira
 
     TAssert.AssertEquals('metade para o primeiro', 2, LA.Count);
     TAssert.AssertEquals('metade para o segundo', 2, LB.Count);
-    TAssert.AssertEquals('alternou', 'm1|m3', LA.Corpos);
-    TAssert.AssertEquals('alternou', 'm2|m4', LB.Corpos);
+    TAssert.AssertEquals('alternou', 'm1|m3', LA.Bodies);
+    TAssert.AssertEquals('alternou', 'm2|m4', LB.Bodies);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueDeliveryTests.ConsumidorQueRecusa_NaoTravaOsOutros;
+procedure TQueueDeliveryTests.RefusingConsumer_DoesNotBlockTheOthers;
 var
   LQ: TAMQPServerQueue;
-  LA, LB: TAlvoFalso;
+  LA, LB: TFakeTarget;
   LRefA, LRefB: IAMQPDeliveryTarget;
   I: Integer;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(1);
-    LA.Recusar := True; // slow consumer: outbound queue full (D3)
+    LA := TFakeTarget.Create(1);
+    LA.Refuse := True; // slow consumer: outbound queue full (D3)
     LRefA := LA;
-    LB := TAlvoFalso.Create(2);
+    LB := TFakeTarget.Create(2);
     LRefB := LB;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', True, False, LRefA));
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('cb', True, False, LRefB));
 
     for I := 1 to 3 do
-      Publicar(LQ, 'm' + IntToStr(I));
+      PublishText(LQ, 'm' + IntToStr(I));
 
     TAssert.AssertEquals('nada ficou preso', 0, LQ.Stats.MessageCount);
     TAssert.AssertEquals('o que recusa nao recebe', 0, LA.Count);
-    TAssert.AssertEquals('o outro consumidor recebe tudo, sem head-of-line', 'm1|m2|m3', LB.Corpos);
+    TAssert.AssertEquals('o outro consumidor recebe tudo, sem head-of-line', 'm1|m2|m3', LB.Bodies);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueDeliveryTests.TodosRecusam_MensagemFicaNaFila;
+procedure TQueueDeliveryTests.AllRefuse_MessageStaysInTheQueue;
 var
   LQ: TAMQPServerQueue;
-  LA: TAlvoFalso;
+  LA: TFakeTarget;
   LRefA: IAMQPDeliveryTarget;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(1);
-    LA.Recusar := True;
+    LA := TFakeTarget.Create(1);
+    LA.Refuse := True;
     LRefA := LA;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', True, False, LRefA));
 
-    Publicar(LQ, 'a');
-    Publicar(LQ, 'b');
+    PublishText(LQ, 'a');
+    PublishText(LQ, 'b');
     TAssert.AssertEquals('ficaram na fila', 2, LQ.Stats.MessageCount);
     TAssert.AssertEquals('nada entregue', 0, LA.Count);
   finally
@@ -257,48 +257,48 @@ begin
   end;
 end;
 
-procedure TQueueDeliveryTests.DeliverTick_RetomaDepoisDaRecusa;
+procedure TQueueDeliveryTests.DeliverTick_ResumesAfterRefusal;
 var
   LQ: TAMQPServerQueue;
-  LA: TAlvoFalso;
+  LA: TFakeTarget;
   LRefA: IAMQPDeliveryTarget;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(1);
-    LA.Recusar := True;
+    LA := TFakeTarget.Create(1);
+    LA.Refuse := True;
     LRefA := LA;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', True, False, LRefA));
-    Publicar(LQ, 'a');
-    Publicar(LQ, 'b');
+    PublishText(LQ, 'a');
+    PublishText(LQ, 'b');
     TAssert.AssertEquals('recusadas', 2, LQ.Stats.MessageCount);
 
     // The channel drained. With no ack at all (consumer in no-ack), the only way
     // for the queue to re-examine is the tick -- it is D3's degraded case.
-    LA.Recusar := False;
+    LA.Refuse := False;
     LQ.PostDeliverTick;
     TAssert.AssertEquals('o tick retomou a entrega', 0, LQ.Stats.MessageCount);
-    TAssert.AssertEquals('na ordem, sem perder nenhuma', 'a|b', LA.Corpos);
+    TAssert.AssertEquals('na ordem, sem perder nenhuma', 'a|b', LA.Bodies);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueDeliveryTests.AlvoMorto_ConsumidorSaiEMensagemFica;
+procedure TQueueDeliveryTests.DeadTarget_ConsumerLeavesAndMessageStays;
 var
   LQ: TAMQPServerQueue;
-  LA: TAlvoFalso;
+  LA: TFakeTarget;
   LRefA: IAMQPDeliveryTarget;
   LStats: TAMQPQueueStats;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(1);
+    LA := TFakeTarget.Create(1);
     LRefA := LA;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', True, False, LRefA));
-    LA.Vivo := False; // channel/connection died (Detach)
+    LA.Alive := False; // channel/connection died (Detach)
 
-    Publicar(LQ, 'a');
+    PublishText(LQ, 'a');
     LStats := LQ.Stats;
     TAssert.AssertEquals('consumidor de canal morto sai', 0, LStats.ConsumerCount);
     TAssert.AssertEquals('e a mensagem continua na fila', 1, LStats.MessageCount);
@@ -308,51 +308,51 @@ begin
   end;
 end;
 
-procedure TQueueDeliveryTests.Entrega_MarcaRedeliveredNaSegundaVez;
+procedure TQueueDeliveryTests.Delivery_SetsRedeliveredTheSecondTime;
 var
   LQ: TAMQPServerQueue;
-  LA: TAlvoFalso;
+  LA: TFakeTarget;
   LRefA: IAMQPDeliveryTarget;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(7);
+    LA := TFakeTarget.Create(7);
     LRefA := LA;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', False, False, LRefA));
-    Publicar(LQ, 'a');
+    PublishText(LQ, 'a');
     LQ.Stats; // barrier: the mailbox is serial, the enqueue already ran
     TAssert.AssertEquals('primeira entrega', 1, LA.Count);
-    TAssert.AssertFalse('nao e reentrega', LA.Entrega(0).Redelivered);
+    TAssert.AssertFalse('nao e reentrega', LA.DeliveryAt(0).Redelivered);
 
     // The consumer gives it back: the message returns and goes out again, now flagged.
-    LQ.PostNack(7, LA.Entrega(0).DeliveryTag, False, True);
+    LQ.PostNack(7, LA.DeliveryAt(0).DeliveryTag, False, True);
     LQ.Stats; // barreira
     TAssert.AssertEquals('entregue de novo', 2, LA.Count);
-    TAssert.AssertTrue('agora e reentrega', LA.Entrega(1).Redelivered);
-    TAssert.AssertEquals('mesma mensagem', 'a', LA.Entrega(1).Corpo);
+    TAssert.AssertTrue('agora e reentrega', LA.DeliveryAt(1).Redelivered);
+    TAssert.AssertEquals('mesma mensagem', 'a', LA.DeliveryAt(1).BodyText);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueDeliveryTests.RemoveChannel_DevolveEntregaNaoConfirmada;
+procedure TQueueDeliveryTests.RemoveChannel_ReturnsUnackedDelivery;
 var
   LQ: TAMQPServerQueue;
-  LA: TAlvoFalso;
+  LA: TFakeTarget;
   LRefA: IAMQPDeliveryTarget;
   LStats: TAMQPQueueStats;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(42);
+    LA := TFakeTarget.Create(42);
     LRefA := LA;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ca', False, False, LRefA));
-    Publicar(LQ, 'a');
+    PublishText(LQ, 'a');
     TAssert.AssertEquals('entregue e nao confirmada', 1, LQ.Stats.UnackedCount);
 
     // The connection dropped before the ack: the message must return to the queue
     // EXACTLY once.
-    LA.Vivo := False;
+    LA.Alive := False;
     LQ.PostRemoveChannel(42);
     LStats := LQ.Stats;
     TAssert.AssertEquals('saiu das nao-confirmadas', 0, LStats.UnackedCount);
@@ -370,37 +370,37 @@ end;
 
 { --- TDeliveryTargetTests --- }
 
-procedure TDeliveryTargetTests.Emite_DeliverHeaderEBody;
+procedure TDeliveryTargetTests.Emits_DeliverHeaderAndBody;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
   LFrames: TArray<TAMQPFrame>;
   LReader: TAMQPReader;
   LDeliver: TAMQPBasicDeliver;
-  LHeaderCru: TBytes;
+  LRawHeader: TBytes;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 3, 0);
-    LRef := LAlvo;
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 3, 0);
+    LRef := LTarget;
     // Raw header like the one that would come from a Basic.Publish (decision D1:
     // re-emitted byte for byte).
-    LHeaderCru := BuildContentHeader(5, TAMQPBasicProperties.Empty);
-    LMsg := TAMQPMessage.Create('ex1', 'rk1', 'guest', LHeaderCru,
+    LRawHeader := BuildContentHeader(5, TAMQPBasicProperties.Empty);
+    LMsg := TAMQPMessage.Create('ex1', 'rk1', 'guest', LRawHeader,
       AmqpUtf8Encode('hello'));
     try
-      TAssert.AssertTrue('entregou', LAlvo.TryDeliver('ctag', 'fila', True, False, LMsg, LTag));
+      TAssert.AssertTrue('entregou', LTarget.TryDeliver('ctag', 'fila', True, False, LMsg, LTag));
       TAssert.AssertEquals('primeira tag do canal e 1', 1, Integer(LTag));
     finally
       LMsg.Release;
     end;
 
-    LFrames := FramesEscritos(LWriter, LStream);
+    LFrames := WrittenFrames(LWriter, LStream);
     TAssert.AssertEquals('method + header + body', 3, Length(LFrames));
     TAssert.AssertEquals('tipo do 1o', Integer(AMQP_FRAME_METHOD), Integer(LFrames[0].FrameType));
     TAssert.AssertEquals('tipo do 2o', Integer(AMQP_FRAME_HEADER), Integer(LFrames[1].FrameType));
@@ -422,7 +422,7 @@ begin
     TAssert.AssertEquals('routing key', 'rk1', LDeliver.RoutingKey);
     TAssert.AssertFalse('redelivered', LDeliver.Redelivered);
 
-    TAssert.AssertEquals('o content-header sai byte a byte como entrou (D1)', AmqpUtf8Decode(LHeaderCru), AmqpUtf8Decode(LFrames[1].Payload));
+    TAssert.AssertEquals('o content-header sai byte a byte como entrou (D1)', AmqpUtf8Decode(LRawHeader), AmqpUtf8Decode(LFrames[1].Payload));
     TAssert.AssertEquals('corpo', 'hello', AmqpUtf8Decode(LFrames[2].Payload));
   finally
     LWriter.Free;
@@ -430,72 +430,72 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.FatiaCorpoPeloFrameMax;
+procedure TDeliveryTargetTests.SlicesBodyByFrameMax;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
   LFrames: TArray<TAMQPFrame>;
-  LCorpo, LJunto: string;
+  LMsgBody, LJoined: string;
   I: Integer;
 begin
-  LCorpo := StringOfChar('x', 250);
-  LStream := TStreamGravador.Create;
+  LMsgBody := StringOfChar('x', 250);
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 100);
-    LRef := LAlvo;
-    LMsg := NovaMensagem(LCorpo);
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 100);
+    LRef := LTarget;
+    LMsg := NewMessage(LMsgBody);
     try
-      TAssert.AssertTrue('entregou', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertTrue('entregou', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
 
-    LFrames := FramesEscritos(LWriter, LStream);
+    LFrames := WrittenFrames(LWriter, LStream);
     TAssert.AssertEquals('method + header + 3 body (250/100)', 5, Length(LFrames));
-    LJunto := '';
+    LJoined := '';
     for I := 2 to High(LFrames) do
     begin
       TAssert.AssertTrue('nenhum body frame passa do frame-max', Length(LFrames[I].Payload) <= 100);
-      LJunto := LJunto + AmqpUtf8Decode(LFrames[I].Payload);
+      LJoined := LJoined + AmqpUtf8Decode(LFrames[I].Payload);
     end;
-    TAssert.AssertEquals('corpo remontado byte a byte', LCorpo, LJunto);
+    TAssert.AssertEquals('corpo remontado byte a byte', LMsgBody, LJoined);
   finally
     LWriter.Free;
     LStream.Free;
   end;
 end;
 
-procedure TDeliveryTargetTests.TagsMonotonicasPorCanal;
+procedure TDeliveryTargetTests.MonotonicTagsPerChannel;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
   I: Integer;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
     for I := 1 to 3 do
     begin
-      LMsg := NovaMensagem('m');
+      LMsg := NewMessage('m');
       try
-        TAssert.AssertTrue('entrega ' + IntToStr(I), LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+        TAssert.AssertTrue('entrega ' + IntToStr(I), LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
         TAssert.AssertEquals('tag monotonica', I, Integer(LTag));
       finally
         LMsg.Release;
       end;
     end;
-    TAssert.AssertEquals('o Basic.Get puxa da mesma sequencia do canal', 4, Integer(LAlvo.NextDeliveryTag));
+    TAssert.AssertEquals('o Basic.Get puxa da mesma sequencia do canal', 4, Integer(LTarget.NextDeliveryTag));
   finally
     LWriter.Stop;
     LWriter.Free;
@@ -503,32 +503,32 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.PrefetchBloqueia_AckLibera;
+procedure TDeliveryTargetTests.PrefetchBlocks_AckReleases;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    LAlvo.SetPrefetch(2);
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    LTarget.SetPrefetch(2);
 
-    LMsg := NovaMensagem('m');
+    LMsg := NewMessage('m');
     try
-      TAssert.AssertTrue('1a', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
-      TAssert.AssertTrue('2a', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
-      TAssert.AssertFalse('3a recusada: prefetch cheio', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
-      TAssert.AssertEquals('duas pendentes', 2, LAlvo.UnackedCount);
+      TAssert.AssertTrue('1a', LTarget.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertTrue('2a', LTarget.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertFalse('3a recusada: prefetch cheio', LTarget.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      TAssert.AssertEquals('duas pendentes', 2, LTarget.UnackedCount);
 
-      LAlvo.NoteResolved(1, False); // the client acked tag 1
-      TAssert.AssertEquals('liberou uma', 1, LAlvo.UnackedCount);
-      TAssert.AssertTrue('com vaga, entrega de novo', LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag));
+      LTarget.NoteResolved(1, False); // the client acked tag 1
+      TAssert.AssertEquals('liberou uma', 1, LTarget.UnackedCount);
+      TAssert.AssertTrue('com vaga, entrega de novo', LTarget.TryDeliver('ct', 'q', False, False, LMsg, LTag));
       TAssert.AssertEquals('a tag seguiu de 2 para 3', 3, Integer(LTag));
     finally
       LMsg.Release;
@@ -540,30 +540,30 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.RecusaNaoConsomeTag;
+procedure TDeliveryTargetTests.RefusalDoesNotConsumeTag;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    LMsg := NovaMensagem('m');
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    LMsg := NewMessage('m');
     try
-      TAssert.AssertTrue('1a', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertTrue('1a', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
       TAssert.AssertEquals('tag 1', 1, Integer(LTag));
 
-      LAlvo.SetActive(False); // refuses due to flow
-      TAssert.AssertFalse('recusou', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
-      LAlvo.SetActive(True);
+      LTarget.SetActive(False); // refuses due to flow
+      TAssert.AssertFalse('recusou', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      LTarget.SetActive(True);
 
-      TAssert.AssertTrue('2a', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertTrue('2a', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
       TAssert.AssertEquals('a recusa nao abriu buraco na sequencia do canal', 2, Integer(LTag));
     finally
       LMsg.Release;
@@ -575,27 +575,27 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.NoAck_NaoContaPrefetch;
+procedure TDeliveryTargetTests.NoAck_DoesNotCountPrefetch;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
   I: Integer;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    LAlvo.SetPrefetch(1);
-    LMsg := NovaMensagem('m');
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    LTarget.SetPrefetch(1);
+    LMsg := NewMessage('m');
     try
       for I := 1 to 5 do
-        TAssert.AssertTrue('entrega ' + IntToStr(I) + ' em no-ack', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
-      TAssert.AssertEquals('entrega em no-ack nunca fica pendente', 0, LAlvo.UnackedCount);
+        TAssert.AssertTrue('entrega ' + IntToStr(I) + ' em no-ack', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertEquals('entrega em no-ack nunca fica pendente', 0, LTarget.UnackedCount);
     finally
       LMsg.Release;
     end;
@@ -606,26 +606,26 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.FlowDesligado_Recusa;
+procedure TDeliveryTargetTests.FlowOff_Refuses;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    LMsg := NovaMensagem('m');
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    LMsg := NewMessage('m');
     try
-      LAlvo.SetActive(False);
-      TAssert.AssertFalse('Channel.Flow desligado recusa', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
-      LAlvo.SetActive(True);
-      TAssert.AssertTrue('religado, entrega', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      LTarget.SetActive(False);
+      TAssert.AssertFalse('Channel.Flow desligado recusa', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      LTarget.SetActive(True);
+      TAssert.AssertTrue('religado, entrega', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
@@ -636,32 +636,32 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.NoteResolved_MultipleResolvePrefixo;
+procedure TDeliveryTargetTests.NoteResolved_MultipleResolvesPrefix;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
   I: Integer;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    LMsg := NovaMensagem('m');
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    LMsg := NewMessage('m');
     try
       for I := 1 to 4 do
-        LAlvo.TryDeliver('ct', 'q', False, False, LMsg, LTag);
-      TAssert.AssertEquals('quatro pendentes', 4, LAlvo.UnackedCount);
+        LTarget.TryDeliver('ct', 'q', False, False, LMsg, LTag);
+      TAssert.AssertEquals('quatro pendentes', 4, LTarget.UnackedCount);
 
-      TAssert.AssertEquals('multiple ate a tag 2', 2, Length(LAlvo.NoteResolved(2, True)));
-      TAssert.AssertEquals('sobraram duas', 2, LAlvo.UnackedCount);
-      TAssert.AssertEquals('tag ja resolvida nao conta de novo', 0, Length(LAlvo.NoteResolved(2, False)));
-      TAssert.AssertEquals('multiple com tag 0 resolve todas as pendentes', 2, Length(LAlvo.NoteResolved(0, True)));
-      TAssert.AssertEquals('nada pendente', 0, LAlvo.UnackedCount);
+      TAssert.AssertEquals('multiple ate a tag 2', 2, Length(LTarget.NoteResolved(2, True)));
+      TAssert.AssertEquals('sobraram duas', 2, LTarget.UnackedCount);
+      TAssert.AssertEquals('tag ja resolvida nao conta de novo', 0, Length(LTarget.NoteResolved(2, False)));
+      TAssert.AssertEquals('multiple com tag 0 resolve todas as pendentes', 2, Length(LTarget.NoteResolved(0, True)));
+      TAssert.AssertEquals('nada pendente', 0, LTarget.UnackedCount);
     finally
       LMsg.Release;
     end;
@@ -672,32 +672,32 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.Detach_RecusaEDeixaDeEstarVivo;
+procedure TDeliveryTargetTests.Detach_RefusesAndStopsBeingAlive;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    TAssert.AssertTrue('nasce vivo', LAlvo.IsAlive);
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    TAssert.AssertTrue('nasce vivo', LTarget.IsAlive);
 
-    LAlvo.Detach;
-    TAssert.AssertFalse('depois do detach, morto', LAlvo.IsAlive);
+    LTarget.Detach;
+    TAssert.AssertFalse('depois do detach, morto', LTarget.IsAlive);
 
-    LMsg := NovaMensagem('m');
+    LMsg := NewMessage('m');
     try
-      TAssert.AssertFalse('nao entrega depois do detach', LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag));
+      TAssert.AssertFalse('nao entrega depois do detach', LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag));
     finally
       LMsg.Release;
     end;
-    LAlvo.Detach; // idempotente
+    LTarget.Detach; // idempotente
   finally
     LWriter.Stop;
     LWriter.Free;
@@ -707,112 +707,112 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.FilaDeEscritaCheia_RecusaSemBloquear;
+procedure TDeliveryTargetTests.FullWriteQueue_RefusesWithoutBlocking;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LAlvo: TAMQPChannelDeliveryTarget;
+  LTarget: TAMQPChannelDeliveryTarget;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
   I: Integer;
-  LRecusou: Boolean;
-  LInicio: UInt64;
+  LRefused: Boolean;
+  LStart: UInt64;
 begin
-  LStream := TStreamGravador.Create;
-  LStream.Bloquear; // the writer thread blocks on the first Write: the queue fills up
+  LStream := TRecordingStream.Create;
+  LStream.Block; // the writer thread blocks on the first Write: the queue fills up
   LWriter := TAMQPFrameWriter.Create(LStream, 8);
   try
-    LAlvo := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
-    LRef := LAlvo;
-    LMsg := NovaMensagem('m');
+    LTarget := TAMQPChannelDeliveryTarget.Create(LWriter, 1, 0);
+    LRef := LTarget;
+    LMsg := NewMessage('m');
     try
-      LRecusou := False;
-      LInicio := PcTickMs;
+      LRefused := False;
+      LStart := PcTickMs;
       for I := 1 to 50 do
-        if not LAlvo.TryDeliver('ct', 'q', True, False, LMsg, LTag) then
+        if not LTarget.TryDeliver('ct', 'q', True, False, LMsg, LTag) then
         begin
-          LRecusou := True;
+          LRefused := True;
           Break;
         end;
-      TAssert.AssertTrue('com a fila de escrita cheia, o alvo recusa', LRecusou);
-      TAssert.AssertTrue('e recusa SEM BLOQUEAR -- e o que a D2/D3 exige do ator', PcTickMs - LInicio < 2000);
+      TAssert.AssertTrue('com a fila de escrita cheia, o alvo recusa', LRefused);
+      TAssert.AssertTrue('e recusa SEM BLOQUEAR -- e o que a D2/D3 exige do ator', PcTickMs - LStart < 2000);
     finally
       LMsg.Release;
     end;
   finally
-    LStream.Liberar; // releases the writer thread before shutting down
+    LStream.Unblock; // releases the writer thread before shutting down
     LWriter.Stop;
     LWriter.Free;
     LStream.Free;
   end;
 end;
 
-procedure TDeliveryTargetTests.TryPostFrames_LoteAtomicoOuNada;
+procedure TDeliveryTargetTests.TryPostFrames_AtomicBatchOrNothing;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LLote: array[0..2] of TAMQPFrame;
+  LBatch: array[0..2] of TAMQPFrame;
   I: Integer;
-  LCoube: Boolean;
+  LFitted: Boolean;
   LFrames: TArray<TAMQPFrame>;
 begin
-  LStream := TStreamGravador.Create;
-  LStream.Bloquear;
+  LStream := TRecordingStream.Create;
+  LStream.Block;
   LWriter := TAMQPFrameWriter.Create(LStream, 4);
   try
     for I := 0 to 2 do
-      LLote[I] := TAMQPFrame.Create(AMQP_FRAME_BODY, 1,
+      LBatch[I] := TAMQPFrame.Create(AMQP_FRAME_BODY, 1,
         AmqpUtf8Encode('lote' + IntToStr(I)));
 
     // Fills the queue (the writer thread is stuck in Write).
-    LCoube := True;
+    LFitted := True;
     for I := 1 to 20 do
       if not LWriter.TryPostFrames([TAMQPFrame.Create(AMQP_FRAME_BODY, 1,
         AmqpUtf8Encode('x'))]) then
       begin
-        LCoube := False;
+        LFitted := False;
         Break;
       end;
-    TAssert.AssertFalse('a fila de escrita encheu', LCoube);
-    TAssert.AssertFalse('lote nao cabe: recusa inteiro', LWriter.TryPostFrames(LLote));
+    TAssert.AssertFalse('a fila de escrita encheu', LFitted);
+    TAssert.AssertFalse('lote nao cabe: recusa inteiro', LWriter.TryPostFrames(LBatch));
 
-    LStream.Liberar;
-    LFrames := FramesEscritos(LWriter, LStream);
+    LStream.Unblock;
+    LFrames := WrittenFrames(LWriter, LStream);
     for I := 0 to High(LFrames) do
       TAssert.AssertEquals('nenhum frame do lote recusado vazou para o wire', 'x', AmqpUtf8Decode(LFrames[I].Payload));
   finally
-    LStream.Liberar;
+    LStream.Unblock;
     LWriter.Free;
     LStream.Free;
   end;
 end;
 
-procedure TDeliveryTargetTests.Canal_LiberadoDetachaOAlvo;
+procedure TDeliveryTargetTests.Channel_FreedDetachesTheTarget;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LCanal: TAMQPServerChannel;
+  LChannel: TAMQPServerChannel;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LCanal := TAMQPServerChannel.Create(5);
-    LCanal.AttachDelivery(LWriter, 0);
-    LRef := LCanal.DeliveryTarget; // it is what a queue would keep in the consumer
+    LChannel := TAMQPServerChannel.Create(5);
+    LChannel.AttachDelivery(LWriter, 0);
+    LRef := LChannel.DeliveryTarget; // it is what a queue would keep in the consumer
     TAssert.AssertTrue('alvo vivo com o canal aberto', LRef.IsAlive);
 
     // The channel dies (Channel.Close, connection drop, reaper...). The queue still
     // holds the interface -- and that is exactly why the object must NOT
     // be freed, nor keep writing to a writer that is going away.
-    LCanal.Free;
+    LChannel.Free;
 
     TAssert.AssertFalse('liberar o canal tem de destacar o alvo, senao a fila entrega num writer morto',
       LRef.IsAlive);
-    LMsg := NovaMensagem('m');
+    LMsg := NewMessage('m');
     try
       TAssert.AssertFalse('e toda entrega posterior falha limpo',
         LRef.TryDeliver('ct', 'q', True, False, LMsg, LTag));
@@ -826,32 +826,32 @@ begin
   end;
 end;
 
-procedure TDeliveryTargetTests.Canal_PropagaFlowEPrefetchParaOAlvo;
+procedure TDeliveryTargetTests.Channel_PropagatesFlowAndPrefetchToTheTarget;
 var
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
-  LCanal: TAMQPServerChannel;
+  LChannel: TAMQPServerChannel;
   LRef: IAMQPDeliveryTarget;
   LMsg: TAMQPMessage;
   LTag: UInt64;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LCanal := TAMQPServerChannel.Create(1);
+    LChannel := TAMQPServerChannel.Create(1);
     try
-      LCanal.AttachDelivery(LWriter, 0);
-      LRef := LCanal.DeliveryTarget;
-      LMsg := NovaMensagem('m');
+      LChannel.AttachDelivery(LWriter, 0);
+      LRef := LChannel.DeliveryTarget;
+      LMsg := NewMessage('m');
       try
         // Channel.Flow reaches the target.
-        LCanal.Active := False;
+        LChannel.Active := False;
         TAssert.AssertFalse('Channel.Flow=False para a entrega',
           LRef.TryDeliver('ct', 'q', True, False, LMsg, LTag));
-        LCanal.Active := True;
+        LChannel.Active := True;
 
         // Basic.Qos too.
-        LCanal.PrefetchCount := 1;
+        LChannel.PrefetchCount := 1;
         TAssert.AssertTrue('1a', LRef.TryDeliver('ct', 'q', False, False, LMsg, LTag));
         TAssert.AssertFalse('prefetch do canal vale para o alvo',
           LRef.TryDeliver('ct', 'q', False, False, LMsg, LTag));
@@ -859,7 +859,7 @@ begin
         LMsg.Release;
       end;
     finally
-      LCanal.Free;
+      LChannel.Free;
     end;
   finally
     LWriter.Stop;

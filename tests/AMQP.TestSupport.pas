@@ -7,13 +7,13 @@
   really differs between the compilers lives here, in a single file that both
   runners compile: this unit is not generated (the generator only reads *Tests.pas).
 
-  - ChecaLevanta: FPCUnit's AssertException. Requires the EXACT class (like
+  - CheckRaises: FPCUnit's AssertException. Requires the EXACT class (like
     it, and unlike DUnitX's Assert.WillRaise, which accepts a subclass).
-  - IgnoraTeste: FPCUnit's Ignore (marks IGNORED). This version's DUnitX
+  - IgnoreTest: FPCUnit's Ignore (marks IGNORED). This version's DUnitX
     has no run-time ignore: the test leaves through Assert.Pass with
     the message 'IGNORADO: ...' and counts as Passed. The caller exits with Exit
     right after, in case neither of the two interrupts.
-  - DirTemporario: Delphi has no GetTempDir; FPC has no System.IOUtils.
+  - TempDir: Delphi has no GetTempDir; FPC has no System.IOUtils.
   - Pki: the TLS test PKI, pascal-common-faa's tests/pki through the
     submodule (CA, server, legitimate and rogue clients; README there). Not
     a compiler difference, but every runner needs it, server and acceptance
@@ -27,13 +27,13 @@ uses
   SysUtils;
 
 type
-  TMetodoDeTeste = procedure of object;
+  TRaisingMethod = procedure of object;
 
-procedure ChecaLevanta(AClasse: ExceptClass; AMetodo: TMetodoDeTeste); overload;
-procedure ChecaLevanta(const AMensagem: string; AClasse: ExceptClass;
-  AMetodo: TMetodoDeTeste); overload;
-procedure IgnoraTeste(const AMotivo: string);
-function DirTemporario: string;
+procedure CheckRaises(AClass: ExceptClass; AMethod: TRaisingMethod); overload;
+procedure CheckRaises(const AMessage: string; AClass: ExceptClass;
+  AMethod: TRaisingMethod); overload;
+procedure IgnoreTest(const AReason: string);
+function TempDir: string;
 /// Full path of a file in the test PKI (external/pascal-common-faa/tests/pki,
 /// looked for upwards from the executable). Raises if it isn't there.
 function Pki(const AName: string): string;
@@ -52,44 +52,44 @@ uses
   AMQP.DUnitXCompat;
 {$ENDIF}
 
-procedure ChecaLevanta(const AMensagem: string; AClasse: ExceptClass;
-  AMetodo: TMetodoDeTeste);
+procedure CheckRaises(const AMessage: string; AClass: ExceptClass;
+  AMethod: TRaisingMethod);
 var
-  LLevantou: Boolean;
-  LClasse: string;
+  LRaised: Boolean;
+  LClassName: string;
 begin
-  LLevantou := False;
-  LClasse := '';
+  LRaised := False;
+  LClassName := '';
   try
-    AMetodo;
+    AMethod;
   except
     on E: Exception do
     begin
-      LLevantou := True;
-      LClasse := E.ClassName;
+      LRaised := True;
+      LClassName := E.ClassName;
     end;
   end;
-  TAssert.AssertTrue(Trim(AMensagem + ' esperava ' + AClasse.ClassName +
-    ', e nada foi levantado'), LLevantou);
-  TAssert.AssertEquals(Trim(AMensagem + ' classe da exceção'), AClasse.ClassName,
-    LClasse);
+  TAssert.AssertTrue(Trim(AMessage + ' esperava ' + AClass.ClassName +
+    ', e nada foi levantado'), LRaised);
+  TAssert.AssertEquals(Trim(AMessage + ' classe da exceção'), AClass.ClassName,
+    LClassName);
 end;
 
-procedure ChecaLevanta(AClasse: ExceptClass; AMetodo: TMetodoDeTeste);
+procedure CheckRaises(AClass: ExceptClass; AMethod: TRaisingMethod);
 begin
-  ChecaLevanta('', AClasse, AMetodo);
+  CheckRaises('', AClass, AMethod);
 end;
 
-procedure IgnoraTeste(const AMotivo: string);
+procedure IgnoreTest(const AReason: string);
 begin
 {$IFDEF FPC}
-  raise EIgnoredTest.Create(AMotivo);
+  raise EIgnoredTest.Create(AReason);
 {$ELSE}
-  Assert.Pass('IGNORADO: ' + AMotivo);
+  Assert.Pass('IGNORADO: ' + AReason);
 {$ENDIF}
 end;
 
-function DirTemporario: string;
+function TempDir: string;
 begin
 {$IFDEF FPC}
   Result := GetTempDir;

@@ -27,32 +27,32 @@
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\AutorizadorSim\AutorizadorSim.lpi">
+      <Target FileName="samples\AuthorizerSim\AuthorizerSim.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\Retaguarda\Retaguarda.lpi">
+      <Target FileName="samples\BackOffice\BackOffice.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\AutorizadorSimVcl\AutorizadorSimVcl.lpi">
+      <Target FileName="samples\AuthorizerSimVcl\AuthorizerSimVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\RetaguardaVcl\RetaguardaVcl.lpi">
+      <Target FileName="samples\BackOfficeVcl\BackOfficeVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\PublicadorConfiavelVcl\PublicadorConfiavelVcl.lpi">
+      <Target FileName="samples\ReliablePublisherVcl\ReliablePublisherVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\ConsultaStatusVcl\ConsultaStatusVcl.lpi">
+      <Target FileName="samples\StatusQueryVcl\StatusQueryVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
@@ -62,32 +62,32 @@
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\EventosTopicVcl\EventosTopicVcl.lpi">
+      <Target FileName="samples\TopicEventsVcl\TopicEventsVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\EventosHeadersVcl\EventosHeadersVcl.lpi">
+      <Target FileName="samples\HeadersEventsVcl\HeadersEventsVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\PrioridadeVcl\PrioridadeVcl.lpi">
+      <Target FileName="samples\PriorityVcl\PriorityVcl.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\PostoAutomacao\servidor\ServidorPosto.lpi">
+      <Target FileName="samples\FuelStation\server\FuelStationServer.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\PostoAutomacao\pdv\PdvPosto.lpi">
+      <Target FileName="samples\FuelStation\pos\FuelStationPos.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>
       </Target>
-      <Target FileName="samples\PostoAutomacao\smoke\SmokePosto.lpi">
+      <Target FileName="samples\FuelStation\smoke\FuelStationSmoke.lpi">
         <BuildModes>
           <Mode Name="Default"/>
         </BuildModes>

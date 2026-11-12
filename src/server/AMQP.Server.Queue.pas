@@ -319,7 +319,7 @@ type
     /// would cost a write on the hottest path there is, and would be false
     /// precision: after a crash the broker does not know whether the consumer
     /// got to see the message.
-    Recuperada: Boolean;   // amqqcEnqueue
+    Restored: Boolean;   // amqqcEnqueue
     Multiple: Boolean;
     Requeue: Boolean;
     IfUnused: Boolean;
@@ -362,7 +362,7 @@ type
     FName: string;
     FMaxLength: Integer;      // EFFECTIVE count cap (global + queue)
     FMaxBytes: Int64;         // EFFECTIVE byte cap (-1 = no cap)
-    FBytesProntos: Int64;     // sum of the READY bodies (actor only)
+    FReadyBytes: Int64;     // sum of the READY bodies (actor only)
     FPool: TPcThreadPool;
     // --- mailbox (under FMon) ---
     FMon: TPcMonitor;
@@ -443,7 +443,7 @@ type
     function NextEligible: TAMQPServerConsumer;
     procedure DeliverPending;
     procedure RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
-      AExpiraEm: UInt64; AJournalId: UInt64 = 0; AContentId: UInt64 = 0);
+      AExpiresAt: UInt64; AJournalId: UInt64 = 0; AContentId: UInt64 = 0);
     procedure EnforceMaxLength;
     /// Adds/subtracts an entry's body in the ready-bytes accumulator.
     /// Every entry that ENTERS or LEAVES the stock goes through here -- if a
@@ -462,7 +462,7 @@ type
     /// True if the queue is full RIGHT NOW (by count or by bytes). Only makes
     /// sense in a queue with x-overflow reject-publish.
     function IsFull: Boolean;
-    /// ARejeitada separates ACK from NACK/REJECT-without-requeue: both arrive
+    /// ARejected separates ACK from NACK/REJECT-without-requeue: both arrive
     /// here with ARequeue=False, but only the second is a death (reason 'rejected').
     /// Confusing the two would send every acked message to the DLX.
     procedure ResolveUnacked(AChannelId: NativeUInt; ADeliveryTag: UInt64;
@@ -973,7 +973,7 @@ begin
       LEntry.Msg.Release;
     end;
   end;
-  FBytesProntos := 0;
+  FReadyBytes := 0;
   for I := 0 to FUnacked.Count - 1 do
     FUnacked[I].Msg.Release;
   FUnacked.Clear;
@@ -995,7 +995,7 @@ begin
   LCmd.MessageTtlMs := AMessageTtlMs;
   LCmd.JournalId := AJournalId;
   LCmd.ContentId := AContentId;
-  LCmd.Recuperada := ARestored;
+  LCmd.Restored := ARestored;
   Post(LCmd);
 end;
 
@@ -1295,7 +1295,7 @@ begin
   // try/EXCEPT leaves the FUNCTION and skips the code after the block. The
   // first version here freed the reference AFTER a try/except that had an Exit
   // on the "no DLX" path -- and on that path the Release never ran. A WS3 test
-  // caught it (Nack_SemRequeue_Descarta) and heaptrc confirmed it with 21
+  // caught it (Nack_WithoutRequeue_Drops) and heaptrc confirmed it with 21
   // leaked blocks.
   try
     try
@@ -1388,7 +1388,7 @@ var
   LNow: UInt64;
   LEntry: TAMQPQueueEntry;
 
-  function VenceCabeca(AQueue: TQueue<TAMQPQueueEntry>): Boolean;
+  function HeadExpired(AQueue: TQueue<TAMQPQueueEntry>): Boolean;
   begin
     Result := (AQueue.Count > 0) and (AQueue.Peek.ExpiresAt > 0)
       and (AQueue.Peek.ExpiresAt <= LNow);
@@ -1401,13 +1401,13 @@ begin
   LNow := NowTick;
   for I := 0 to High(FStock) do
   begin
-    while VenceCabeca(FRequeued[I]) do
+    while HeadExpired(FRequeued[I]) do
     begin
       LEntry := FRequeued[I].Dequeue;
       TrackBytes(LEntry, -1);
       DiscardExpired(LEntry);
     end;
-    while VenceCabeca(FStock[I]) do
+    while HeadExpired(FStock[I]) do
     begin
       LEntry := FStock[I].Dequeue;
       TrackBytes(LEntry, -1);
@@ -1543,14 +1543,14 @@ end;
 // to the absolute head would let a low-priority message jump the queue of the
 // high ones; resetting the deadline would give extra life to one that should already have died.
 procedure TAMQPServerQueue.RequeueFront(AMsg: TAMQPMessage; APriority: Byte;
-  AExpiraEm: UInt64; AJournalId, AContentId: UInt64);
+  AExpiresAt: UInt64; AJournalId, AContentId: UInt64);
 var
   LEntry: TAMQPQueueEntry;
 begin
   LEntry.Msg := AMsg;
   LEntry.Redelivered := True;
   LEntry.Priority := LimitPriority(APriority);
-  LEntry.ExpiresAt := AExpiraEm;
+  LEntry.ExpiresAt := AExpiresAt;
   // The placement is NOT retired on a requeue: it stays the same on disk, it
   // only went back to the stock. That is what makes D27 ("unacked comes back
   // ready") come for free in the replay -- there is no record at all to write.
@@ -1596,13 +1596,13 @@ procedure TAMQPServerQueue.TrackBytes(const AEntry: TAMQPQueueEntry;
   ASignal: Integer);
 begin
   if AEntry.Msg <> nil then
-    Inc(FBytesProntos, Int64(ASignal) * AEntry.Msg.BodySize);
+    Inc(FReadyBytes, Int64(ASignal) * AEntry.Msg.BodySize);
 end;
 
 function TAMQPServerQueue.IsFull: Boolean;
 begin
   Result := ((FMaxLength > 0) and (ReadyCount >= FMaxLength))
-    or ((FMaxBytes >= 0) and (FBytesProntos >= FMaxBytes));
+    or ((FMaxBytes >= 0) and (FReadyBytes >= FMaxBytes));
 end;
 
 procedure TAMQPServerQueue.EnforceMaxLength;
@@ -1617,7 +1617,7 @@ begin
   // ">=": the cap is what the queue MAY hold, so it only drops after going
   // past it.
   while ((FMaxLength > 0) and (ReadyCount > FMaxLength))
-    or ((FMaxBytes >= 0) and (FBytesProntos > FMaxBytes)) do
+    or ((FMaxBytes >= 0) and (FReadyBytes > FMaxBytes)) do
   begin
     // D12: starts with the LOWEST priority bucket. Dropping from the absolute
     // head (which is the HIGHEST priority one) would throw away exactly what
@@ -1758,7 +1758,7 @@ begin
     amqqcEnqueue:
       begin
         LEntry.Msg := ACmd.Msg;
-        LEntry.Redelivered := ACmd.Recuperada; // D27
+        LEntry.Redelivered := ACmd.Restored; // D27
         LEntry.Priority := LimitPriority(ACmd.Priority);
         LEntry.ExpiresAt := CalculateExpiration(ACmd.MessageTtlMs);
         LEntry.JournalId := ACmd.JournalId;
@@ -1855,7 +1855,7 @@ begin
         EnforceMaxLength;
       end;
 
-    amqqcAck: // an ack is NOT a death: ARejeitada=False
+    amqqcAck: // an ack is NOT a death: ARejected=False
       ResolveUnacked(ACmd.ChannelId, ACmd.DeliveryTag, ACmd.Multiple,
         False, False);
 

@@ -18,20 +18,20 @@ type
   TAMQPFrameTests = class(TTestCase)
   private
     FTruncStream: TBytesStream;
-    procedure DoReadFrameEndInvalido;
-    procedure DoReadStreamTruncado;
-    procedure DoReadPayloadAcimaDoMaximo;
+    procedure DoReadInvalidFrameEnd;
+    procedure DoReadTruncatedStream;
+    procedure DoReadPayloadAboveMaximum;
   published
-    procedure WriteTo_LayoutBinario;
-    procedure WriteTo_TerminaComFrameEnd;
+    procedure WriteTo_BinaryLayout;
+    procedure WriteTo_EndsWithFrameEnd;
     procedure RoundTrip_Method;
-    procedure RoundTrip_PayloadVazio;
+    procedure RoundTrip_EmptyPayload;
     procedure RoundTrip_Heartbeat;
-    procedure ReadFrom_FrameEndInvalido_Levanta;
-    procedure ReadFrom_StreamTruncado_Levanta;
-    procedure ReadFrom_PayloadAcimaDoMaximo_Levanta;
-    procedure ProtocolHeader_OitoOctetosCorretos;
-    procedure RoundTrip_MultiplosFramesEmSequencia;
+    procedure ReadFrom_InvalidFrameEnd_Raises;
+    procedure ReadFrom_TruncatedStream_Raises;
+    procedure ReadFrom_PayloadAboveMaximum_Raises;
+    procedure ProtocolHeader_EightCorrectOctets;
+    procedure RoundTrip_MultipleFramesInSequence;
   end;
 
 implementation
@@ -55,7 +55,7 @@ end;
 
 { TAMQPFrameTests }
 
-procedure TAMQPFrameTests.WriteTo_LayoutBinario;
+procedure TAMQPFrameTests.WriteTo_BinaryLayout;
 var
   LFrame: TAMQPFrame;
   LStream: TBytesStream;
@@ -83,7 +83,7 @@ begin
   end;
 end;
 
-procedure TAMQPFrameTests.WriteTo_TerminaComFrameEnd;
+procedure TAMQPFrameTests.WriteTo_EndsWithFrameEnd;
 var
   LFrame: TAMQPFrame;
   LStream: TBytesStream;
@@ -121,7 +121,7 @@ begin
   end;
 end;
 
-procedure TAMQPFrameTests.RoundTrip_PayloadVazio;
+procedure TAMQPFrameTests.RoundTrip_EmptyPayload;
 var
   LOut, LIn: TAMQPFrame;
   LStream: TBytesStream;
@@ -155,57 +155,57 @@ begin
   end;
 end;
 
-procedure TAMQPFrameTests.DoReadFrameEndInvalido;
+procedure TAMQPFrameTests.DoReadInvalidFrameEnd;
 begin
   TAMQPFrame.ReadFrom(FTruncStream);
 end;
 
-procedure TAMQPFrameTests.ReadFrom_FrameEndInvalido_Levanta;
+procedure TAMQPFrameTests.ReadFrom_InvalidFrameEnd_Raises;
 begin
   // type=1, channel=0, size=1, payload=00, frame-end=FF (invalid)
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 1, 0, $FF]);
   try
-    ChecaLevanta(EAMQPFrame, DoReadFrameEndInvalido);
+    CheckRaises(EAMQPFrame, DoReadInvalidFrameEnd);
   finally
     FTruncStream.Free;
   end;
 end;
 
-procedure TAMQPFrameTests.DoReadStreamTruncado;
+procedure TAMQPFrameTests.DoReadTruncatedStream;
 begin
   TAMQPFrame.ReadFrom(FTruncStream);
 end;
 
-procedure TAMQPFrameTests.ReadFrom_StreamTruncado_Levanta;
+procedure TAMQPFrameTests.ReadFrom_TruncatedStream_Raises;
 begin
   // header says size=10 but the stream ends before that
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 10, 1, 2, 3]);
   try
     // EAMQPFrameEOF (subclass of EAMQPFrame): end of stream, not a malformed
-    // frame. ChecaLevanta requires the exact class.
-    ChecaLevanta(EAMQPFrameEOF, DoReadStreamTruncado);
+    // frame. CheckRaises requires the exact class.
+    CheckRaises(EAMQPFrameEOF, DoReadTruncatedStream);
   finally
     FTruncStream.Free;
   end;
 end;
 
-procedure TAMQPFrameTests.DoReadPayloadAcimaDoMaximo;
+procedure TAMQPFrameTests.DoReadPayloadAboveMaximum;
 begin
   TAMQPFrame.ReadFrom(FTruncStream, 16);
 end;
 
-procedure TAMQPFrameTests.ReadFrom_PayloadAcimaDoMaximo_Levanta;
+procedure TAMQPFrameTests.ReadFrom_PayloadAboveMaximum_Raises;
 begin
   // size=100, but we pass AMaxPayload=16
   FTruncStream := BuildStream([1, 0, 0, 0, 0, 0, 100]);
   try
-    ChecaLevanta(EAMQPFrame, DoReadPayloadAcimaDoMaximo);
+    CheckRaises(EAMQPFrame, DoReadPayloadAboveMaximum);
   finally
     FTruncStream.Free;
   end;
 end;
 
-procedure TAMQPFrameTests.ProtocolHeader_OitoOctetosCorretos;
+procedure TAMQPFrameTests.ProtocolHeader_EightCorrectOctets;
 var
   LStream: TBytesStream;
   B: TBytes;
@@ -228,7 +228,7 @@ begin
   end;
 end;
 
-procedure TAMQPFrameTests.RoundTrip_MultiplosFramesEmSequencia;
+procedure TAMQPFrameTests.RoundTrip_MultipleFramesInSequence;
 var
   LStream: TBytesStream;
   F1, F2, R1, R2: TAMQPFrame;

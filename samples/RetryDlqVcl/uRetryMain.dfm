@@ -18,7 +18,7 @@ object frmRetry: TfrmRetry
     700
     640)
   TextHeight = 15
-  object gbConexao: TGroupBox
+  object gbConnection: TGroupBox
     Left = 8
     Top = 8
     Width = 684
@@ -133,24 +133,24 @@ object frmRetry: TfrmRetry
       State = cbChecked
       TabOrder = 6
     end
-    object btnConectar: TButton
+    object btnConnect: TButton
       Left = 16
       Top = 140
       Width = 110
       Height = 25
       Caption = 'Conectar'
       TabOrder = 7
-      OnClick = btnConectarClick
+      OnClick = btnConnectClick
     end
   end
-  object gbTopologia: TGroupBox
+  object gbTopology: TGroupBox
     Left = 8
     Top = 186
     Width = 335
     Height = 120
     Caption = ' Topologia (recriada ao conectar) '
     TabOrder = 1
-    object lblFila: TLabel
+    object lblQueue: TLabel
       Left = 16
       Top = 28
       Width = 51
@@ -171,7 +171,7 @@ object frmRetry: TfrmRetry
       Height = 15
       Caption = 'M'#225'x tentativas:'
     end
-    object edtFila: TEdit
+    object edtQueue: TEdit
       Left = 90
       Top = 24
       Width = 160
@@ -196,35 +196,35 @@ object frmRetry: TfrmRetry
       Text = '3'
     end
   end
-  object gbProcesso: TGroupBox
+  object gbProcess: TGroupBox
     Left = 351
     Top = 186
     Width = 341
     Height = 120
     Caption = ' Processamento simulado '
     TabOrder = 2
-    object lblFalhar: TLabel
+    object lblFailFirst: TLabel
       Left = 12
       Top = 28
       Width = 88
       Height = 15
       Caption = 'Falhar primeiras:'
     end
-    object lblQtd: TLabel
+    object lblCount: TLabel
       Left = 190
       Top = 28
       Width = 24
       Height = 15
       Caption = 'Qtd:'
     end
-    object lblContadores: TLabel
+    object lblCounters: TLabel
       Left = 12
       Top = 92
       Width = 150
       Height = 15
       Caption = 'Publicadas: 0'
     end
-    object edtFalhar: TEdit
+    object edtFailFirst: TEdit
       Left = 110
       Top = 24
       Width = 40
@@ -232,7 +232,7 @@ object frmRetry: TfrmRetry
       TabOrder = 0
       Text = '2'
     end
-    object edtQtd: TEdit
+    object edtCount: TEdit
       Left = 222
       Top = 24
       Width = 40
@@ -240,7 +240,7 @@ object frmRetry: TfrmRetry
       TabOrder = 1
       Text = '3'
     end
-    object btnPublicar: TButton
+    object btnPublish: TButton
       Left = 12
       Top = 56
       Width = 120
@@ -248,9 +248,9 @@ object frmRetry: TfrmRetry
       Caption = 'Publicar notas'
       Enabled = False
       TabOrder = 2
-      OnClick = btnPublicarClick
+      OnClick = btnPublishClick
     end
-    object btnConsumir: TButton
+    object btnConsume: TButton
       Left = 140
       Top = 56
       Width = 130
@@ -258,10 +258,10 @@ object frmRetry: TfrmRetry
       Caption = 'Iniciar consumo'
       Enabled = False
       TabOrder = 3
-      OnClick = btnConsumirClick
+      OnClick = btnConsumeClick
     end
   end
-  object lvNotas: TListView
+  object lvInvoices: TListView
     Left = 8
     Top = 314
     Width = 684
@@ -290,7 +290,7 @@ object frmRetry: TfrmRetry
     TabOrder = 3
     ViewStyle = vsReport
   end
-  object btnLimparLista: TButton
+  object btnClearList: TButton
     Left = 480
     Top = 488
     Width = 100
@@ -298,9 +298,9 @@ object frmRetry: TfrmRetry
     Anchors = [akTop, akRight]
     Caption = 'Limpar lista'
     TabOrder = 4
-    OnClick = btnLimparListaClick
+    OnClick = btnClearListClick
   end
-  object btnLimparLog: TButton
+  object btnClearLog: TButton
     Left = 590
     Top = 488
     Width = 100
@@ -308,7 +308,7 @@ object frmRetry: TfrmRetry
     Anchors = [akTop, akRight]
     Caption = 'Limpar log'
     TabOrder = 5
-    OnClick = btnLimparLogClick
+    OnClick = btnClearLogClick
   end
   object mmoLog: TMemo
     Left = 8

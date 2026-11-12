@@ -148,7 +148,7 @@ var
   LNextB, LNextR: Integer;         // trial cursors (TryGetWord advances)
   LBStart, LBWordLen: Integer;
   LRStart, LRWordLen: Integer;
-  LTemB: Boolean;
+  LHasB: Boolean;
 begin
   LBLen := Length(ABindingKey);
   LRLen := Length(ARoutingKey);
@@ -165,10 +165,10 @@ begin
       Break; // routing exhausted -- decide on the tail, after the loop
 
     LNextB := LBPos;
-    LTemB := TryGetWord(ABindingKey, LNextB, LBLen, LBStart, LBWordLen);
+    LHasB := TryGetWord(ABindingKey, LNextB, LBLen, LBStart, LBWordLen);
 
     // '#': for now it consumes ZERO words; remember where to resume if it fails.
-    if LTemB and (LBWordLen = 1) and (ABindingKey[LBStart] = '#') then
+    if LHasB and (LBWordLen = 1) and (ABindingKey[LBStart] = '#') then
     begin
       LStarBPos := LNextB;  // binding right after the '#'
       LStarRPos := LRPos;   // routing where the '#' started
@@ -178,7 +178,7 @@ begin
 
     // '*' matches exactly one word (including empty); a literal matches byte by
     // byte. In both cases, it consumes one word from each side.
-    if LTemB and (((LBWordLen = 1) and (ABindingKey[LBStart] = '*')) or
+    if LHasB and (((LBWordLen = 1) and (ABindingKey[LBStart] = '*')) or
        WordsEqual(ABindingKey, LBStart, LBWordLen,
                   ARoutingKey, LRStart, LRWordLen)) then
     begin

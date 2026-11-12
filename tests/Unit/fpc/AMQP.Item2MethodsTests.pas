@@ -52,11 +52,11 @@ type
 
   TContentHeaderTests = class(TTestCase)
   published
-    procedure PropertyFlags_ContentTypeEDeliveryMode;
-    procedure RoundTrip_VariasPropriedades;
-    procedure Persistente_DeliveryMode2;
+    procedure PropertyFlags_ContentTypeAndDeliveryMode;
+    procedure RoundTrip_SeveralProperties;
+    procedure Persistent_DeliveryMode2;
     procedure Headers_RoundTrip;
-    procedure SemPropriedades_FlagsZero;
+    procedure NoProperties_FlagsZero;
   end;
 
   { Server side (broker sub-module) of the Channel/Exchange/Queue/Basic classes:
@@ -66,34 +66,34 @@ type
   TServerCodecTests = class(TTestCase)
   published
     // Channel
-    procedure ChannelOpen_DecodeDoBuildDoCliente;
-    procedure ChannelOpenOk_ClienteConsome;
+    procedure ChannelOpen_DecodeOfClientBuild;
+    procedure ChannelOpenOk_ClientConsumes;
     procedure ChannelFlow_RoundTrip;
     // Exchange
-    procedure ExchangeDeclare_DecodeDoBuildDoCliente;
-    procedure ExchangeDeclareOk_ClienteConsome;
-    procedure ExchangeBind_DecodeDoBuildDoCliente;
-    procedure ExchangeUnbindOk_Metodo51;
+    procedure ExchangeDeclare_DecodeOfClientBuild;
+    procedure ExchangeDeclareOk_ClientConsumes;
+    procedure ExchangeBind_DecodeOfClientBuild;
+    procedure ExchangeUnbindOk_Method51;
     // Queue
-    procedure QueueDeclare_DecodeDoBuildDoCliente;
-    procedure QueueDeclareOk_ClienteDecodifica;
-    procedure QueueBind_DecodeDoBuildDoCliente;
-    procedure QueueUnbind_DecodeSemNoWait;
+    procedure QueueDeclare_DecodeOfClientBuild;
+    procedure QueueDeclareOk_ClientDecodes;
+    procedure QueueBind_DecodeOfClientBuild;
+    procedure QueueUnbind_DecodeWithoutNoWait;
     procedure QueuePurge_RoundTrip;
     procedure QueueDelete_RoundTrip;
     // Basic
-    procedure BasicQos_DecodeDoBuildDoCliente;
-    procedure BasicPublish_DecodeDoBuildDoCliente;
-    procedure BasicConsume_DecodeDoBuildDoCliente;
-    procedure BasicConsumeOk_ClienteDecodifica;
-    procedure BasicCancel_ArgsComNoWait;
-    procedure BasicGet_DecodeDoBuildDoCliente;
-    procedure BasicGetOk_ClienteDecodifica;
-    procedure BasicGetEmpty_SoReservado;
-    procedure BasicDeliver_ClienteDecodifica;
-    procedure BasicReturn_ClienteDecodifica;
+    procedure BasicQos_DecodeOfClientBuild;
+    procedure BasicPublish_DecodeOfClientBuild;
+    procedure BasicConsume_DecodeOfClientBuild;
+    procedure BasicConsumeOk_ClientDecodes;
+    procedure BasicCancel_ArgsWithNoWait;
+    procedure BasicGet_DecodeOfClientBuild;
+    procedure BasicGetOk_ClientDecodes;
+    procedure BasicGetEmpty_ReservedOnly;
+    procedure BasicDeliver_ClientDecodes;
+    procedure BasicReturn_ClientDecodes;
     procedure BasicReject_RoundTrip;
-    procedure ConfirmSelect_DecodeEBuildOk;
+    procedure ConfirmSelect_DecodeAndBuildOk;
   end;
 
 implementation
@@ -643,7 +643,7 @@ end;
 
 { TContentHeaderTests }
 
-procedure TContentHeaderTests.PropertyFlags_ContentTypeEDeliveryMode;
+procedure TContentHeaderTests.PropertyFlags_ContentTypeAndDeliveryMode;
 var
   LProps: TAMQPBasicProperties;
   R: TAMQPReader;
@@ -666,7 +666,7 @@ begin
   end;
 end;
 
-procedure TContentHeaderTests.RoundTrip_VariasPropriedades;
+procedure TContentHeaderTests.RoundTrip_SeveralProperties;
 var
   LProps: TAMQPBasicProperties;
   R: TAMQPReader;
@@ -700,7 +700,7 @@ begin
   end;
 end;
 
-procedure TContentHeaderTests.Persistente_DeliveryMode2;
+procedure TContentHeaderTests.Persistent_DeliveryMode2;
 var
   LProps: TAMQPBasicProperties;
 begin
@@ -716,7 +716,7 @@ var
   LTbl: TAMQPFieldTable;
   R: TAMQPReader;
   LHeader: TAMQPContentHeader;
-  LChaveVal: TValue;
+  LKeyVal: TValue;
 begin
   LTbl := TAMQPFieldTable.Create;
   LTbl.Put('chave-nfe', 'NFe35240712345678000199550010000012341000012349');
@@ -729,9 +729,9 @@ begin
     LHeader := DecodeContentHeader(R);
     try
       TAssert.AssertTrue(LHeader.Properties.Has(bpHeaders));
-      LChaveVal := LHeader.Properties.Headers['chave-nfe'];
+      LKeyVal := LHeader.Properties.Headers['chave-nfe'];
       TAssert.AssertEquals('NFe35240712345678000199550010000012341000012349',
-        LChaveVal.AsString);
+        LKeyVal.AsString);
     finally
       LHeader.Properties.Headers.Free; // decoded table
     end;
@@ -741,7 +741,7 @@ begin
   end;
 end;
 
-procedure TContentHeaderTests.SemPropriedades_FlagsZero;
+procedure TContentHeaderTests.NoProperties_FlagsZero;
 var
   R: TAMQPReader;
 begin
@@ -759,7 +759,7 @@ end;
 
 { TServerCodecTests }
 
-procedure TServerCodecTests.ChannelOpen_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.ChannelOpen_DecodeOfClientBuild;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -775,7 +775,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.ChannelOpenOk_ClienteConsome;
+procedure TServerCodecTests.ChannelOpenOk_ClientConsumes;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -815,7 +815,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.ExchangeDeclare_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.ExchangeDeclare_DecodeOfClientBuild;
 var
   LDeclare, LDecoded: TAMQPExchangeDeclare;
   R: TAMQPReader;
@@ -849,7 +849,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.ExchangeDeclareOk_ClienteConsome;
+procedure TServerCodecTests.ExchangeDeclareOk_ClientConsumes;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -865,7 +865,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.ExchangeBind_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.ExchangeBind_DecodeOfClientBuild;
 var
   LBind, LDecoded: TAMQPExchangeBinding;
   R: TAMQPReader;
@@ -892,7 +892,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.ExchangeUnbindOk_Metodo51;
+procedure TServerCodecTests.ExchangeUnbindOk_Method51;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -909,7 +909,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.QueueDeclare_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.QueueDeclare_DecodeOfClientBuild;
 var
   LDeclare, LDecoded: TAMQPQueueDeclare;
   R: TAMQPReader;
@@ -941,7 +941,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.QueueDeclareOk_ClienteDecodifica;
+procedure TServerCodecTests.QueueDeclareOk_ClientDecodes;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -961,7 +961,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.QueueBind_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.QueueBind_DecodeOfClientBuild;
 var
   LBind: TAMQPQueueBind;
   LDecoded: TAMQPQueueBind;
@@ -989,7 +989,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.QueueUnbind_DecodeSemNoWait;
+procedure TServerCodecTests.QueueUnbind_DecodeWithoutNoWait;
 var
   LUnbind: TAMQPQueueUnbind;
   LDecoded: TAMQPQueueUnbind;
@@ -1080,7 +1080,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicQos_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.BasicQos_DecodeOfClientBuild;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -1109,7 +1109,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicPublish_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.BasicPublish_DecodeOfClientBuild;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -1130,7 +1130,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicConsume_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.BasicConsume_DecodeOfClientBuild;
 var
   LConsume: TAMQPBasicConsume;
   LDecoded: TAMQPBasicConsume;
@@ -1159,7 +1159,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicConsumeOk_ClienteDecodifica;
+procedure TServerCodecTests.BasicConsumeOk_ClientDecodes;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -1175,7 +1175,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicCancel_ArgsComNoWait;
+procedure TServerCodecTests.BasicCancel_ArgsWithNoWait;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -1203,7 +1203,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicGet_DecodeDoBuildDoCliente;
+procedure TServerCodecTests.BasicGet_DecodeOfClientBuild;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -1222,7 +1222,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicGetOk_ClienteDecodifica;
+procedure TServerCodecTests.BasicGetOk_ClientDecodes;
 var
   LGetOk: TAMQPBasicGetOk;
   LDecoded: TAMQPBasicGetOk;
@@ -1251,7 +1251,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicGetEmpty_SoReservado;
+procedure TServerCodecTests.BasicGetEmpty_ReservedOnly;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;
@@ -1267,7 +1267,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicDeliver_ClienteDecodifica;
+procedure TServerCodecTests.BasicDeliver_ClientDecodes;
 var
   LDeliver: TAMQPBasicDeliver;
   LDecoded: TAMQPBasicDeliver;
@@ -1296,7 +1296,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.BasicReturn_ClienteDecodifica;
+procedure TServerCodecTests.BasicReturn_ClientDecodes;
 var
   LReturn: TAMQPBasicReturn;
   LDecoded: TAMQPBasicReturn;
@@ -1342,7 +1342,7 @@ begin
   end;
 end;
 
-procedure TServerCodecTests.ConfirmSelect_DecodeEBuildOk;
+procedure TServerCodecTests.ConfirmSelect_DecodeAndBuildOk;
 var
   R: TAMQPReader;
   LId: TAMQPMethodId;

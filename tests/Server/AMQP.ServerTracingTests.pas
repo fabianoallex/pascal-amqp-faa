@@ -41,7 +41,7 @@ uses
 
 type
   { Exporter that only keeps: the spans arrive in the order they ended. }
-  TColetorDeSpans = class(TInterfacedObject, IPcSpanExporter)
+  TSpanCollector = class(TInterfacedObject, IPcSpanExporter)
   private
     FLock: TCriticalSection;
     FSpans: TList<TPcSpanData>;
@@ -51,58 +51,58 @@ type
     function ExportSpans(const ASpans: TPcSpanDataArray; out AError: string): Boolean;
     function Count: Integer;
     /// The spans with that name, in the order they ended.
-    function ComNome(const AName: string): TPcSpanDataArray;
+    function WithName(const AName: string): TPcSpanDataArray;
   end;
 
   [TestFixture]
   TTracingTests = class
   private
     FBroker: TAMQPServer;
-    FColetor: TColetorDeSpans;
-    FColetorRef: IPcSpanExporter;
+    FCollector: TSpanCollector;
+    FCollectorRef: IPcSpanExporter;
     FLock: TCriticalSection;
-    FTraceParentVisto: string;
-    FRecebidas: Integer;
-    FRepassarPara: string;
+    FSeenTraceParent: string;
+    FReceived: Integer;
+    FForwardTo: string;
     // what OnConsumerError saw as the current span ('' = none)
-    FTraceNoHandler: string;
-    FSpanNoHandler: string;
-    FHandlerChamado: Integer;
+    FTraceInHandler: string;
+    FSpanInHandler: string;
+    FHandlerCalled: Integer;
     function Params: TAMQPConnectionParams;
-    procedure AoEntregar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
-    procedure AoFalhar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
+    procedure HandleDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure HandleFailure(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
       AError: Exception; var AAction: TAMQPConsumerErrorAction);
     /// Exports and waits for ACount spans with that name.
-    function EsperaSpans(const AName: string; ACount, ATimeoutMs: Integer): Boolean;
+    function WaitSpans(const AName: string; ACount, ATimeoutMs: Integer): Boolean;
     /// The AIndex-th span with that name (fails the test if there is none).
     function Span(const AName: string; AIndex: Integer = 0): TPcSpanData;
     /// The span with that name and that attribute value (fails if there is none).
-    function SpanCom(const AName, AKey, AValue: string): TPcSpanData;
-    function TraceParentVisto: string;
+    function SpanWith(const AName, AKey, AValue: string): TPcSpanData;
+    function SeenTraceParent: string;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure PublishEProcess_NaTraceDoSpanCorrente;
-    [Test] procedure Consumidor_VeOTraceParentDoPublish;
-    [Test] procedure TraceParentDaAplicacao_Vence;
-    [Test] procedure PublishDentroDoCallback_EFilhoDoProcess;
-    [Test] procedure CallbackQueLevanta_ProcessComErro;
-    [Test] procedure OnConsumerError_RodaDentroDoProcess;
-    [Test] procedure Get_SpanReceiveFilhoDoCorrente;
-    [Test] procedure DeadLetter_PreservaOTraceParent;
-    [Test] procedure FilaGerada_NomeTemporarioNoSpan;
-    [Test] procedure TracerDesligado_NaoInjetaHeader;
+    [Test] procedure PublishAndProcess_InTheCurrentSpanTrace;
+    [Test] procedure Consumer_SeesThePublishTraceParent;
+    [Test] procedure ApplicationTraceParent_Wins;
+    [Test] procedure PublishInsideCallback_IsChildOfProcess;
+    [Test] procedure RaisingCallback_ProcessWithError;
+    [Test] procedure OnConsumerError_RunsInsideProcess;
+    [Test] procedure Get_ReceiveSpanIsChildOfCurrent;
+    [Test] procedure DeadLetter_PreservesTheTraceParent;
+    [Test] procedure GeneratedQueue_TemporaryNameInSpan;
+    [Test] procedure TracerOff_DoesNotInjectHeader;
   end;
 
 implementation
 
 const
-  TP_DA_APLICACAO = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
-  CORPO_QUE_LEVANTA = 'levanta';
+  APP_TRACEPARENT = '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01';
+  RAISING_BODY = 'levanta';
 
 { --- helpers --- }
 
-function NovoBroker: TAMQPServer;
+function NewBroker: TAMQPServer;
 begin
   Result := TAMQPServer.Create;
   Result.BindAddress := '127.0.0.1';
@@ -134,34 +134,34 @@ begin
     end;
 end;
 
-function TraceParentDe(const ASpan: TPcSpanData): string;
+function TraceParentOf(const ASpan: TPcSpanData): string;
 begin
   Result := '00-' + ASpan.TraceId + '-' + ASpan.SpanId + '-01';
 end;
 
-procedure LiberaHeaders(const AResult: TAMQPGetResult);
+procedure FreeHeaders(const AResult: TAMQPGetResult);
 begin
   if bpHeaders in AResult.Properties.Flags then
     AResult.Properties.Headers.Free;
 end;
 
-{ --- TColetorDeSpans --- }
+{ --- TSpanCollector --- }
 
-constructor TColetorDeSpans.Create;
+constructor TSpanCollector.Create;
 begin
   inherited Create;
   FLock := TCriticalSection.Create;
   FSpans := TList<TPcSpanData>.Create;
 end;
 
-destructor TColetorDeSpans.Destroy;
+destructor TSpanCollector.Destroy;
 begin
   FSpans.Free;
   FLock.Free;
   inherited;
 end;
 
-function TColetorDeSpans.ExportSpans(const ASpans: TPcSpanDataArray;
+function TSpanCollector.ExportSpans(const ASpans: TPcSpanDataArray;
   out AError: string): Boolean;
 var
   I: Integer;
@@ -177,7 +177,7 @@ begin
   Result := True;
 end;
 
-function TColetorDeSpans.Count: Integer;
+function TSpanCollector.Count: Integer;
 begin
   FLock.Enter;
   try
@@ -187,7 +187,7 @@ begin
   end;
 end;
 
-function TColetorDeSpans.ComNome(const AName: string): TPcSpanDataArray;
+function TSpanCollector.WithName(const AName: string): TPcSpanDataArray;
 var
   I: Integer;
 begin
@@ -209,24 +209,24 @@ end;
 
 procedure TTracingTests.SetUp;
 begin
-  FBroker := NovoBroker;
+  FBroker := NewBroker;
   FLock := TCriticalSection.Create;
-  FTraceParentVisto := '';
-  FRecebidas := 0;
-  FRepassarPara := '';
-  FTraceNoHandler := '';
-  FSpanNoHandler := '';
-  FHandlerChamado := 0;
-  FColetor := TColetorDeSpans.Create;
-  FColetorRef := FColetor;
-  TPcTracing.Start(TPcTracingOptions.Default('amqp-tests', '0'), FColetorRef, False);
+  FSeenTraceParent := '';
+  FReceived := 0;
+  FForwardTo := '';
+  FTraceInHandler := '';
+  FSpanInHandler := '';
+  FHandlerCalled := 0;
+  FCollector := TSpanCollector.Create;
+  FCollectorRef := FCollector;
+  TPcTracing.Start(TPcTracingOptions.Default('amqp-tests', '0'), FCollectorRef, False);
 end;
 
 procedure TTracingTests.TearDown;
 begin
   TPcTracing.Shutdown;
   FBroker.Free;
-  FColetorRef := nil;
+  FCollectorRef := nil;
   FLock.Free;
 end;
 
@@ -237,7 +237,7 @@ begin
   Result.Port := FBroker.Port;
 end;
 
-procedure TTracingTests.AoEntregar(AChannel: TAMQPChannel;
+procedure TTracingTests.HandleDelivery(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery);
 var
   LParent, LState: string;
@@ -245,50 +245,50 @@ begin
   AmqpTraceParentOf(ADelivery.Properties, LParent, LState);
   FLock.Enter;
   try
-    FTraceParentVisto := LParent;
-    Inc(FRecebidas);
+    FSeenTraceParent := LParent;
+    Inc(FReceived);
   finally
     FLock.Leave;
   end;
   // Forwards what came from another queue (what reaches the destination one stops here).
-  if (FRepassarPara <> '') and (ADelivery.RoutingKey <> FRepassarPara) then
-    AChannel.PublishText('', FRepassarPara, 'repassada');
-  if ADelivery.BodyAsText = CORPO_QUE_LEVANTA then
+  if (FForwardTo <> '') and (ADelivery.RoutingKey <> FForwardTo) then
+    AChannel.PublishText('', FForwardTo, 'repassada');
+  if ADelivery.BodyAsText = RAISING_BODY then
     raise Exception.Create('falhou de proposito');
 end;
 
-procedure TTracingTests.AoFalhar(AChannel: TAMQPChannel;
+procedure TTracingTests.HandleFailure(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery; AError: Exception;
   var AAction: TAMQPConsumerErrorAction);
 var
-  LCorrente: IPcSpan;
+  LCurrent: IPcSpan;
 begin
   // What an application log would see here: the thread's current span.
-  LCorrente := TPcTracing.Current;
+  LCurrent := TPcTracing.Current;
   FLock.Enter;
   try
-    if LCorrente <> nil then
+    if LCurrent <> nil then
     begin
-      FTraceNoHandler := LCorrente.TraceId;
-      FSpanNoHandler := LCorrente.SpanId;
+      FTraceInHandler := LCurrent.TraceId;
+      FSpanInHandler := LCurrent.SpanId;
     end;
   finally
     FLock.Leave;
   end;
-  PcAtomicInc(FHandlerChamado);
+  PcAtomicInc(FHandlerCalled);
 end;
 
-function TTracingTests.TraceParentVisto: string;
+function TTracingTests.SeenTraceParent: string;
 begin
   FLock.Enter;
   try
-    Result := FTraceParentVisto;
+    Result := FSeenTraceParent;
   finally
     FLock.Leave;
   end;
 end;
 
-function TTracingTests.EsperaSpans(const AName: string; ACount,
+function TTracingTests.WaitSpans(const AName: string; ACount,
   ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
@@ -296,7 +296,7 @@ begin
   LDeadline := PcTickMs + UInt64(ATimeoutMs);
   repeat
     TPcTracing.FlushNow;
-    Result := Length(FColetor.ComNome(AName)) >= ACount;
+    Result := Length(FCollector.WithName(AName)) >= ACount;
     if Result or (PcTickMs >= LDeadline) then
       Exit;
     Sleep(10);
@@ -307,30 +307,30 @@ function TTracingTests.Span(const AName: string; AIndex: Integer): TPcSpanData;
 var
   LSpans: TPcSpanDataArray;
 begin
-  LSpans := FColetor.ComNome(AName);
+  LSpans := FCollector.WithName(AName);
   if AIndex > High(LSpans) then
     TAssert.Fail('sem o span ' + AName + ' #' + IntToStr(AIndex));
   Result := LSpans[AIndex];
 end;
 
-function TTracingTests.SpanCom(const AName, AKey, AValue: string): TPcSpanData;
+function TTracingTests.SpanWith(const AName, AKey, AValue: string): TPcSpanData;
 var
   LSpans: TPcSpanDataArray;
   I: Integer;
 begin
-  LSpans := FColetor.ComNome(AName);
+  LSpans := FCollector.WithName(AName);
   for I := 0 to High(LSpans) do
     if Attr(LSpans[I], AKey) = AValue then
       Exit(LSpans[I]);
   TAssert.Fail('sem o span ' + AName + ' com ' + AKey + '=' + AValue);
 end;
 
-procedure TTracingTests.PublishEProcess_NaTraceDoSpanCorrente;
+procedure TTracingTests.PublishAndProcess_InTheCurrentSpanTrace;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LPai: IPcSpan;
-  LTraceId, LPaiId: string;
+  LParent: IPcSpan;
+  LTraceId, LParentId: string;
   LPub, LProc: TPcSpanData;
 begin
   LConn := TAMQPConnection.Create(Params);
@@ -338,24 +338,24 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.trace', False));
-    LCh.Consume('q.trace', AoEntregar, True);
+    LCh.Consume('q.trace', HandleDelivery, True);
 
-    LPai := TPcTracing.StartSpan('GET /pedidos', skServer);
-    LTraceId := LPai.TraceId;
-    LPaiId := LPai.SpanId;
+    LParent := TPcTracing.StartSpan('GET /pedidos', skServer);
+    LTraceId := LParent.TraceId;
+    LParentId := LParent.SpanId;
     try
       LCh.PublishText('', 'q.trace', 'oi');
     finally
-      LPai.Finish;
-      LPai := nil;
+      LParent.Finish;
+      LParent := nil;
     end;
 
-    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.trace', 1, 5000));
+    TAssert.AssertTrue('o process terminou', WaitSpans('process q.trace', 1, 5000));
     LPub := Span('publish amq.default');
     LProc := Span('process q.trace');
 
     TAssert.AssertEquals('publish na trace do pai', LTraceId, LPub.TraceId);
-    TAssert.AssertEquals('publish filho do pai', LPaiId, LPub.ParentSpanId);
+    TAssert.AssertEquals('publish filho do pai', LParentId, LPub.ParentSpanId);
     TAssert.AssertTrue('publish e producer', LPub.Kind = skProducer);
     TAssert.AssertEquals('process na mesma trace', LTraceId, LProc.TraceId);
     TAssert.AssertEquals('process filho do publish', LPub.SpanId, LProc.ParentSpanId);
@@ -376,7 +376,7 @@ begin
   end;
 end;
 
-procedure TTracingTests.Consumidor_VeOTraceParentDoPublish;
+procedure TTracingTests.Consumer_SeesThePublishTraceParent;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -386,23 +386,23 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.visto', False));
-    LCh.Consume('q.visto', AoEntregar, True);
+    LCh.Consume('q.visto', HandleDelivery, True);
     LCh.PublishText('', 'q.visto', 'oi');
 
-    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.visto', 1, 5000));
+    TAssert.AssertTrue('o process terminou', WaitSpans('process q.visto', 1, 5000));
     TAssert.AssertEquals('o header traz o contexto do publish',
-      TraceParentDe(Span('publish amq.default')), TraceParentVisto);
+      TraceParentOf(Span('publish amq.default')), SeenTraceParent);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TTracingTests.TraceParentDaAplicacao_Vence;
+procedure TTracingTests.ApplicationTraceParent_Wins;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LProps: TAMQPBasicProperties;
-  LTabela: TAMQPFieldTable;
+  LTable: TAMQPFieldTable;
   LValue: TValue;
   LProc: TPcSpanData;
 begin
@@ -411,23 +411,23 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.app', False));
-    LCh.Consume('q.app', AoEntregar, True);
+    LCh.Consume('q.app', HandleDelivery, True);
 
-    LTabela := TAMQPFieldTable.Create;
+    LTable := TAMQPFieldTable.Create;
     try
-      LValue := TValue.From<string>(TP_DA_APLICACAO);
-      LTabela.Put('traceparent', LValue);
+      LValue := TValue.From<string>(APP_TRACEPARENT);
+      LTable.Put('traceparent', LValue);
       LProps := TAMQPBasicProperties.Empty;
-      LProps.SetHeaders(LTabela);
+      LProps.SetHeaders(LTable);
       LCh.Publish('', 'q.app', AmqpUtf8Encode('oi'), LProps);
-      TAssert.AssertEquals('a tabela do chamador nao mudou', 1, Integer(LTabela.Count));
+      TAssert.AssertEquals('a tabela do chamador nao mudou', 1, Integer(LTable.Count));
     finally
-      LTabela.Free;
+      LTable.Free;
     end;
 
-    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.app', 1, 5000));
+    TAssert.AssertTrue('o process terminou', WaitSpans('process q.app', 1, 5000));
     LProc := Span('process q.app');
-    TAssert.AssertEquals('chegou o da aplicacao', TP_DA_APLICACAO, TraceParentVisto);
+    TAssert.AssertEquals('chegou o da aplicacao', APP_TRACEPARENT, SeenTraceParent);
     TAssert.AssertEquals('process na trace da aplicacao',
       '4bf92f3577b34da6a3ce929d0e0e4736', LProc.TraceId);
     TAssert.AssertEquals('process filho do span da aplicacao', '00f067aa0ba902b7',
@@ -437,7 +437,7 @@ begin
   end;
 end;
 
-procedure TTracingTests.PublishDentroDoCallback_EFilhoDoProcess;
+procedure TTracingTests.PublishInsideCallback_IsChildOfProcess;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -449,26 +449,26 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.a', False));
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.b', False));
-    FRepassarPara := 'q.b';
-    LCh.Consume('q.a', AoEntregar, True);
-    LCh.Consume('q.b', AoEntregar, True);
+    FForwardTo := 'q.b';
+    LCh.Consume('q.a', HandleDelivery, True);
+    LCh.Consume('q.b', HandleDelivery, True);
     LCh.PublishText('', 'q.a', 'oi');
 
-    TAssert.AssertTrue('o process do repasse terminou', EsperaSpans('process q.b', 1, 5000));
+    TAssert.AssertTrue('o process do repasse terminou', WaitSpans('process q.b', 1, 5000));
     LProcA := Span('process q.a');
-    LPub2 := SpanCom('publish amq.default',
+    LPub2 := SpanWith('publish amq.default',
       'messaging.rabbitmq.destination.routing_key', 'q.b');
     LProcB := Span('process q.b');
     TAssert.AssertEquals('publish filho do process', LProcA.SpanId, LPub2.ParentSpanId);
     TAssert.AssertEquals('process do repasse filho dele', LPub2.SpanId, LProcB.ParentSpanId);
     TAssert.AssertEquals('uma trace so', LProcA.TraceId, LProcB.TraceId);
   finally
-    FRepassarPara := '';
+    FForwardTo := '';
     LConn.Free;
   end;
 end;
 
-procedure TTracingTests.CallbackQueLevanta_ProcessComErro;
+procedure TTracingTests.RaisingCallback_ProcessWithError;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -479,10 +479,10 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.erro', False));
-    LCh.Consume('q.erro', AoEntregar, True);
-    LCh.PublishText('', 'q.erro', CORPO_QUE_LEVANTA);
+    LCh.Consume('q.erro', HandleDelivery, True);
+    LCh.PublishText('', 'q.erro', RAISING_BODY);
 
-    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.erro', 1, 5000));
+    TAssert.AssertTrue('o process terminou', WaitSpans('process q.erro', 1, 5000));
     LProc := Span('process q.erro');
     TAssert.AssertTrue('status de erro', LProc.Status = ssError);
     TAssert.AssertEquals('mensagem', 'falhou de proposito', LProc.StatusMessage);
@@ -492,7 +492,7 @@ begin
   end;
 end;
 
-procedure TTracingTests.OnConsumerError_RodaDentroDoProcess;
+procedure TTracingTests.OnConsumerError_RunsInsideProcess;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -504,20 +504,20 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.OnConsumerError := AoFalhar;
+    LCh.OnConsumerError := HandleFailure;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.handler', False));
-    LCh.Consume('q.handler', AoEntregar, True);
-    LCh.PublishText('', 'q.handler', CORPO_QUE_LEVANTA);
+    LCh.Consume('q.handler', HandleDelivery, True);
+    LCh.PublishText('', 'q.handler', RAISING_BODY);
 
-    TAssert.AssertTrue('o process terminou', EsperaSpans('process q.handler', 1, 5000));
-    TAssert.AssertEquals('o handler rodou', 1, PcAtomicGet(FHandlerChamado));
+    TAssert.AssertTrue('o process terminou', WaitSpans('process q.handler', 1, 5000));
+    TAssert.AssertEquals('o handler rodou', 1, PcAtomicGet(FHandlerCalled));
     LProc := Span('process q.handler');
     FLock.Enter;
     try
       TAssert.AssertEquals('no handler, a trace corrente e a da mensagem', LProc.TraceId,
-        FTraceNoHandler);
+        FTraceInHandler);
       TAssert.AssertEquals('no handler, o span corrente e o process', LProc.SpanId,
-        FSpanNoHandler);
+        FSpanInHandler);
     finally
       FLock.Leave;
     end;
@@ -529,14 +529,14 @@ begin
   end;
 end;
 
-procedure TTracingTests.Get_SpanReceiveFilhoDoCorrente;
+procedure TTracingTests.Get_ReceiveSpanIsChildOfCurrent;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LPai: IPcSpan;
-  LPaiId: string;
+  LParent: IPcSpan;
+  LParentId: string;
   LGet: TAMQPGetResult;
-  LCheio, LVazio: TPcSpanData;
+  LFullSpan, LEmptySpan: TPcSpanData;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
@@ -545,35 +545,35 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.get', False));
     LCh.PublishText('', 'q.get', 'abc');
 
-    LPai := TPcTracing.StartSpan('job', skInternal);
-    LPaiId := LPai.SpanId;
+    LParent := TPcTracing.StartSpan('job', skInternal);
+    LParentId := LParent.SpanId;
     try
       LGet := LCh.BasicGet('q.get', True);
-      LiberaHeaders(LGet);
+      FreeHeaders(LGet);
       TAssert.AssertTrue('achou', LGet.Found);
       LGet := LCh.BasicGet('q.get', True);
       TAssert.AssertFalse('vazia', LGet.Found);
     finally
-      LPai.Finish;
-      LPai := nil;
+      LParent.Finish;
+      LParent := nil;
     end;
 
-    TAssert.AssertTrue('os dois receive', EsperaSpans('receive q.get', 2, 5000));
-    LCheio := Span('receive q.get', 0);
-    LVazio := Span('receive q.get', 1);
-    TAssert.AssertTrue('client', LCheio.Kind = skClient);
-    TAssert.AssertEquals('filho do corrente', LPaiId, LCheio.ParentSpanId);
-    TAssert.AssertEquals('operacao', 'receive', Attr(LCheio, 'messaging.operation.type'));
-    TAssert.AssertEquals('tamanho', '3', Attr(LCheio, 'messaging.message.body.size'));
-    TAssert.AssertEquals('nao vazio', '', Attr(LCheio, 'pascalamqp.get.empty'));
-    TAssert.AssertEquals('vazio marcado', 'true', Attr(LVazio, 'pascalamqp.get.empty'));
-    TAssert.AssertEquals('vazio sem tamanho', '', Attr(LVazio, 'messaging.message.body.size'));
+    TAssert.AssertTrue('os dois receive', WaitSpans('receive q.get', 2, 5000));
+    LFullSpan := Span('receive q.get', 0);
+    LEmptySpan := Span('receive q.get', 1);
+    TAssert.AssertTrue('client', LFullSpan.Kind = skClient);
+    TAssert.AssertEquals('filho do corrente', LParentId, LFullSpan.ParentSpanId);
+    TAssert.AssertEquals('operacao', 'receive', Attr(LFullSpan, 'messaging.operation.type'));
+    TAssert.AssertEquals('tamanho', '3', Attr(LFullSpan, 'messaging.message.body.size'));
+    TAssert.AssertEquals('nao vazio', '', Attr(LFullSpan, 'pascalamqp.get.empty'));
+    TAssert.AssertEquals('vazio marcado', 'true', Attr(LEmptySpan, 'pascalamqp.get.empty'));
+    TAssert.AssertEquals('vazio sem tamanho', '', Attr(LEmptySpan, 'messaging.message.body.size'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TTracingTests.DeadLetter_PreservaOTraceParent;
+procedure TTracingTests.DeadLetter_PreservesTheTraceParent;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -604,7 +604,7 @@ begin
     LCh.PublishText('', 'q.origem', 'rejeitada');
 
     LGet := LCh.BasicGet('q.origem', False);
-    LiberaHeaders(LGet);
+    FreeHeaders(LGet);
     TAssert.AssertTrue('achou na origem', LGet.Found);
     LCh.Nack(LGet.DeliveryTag, False);
 
@@ -622,17 +622,17 @@ begin
       TAssert.AssertTrue('e o x-death do dead-letter',
         LGet.Properties.Headers.ContainsKey('x-death'));
     finally
-      LiberaHeaders(LGet);
+      FreeHeaders(LGet);
     end;
-    TAssert.AssertTrue('o publish exportado', EsperaSpans('publish amq.default', 1, 5000));
+    TAssert.AssertTrue('o publish exportado', WaitSpans('publish amq.default', 1, 5000));
     TAssert.AssertEquals('o mesmo do publish original',
-      TraceParentDe(Span('publish amq.default')), LParent);
+      TraceParentOf(Span('publish amq.default')), LParent);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TTracingTests.FilaGerada_NomeTemporarioNoSpan;
+procedure TTracingTests.GeneratedQueue_TemporaryNameInSpan;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -647,10 +647,10 @@ begin
     LDecl := TAMQPQueueDeclare.Create('', False);
     LDecl.Exclusive := True;
     LOk := LCh.DeclareQueue(LDecl);
-    LCh.Consume(LOk.QueueName, AoEntregar, True);
+    LCh.Consume(LOk.QueueName, HandleDelivery, True);
     LCh.PublishText('', LOk.QueueName, 'oi');
 
-    TAssert.AssertTrue('o process terminou', EsperaSpans('process (temporary)', 1, 5000));
+    TAssert.AssertTrue('o process terminou', WaitSpans('process (temporary)', 1, 5000));
     LProc := Span('process (temporary)');
     TAssert.AssertEquals('o nome real no atributo', LOk.QueueName,
       Attr(LProc, 'messaging.destination.name'));
@@ -661,7 +661,7 @@ begin
   end;
 end;
 
-procedure TTracingTests.TracerDesligado_NaoInjetaHeader;
+procedure TTracingTests.TracerOff_DoesNotInjectHeader;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -679,9 +679,9 @@ begin
       TAssert.AssertTrue('achou', LGet.Found);
       TAssert.AssertFalse('sem headers', bpHeaders in LGet.Properties.Flags);
     finally
-      LiberaHeaders(LGet);
+      FreeHeaders(LGet);
     end;
-    TAssert.AssertEquals('nenhum span', 0, FColetor.Count);
+    TAssert.AssertEquals('nenhum span', 0, FCollector.Count);
   finally
     LConn.Free;
   end;

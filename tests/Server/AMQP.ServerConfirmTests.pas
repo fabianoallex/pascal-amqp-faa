@@ -26,7 +26,7 @@
   4. The fast path stays fast: with no LSN and nothing pending, nothing is deferred --
      the broker without DataDir is letter for letter Phase 3's (D19).
 
-  The three Checa* functions exist so the test bodies are IDENTICAL in the
+  The three Check* functions exist so the test bodies are IDENTICAL in the
   two dialects: only their implementation changes side. }
 
 { DUnitX master in FPCUnit's dialect (TAssert.*); the FPCUnit mirror in
@@ -51,7 +51,7 @@ uses
 
 type
   { A Basic.Ack/Nack read from the wire. }
-  TConfirmLido = record
+  TReadConfirm = record
     Seq: UInt64;
     Multiple: Boolean;
     Nack: Boolean;
@@ -61,59 +61,59 @@ type
   [TestFixture]
   TConfirmTrackerTests = class
   private
-    FStream: TStreamGravador;
+    FStream: TRecordingStream;
     FWriter: TAMQPFrameWriter;
     FTracker: IAMQPConfirmTracker;
     /// Confirms written so far, decoded from the wire. STOPS the writer thread --
     /// call it only once, at the end of the test.
-    function Confirms: TArray<TConfirmLido>;
+    function Confirms: TArray<TReadConfirm>;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-     [Test] procedure SemLsnESemPendente_NaoAdia;
-     [Test] procedure ComLsn_Adia_ESoSaiDepoisDaMarca;
-     [Test] procedure TransienteAtrasDePersistente_Espera;
-     [Test] procedure VariosPersistentes_SaemNumAckSoComMultiple;
-     [Test] procedure MarcaParcial_LiberaSoOPrefixo;
-     [Test] procedure Nack_SaiSozinho_ECortaOColapso;
-     [Test] procedure JournalFalho_TudoPendenteViraNack;
-     [Test] procedure CanalMorto_NaoEscreveNada;
-     [Test] procedure SaidaCheia_NaoBloqueiaQuemLibera;
+     [Test] procedure NoLsnAndNoPending_DoesNotDefer;
+     [Test] procedure WithLsn_Defers_AndOnlyLeavesAfterTheMark;
+     [Test] procedure TransientBehindPersistent_Waits;
+     [Test] procedure SeveralPersistent_LeaveInOneAckWithMultiple;
+     [Test] procedure PartialMark_ReleasesOnlyThePrefix;
+     [Test] procedure Nack_GoesOutAlone_AndBreaksTheCollapse;
+     [Test] procedure FailedJournal_AllPendingBecomesNack;
+     [Test] procedure DeadChannel_WritesNothing;
+     [Test] procedure FullOutput_DoesNotBlockTheReleaser;
   end;
 
   { The registry: the bridge between the journal thread and the channels. }
   [TestFixture]
   TConfirmRegistryTests = class
   public
-     [Test] procedure Durable_LiberaTodosOsRastreadores;
-     [Test] procedure Unregister_ParaDeAvisar;
-     [Test] procedure Watermark_AcompanhaOUltimoDurable;
+     [Test] procedure Durable_ReleasesAllTrackers;
+     [Test] procedure Unregister_StopsNotifying;
+     [Test] procedure Watermark_TracksTheLastDurable;
   end;
 
 implementation
 
 // Assertions with a fixed type: the value comes in already converted, and the
 // TAssert overload is the same on both compilers.
-procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Integer);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaOk(const AMsg: string; ACond: Boolean);
+procedure CheckOk(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertTrue(AMsg, ACond);
 end;
 
-procedure ChecaNao(const AMsg: string; ACond: Boolean);
+procedure CheckNot(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertFalse(AMsg, ACond);
 end;
 
-function LeConfirms(const AFrames: TArray<TAMQPFrame>): TArray<TConfirmLido>;
+function ReadConfirms(const AFrames: TArray<TAMQPFrame>): TArray<TReadConfirm>;
 var
   I: Integer;
   LReader: TAMQPReader;
-  LClasse, LMetodo: Word;
+  LClassName, LMethod: Word;
   LAck: TAMQPBasicAck;
   LNack: TAMQPBasicNack;
 begin
@@ -122,10 +122,10 @@ begin
   begin
     LReader := TAMQPReader.Create(AFrames[I].Payload);
     try
-      LClasse := LReader.ReadShortUInt;
-      LMetodo := LReader.ReadShortUInt;
-      Result[I].Nack := (LClasse = AMQP_CLASS_BASIC)
-        and (LMetodo = AMQP_BASIC_NACK);
+      LClassName := LReader.ReadShortUInt;
+      LMethod := LReader.ReadShortUInt;
+      Result[I].Nack := (LClassName = AMQP_CLASS_BASIC)
+        and (LMethod = AMQP_BASIC_NACK);
       if Result[I].Nack then
       begin
         LNack := DecodeBasicNack(LReader);
@@ -148,7 +148,7 @@ end;
 
 procedure TConfirmTrackerTests.SetUp;
 begin
-  FStream := TStreamGravador.Create;
+  FStream := TRecordingStream.Create;
   FWriter := TAMQPFrameWriter.Create(FStream);
   FTracker := TAMQPConfirmTracker.Create(FWriter, 7);
 end;
@@ -160,74 +160,74 @@ begin
   FStream.Free;
 end;
 
-function TConfirmTrackerTests.Confirms: TArray<TConfirmLido>;
+function TConfirmTrackerTests.Confirms: TArray<TReadConfirm>;
 begin
-  Result := LeConfirms(FramesEscritos(FWriter, FStream));
+  Result := ReadConfirms(WrittenFrames(FWriter, FStream));
 end;
 
-procedure TConfirmTrackerTests.SemLsnESemPendente_NaoAdia;
+procedure TConfirmTrackerTests.NoLsnAndNoPending_DoesNotDefer;
 begin
   // Phase 3's fast path still exists: a transient publish on a
   // channel with nothing pending confirms RIGHT AWAY, without going through the tracker.
-  ChecaNao('nao adia', FTracker.TryDefer(1, 0, False));
-  ChecaInt('nada ficou pendente', 0, FTracker.PendingCount);
-  ChecaInt('e nada foi escrito por nossa conta', 0, Length(Confirms));
+  CheckNot('nao adia', FTracker.TryDefer(1, 0, False));
+  CheckInt('nada ficou pendente', 0, FTracker.PendingCount);
+  CheckInt('e nada foi escrito por nossa conta', 0, Length(Confirms));
 end;
 
-procedure TConfirmTrackerTests.ComLsn_Adia_ESoSaiDepoisDaMarca;
+procedure TConfirmTrackerTests.WithLsn_Defers_AndOnlyLeavesAfterTheMark;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
 begin
   // The reason WS5 exists: with an LSN to wait for, the frame does NOT go out until the
   // disk answers.
-  ChecaOk('adiou', FTracker.TryDefer(1, 10, False));
+  CheckOk('adiou', FTracker.TryDefer(1, 10, False));
   FTracker.Release(9); // the watermark has not reached it yet
-  ChecaInt('segue pendente com a marca em 9', 1, FTracker.PendingCount);
+  CheckInt('segue pendente com a marca em 9', 1, FTracker.PendingCount);
   FTracker.Release(10);
-  ChecaInt('liberou com a marca em 10', 0, FTracker.PendingCount);
+  CheckInt('liberou com a marca em 10', 0, FTracker.PendingCount);
   LC := Confirms;
-  ChecaInt('um confirm', 1, Length(LC));
-  ChecaInt('do seq 1', 1, Integer(LC[0].Seq));
-  ChecaNao('e nao e nack', LC[0].Nack);
+  CheckInt('um confirm', 1, Length(LC));
+  CheckInt('do seq 1', 1, Integer(LC[0].Seq));
+  CheckNot('e nao e nack', LC[0].Nack);
 end;
 
-procedure TConfirmTrackerTests.TransienteAtrasDePersistente_Espera;
+procedure TConfirmTrackerTests.TransientBehindPersistent_Waits;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
 begin
   // Corollary (a) of D24. Seq 2 wrote nothing to disk and could go out
   // now -- but going out now would break the channel's confirm order, and the client
   // would see the ack for 2 before the one for 1. It waits, and goes out COLLAPSED with 1.
-  ChecaOk('o persistente adia', FTracker.TryDefer(1, 10, False));
-  ChecaOk('e o transiente atras dele TAMBEM adia', FTracker.TryDefer(2, 0, False));
+  CheckOk('o persistente adia', FTracker.TryDefer(1, 10, False));
+  CheckOk('e o transiente atras dele TAMBEM adia', FTracker.TryDefer(2, 0, False));
   FTracker.Release(9);
-  ChecaInt('nenhum dos dois saiu', 2, FTracker.PendingCount);
+  CheckInt('nenhum dos dois saiu', 2, FTracker.PendingCount);
   FTracker.Release(10);
-  ChecaInt('os dois sairam juntos', 0, FTracker.PendingCount);
+  CheckInt('os dois sairam juntos', 0, FTracker.PendingCount);
   LC := Confirms;
-  ChecaInt('num frame so', 1, Length(LC));
-  ChecaInt('com o MAIOR seq', 2, Integer(LC[0].Seq));
-  ChecaOk('e multiple=true, que e o que resolve o seq 1', LC[0].Multiple);
+  CheckInt('num frame so', 1, Length(LC));
+  CheckInt('com o MAIOR seq', 2, Integer(LC[0].Seq));
+  CheckOk('e multiple=true, que e o que resolve o seq 1', LC[0].Multiple);
 end;
 
-procedure TConfirmTrackerTests.VariosPersistentes_SaemNumAckSoComMultiple;
+procedure TConfirmTrackerTests.SeveralPersistent_LeaveInOneAckWithMultiple;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
   I: Integer;
 begin
   // The letter of D9: the whole prefix becomes ONE frame.
   for I := 1 to 5 do
-    ChecaOk('adiou ' + IntToStr(I), FTracker.TryDefer(I, 100 + I, False));
+    CheckOk('adiou ' + IntToStr(I), FTracker.TryDefer(I, 100 + I, False));
   FTracker.Release(105);
   LC := Confirms;
-  ChecaInt('cinco confirms num frame so', 1, Length(LC));
-  ChecaInt('seq do ultimo', 5, Integer(LC[0].Seq));
-  ChecaOk('multiple', LC[0].Multiple);
+  CheckInt('cinco confirms num frame so', 1, Length(LC));
+  CheckInt('seq do ultimo', 5, Integer(LC[0].Seq));
+  CheckOk('multiple', LC[0].Multiple);
 end;
 
-procedure TConfirmTrackerTests.MarcaParcial_LiberaSoOPrefixo;
+procedure TConfirmTrackerTests.PartialMark_ReleasesOnlyThePrefix;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
 begin
   // Watermark in the middle: the prefix goes out, the rest stays. An fsync batch does not need
   // to cover everything that is pending.
@@ -235,16 +235,16 @@ begin
   FTracker.TryDefer(2, 20, False);
   FTracker.TryDefer(3, 30, False);
   FTracker.Release(20);
-  ChecaInt('sobrou o seq 3', 1, FTracker.PendingCount);
+  CheckInt('sobrou o seq 3', 1, FTracker.PendingCount);
   LC := Confirms;
-  ChecaInt('um frame', 1, Length(LC));
-  ChecaInt('ate o seq 2', 2, Integer(LC[0].Seq));
-  ChecaOk('multiple', LC[0].Multiple);
+  CheckInt('um frame', 1, Length(LC));
+  CheckInt('ate o seq 2', 2, Integer(LC[0].Seq));
+  CheckOk('multiple', LC[0].Multiple);
 end;
 
-procedure TConfirmTrackerTests.Nack_SaiSozinho_ECortaOColapso;
+procedure TConfirmTrackerTests.Nack_GoesOutAlone_AndBreaksTheCollapse;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
 begin
   // A Nack marks ONE seq: it cannot be collapsed with its neighbours. So the
   // accumulated ack goes out BEFORE it, and accumulation restarts after.
@@ -252,104 +252,104 @@ begin
   FTracker.TryDefer(2, 0, True);  // reject-publish: nack, and does not wait for disk
   FTracker.TryDefer(3, 0, False);
   FTracker.Release(10);
-  ChecaInt('tudo saiu', 0, FTracker.PendingCount);
+  CheckInt('tudo saiu', 0, FTracker.PendingCount);
   LC := Confirms;
-  ChecaInt('tres frames e nao um', 3, Length(LC));
-  ChecaInt('1o: ack ate o seq 1', 1, Integer(LC[0].Seq));
-  ChecaNao('1o nao e nack', LC[0].Nack);
-  ChecaInt('2o: o nack do seq 2', 2, Integer(LC[1].Seq));
-  ChecaOk('2o e nack', LC[1].Nack);
-  ChecaNao('e nack nunca vai com multiple', LC[1].Multiple);
-  ChecaInt('3o: ack do seq 3', 3, Integer(LC[2].Seq));
-  ChecaNao('3o nao e nack', LC[2].Nack);
+  CheckInt('tres frames e nao um', 3, Length(LC));
+  CheckInt('1o: ack ate o seq 1', 1, Integer(LC[0].Seq));
+  CheckNot('1o nao e nack', LC[0].Nack);
+  CheckInt('2o: o nack do seq 2', 2, Integer(LC[1].Seq));
+  CheckOk('2o e nack', LC[1].Nack);
+  CheckNot('e nack nunca vai com multiple', LC[1].Multiple);
+  CheckInt('3o: ack do seq 3', 3, Integer(LC[2].Seq));
+  CheckNot('3o nao e nack', LC[2].Nack);
 end;
 
-procedure TConfirmTrackerTests.JournalFalho_TudoPendenteViraNack;
+procedure TConfirmTrackerTests.FailedJournal_AllPendingBecomesNack;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
 begin
   // The watermark will not move any more. Leaving the publisher hanging would be the worst of
   // all worlds: it would see neither success nor failure.
   FTracker.TryDefer(1, 10, False);
   FTracker.TryDefer(2, 20, False);
   FTracker.FailAll;
-  ChecaInt('nada ficou preso', 0, FTracker.PendingCount);
+  CheckInt('nada ficou preso', 0, FTracker.PendingCount);
   LC := Confirms;
-  ChecaInt('um nack por seq', 2, Length(LC));
-  ChecaOk('o 1o e nack', LC[0].Nack);
-  ChecaOk('o 2o e nack', LC[1].Nack);
-  ChecaInt('seq 1', 1, Integer(LC[0].Seq));
-  ChecaInt('seq 2', 2, Integer(LC[1].Seq));
+  CheckInt('um nack por seq', 2, Length(LC));
+  CheckOk('o 1o e nack', LC[0].Nack);
+  CheckOk('o 2o e nack', LC[1].Nack);
+  CheckInt('seq 1', 1, Integer(LC[0].Seq));
+  CheckInt('seq 2', 2, Integer(LC[1].Seq));
 end;
 
-procedure TConfirmTrackerTests.CanalMorto_NaoEscreveNada;
+procedure TConfirmTrackerTests.DeadChannel_WritesNothing;
 begin
   // The one releasing is the JOURNAL thread, and the channel may have died meanwhile.
   // After Detach nothing is written -- and nothing is deferred, because there is no one
   // to confirm to.
   FTracker.TryDefer(1, 10, False);
   FTracker.Detach;
-  ChecaInt('o pendente foi descartado', 0, FTracker.PendingCount);
+  CheckInt('o pendente foi descartado', 0, FTracker.PendingCount);
   FTracker.Release(10);
-  ChecaNao('e nem adia mais', FTracker.TryDefer(2, 10, False));
-  ChecaInt('nenhum frame', 0, Length(Confirms));
+  CheckNot('e nem adia mais', FTracker.TryDefer(2, 10, False));
+  CheckInt('nenhum frame', 0, Length(Confirms));
 end;
 
-procedure TConfirmTrackerTests.SaidaCheia_NaoBloqueiaQuemLibera;
+procedure TConfirmTrackerTests.FullOutput_DoesNotBlockTheReleaser;
 var
-  LC: TArray<TConfirmLido>;
+  LC: TArray<TReadConfirm>;
 begin
   // D3's shape applied to the confirm: the caller of Release is the
   // JOURNAL thread, and it cannot wait for a channel's write queue to empty.
   // With the stream blocked, if the release used PostFrames instead of
   // TryPostFrames this test would NOT RETURN -- the suite would hang instead of
   // failing, which is the symptom to recognize if it ever hangs.
-  FStream.Bloquear;
+  FStream.Block;
   try
     FTracker.TryDefer(1, 10, False);
     FTracker.Release(10);
-    ChecaInt('a liberacao voltou sem esperar o stream', 0,
+    CheckInt('a liberacao voltou sem esperar o stream', 0,
       FTracker.PendingCount);
   finally
-    FStream.Liberar;
+    FStream.Unblock;
   end;
   LC := Confirms;
-  ChecaInt('e o frame saiu quando o stream destravou', 1, Length(LC));
-  ChecaInt('seq 1', 1, Integer(LC[0].Seq));
+  CheckInt('e o frame saiu quando o stream destravou', 1, Length(LC));
+  CheckInt('seq 1', 1, Integer(LC[0].Seq));
 end;
 
 { --- TConfirmRegistryTests --- }
 
-procedure TConfirmRegistryTests.Durable_LiberaTodosOsRastreadores;
+procedure TConfirmRegistryTests.Durable_ReleasesAllTrackers;
 var
-  LReg: IAMQPConfirmRegistry;
+  LRec: IAMQPConfirmRegistry;
   LSink: IAMQPDurabilitySink;
-  LStreamA, LStreamB: TStreamGravador;
+  LStreamA, LStreamB: TRecordingStream;
   LWriterA, LWriterB: TAMQPFrameWriter;
   LA, LB: IAMQPConfirmTracker;
 begin
-  LStreamA := TStreamGravador.Create;
-  LStreamB := TStreamGravador.Create;
+  LStreamA := TRecordingStream.Create;
+  LStreamB := TRecordingStream.Create;
   LWriterA := TAMQPFrameWriter.Create(LStreamA);
   LWriterB := TAMQPFrameWriter.Create(LStreamB);
   try
-    LReg := TAMQPConfirmRegistry.Create;
-    LSink := LReg as IAMQPDurabilitySink;
-    LA := LReg.CreateTracker(LWriterA, 1);
-    LB := LReg.CreateTracker(LWriterB, 2);
+    LRec := TAMQPConfirmRegistry.Create;
+    LSink := LRec as IAMQPDurabilitySink;
+    LA := LRec.CreateTracker(LWriterA, 1);
+    LB := LRec.CreateTracker(LWriterB, 2);
     LA.TryDefer(1, 10, False);
     LB.TryDefer(1, 10, False);
     // ONE fsync unblocks BOTH channels: that is what "watermark of the whole
     // broker" means.
     LSink.Durable(10);
-    ChecaInt('canal A liberou', 0, LA.PendingCount);
-    ChecaInt('canal B liberou', 0, LB.PendingCount);
-    ChecaInt('um confirm em A', 1, Length(LeConfirms(FramesEscritos(LWriterA, LStreamA))));
-    ChecaInt('um confirm em B', 1, Length(LeConfirms(FramesEscritos(LWriterB, LStreamB))));
+    CheckInt('canal A liberou', 0, LA.PendingCount);
+    CheckInt('canal B liberou', 0, LB.PendingCount);
+    CheckInt('um confirm em A', 1, Length(ReadConfirms(WrittenFrames(LWriterA, LStreamA))));
+    CheckInt('um confirm em B', 1, Length(ReadConfirms(WrittenFrames(LWriterB, LStreamB))));
     LA := nil;
     LB := nil;
     LSink := nil;
-    LReg := nil;
+    LRec := nil;
   finally
     LWriterA.Free;
     LWriterB.Free;
@@ -358,51 +358,51 @@ begin
   end;
 end;
 
-procedure TConfirmRegistryTests.Unregister_ParaDeAvisar;
+procedure TConfirmRegistryTests.Unregister_StopsNotifying;
 var
-  LReg: IAMQPConfirmRegistry;
+  LRec: IAMQPConfirmRegistry;
   LSink: IAMQPDurabilitySink;
-  LStream: TStreamGravador;
+  LStream: TRecordingStream;
   LWriter: TAMQPFrameWriter;
   LT: IAMQPConfirmTracker;
 begin
-  LStream := TStreamGravador.Create;
+  LStream := TRecordingStream.Create;
   LWriter := TAMQPFrameWriter.Create(LStream);
   try
-    LReg := TAMQPConfirmRegistry.Create;
-    LSink := LReg as IAMQPDurabilitySink;
-    LT := LReg.CreateTracker(LWriter, 1);
+    LRec := TAMQPConfirmRegistry.Create;
+    LSink := LRec as IAMQPDurabilitySink;
+    LT := LRec.CreateTracker(LWriter, 1);
     LT.TryDefer(1, 10, False);
-    LReg.Unregister(LT);
+    LRec.Unregister(LT);
     LSink.Durable(10);
     // Without Unregister, the journal thread would walk trackers of dead
     // channels on every fsync, forever.
-    ChecaInt('o desregistrado nao foi avisado', 1, LT.PendingCount);
+    CheckInt('o desregistrado nao foi avisado', 1, LT.PendingCount);
     LT.Detach; // otherwise the writer's TearDown would find it alive
     LT := nil;
     LSink := nil;
-    LReg := nil;
+    LRec := nil;
   finally
     LWriter.Free;
     LStream.Free;
   end;
 end;
 
-procedure TConfirmRegistryTests.Watermark_AcompanhaOUltimoDurable;
+procedure TConfirmRegistryTests.Watermark_TracksTheLastDurable;
 var
-  LReg: IAMQPConfirmRegistry;
+  LRec: IAMQPConfirmRegistry;
   LSink: IAMQPDurabilitySink;
 begin
-  LReg := TAMQPConfirmRegistry.Create;
-  LSink := LReg as IAMQPDurabilitySink;
-  ChecaInt('comeca em zero', 0, Integer(LReg.Watermark));
+  LRec := TAMQPConfirmRegistry.Create;
+  LSink := LRec as IAMQPDurabilitySink;
+  CheckInt('comeca em zero', 0, Integer(LRec.Watermark));
   LSink.Durable(42);
-  ChecaInt('anda com o fsync', 42, Integer(LReg.Watermark));
+  CheckInt('anda com o fsync', 42, Integer(LRec.Watermark));
   // RetryPending recovers what got stuck without INVENTING durability.
-  LReg.RetryPending;
-  ChecaInt('o retry nao mexe na marca', 42, Integer(LReg.Watermark));
+  LRec.RetryPending;
+  CheckInt('o retry nao mexe na marca', 42, Integer(LRec.Watermark));
   LSink := nil;
-  LReg := nil;
+  LRec := nil;
 end;
 
 initialization

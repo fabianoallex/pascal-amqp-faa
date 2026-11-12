@@ -52,8 +52,8 @@ const
   // Phase 3: TTL+DLX and priority. They run against RabbitMQ AND against the
   // embedded broker -- it is the double proof that the implemented semantics are the spec's.
   DLX = 'pascal-amqp-faa.smoke.dlx';
-  QUEUE_ESPERA = 'pascal-amqp-faa.smoke.espera';
-  QUEUE_MORTA = 'pascal-amqp-faa.smoke.morta';
+  QUEUE_WAIT = 'pascal-amqp-faa.smoke.espera';
+  QUEUE_DEAD = 'pascal-amqp-faa.smoke.morta';
   QUEUE_PRIO = 'pascal-amqp-faa.smoke.prio';
 
 type
@@ -182,13 +182,13 @@ begin
 end;
 
 // Reads a numeric argument of an option, or -1 if it was not given.
-function ArgNumerico(const AOpcao: string): Integer;
+function NumericArg(const AOption: string): Integer;
 var
   I: Integer;
 begin
   Result := -1;
   for I := 1 to ParamCount - 1 do
-    if SameText(ParamStr(I), AOpcao) then
+    if SameText(ParamStr(I), AOption) then
       Exit(StrToIntDef(ParamStr(I + 1), -1));
 end;
 
@@ -197,26 +197,26 @@ begin
   if ACondition then
     WriteLn('  ok: ', AWhat)
   else
-    raise Exception.Create('FALHOU: ' + AWhat);
+    raise Exception.Create('FAILED: ' + AWhat);
 end;
 
 // Waits until ACount messages show up in the queue, or gives up at the deadline.
 // Without it this would be a fixed Sleep -- and the time for a TTL to expire plus
 // the dead-letter to cross two queues varies between RabbitMQ and the embedded broker.
-function EsperaContagem(AChan: TAMQPChannel; const AQueue: string;
+function WaitForCount(AChan: TAMQPChannel; const AQueue: string;
   ACount: Cardinal; ATimeoutMs: Cardinal): Boolean;
 var
   LDecl: TAMQPQueueDeclare;
-  LFim: UInt64;
+  LEnd: UInt64;
 begin
-  LFim := PcTickMs + ATimeoutMs;
+  LEnd := PcTickMs + ATimeoutMs;
   repeat
     LDecl := TAMQPQueueDeclare.Create(AQueue);
     LDecl.Passive := True; // passive: only queries, does not redeclare
     if AChan.DeclareQueue(LDecl).MessageCount >= ACount then
       Exit(True);
     Sleep(25);
-  until PcTickMs > LFim;
+  until PcTickMs > LEnd;
   Result := False;
 end;
 
@@ -227,7 +227,7 @@ end;
 // It runs the SAME against RabbitMQ and against the embedded broker -- that is
 // the point: the same steps against both say that the implemented semantics are
 // the spec's, not ours.
-procedure PassoTtlDlx(AChan: TAMQPChannel);
+procedure StepTtlDlx(AChan: TAMQPChannel);
 var
   LArgs: TAMQPFieldTable;
   LDecl: TAMQPQueueDeclare;
@@ -240,22 +240,22 @@ begin
   // Delete first: redeclaring with different arguments would be
   // PRECONDITION_FAILED, and deleting a missing queue is a no-op.
   LDel := Default(TAMQPQueueDelete);
-  LDel.QueueName := QUEUE_ESPERA;
+  LDel.QueueName := QUEUE_WAIT;
   AChan.DeleteQueue(LDel);
-  LDel.QueueName := QUEUE_MORTA;
+  LDel.QueueName := QUEUE_DEAD;
   AChan.DeleteQueue(LDel);
 
   // Final queue, bound to the DLX.
-  AChan.DeclareQueue(TAMQPQueueDeclare.Create(QUEUE_MORTA));
+  AChan.DeclareQueue(TAMQPQueueDeclare.Create(QUEUE_DEAD));
   LBind := Default(TAMQPQueueBind);
-  LBind.QueueName := QUEUE_MORTA;
+  LBind.QueueName := QUEUE_DEAD;
   LBind.ExchangeName := DLX;
   // The key is the NAME OF THE WAIT QUEUE, not ROUTING_KEY: without
   // x-dead-letter-routing-key the dead message keeps its ORIGINAL key, and its
   // key is the queue name (it was published to the default exchange). Tying this
   // down here is what makes this step exercise the key-preservation rule,
   // instead of masking it with a fixed key on both sides.
-  LBind.RoutingKey := QUEUE_ESPERA;
+  LBind.RoutingKey := QUEUE_WAIT;
   AChan.BindQueue(LBind);
 
   // Wait queue: short TTL + DLX. No consumer -- the TTL is what moves it.
@@ -265,18 +265,18 @@ begin
     LArgs.Put('x-message-ttl', LVal);
     LVal := TValue.From<string>(DLX);
     LArgs.Put('x-dead-letter-exchange', LVal);
-    LDecl := TAMQPQueueDeclare.Create(QUEUE_ESPERA);
+    LDecl := TAMQPQueueDeclare.Create(QUEUE_WAIT);
     LDecl.Arguments := LArgs;
     AChan.DeclareQueue(LDecl);
   finally
     LArgs.Free; // the declare does NOT free it: the owner is the caller
   end;
 
-  AChan.PublishText('', QUEUE_ESPERA, 'vai-morrer');
-  Check(EsperaContagem(AChan, QUEUE_MORTA, 1, 10000),
+  AChan.PublishText('', QUEUE_WAIT, 'vai-morrer');
+  Check(WaitForCount(AChan, QUEUE_DEAD, 1, 10000),
     'mensagem venceu o TTL e caiu na fila do DLX');
 
-  LGet := AChan.BasicGet(QUEUE_MORTA, True);
+  LGet := AChan.BasicGet(QUEUE_DEAD, True);
   Check(LGet.Found, 'mensagem encontrada na fila morta');
   Check(LGet.BodyAsText = 'vai-morrer', 'corpo integro apos o dead-letter');
   Check(LGet.Properties.Has(bpHeaders), 'a mensagem morta ganhou headers');
@@ -287,7 +287,7 @@ end;
 // Priority: with the consumer stopped, a batch of mixed priorities comes out
 // in DESCENDING order. The two conditions that make this hold are here:
 // backlog built BEFORE any read, and reading one at a time through Get.
-procedure PassoPrioridade(AChan: TAMQPChannel);
+procedure StepPriority(AChan: TAMQPChannel);
 var
   LArgs: TAMQPFieldTable;
   LDecl: TAMQPQueueDeclare;
@@ -295,8 +295,8 @@ var
   LVal: TValue;
   LProps: TAMQPBasicProperties;
   LDel: TAMQPQueueDelete;
-  I, LAnterior, LAtual: Integer;
-  LOrdem: string;
+  I, LPrevious, LCurrent: Integer;
+  LOrder: string;
 const
   PRIOS: array[0..5] of Byte = (2, 8, 5, 9, 1, 7);
 begin
@@ -323,23 +323,23 @@ begin
     AChan.Publish('', QUEUE_PRIO,
       AmqpUtf8Encode('p' + IntToStr(PRIOS[I])), LProps);
   end;
-  Check(EsperaContagem(AChan, QUEUE_PRIO, Length(PRIOS), 10000),
+  Check(WaitForCount(AChan, QUEUE_PRIO, Length(PRIOS), 10000),
     'lote de prioridades enfileirado');
 
-  LOrdem := '';
-  LAnterior := 999;
+  LOrder := '';
+  LPrevious := 999;
   for I := Low(PRIOS) to High(PRIOS) do
   begin
     LGet := AChan.BasicGet(QUEUE_PRIO, True);
     if not LGet.Found then
       Break;
-    LAtual := LGet.Properties.Priority;
-    LOrdem := LOrdem + IntToStr(LAtual) + ' ';
-    Check(LAtual <= LAnterior,
-      'ordem decrescente de prioridade (saiu: ' + LOrdem + ')');
-    LAnterior := LAtual;
+    LCurrent := LGet.Properties.Priority;
+    LOrder := LOrder + IntToStr(LCurrent) + ' ';
+    Check(LCurrent <= LPrevious,
+      'ordem decrescente de prioridade (saiu: ' + LOrder + ')');
+    LPrevious := LCurrent;
   end;
-  Check(LOrdem = '9 8 7 5 2 1 ', 'drenou em ordem de prioridade: ' + LOrdem);
+  Check(LOrder = '9 8 7 5 2 1 ', 'drenou em ordem de prioridade: ' + LOrder);
 end;
 
 // Drops the socket in the middle of consumption and checks that the lib reconnects
@@ -394,7 +394,7 @@ begin
 end;
 
 const
-  FILA_DURAVEL = 'smoke.durable';
+  DURABLE_QUEUE = 'smoke.durable';
 
 // Publishes AN persistent messages to a durable queue and confirms. The body of
 // each one is its own number: the verify checks ORDER and INTEGRITY, not just
@@ -406,16 +406,16 @@ var
   LDecl: TAMQPQueueDeclare;
   I: Integer;
 begin
-  WriteLn('[durable-publish] ', AN, ' persistentes em ', FILA_DURAVEL);
+  WriteLn('[durable-publish] ', AN, ' persistentes em ', DURABLE_QUEUE);
   LConn := TAMQPConnection.Create(AParams);
   try
     LConn.Open;
     LChan := LConn.CreateChannel;
-    LDecl := TAMQPQueueDeclare.Create(FILA_DURAVEL, True); // durable
+    LDecl := TAMQPQueueDeclare.Create(DURABLE_QUEUE, True); // durable
     LChan.DeclareQueue(LDecl);
     LChan.ConfirmSelect;
     for I := 1 to AN do
-      LChan.PublishText('', FILA_DURAVEL, IntToStr(I), True); // persistent
+      LChan.PublishText('', DURABLE_QUEUE, IntToStr(I), True); // persistent
     Check(LChan.WaitForConfirms(30000), 'o broker confirmou as ' +
       IntToStr(AN) + ' persistentes');
     LConn.Close;
@@ -433,14 +433,14 @@ var
   LGet: TAMQPGetResult;
   I: Integer;
 begin
-  WriteLn('[durable-verify] esperando ', AN, ' de volta em ', FILA_DURAVEL);
+  WriteLn('[durable-verify] esperando ', AN, ' de volta em ', DURABLE_QUEUE);
   LConn := TAMQPConnection.Create(AParams);
   try
     LConn.Open;
     LChan := LConn.CreateChannel;
     for I := 1 to AN do
     begin
-      LGet := LChan.BasicGet(FILA_DURAVEL, True);
+      LGet := LChan.BasicGet(DURABLE_QUEUE, True);
       Check(LGet.Found, Format('mensagem %d sobreviveu ao restart', [I]));
       Check(LGet.BodyAsText = IntToStr(I),
         Format('mensagem %d na ordem e integra (veio "%s")',
@@ -450,7 +450,7 @@ begin
       // after a crash the broker does not know whether anyone got to see it.
       Check(LGet.Redelivered, Format('mensagem %d veio redelivered', [I]));
     end;
-    LGet := LChan.BasicGet(FILA_DURAVEL, True);
+    LGet := LChan.BasicGet(DURABLE_QUEUE, True);
     Check(not LGet.Found, 'e nada a mais voltou');
     LConn.Close;
   finally
@@ -472,10 +472,10 @@ begin
   LSmoke := nil;
   // The durable modes REPLACE the 9 steps: they are half of a test that
   // only makes sense with a broker restart in the middle.
-  if ArgNumerico('--durable-publish') >= 0 then
+  if NumericArg('--durable-publish') >= 0 then
   begin
     try
-      DurablePublish(SmokeParams, ArgNumerico('--durable-publish'));
+      DurablePublish(SmokeParams, NumericArg('--durable-publish'));
       WriteLn('DURABLE PUBLISH: OK');
       ExitCode := 0;
     except
@@ -487,10 +487,10 @@ begin
     end;
     Exit;
   end;
-  if ArgNumerico('--durable-verify') >= 0 then
+  if NumericArg('--durable-verify') >= 0 then
   begin
     try
-      DurableVerify(SmokeParams, ArgNumerico('--durable-verify'));
+      DurableVerify(SmokeParams, NumericArg('--durable-verify'));
       WriteLn('DURABLE VERIFY: OK');
       ExitCode := 0;
     except
@@ -552,10 +552,10 @@ begin
       LChan.Cancel(LTag);
 
       WriteLn('[6] ttl + dead-letter (Fase 3)');
-      PassoTtlDlx(LChan);
+      StepTtlDlx(LChan);
 
       WriteLn('[7] fila com prioridade (Fase 3)');
-      PassoPrioridade(LChan);
+      StepPriority(LChan);
 
       WriteLn('[8] teardown');
       LChan.Close;

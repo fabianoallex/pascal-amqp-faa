@@ -33,26 +33,26 @@ uses
 type
   TMessageTests = class(TTestCase)
   published
-    procedure NasceComRefCount1;
-    procedure AddRefSobeReleaseDesce;
-    procedure UltimoReleaseLibera;
-    procedure CorpoCompartilhadoSemCopia;
-    procedure HeaderPayloadVoltaIgual;
-    procedure FromServerMessage_CopiaOsCampos;
-    procedure Split_CorpoVazio;
-    procedure Split_CorpoMenorQueOMaximo;
-    procedure Split_CorpoGrandeEmVariosPedacos;
-    procedure Split_MaximoZero_UmPedacoSo;
+    procedure StartsWithRefCount1;
+    procedure AddRefGoesUpReleaseGoesDown;
+    procedure LastReleaseFrees;
+    procedure SharedBodyWithoutCopy;
+    procedure HeaderPayloadReturnsUnchanged;
+    procedure FromServerMessage_CopiesTheFields;
+    procedure Split_EmptyBody;
+    procedure Split_BodySmallerThanTheMaximum;
+    procedure Split_LargeBodyInSeveralPieces;
+    procedure Split_MaximumZero_SinglePiece;
   end;
 
   TResourceTests = class(TTestCase)
   published
-    procedure ArgsEqual_Iguais;
-    procedure ArgsEqual_ValorDiferente;
-    procedure ArgsEqual_ChaveAMais;
-    procedure ArgsEqual_NilXVazia;
-    procedure ArgsEqual_TabelaAninhada;
-    procedure ArgsEqual_ArrayDeValores;
+    procedure ArgsEqual_Equal;
+    procedure ArgsEqual_DifferentValue;
+    procedure ArgsEqual_ExtraKey;
+    procedure ArgsEqual_NilVsEmpty;
+    procedure ArgsEqual_NestedTable;
+    procedure ArgsEqual_ArrayOfValues;
     procedure ReservedName;
     procedure ValidExchangeType;
     procedure ExchangeDef_EquivalentTo;
@@ -61,42 +61,42 @@ type
 
   TQueuePolicyTests = class(TTestCase)
   published
-    procedure Ausente_TudoNeutro;
-    procedure Ttl_AceitaIntegerEInt64;
-    procedure Ttl_NegativoRecusa;
-    procedure Ttl_TipoErradoRecusa;
-    procedure Expires_ZeroRecusa;
-    procedure MaxLength_ZeroEValidoENaoAusente;
-    procedure MaxPriority_FaixaFechada;
-    procedure Overflow_DuasPoliticas;
-    procedure DeadLetter_VazioEPresente;
-    procedure ArgumentoDesconhecido_Ignorado;
-    procedure AlternateExchange_LeEValida;
-    procedure QueueDef_DerivaPolitica;
-    procedure ExchangeDef_DerivaAlternate;
+    procedure Absent_AllNeutral;
+    procedure Ttl_AcceptsIntegerAndInt64;
+    procedure Ttl_NegativeRefused;
+    procedure Ttl_WrongTypeRefused;
+    procedure Expires_ZeroRefused;
+    procedure MaxLength_ZeroIsValidAndNotAbsent;
+    procedure MaxPriority_ClosedRange;
+    procedure Overflow_TwoPolicies;
+    procedure DeadLetter_EmptyAndPresent;
+    procedure UnknownArgument_Ignored;
+    procedure AlternateExchange_ReadsAndValidates;
+    procedure QueueDef_DerivesPolicy;
+    procedure ExchangeDef_DerivesAlternate;
   end;
 
   THeaderRewriteTests = class(TTestCase)
   published
-    procedure RoundTripSemMexer_BytesIdenticos;
-    procedure TodasAsCatorzePropriedades_Preservadas;
-    procedure AcrescentaHeader_RestoIntacto;
-    procedure SemHeaders_GanhaTabelaSobDemanda;
-    procedure ArrayDeTabelas_AtravessaAReescrita;
-    procedure Derive_CompartilhaOCorpoSemCopiar;
-    procedure Derive_NaoTocaNaOrigem;
-    procedure Derive_BodySizeBateComOCorpo;
-    procedure PayloadMalformado_Levanta;
+    procedure UntouchedRoundTrip_IdenticalBytes;
+    procedure AllFourteenProperties_Preserved;
+    procedure AddsHeader_RestIntact;
+    procedure NoHeaders_GetsATableOnDemand;
+    procedure ArrayOfTables_SurvivesTheRewrite;
+    procedure Derive_SharesTheBodyWithoutCopying;
+    procedure Derive_DoesNotTouchTheSource;
+    procedure Derive_BodySizeMatchesTheBody;
+    procedure MalformedPayload_Raises;
   end;
 
 implementation
 
-// Builds { 'x-lista': array of field-values ['S':ATexto, 'l':AInt] } through
+// Builds { 'x-lista': array of field-values ['S':AText, 'l':AInt] } through
 // the WIRE path (encode + decode). It is the only way to get an 'A' array
 // the way the broker will receive it -- and it is what exposes FPC's TValue
 // wrapping in GetArrayElement, which AmqpUnwrapValue undoes inside
 // AmqpArgsEqual (see the gotcha in CLAUDE.md).
-function TabelaComArray(const ATexto: string; AInt: Int64): TAMQPFieldTable;
+function TableWithArray(const AText: string; AInt: Int64): TAMQPFieldTable;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -105,7 +105,7 @@ begin
   W := TAMQPWriter.Create;
   try
     W.WriteOctet(Ord('S'));
-    W.WriteLongStr(ATexto);
+    W.WriteLongStr(AText);
     W.WriteOctet(Ord('l'));
     W.WriteLongLongUInt(UInt64(AInt));
     LElems := W.ToBytes;
@@ -143,7 +143,7 @@ end;
 
 { TMessageTests }
 
-procedure TMessageTests.NasceComRefCount1;
+procedure TMessageTests.StartsWithRefCount1;
 var
   LMsg: TAMQPMessage;
 begin
@@ -155,7 +155,7 @@ begin
   end;
 end;
 
-procedure TMessageTests.AddRefSobeReleaseDesce;
+procedure TMessageTests.AddRefGoesUpReleaseGoesDown;
 var
   LMsg: TAMQPMessage;
 begin
@@ -167,7 +167,7 @@ begin
   LMsg.Release; // second Release: reaches 0 and really frees
 end;
 
-procedure TMessageTests.UltimoReleaseLibera;
+procedure TMessageTests.LastReleaseFrees;
 var
   LMsg: TAMQPMessage;
 begin
@@ -179,7 +179,7 @@ begin
   TAssert.AssertEquals('ultimo release chega a 0', 0, LMsg.Release);
 end;
 
-procedure TMessageTests.CorpoCompartilhadoSemCopia;
+procedure TMessageTests.SharedBodyWithoutCopy;
 var
   LOriginal: TBytes;
   LMsg: TAMQPMessage;
@@ -195,7 +195,7 @@ begin
   end;
 end;
 
-procedure TMessageTests.HeaderPayloadVoltaIgual;
+procedure TMessageTests.HeaderPayloadReturnsUnchanged;
 var
   LHdr, LGot: TBytes;
   LMsg: TAMQPMessage;
@@ -216,7 +216,7 @@ begin
   end;
 end;
 
-procedure TMessageTests.FromServerMessage_CopiaOsCampos;
+procedure TMessageTests.FromServerMessage_CopiesTheFields;
 var
   LSrv: TAMQPServerMessage;
   LMsg: TAMQPMessage;
@@ -241,7 +241,7 @@ begin
   end;
 end;
 
-procedure TMessageTests.Split_CorpoVazio;
+procedure TMessageTests.Split_EmptyBody;
 var
   LChunks: TAMQPBodyChunks;
 begin
@@ -249,7 +249,7 @@ begin
   TAssert.AssertEquals('corpo vazio -> 0 pedacos', 0, Length(LChunks));
 end;
 
-procedure TMessageTests.Split_CorpoMenorQueOMaximo;
+procedure TMessageTests.Split_BodySmallerThanTheMaximum;
 var
   LBody: TBytes;
   LChunks: TAMQPBodyChunks;
@@ -260,7 +260,7 @@ begin
   TAssert.AssertEquals('tamanho do pedaco unico', Length(LBody), Length(LChunks[0]));
 end;
 
-procedure TMessageTests.Split_CorpoGrandeEmVariosPedacos;
+procedure TMessageTests.Split_LargeBodyInSeveralPieces;
 var
   LBody: TBytes;
   LChunks: TAMQPBodyChunks;
@@ -298,7 +298,7 @@ begin
       TAssert.Fail(Format('corpo remontado diverge no octeto %d', [I]));
 end;
 
-procedure TMessageTests.Split_MaximoZero_UmPedacoSo;
+procedure TMessageTests.Split_MaximumZero_SinglePiece;
 var
   LBody: TBytes;
   LChunks: TAMQPBodyChunks;
@@ -312,7 +312,7 @@ end;
 
 { TResourceTests }
 
-procedure TResourceTests.ArgsEqual_Iguais;
+procedure TResourceTests.ArgsEqual_Equal;
 var
   A, B: TAMQPFieldTable;
 begin
@@ -330,7 +330,7 @@ begin
   end;
 end;
 
-procedure TResourceTests.ArgsEqual_ValorDiferente;
+procedure TResourceTests.ArgsEqual_DifferentValue;
 var
   A, B: TAMQPFieldTable;
 begin
@@ -346,7 +346,7 @@ begin
   end;
 end;
 
-procedure TResourceTests.ArgsEqual_ChaveAMais;
+procedure TResourceTests.ArgsEqual_ExtraKey;
 var
   A, B: TAMQPFieldTable;
 begin
@@ -363,30 +363,30 @@ begin
   end;
 end;
 
-procedure TResourceTests.ArgsEqual_NilXVazia;
+procedure TResourceTests.ArgsEqual_NilVsEmpty;
 var
-  LVazia, LComItem: TAMQPFieldTable;
+  LEmptyTable, LWithItem: TAMQPFieldTable;
 begin
-  LVazia := TAMQPFieldTable.Create;
+  LEmptyTable := TAMQPFieldTable.Create;
   try
-    TAssert.AssertTrue('nil == tabela vazia', AmqpArgsEqual(nil, LVazia));
-    TAssert.AssertTrue('tabela vazia == nil', AmqpArgsEqual(LVazia, nil));
+    TAssert.AssertTrue('nil == tabela vazia', AmqpArgsEqual(nil, LEmptyTable));
+    TAssert.AssertTrue('tabela vazia == nil', AmqpArgsEqual(LEmptyTable, nil));
     TAssert.AssertTrue('nil == nil', AmqpArgsEqual(nil, nil));
   finally
-    LVazia.Free;
+    LEmptyTable.Free;
   end;
 
-  LComItem := TAMQPFieldTable.Create;
+  LWithItem := TAMQPFieldTable.Create;
   try
-    LComItem.Put('a', 1);
-    TAssert.AssertFalse('nil != tabela com item', AmqpArgsEqual(nil, LComItem));
-    TAssert.AssertFalse('tabela com item != nil', AmqpArgsEqual(LComItem, nil));
+    LWithItem.Put('a', 1);
+    TAssert.AssertFalse('nil != tabela com item', AmqpArgsEqual(nil, LWithItem));
+    TAssert.AssertFalse('tabela com item != nil', AmqpArgsEqual(LWithItem, nil));
   finally
-    LComItem.Free;
+    LWithItem.Free;
   end;
 end;
 
-procedure TResourceTests.ArgsEqual_TabelaAninhada;
+procedure TResourceTests.ArgsEqual_NestedTable;
 var
   A, B, C: TAMQPFieldTable;
   LInnerA, LInnerB, LInnerC: TAMQPFieldTable;
@@ -414,14 +414,14 @@ begin
   end;
 end;
 
-procedure TResourceTests.ArgsEqual_ArrayDeValores;
+procedure TResourceTests.ArgsEqual_ArrayOfValues;
 var
   A, B, C, D, E: TAMQPFieldTable;
 begin
-  A := TabelaComArray('nfe', 7);
-  B := TabelaComArray('nfe', 7);
-  C := TabelaComArray('cte', 7);  // string element differs
-  D := TabelaComArray('nfe', 8);  // integer element differs
+  A := TableWithArray('nfe', 7);
+  B := TableWithArray('nfe', 7);
+  C := TableWithArray('cte', 7);  // string element differs
+  D := TableWithArray('nfe', 8);  // integer element differs
   E := TAMQPFieldTable.Create;
   try
     E.Put('x-lista', 7); // scalar where the other has an array
@@ -529,68 +529,68 @@ end;
 { Assertions used only by TQueuePolicyTests, with a fixed type: the value
   comes in already converted, and the TAssert overload is the same on both
   compilers. }
-procedure ChecaOk(AOk: Boolean; const AErro: string);
+procedure CheckOk(AOk: Boolean; const AError: string);
 begin
-  TAssert.AssertTrue('parse deveria passar, erro: ' + AErro, AOk);
+  TAssert.AssertTrue('parse deveria passar, erro: ' + AError, AOk);
 end;
 
-procedure ChecaInt(const AMsg: string; AEsperado, AReal: Int64);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Int64);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaBool(const AMsg: string; AEsperado, AReal: Boolean);
+procedure CheckBool(const AMsg: string; AExpected, AActual: Boolean);
 begin
-  TAssert.AssertTrue(AMsg, AReal = AEsperado);
+  TAssert.AssertTrue(AMsg, AActual = AExpected);
 end;
 
-procedure ChecaStr(const AMsg, AEsperado, AReal: string);
+procedure CheckStr(const AMsg, AExpected, AActual: string);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
 { TQueuePolicyTests }
 
 // Table with a single numeric key, built with the value already in a local
 // TValue (chaining TValue.From<T> inline in a Put crashes FPC 3.2).
-function TabInt(const AChave: string; AValor: Int64): TAMQPFieldTable;
+function TabInt(const AKey: string; AValue: Int64): TAMQPFieldTable;
 var
   LVal: TValue;
 begin
   Result := TAMQPFieldTable.Create;
-  LVal := TValue.From<Int64>(AValor);
-  Result.Put(AChave, LVal);
+  LVal := TValue.From<Int64>(AValue);
+  Result.Put(AKey, LVal);
 end;
 
-function TabStr(const AChave, AValor: string): TAMQPFieldTable;
+function TabStr(const AKey, AValue: string): TAMQPFieldTable;
 var
   LVal: TValue;
 begin
   Result := TAMQPFieldTable.Create;
-  LVal := TValue.From<string>(AValor);
-  Result.Put(AChave, LVal);
+  LVal := TValue.From<string>(AValue);
+  Result.Put(AKey, LVal);
 end;
 
-procedure TQueuePolicyTests.Ausente_TudoNeutro;
+procedure TQueuePolicyTests.Absent_AllNeutral;
 var
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   // nil is the common case: most Queue.Declare calls send no argument.
-  ChecaOk(AmqpParseQueuePolicy(nil, LPol, LErro), LErro);
-  ChecaInt('ttl ausente', -1, LPol.MessageTtlMs);
-  ChecaInt('expires ausente', -1, LPol.ExpiresMs);
-  ChecaInt('max-length ausente', -1, LPol.MaxLength);
-  ChecaInt('max-priority ausente', -1, LPol.MaxPriority);
-  ChecaBool('sem dead-letter', False, LPol.HasDeadLetterExchange);
-  ChecaBool('HasAny False', False, LPol.HasAny);
+  CheckOk(AmqpParseQueuePolicy(nil, LPolicy, LError), LError);
+  CheckInt('ttl ausente', -1, LPolicy.MessageTtlMs);
+  CheckInt('expires ausente', -1, LPolicy.ExpiresMs);
+  CheckInt('max-length ausente', -1, LPolicy.MaxLength);
+  CheckInt('max-priority ausente', -1, LPolicy.MaxPriority);
+  CheckBool('sem dead-letter', False, LPolicy.HasDeadLetterExchange);
+  CheckBool('HasAny False', False, LPolicy.HasAny);
 end;
 
-procedure TQueuePolicyTests.Ttl_AceitaIntegerEInt64;
+procedure TQueuePolicyTests.Ttl_AcceptsIntegerAndInt64;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
   LVal: TValue;
 begin
   // The wire has no single type for numbers: 'b'/'s'/'I' become tkInteger and
@@ -600,106 +600,106 @@ begin
   try
     LVal := TValue.From<Integer>(60000);
     LTab.Put('x-message-ttl', LVal);
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaInt('ttl como Integer', 60000, LPol.MessageTtlMs);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckInt('ttl como Integer', 60000, LPolicy.MessageTtlMs);
   finally
     LTab.Free;
   end;
 
   LTab := TabInt('x-message-ttl', 60000);
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaInt('ttl como Int64', 60000, LPol.MessageTtlMs);
-    ChecaBool('HasAny True', True, LPol.HasAny);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckInt('ttl como Int64', 60000, LPolicy.MessageTtlMs);
+    CheckBool('HasAny True', True, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.Ttl_NegativoRecusa;
+procedure TQueuePolicyTests.Ttl_NegativeRefused;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   LTab := TabInt('x-message-ttl', -1);
   try
-    ChecaBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPol, LErro));
+    CheckBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
     // The message must NAME the argument -- that is what separates an actionable
     // error from a "precondition failed" the user has to guess at.
-    ChecaBool('erro cita o argumento', True,
-      Pos('x-message-ttl', LErro) > 0);
+    CheckBool('erro cita o argumento', True,
+      Pos('x-message-ttl', LError) > 0);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.Ttl_TipoErradoRecusa;
+procedure TQueuePolicyTests.Ttl_WrongTypeRefused;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   LTab := TabStr('x-message-ttl', '60000'); // string, not a number
   try
-    ChecaBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPol, LErro));
-    ChecaBool('erro diz integer', True, Pos('integer', LErro) > 0);
+    CheckBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('erro diz integer', True, Pos('integer', LError) > 0);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.Expires_ZeroRecusa;
+procedure TQueuePolicyTests.Expires_ZeroRefused;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   // A queue that expires in 0 ms would vanish at the instant of its own declare.
   LTab := TabInt('x-expires', 0);
   try
-    ChecaBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPol, LErro));
-    ChecaBool('erro cita o argumento', True, Pos('x-expires', LErro) > 0);
+    CheckBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('erro cita o argumento', True, Pos('x-expires', LError) > 0);
   finally
     LTab.Free;
   end;
   LTab := TabInt('x-expires', 1);
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaInt('1 ms e valido', 1, LPol.ExpiresMs);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckInt('1 ms e valido', 1, LPolicy.ExpiresMs);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.MaxLength_ZeroEValidoENaoAusente;
+procedure TQueuePolicyTests.MaxLength_ZeroIsValidAndNotAbsent;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   // The reason absence is -1 and not 0: x-max-length=0 is a legitimate value
   // ("a queue that keeps nothing"), different from not having been given.
   LTab := TabInt('x-max-length', 0);
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaInt('zero preservado', 0, LPol.MaxLength);
-    ChecaBool('HasAny True com zero', True, LPol.HasAny);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckInt('zero preservado', 0, LPolicy.MaxLength);
+    CheckBool('HasAny True com zero', True, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.MaxPriority_FaixaFechada;
+procedure TQueuePolicyTests.MaxPriority_ClosedRange;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   LTab := TabInt('x-max-priority', AMQP_MAX_PRIORITY_LEVEL);
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaInt('teto aceito', AMQP_MAX_PRIORITY_LEVEL, LPol.MaxPriority);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckInt('teto aceito', AMQP_MAX_PRIORITY_LEVEL, LPolicy.MaxPriority);
   finally
     LTab.Free;
   end;
@@ -708,42 +708,42 @@ begin
   // and rejects instead of silently clamping.
   LTab := TabInt('x-max-priority', AMQP_MAX_PRIORITY_LEVEL + 1);
   try
-    ChecaBool('acima do teto recusa', False,
-      AmqpParseQueuePolicy(LTab, LPol, LErro));
-    ChecaBool('erro cita o argumento', True,
-      Pos('x-max-priority', LErro) > 0);
+    CheckBool('acima do teto recusa', False,
+      AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('erro cita o argumento', True,
+      Pos('x-max-priority', LError) > 0);
   finally
     LTab.Free;
   end;
 
   LTab := TabInt('x-max-priority', -1);
   try
-    ChecaBool('negativo recusa', False,
-      AmqpParseQueuePolicy(LTab, LPol, LErro));
+    CheckBool('negativo recusa', False,
+      AmqpParseQueuePolicy(LTab, LPolicy, LError));
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.Overflow_DuasPoliticas;
+procedure TQueuePolicyTests.Overflow_TwoPolicies;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   LTab := TabStr('x-overflow', 'drop-head');
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaBool('drop-head', True, LPol.Overflow = amqovDropHead);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckBool('drop-head', True, LPolicy.Overflow = amqovDropHead);
   finally
     LTab.Free;
   end;
 
   LTab := TabStr('x-overflow', 'reject-publish');
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaBool('reject-publish', True, LPol.Overflow = amqovRejectPublish);
-    ChecaBool('HasAny True', True, LPol.HasAny);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckBool('reject-publish', True, LPolicy.Overflow = amqovRejectPublish);
+    CheckBool('HasAny True', True, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
@@ -751,90 +751,90 @@ begin
   // RabbitMQ's 'reject-publish-dlx' is not part of this implementation.
   LTab := TabStr('x-overflow', 'reject-publish-dlx');
   try
-    ChecaBool('politica desconhecida recusa', False,
-      AmqpParseQueuePolicy(LTab, LPol, LErro));
-    ChecaBool('erro cita o argumento', True, Pos('x-overflow', LErro) > 0);
+    CheckBool('politica desconhecida recusa', False,
+      AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('erro cita o argumento', True, Pos('x-overflow', LError) > 0);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.DeadLetter_VazioEPresente;
+procedure TQueuePolicyTests.DeadLetter_EmptyAndPresent;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   // x-dead-letter-exchange='' is the DEFAULT exchange, not "no DLX" -- hence
   // the Has* pair, and not an empty string as a sentinel.
   LTab := TabStr('x-dead-letter-exchange', '');
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaBool('presente', True, LPol.HasDeadLetterExchange);
-    ChecaStr('valor vazio', '', LPol.DeadLetterExchange);
-    ChecaBool('HasAny True', True, LPol.HasAny);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckBool('presente', True, LPolicy.HasDeadLetterExchange);
+    CheckStr('valor vazio', '', LPolicy.DeadLetterExchange);
+    CheckBool('HasAny True', True, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
 
   LTab := TabStr('x-dead-letter-routing-key', 'falhou');
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaBool('dlrk presente', True, LPol.HasDeadLetterRoutingKey);
-    ChecaStr('dlrk valor', 'falhou', LPol.DeadLetterRoutingKey);
-    ChecaBool('dlx continua ausente', False, LPol.HasDeadLetterExchange);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckBool('dlrk presente', True, LPolicy.HasDeadLetterRoutingKey);
+    CheckStr('dlrk valor', 'falhou', LPolicy.DeadLetterRoutingKey);
+    CheckBool('dlx continua ausente', False, LPolicy.HasDeadLetterExchange);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.ArgumentoDesconhecido_Ignorado;
+procedure TQueuePolicyTests.UnknownArgument_Ignored;
 var
   LTab: TAMQPFieldTable;
-  LPol: TAMQPQueuePolicy;
-  LErro: string;
+  LPolicy: TAMQPQueuePolicy;
+  LError: string;
 begin
   // Rejecting an unknown 'x-' would break a client that sends an argument for an
   // extension this broker does not have. Same behaviour as RabbitMQ.
   LTab := TabInt('x-invencao-do-cliente', 7);
   try
-    ChecaOk(AmqpParseQueuePolicy(LTab, LPol, LErro), LErro);
-    ChecaBool('nao vira politica', False, LPol.HasAny);
+    CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
+    CheckBool('nao vira politica', False, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.AlternateExchange_LeEValida;
+procedure TQueuePolicyTests.AlternateExchange_ReadsAndValidates;
 var
   LTab: TAMQPFieldTable;
-  LNome, LErro: string;
-  LTem: Boolean;
+  LName, LError: string;
+  LPresent: Boolean;
 begin
-  ChecaOk(AmqpParseAlternateExchange(nil, LNome, LTem, LErro), LErro);
-  ChecaBool('ausente', False, LTem);
+  CheckOk(AmqpParseAlternateExchange(nil, LName, LPresent, LError), LError);
+  CheckBool('ausente', False, LPresent);
 
   LTab := TabStr('alternate-exchange', 'ae');
   try
-    ChecaOk(AmqpParseAlternateExchange(LTab, LNome, LTem, LErro), LErro);
-    ChecaBool('presente', True, LTem);
-    ChecaStr('nome', 'ae', LNome);
+    CheckOk(AmqpParseAlternateExchange(LTab, LName, LPresent, LError), LError);
+    CheckBool('presente', True, LPresent);
+    CheckStr('nome', 'ae', LName);
   finally
     LTab.Free;
   end;
 
   LTab := TabInt('alternate-exchange', 42); // number where a string is expected
   try
-    ChecaBool('tipo errado recusa', False,
-      AmqpParseAlternateExchange(LTab, LNome, LTem, LErro));
-    ChecaBool('erro cita o argumento', True,
-      Pos('alternate-exchange', LErro) > 0);
+    CheckBool('tipo errado recusa', False,
+      AmqpParseAlternateExchange(LTab, LName, LPresent, LError));
+    CheckBool('erro cita o argumento', True,
+      Pos('alternate-exchange', LError) > 0);
   finally
     LTab.Free;
   end;
 end;
 
-procedure TQueuePolicyTests.QueueDef_DerivaPolitica;
+procedure TQueuePolicyTests.QueueDef_DerivesPolicy;
 var
   LTab: TAMQPFieldTable;
   LDef: TAMQPQueueDef;
@@ -850,15 +850,15 @@ begin
 
   LDef := TAMQPQueueDef.Create('q', True, False, False, LTab);
   try
-    ChecaInt('ttl derivado', 30000, LDef.Policy.MessageTtlMs);
-    ChecaBool('dlx derivado', True, LDef.Policy.HasDeadLetterExchange);
-    ChecaStr('dlx nome', 'dlx', LDef.Policy.DeadLetterExchange);
+    CheckInt('ttl derivado', 30000, LDef.Policy.MessageTtlMs);
+    CheckBool('dlx derivado', True, LDef.Policy.HasDeadLetterExchange);
+    CheckStr('dlx nome', 'dlx', LDef.Policy.DeadLetterExchange);
   finally
     LDef.Free; // owner of the table
   end;
 end;
 
-procedure TQueuePolicyTests.ExchangeDef_DerivaAlternate;
+procedure TQueuePolicyTests.ExchangeDef_DerivesAlternate;
 var
   LTab: TAMQPFieldTable;
   LDef: TAMQPExchangeDef;
@@ -870,8 +870,8 @@ begin
 
   LDef := TAMQPExchangeDef.Create('x', 'direct', True, False, False, LTab);
   try
-    ChecaBool('tem AE', True, LDef.HasAlternateExchange);
-    ChecaStr('nome do AE', 'ae', LDef.AlternateExchange);
+    CheckBool('tem AE', True, LDef.HasAlternateExchange);
+    CheckStr('nome do AE', 'ae', LDef.AlternateExchange);
   finally
     LDef.Free;
   end;
@@ -881,7 +881,7 @@ end;
 
 // Hex of a TBytes: compares whole buffers in a single assertion, with both
 // sides visible in the failure message.
-function HexDe(const ABytes: TBytes): string;
+function HexOf(const ABytes: TBytes): string;
 var
   I: Integer;
 begin
@@ -894,7 +894,7 @@ end;
 // cover all of them, not a sample: DecodeContentHeader drops the property-flags
 // continuation words, and only by exercising the whole set can we
 // claim the rewrite is faithful to what the class defines.
-function PropsCompletas: TAMQPBasicProperties;
+function FullProps: TAMQPBasicProperties;
 var
   LTab: TAMQPFieldTable;
   LVal: TValue;
@@ -925,13 +925,13 @@ end;
 // bytes. It is what guarantees dead-lettering only changes what actually changed,
 // and what backs decision D10 (D1 still holds because the rewrite
 // derives, it does not clone on the hot path).
-procedure THeaderRewriteTests.RoundTripSemMexer_BytesIdenticos;
+procedure THeaderRewriteTests.UntouchedRoundTrip_IdenticalBytes;
 var
   LProps: TAMQPBasicProperties;
   LEd: TAMQPHeaderEditor;
   B1, B2: TBytes;
 begin
-  LProps := PropsCompletas;
+  LProps := FullProps;
   try
     B1 := BuildContentHeader(4321, LProps);
   finally
@@ -940,18 +940,18 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B1);
   try
-    ChecaInt('body-size lido do payload', 4321, Int64(LEd.BodySizeOriginal));
+    CheckInt('body-size lido do payload', 4321, Int64(LEd.BodySizeOriginal));
     B2 := LEd.BuildPayload(LEd.BodySizeOriginal);
   finally
     LEd.Free;
   end;
 
-  ChecaStr('bytes identicos apos ida e volta', HexDe(B1), HexDe(B2));
+  CheckStr('bytes identicos apos ida e volta', HexOf(B1), HexOf(B2));
 end;
 
 // Complements the bytes test: if it ever fails, this one says WHICH
 // property got lost, instead of showing two hexdumps.
-procedure THeaderRewriteTests.TodasAsCatorzePropriedades_Preservadas;
+procedure THeaderRewriteTests.AllFourteenProperties_Preserved;
 var
   LProps: TAMQPBasicProperties;
   LEd: TAMQPHeaderEditor;
@@ -959,7 +959,7 @@ var
   B: TBytes;
   LVal: TValue;
 begin
-  LProps := PropsCompletas;
+  LProps := FullProps;
   try
     B := BuildContentHeader(10, LProps);
   finally
@@ -982,24 +982,24 @@ begin
   LEd := TAMQPHeaderEditor.Create(B);
   try
     LP := LEd.Properties;
-    ChecaStr('content-type', 'application/json', LP.ContentType);
-    ChecaStr('content-encoding', 'gzip', LP.ContentEncoding);
-    ChecaBool('headers presente', True, LP.Has(bpHeaders));
-    ChecaBool('headers tem regiao', True,
+    CheckStr('content-type', 'application/json', LP.ContentType);
+    CheckStr('content-encoding', 'gzip', LP.ContentEncoding);
+    CheckBool('headers presente', True, LP.Has(bpHeaders));
+    CheckBool('headers tem regiao', True,
       LEd.Headers.TryGetValue('regiao', LVal));
-    ChecaStr('headers.regiao', 'sul', LVal.AsString);
-    ChecaInt('delivery-mode', 2, LP.DeliveryMode);
-    ChecaInt('priority', 5, LP.Priority);
-    ChecaStr('correlation-id', 'corr-123', LP.CorrelationId);
-    ChecaStr('reply-to', 'fila.resposta', LP.ReplyTo);
-    ChecaStr('expiration', '60000', LP.Expiration);
-    ChecaStr('message-id', 'msg-1', LP.MessageId);
-    ChecaInt('timestamp', 1756900000, Int64(LP.Timestamp));
-    ChecaStr('type', 'nota.emitida', LP.MsgType);
-    ChecaStr('user-id', 'guest', LP.UserId);
-    ChecaStr('app-id', 'retaguarda', LP.AppId);
-    ChecaStr('cluster-id', 'cluster-a', LP.ClusterId);
-    ChecaInt('body-size', 10, Int64(LEd.BodySizeOriginal));
+    CheckStr('headers.regiao', 'sul', LVal.AsString);
+    CheckInt('delivery-mode', 2, LP.DeliveryMode);
+    CheckInt('priority', 5, LP.Priority);
+    CheckStr('correlation-id', 'corr-123', LP.CorrelationId);
+    CheckStr('reply-to', 'fila.resposta', LP.ReplyTo);
+    CheckStr('expiration', '60000', LP.Expiration);
+    CheckStr('message-id', 'msg-1', LP.MessageId);
+    CheckInt('timestamp', 1756900000, Int64(LP.Timestamp));
+    CheckStr('type', 'nota.emitida', LP.MsgType);
+    CheckStr('user-id', 'guest', LP.UserId);
+    CheckStr('app-id', 'retaguarda', LP.AppId);
+    CheckStr('cluster-id', 'cluster-a', LP.ClusterId);
+    CheckInt('body-size', 10, Int64(LEd.BodySizeOriginal));
   finally
     LEd.Free;
   end;
@@ -1007,14 +1007,14 @@ end;
 
 // Adding a header must not damage the rest -- it is exactly what
 // dead-lettering does with x-death.
-procedure THeaderRewriteTests.AcrescentaHeader_RestoIntacto;
+procedure THeaderRewriteTests.AddsHeader_RestIntact;
 var
   LProps: TAMQPBasicProperties;
   LEd: TAMQPHeaderEditor;
   B, B2: TBytes;
   LVal: TValue;
 begin
-  LProps := PropsCompletas;
+  LProps := FullProps;
   try
     B := BuildContentHeader(10, LProps);
   finally
@@ -1030,18 +1030,18 @@ begin
     LEd.Free;
   end;
 
-  ChecaBool('o header mudou', True, HexDe(B) <> HexDe(B2));
+  CheckBool('o header mudou', True, HexOf(B) <> HexOf(B2));
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    ChecaBool('chave nova presente', True,
+    CheckBool('chave nova presente', True,
       LEd.Headers.TryGetValue('x-motivo', LVal));
-    ChecaStr('valor da chave nova', 'expired', LVal.AsString);
-    ChecaBool('chave antiga sobreviveu', True,
+    CheckStr('valor da chave nova', 'expired', LVal.AsString);
+    CheckBool('chave antiga sobreviveu', True,
       LEd.Headers.TryGetValue('regiao', LVal));
-    ChecaStr('valor antigo', 'sul', LVal.AsString);
-    ChecaStr('correlation-id intacto', 'corr-123', LEd.Properties.CorrelationId);
-    ChecaInt('priority intacta', 5, LEd.Properties.Priority);
+    CheckStr('valor antigo', 'sul', LVal.AsString);
+    CheckStr('correlation-id intacto', 'corr-123', LEd.Properties.CorrelationId);
+    CheckInt('priority intacta', 5, LEd.Properties.Priority);
   finally
     LEd.Free;
   end;
@@ -1049,7 +1049,7 @@ end;
 
 // Message published without headers: the editor creates the table on demand, otherwise
 // there would be no way to add x-death to it.
-procedure THeaderRewriteTests.SemHeaders_GanhaTabelaSobDemanda;
+procedure THeaderRewriteTests.NoHeaders_GetsATableOnDemand;
 var
   LProps: TAMQPBasicProperties;
   LEd: TAMQPHeaderEditor;
@@ -1062,7 +1062,7 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B);
   try
-    ChecaBool('original nao tinha headers', False, LEd.HadHeaders);
+    CheckBool('original nao tinha headers', False, LEd.HadHeaders);
     LVal := TValue.From<Int64>(1);
     LEd.Headers.Put('x-death-count', LVal);
     B2 := LEd.BuildPayload(3);
@@ -1072,11 +1072,11 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    ChecaBool('agora tem headers', True, LEd.HadHeaders);
-    ChecaBool('chave presente', True,
+    CheckBool('agora tem headers', True, LEd.HadHeaders);
+    CheckBool('chave presente', True,
       LEd.Headers.TryGetValue('x-death-count', LVal));
-    ChecaInt('valor', 1, LVal.AsInt64);
-    ChecaStr('content-type intacto', 'text/plain', LEd.Properties.ContentType);
+    CheckInt('valor', 1, LVal.AsInt64);
+    CheckStr('content-type intacto', 'text/plain', LEd.Properties.ContentType);
   finally
     LEd.Free;
   end;
@@ -1085,13 +1085,13 @@ end;
 // The exact shape of x-death (array of tables) going through the rewrite. This
 // test crosses WS1 (writing an array in the field-table) with WS3: without the former,
 // BuildPayload here would raise EAMQPWire.
-procedure THeaderRewriteTests.ArrayDeTabelas_AtravessaAReescrita;
+procedure THeaderRewriteTests.ArrayOfTables_SurvivesTheRewrite;
 var
   LEd: TAMQPHeaderEditor;
   LProps: TAMQPBasicProperties;
-  LEntrada: TAMQPFieldTable;
+  LEntry: TAMQPFieldTable;
   LArr: TAMQPValueArray;
-  LVal, LElem, LCampo: TValue;
+  LVal, LElem, LField: TValue;
   B, B2: TBytes;
 begin
   LProps := TAMQPBasicProperties.Empty;
@@ -1100,12 +1100,12 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B);
   try
-    LEntrada := TAMQPFieldTable.Create;
-    LEntrada.Put('queue', 'fila-origem');
-    LEntrada.Put('reason', 'expired');
-    LEntrada.Put('count', Int64(1));
+    LEntry := TAMQPFieldTable.Create;
+    LEntry.Put('queue', 'fila-origem');
+    LEntry.Put('reason', 'expired');
+    LEntry.Put('count', Int64(1));
     SetLength(LArr, 1);
-    LArr[0] := TValue.From<TObject>(LEntrada);
+    LArr[0] := TValue.From<TObject>(LEntry);
     LVal := TValue.From<TAMQPValueArray>(LArr);
     LEd.Headers.Put('x-death', LVal);
     B2 := LEd.BuildPayload(0);
@@ -1115,16 +1115,16 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    ChecaBool('x-death presente', True,
+    CheckBool('x-death presente', True,
       LEd.Headers.TryGetValue('x-death', LVal));
     LVal := AmqpUnwrapValue(LVal);
-    ChecaBool('e array', True, LVal.IsArray);
-    ChecaInt('uma entrada', 1, LVal.GetArrayLength);
+    CheckBool('e array', True, LVal.IsArray);
+    CheckInt('uma entrada', 1, LVal.GetArrayLength);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
-    ChecaBool('entrada e tabela', True,
+    CheckBool('entrada e tabela', True,
       LElem.IsObject and (LElem.AsObject is TAMQPFieldTable));
-    TAMQPFieldTable(LElem.AsObject).TryGetValue('reason', LCampo);
-    ChecaStr('reason', 'expired', LCampo.AsString);
+    TAMQPFieldTable(LElem.AsObject).TryGetValue('reason', LField);
+    CheckStr('reason', 'expired', LField.AsString);
   finally
     LEd.Free;
   end;
@@ -1132,27 +1132,27 @@ end;
 
 // D10: the body is SHARED, never copied. It is what makes the rewrite
 // cheap even with a large payload.
-procedure THeaderRewriteTests.Derive_CompartilhaOCorpoSemCopiar;
+procedure THeaderRewriteTests.Derive_SharesTheBodyWithoutCopying;
 var
-  LOrig, LNova: TAMQPMessage;
-  LCorpo, LHdr: TBytes;
+  LOrig, LNew: TAMQPMessage;
+  LMsgBody, LHdr: TBytes;
   LProps: TAMQPBasicProperties;
 begin
-  SetLength(LCorpo, 64);
-  LCorpo[0] := 42;
+  SetLength(LMsgBody, 64);
+  LMsgBody[0] := 42;
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
   LHdr := BuildContentHeader(64, LProps);
 
-  LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LCorpo);
+  LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LMsgBody);
   try
-    LNova := AmqpDeriveMessage(LOrig, LHdr, 'dlx', 'morta');
+    LNew := AmqpDeriveMessage(LOrig, LHdr, 'dlx', 'morta');
     try
-      ChecaBool('mesmo buffer de corpo, sem copia', True,
-        Pointer(LNova.Body) = Pointer(LOrig.Body));
-      ChecaInt('tamanho do corpo', 64, Length(LNova.Body));
+      CheckBool('mesmo buffer de corpo, sem copia', True,
+        Pointer(LNew.Body) = Pointer(LOrig.Body));
+      CheckInt('tamanho do corpo', 64, Length(LNew.Body));
     finally
-      LNova.Release;
+      LNew.Release;
     end;
   finally
     LOrig.Release;
@@ -1161,19 +1161,19 @@ end;
 
 // The source must not be touched: other queues may be holding the SAME
 // TAMQPMessage, and only one of them is dead-lettering.
-procedure THeaderRewriteTests.Derive_NaoTocaNaOrigem;
+procedure THeaderRewriteTests.Derive_DoesNotTouchTheSource;
 var
-  LOrig, LNova: TAMQPMessage;
-  LCorpo, LHdr, LHdr2: TBytes;
+  LOrig, LNew: TAMQPMessage;
+  LMsgBody, LHdr, LHdr2: TBytes;
   LProps: TAMQPBasicProperties;
   LEd: TAMQPHeaderEditor;
   LVal: TValue;
 begin
-  SetLength(LCorpo, 4);
+  SetLength(LMsgBody, 4);
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
   LHdr := BuildContentHeader(4, LProps);
-  LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LCorpo);
+  LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LMsgBody);
   try
     LEd := TAMQPHeaderEditor.Create(LOrig.HeaderPayload);
     try
@@ -1184,18 +1184,18 @@ begin
       LEd.Free;
     end;
 
-    LNova := AmqpDeriveMessage(LOrig, LHdr2, 'dlx', 'morta');
+    LNew := AmqpDeriveMessage(LOrig, LHdr2, 'dlx', 'morta');
     try
-      ChecaStr('header da origem intacto', HexDe(LHdr),
-        HexDe(LOrig.HeaderPayload));
-      ChecaBool('header da nova e diferente', True,
-        HexDe(LNova.HeaderPayload) <> HexDe(LOrig.HeaderPayload));
-      ChecaInt('refcount da origem inalterado', 1, LOrig.RefCount);
-      ChecaStr('exchange novo', 'dlx', LNova.Exchange);
-      ChecaStr('routing key nova', 'morta', LNova.RoutingKey);
-      ChecaStr('user-id herdado da origem', 'guest', LNova.UserId);
+      CheckStr('header da origem intacto', HexOf(LHdr),
+        HexOf(LOrig.HeaderPayload));
+      CheckBool('header da nova e diferente', True,
+        HexOf(LNew.HeaderPayload) <> HexOf(LOrig.HeaderPayload));
+      CheckInt('refcount da origem inalterado', 1, LOrig.RefCount);
+      CheckStr('exchange novo', 'dlx', LNew.Exchange);
+      CheckStr('routing key nova', 'morta', LNew.RoutingKey);
+      CheckStr('user-id herdado da origem', 'guest', LNew.UserId);
     finally
-      LNova.Release;
+      LNew.Release;
     end;
   finally
     LOrig.Release;
@@ -1204,42 +1204,42 @@ end;
 
 // A mismatched body-size would make the consumer wait for body frames that never
 // arrive -- that is why AmqpDeriveMessage fills it from the real body.
-procedure THeaderRewriteTests.Derive_BodySizeBateComOCorpo;
+procedure THeaderRewriteTests.Derive_BodySizeMatchesTheBody;
 var
-  LOrig, LNova: TAMQPMessage;
-  LCorpo, LHdr: TBytes;
+  LOrig, LNew: TAMQPMessage;
+  LMsgBody, LHdr: TBytes;
   LProps: TAMQPBasicProperties;
   LEd: TAMQPHeaderEditor;
 begin
-  SetLength(LCorpo, 300);
+  SetLength(LMsgBody, 300);
   LProps := TAMQPBasicProperties.Empty;
   LHdr := BuildContentHeader(300, LProps);
-  LOrig := TAMQPMessage.Create('ex', 'rk', '', LHdr, LCorpo);
+  LOrig := TAMQPMessage.Create('ex', 'rk', '', LHdr, LMsgBody);
   try
     LEd := TAMQPHeaderEditor.Create(LOrig.HeaderPayload);
     try
-      LNova := AmqpDeriveMessage(LOrig, LEd.BuildPayload(LOrig.BodySize),
+      LNew := AmqpDeriveMessage(LOrig, LEd.BuildPayload(LOrig.BodySize),
         'dlx', 'morta');
     finally
       LEd.Free;
     end;
     try
-      LEd := TAMQPHeaderEditor.Create(LNova.HeaderPayload);
+      LEd := TAMQPHeaderEditor.Create(LNew.HeaderPayload);
       try
-        ChecaInt('body-size do header bate com o corpo',
-          Int64(Length(LNova.Body)), Int64(LEd.BodySizeOriginal));
+        CheckInt('body-size do header bate com o corpo',
+          Int64(Length(LNew.Body)), Int64(LEd.BodySizeOriginal));
       finally
         LEd.Free;
       end;
     finally
-      LNova.Release;
+      LNew.Release;
     end;
   finally
     LOrig.Release;
   end;
 end;
 
-procedure THeaderRewriteTests.PayloadMalformado_Levanta;
+procedure THeaderRewriteTests.MalformedPayload_Raises;
 var
   B: TBytes;
   LOk: Boolean;
@@ -1252,7 +1252,7 @@ begin
     on E: Exception do
       LOk := True;
   end;
-  ChecaBool('payload truncado tem de levantar', True, LOk);
+  CheckBool('payload truncado tem de levantar', True, LOk);
 end;
 
 initialization

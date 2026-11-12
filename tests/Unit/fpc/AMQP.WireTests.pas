@@ -23,44 +23,44 @@ type
     procedure SetUp; override;
     procedure TearDown; override;
   published
-    procedure Octet_EscreveUmByte;
+    procedure Octet_WritesOneByte;
     procedure ShortUInt_BigEndian;
     procedure LongUInt_BigEndian;
     procedure LongLongUInt_BigEndian;
-    procedure ShortStr_PrefixaComprimentoEmUmOcteto;
-    procedure ShortStr_UsaUTF8;
-    procedure ShortStr_AcimaDe255_Levanta;
-    procedure LongStr_PrefixaComprimentoEmU32;
-    procedure Bits_EmpacotaLSBPrimeiro;
-    procedure Bits_NonoBitVaiParaSegundoOcteto;
-    procedure Bit_SeguidoDeOcteto_DescarregaByteParcial;
+    procedure ShortStr_PrefixesLengthInOneOctet;
+    procedure ShortStr_UsesUTF8;
+    procedure ShortStr_Above255_Raises;
+    procedure LongStr_PrefixesLengthAsU32;
+    procedure Bits_PacksLSBFirst;
+    procedure Bits_NinthBitGoesToSecondOctet;
+    procedure Bit_FollowedByOctet_FlushesPartialByte;
   end;
 
   TAMQPRoundTripTests = class(TTestCase)
   published
     procedure Octet;
-    procedure ShortUInt_Limites;
-    procedure LongUInt_Limites;
-    procedure LongLongUInt_Limites;
-    procedure ShortStr_ComAcentos;
-    procedure LongStr_Vazia;
+    procedure ShortUInt_Limits;
+    procedure LongUInt_Limits;
+    procedure LongLongUInt_Limits;
+    procedure ShortStr_WithAccents;
+    procedure LongStr_Empty;
     procedure Timestamp;
-    procedure Bits_Sequencia;
+    procedure Bits_Sequence;
   end;
 
   TAMQPFieldTableTests = class(TTestCase)
   published
-    procedure RoundTrip_TiposBasicos;
-    procedure RoundTrip_TabelaAninhada;
-    procedure TabelaVazia_TemComprimentoZero;
+    procedure RoundTrip_BasicTypes;
+    procedure RoundTrip_NestedTable;
+    procedure EmptyTable_HasZeroLength;
     procedure Decode_Boolean;
     procedure Decode_LongStr;
-    procedure Decode_ArrayDeTabelas_EstiloXDeath;
-    procedure Encode_ArrayDeTabelas_EstiloXDeath;
-    procedure RoundTrip_ArrayDeEscalares;
-    procedure Encode_ArrayVazio;
-    procedure Encode_TBytes_SaiComoTagX_NaoComoArray;
-    procedure PropriedadesDeCliente_Tipicas;
+    procedure Decode_ArrayOfTables_XDeathStyle;
+    procedure Encode_ArrayOfTables_XDeathStyle;
+    procedure RoundTrip_ArrayOfScalars;
+    procedure Encode_EmptyArray;
+    procedure Encode_TBytes_GoesOutAsTagX_NotAsArray;
+    procedure ClientProperties_Typical;
   end;
 
 implementation
@@ -101,7 +101,7 @@ begin
   FWriter.WriteShortStr(StringOfChar('x', 256));
 end;
 
-procedure TAMQPWriterTests.Octet_EscreveUmByte;
+procedure TAMQPWriterTests.Octet_WritesOneByte;
 var
   B: TBytes;
 begin
@@ -146,7 +146,7 @@ begin
   EqualByte($08, B[7]);
 end;
 
-procedure TAMQPWriterTests.ShortStr_PrefixaComprimentoEmUmOcteto;
+procedure TAMQPWriterTests.ShortStr_PrefixesLengthInOneOctet;
 var
   B: TBytes;
 begin
@@ -158,7 +158,7 @@ begin
   EqualByte(Ord('i'), B[2]);
 end;
 
-procedure TAMQPWriterTests.ShortStr_UsaUTF8;
+procedure TAMQPWriterTests.ShortStr_UsesUTF8;
 var
   B: TBytes;
 begin
@@ -171,12 +171,12 @@ begin
   EqualByte($A1, B[2]);
 end;
 
-procedure TAMQPWriterTests.ShortStr_AcimaDe255_Levanta;
+procedure TAMQPWriterTests.ShortStr_Above255_Raises;
 begin
-  ChecaLevanta(EAMQPWire, DoWriteShortStrTooLong);
+  CheckRaises(EAMQPWire, DoWriteShortStrTooLong);
 end;
 
-procedure TAMQPWriterTests.LongStr_PrefixaComprimentoEmU32;
+procedure TAMQPWriterTests.LongStr_PrefixesLengthAsU32;
 var
   B: TBytes;
 begin
@@ -190,7 +190,7 @@ begin
   EqualByte(Ord('A'), B[4]);
 end;
 
-procedure TAMQPWriterTests.Bits_EmpacotaLSBPrimeiro;
+procedure TAMQPWriterTests.Bits_PacksLSBFirst;
 var
   B: TBytes;
 begin
@@ -203,7 +203,7 @@ begin
   EqualByte($05, B[0]);
 end;
 
-procedure TAMQPWriterTests.Bits_NonoBitVaiParaSegundoOcteto;
+procedure TAMQPWriterTests.Bits_NinthBitGoesToSecondOctet;
 var
   B: TBytes;
   I: Integer;
@@ -218,7 +218,7 @@ begin
   EqualByte($01, B[1]);
 end;
 
-procedure TAMQPWriterTests.Bit_SeguidoDeOcteto_DescarregaByteParcial;
+procedure TAMQPWriterTests.Bit_FollowedByOctet_FlushesPartialByte;
 var
   B: TBytes;
 begin
@@ -252,7 +252,7 @@ begin
   end;
 end;
 
-procedure TAMQPRoundTripTests.ShortUInt_Limites;
+procedure TAMQPRoundTripTests.ShortUInt_Limits;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -273,7 +273,7 @@ begin
   end;
 end;
 
-procedure TAMQPRoundTripTests.LongUInt_Limites;
+procedure TAMQPRoundTripTests.LongUInt_Limits;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -294,7 +294,7 @@ begin
   end;
 end;
 
-procedure TAMQPRoundTripTests.LongLongUInt_Limites;
+procedure TAMQPRoundTripTests.LongLongUInt_Limits;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -315,7 +315,7 @@ begin
   end;
 end;
 
-procedure TAMQPRoundTripTests.ShortStr_ComAcentos;
+procedure TAMQPRoundTripTests.ShortStr_WithAccents;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -334,7 +334,7 @@ begin
   end;
 end;
 
-procedure TAMQPRoundTripTests.LongStr_Vazia;
+procedure TAMQPRoundTripTests.LongStr_Empty;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -374,7 +374,7 @@ begin
   end;
 end;
 
-procedure TAMQPRoundTripTests.Bits_Sequencia;
+procedure TAMQPRoundTripTests.Bits_Sequence;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -401,14 +401,14 @@ end;
 
 { TAMQPFieldTableTests }
 
-procedure TAMQPFieldTableTests.RoundTrip_TiposBasicos;
+procedure TAMQPFieldTableTests.RoundTrip_BasicTypes;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
   LIn, LOut: TAMQPFieldTable;
-  LTextoVal, LPrecoVal: TValue;
-  LTexto: string;
-  LPreco: Double;
+  LTextVal, LPriceVal: TValue;
+  LText: string;
+  LPrice: Double;
 begin
   LIn := TAMQPFieldTable.Create;
   W := TAMQPWriter.Create;
@@ -434,12 +434,12 @@ begin
         // .AsString/.AsExtended chained directly on the indexer (Tabela['x'].AsY)
         // trigger an FPC 3.2.2 internal error (see note above) — that is why the
         // indexer's value goes into a local TValue before the accessor.
-        LTextoVal := LOut['texto'];
-        LTexto := LTextoVal.AsString;
-        TAssert.AssertEquals('texto', 'olá', LTexto);
-        LPrecoVal := LOut['preco'];
-        LPreco := LPrecoVal.AsExtended;
-        TAssert.AssertEquals('preco', Double(19.9), LPreco, 0.0001);
+        LTextVal := LOut['texto'];
+        LText := LTextVal.AsString;
+        TAssert.AssertEquals('texto', 'olá', LText);
+        LPriceVal := LOut['preco'];
+        LPrice := LPriceVal.AsExtended;
+        TAssert.AssertEquals('preco', Double(19.9), LPrice, 0.0001);
       finally
         LOut.Free;
       end;
@@ -452,7 +452,7 @@ begin
   end;
 end;
 
-procedure TAMQPFieldTableTests.RoundTrip_TabelaAninhada;
+procedure TAMQPFieldTableTests.RoundTrip_NestedTable;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -489,7 +489,7 @@ begin
   end;
 end;
 
-procedure TAMQPFieldTableTests.TabelaVazia_TemComprimentoZero;
+procedure TAMQPFieldTableTests.EmptyTable_HasZeroLength;
 var
   W: TAMQPWriter;
   LIn: TAMQPFieldTable;
@@ -561,14 +561,14 @@ end;
 // format the broker sends in dead-lettered messages. The writer does not emit
 // 'A' arrays (they are decode-only in this lib), so the array wrapper is written
 // raw: 'A' + u32(size) + elements ('F' + table).
-procedure TAMQPFieldTableTests.Decode_ArrayDeTabelas_EstiloXDeath;
+procedure TAMQPFieldTableTests.Decode_ArrayOfTables_XDeathStyle;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
   LInner, LOut, LTab: TAMQPFieldTable;
   LInnerBytes, LArrPayload, LBody, LOuterBytes: TBytes;
-  LVal, LEntrada, LCampo: TValue;
-  LTexto: string;
+  LVal, LEntry, LField: TValue;
+  LText: string;
 begin
   LInner := TAMQPFieldTable.Create;
   W := TAMQPWriter.Create;
@@ -622,18 +622,18 @@ begin
       // AmqpUnwrapValue is mandatory: GetArrayElement returns the element
       // re-wrapped in a tkRecord TValue — without the unwrap, IsObject would give
       // False. It holds on Delphi too: neither of the two collapses in Make.
-      LEntrada := AmqpUnwrapValue(LVal.GetArrayElement(0));
-      TAssert.AssertTrue('elemento deve ser objeto', LEntrada.IsObject);
-      TAssert.AssertTrue('elemento deve ser tabela', LEntrada.AsObject is TAMQPFieldTable);
-      LTab := TAMQPFieldTable(LEntrada.AsObject);
-      TAssert.AssertTrue('tabela deve ter queue', LTab.TryGetValue('queue', LCampo));
-      LTexto := LCampo.AsString;
-      TAssert.AssertEquals('queue', 'fila-trab', LTexto);
-      TAssert.AssertTrue('tabela deve ter reason', LTab.TryGetValue('reason', LCampo));
-      LTexto := LCampo.AsString;
-      TAssert.AssertEquals('reason', 'rejected', LTexto);
-      TAssert.AssertTrue('tabela deve ter count', LTab.TryGetValue('count', LCampo));
-      TAssert.AssertEquals('count', 2, Integer(LCampo.AsInt64));
+      LEntry := AmqpUnwrapValue(LVal.GetArrayElement(0));
+      TAssert.AssertTrue('elemento deve ser objeto', LEntry.IsObject);
+      TAssert.AssertTrue('elemento deve ser tabela', LEntry.AsObject is TAMQPFieldTable);
+      LTab := TAMQPFieldTable(LEntry.AsObject);
+      TAssert.AssertTrue('tabela deve ter queue', LTab.TryGetValue('queue', LField));
+      LText := LField.AsString;
+      TAssert.AssertEquals('queue', 'fila-trab', LText);
+      TAssert.AssertTrue('tabela deve ter reason', LTab.TryGetValue('reason', LField));
+      LText := LField.AsString;
+      TAssert.AssertEquals('reason', 'rejected', LText);
+      TAssert.AssertTrue('tabela deve ter count', LTab.TryGetValue('count', LField));
+      TAssert.AssertEquals('count', 2, Integer(LField.AsInt64));
     finally
       // Also exercises the destructor: the nested table INSIDE the array must
       // be freed (it leaked on FPC before AmqpUnwrapValue in Destroy).
@@ -650,23 +650,23 @@ end;
 // tables, which is exactly dead-lettering's x-death header -- raised
 // EAMQPWire. It holds for both ends: without this, neither does the broker emit
 // x-death nor can a client application publish an array header.
-procedure TAMQPFieldTableTests.Encode_ArrayDeTabelas_EstiloXDeath;
+procedure TAMQPFieldTableTests.Encode_ArrayOfTables_XDeathStyle;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
-  LEntrada, LOut, LTab: TAMQPFieldTable;
+  LEntry, LOut, LTab: TAMQPFieldTable;
   LArr: TAMQPValueArray;
-  LVal, LElem, LCampo: TValue;
+  LVal, LElem, LField: TValue;
   LBytes: TBytes;
-  LTexto: string;
+  LText: string;
 begin
-  LEntrada := TAMQPFieldTable.Create;
-  LEntrada.Put('queue', 'fila-trab');
-  LEntrada.Put('reason', 'expired');
-  LEntrada.Put('count', Int64(3));
+  LEntry := TAMQPFieldTable.Create;
+  LEntry.Put('queue', 'fila-trab');
+  LEntry.Put('reason', 'expired');
+  LEntry.Put('count', Int64(3));
 
   SetLength(LArr, 1);
-  LArr[0] := TValue.From<TObject>(LEntrada);
+  LArr[0] := TValue.From<TObject>(LEntry);
 
   LOut := TAMQPFieldTable.Create;
   try
@@ -700,14 +700,14 @@ begin
       TAssert.AssertTrue('elemento deve ser objeto', LElem.IsObject);
       TAssert.AssertTrue('elemento deve ser tabela', LElem.AsObject is TAMQPFieldTable);
       LTab := TAMQPFieldTable(LElem.AsObject);
-      TAssert.AssertTrue('deve ter queue', LTab.TryGetValue('queue', LCampo));
-      LTexto := LCampo.AsString;
-      TAssert.AssertEquals('queue', 'fila-trab', LTexto);
-      TAssert.AssertTrue('deve ter reason', LTab.TryGetValue('reason', LCampo));
-      LTexto := LCampo.AsString;
-      TAssert.AssertEquals('reason', 'expired', LTexto);
-      TAssert.AssertTrue('deve ter count', LTab.TryGetValue('count', LCampo));
-      TAssert.AssertEquals('count', 3, Integer(LCampo.AsInt64));
+      TAssert.AssertTrue('deve ter queue', LTab.TryGetValue('queue', LField));
+      LText := LField.AsString;
+      TAssert.AssertEquals('queue', 'fila-trab', LText);
+      TAssert.AssertTrue('deve ter reason', LTab.TryGetValue('reason', LField));
+      LText := LField.AsString;
+      TAssert.AssertEquals('reason', 'expired', LText);
+      TAssert.AssertTrue('deve ter count', LTab.TryGetValue('count', LField));
+      TAssert.AssertEquals('count', 3, Integer(LField.AsInt64));
     finally
       LOut.Free;
     end;
@@ -719,7 +719,7 @@ end;
 // Write -> read -> write must give the SAME bytes. It is the property
 // dead-lettering depends on: rewriting a header may only change what actually
 // changed. Covers three element types in the same array.
-procedure TAMQPFieldTableTests.RoundTrip_ArrayDeEscalares;
+procedure TAMQPFieldTableTests.RoundTrip_ArrayOfScalars;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -727,7 +727,7 @@ var
   LArr: TAMQPValueArray;
   LVal, LElem: TValue;
   B1, B2: TBytes;
-  LTexto: string;
+  LText: string;
 begin
   SetLength(LArr, 3);
   LArr[0] := TValue.From<string>('um');
@@ -760,8 +760,8 @@ begin
     LVal := AmqpUnwrapValue(LVal);
     TAssert.AssertEquals('tres elementos', 3, LVal.GetArrayLength);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
-    LTexto := LElem.AsString;
-    TAssert.AssertEquals('elemento 0', 'um', LTexto);
+    LText := LElem.AsString;
+    TAssert.AssertEquals('elemento 0', 'um', LText);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(1));
     TAssert.AssertEquals('elemento 1', 42, Integer(LElem.AsInt64));
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(2));
@@ -782,7 +782,7 @@ begin
     BytesHex(B1), BytesHex(B2));
 end;
 
-procedure TAMQPFieldTableTests.Encode_ArrayVazio;
+procedure TAMQPFieldTableTests.Encode_EmptyArray;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
@@ -827,13 +827,13 @@ end;
 // Without that distinction in WriteFieldValue, a bytes value read back from the wire
 // would be rewritten as an array of integers -- the type would silently change in the
 // round-trip.
-procedure TAMQPFieldTableTests.Encode_TBytes_SaiComoTagX_NaoComoArray;
+procedure TAMQPFieldTableTests.Encode_TBytes_GoesOutAsTagX_NotAsArray;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
   LT1, LT2: TAMQPFieldTable;
   LVal: TValue;
-  LOrig, LVolta, LBytes: TBytes;
+  LOrig, LRoundTripped, LBytes: TBytes;
   I: Integer;
 begin
   SetLength(LOrig, 4);
@@ -865,11 +865,11 @@ begin
       TAssert.AssertTrue('deve ter blob', LT2.TryGetValue('blob', LVal));
       // AsType<T> does not exist in FPC 3.2 -- extracts element by element, which
       // works on both compilers.
-      SetLength(LVolta, LVal.GetArrayLength);
-      for I := 0 to High(LVolta) do
-        LVolta[I] := Byte(LVal.GetArrayElement(I).AsInteger);
-      TAssert.AssertEquals('quatro bytes de volta', 4, Length(LVolta));
-      TAssert.AssertEquals('conteudo intacto', BytesHex(LOrig), BytesHex(LVolta));
+      SetLength(LRoundTripped, LVal.GetArrayLength);
+      for I := 0 to High(LRoundTripped) do
+        LRoundTripped[I] := Byte(LVal.GetArrayElement(I).AsInteger);
+      TAssert.AssertEquals('quatro bytes de volta', 4, Length(LRoundTripped));
+      TAssert.AssertEquals('conteudo intacto', BytesHex(LOrig), BytesHex(LRoundTripped));
     finally
       LT2.Free;
     end;
@@ -878,12 +878,12 @@ begin
   end;
 end;
 
-procedure TAMQPFieldTableTests.PropriedadesDeCliente_Tipicas;
+procedure TAMQPFieldTableTests.ClientProperties_Typical;
 var
   W: TAMQPWriter;
   R: TAMQPReader;
   LProps, LCaps, LOut, LCapsOut: TAMQPFieldTable;
-  LProdutoVal, LCapsVal, LConfirmsVal: TValue;
+  LProductVal, LCapsVal, LConfirmsVal: TValue;
 begin
   // Builds client-properties as in Start-Ok and checks the round-trip.
   LCaps := TAMQPFieldTable.Create;
@@ -891,7 +891,7 @@ begin
        .Put('consumer_cancel_notify', True);
 
   LProps := TAMQPFieldTable.Create;
-  // Separate calls (see the note in RoundTrip_TiposBasicos about the FPC ICE
+  // Separate calls (see the note in RoundTrip_BasicTypes about the FPC ICE
   // when chaining .Put(...) ending in a generic TValue.From<T>).
   LProps.Put('product', 'pascal-amqp-faa');
   LProps.Put('version', '0.1.0');
@@ -905,8 +905,8 @@ begin
     try
       LOut := R.ReadFieldTable;
       try
-        LProdutoVal := LOut['product'];
-        TAssert.AssertEquals('pascal-amqp-faa', LProdutoVal.AsString);
+        LProductVal := LOut['product'];
+        TAssert.AssertEquals('pascal-amqp-faa', LProductVal.AsString);
         LCapsVal := LOut['capabilities'];
         LCapsOut := TAMQPFieldTable(LCapsVal.AsObject);
         LConfirmsVal := LCapsOut['publisher_confirms'];

@@ -40,113 +40,113 @@ uses
 type
   TQueueActorTests = class(TTestCase)
   published
-    procedure Enqueue_ContaNasStats;
-    procedure Get_OrdemFifo;
-    procedure Get_FilaVazia_DevolveFalse;
-    procedure Get_NoAck_NaoDeixaNaoConfirmada;
-    procedure Get_ComAck_DeixaNaoConfirmadaEAckLimpa;
-    procedure Ack_Multiple_LimpaAteATag;
-    procedure Nack_Requeue_VoltaNaCabecaComRedelivered;
-    procedure Nack_SemRequeue_Descarta;
-    procedure Reject_Requeue_VoltaComRedelivered;
-    procedure RemoveChannel_TiraConsumidoresEDevolveNaoConfirmadas;
-    procedure Consumidores_AddERemove;
-    procedure MaxLength_DescartaDaCabecaEConta;
-    procedure MaxLengthZero_SemLimite;
-    procedure Purge_LimpaProntasENaoAsNaoConfirmadas;
-    procedure Delete_IfUnused_ComConsumidor_Recusa;
-    procedure Delete_IfEmpty_ComMensagem_Recusa;
-    procedure Delete_DevolveContagemEParaAFila;
-    procedure Stop_DescartaPostsNovosSemVazar;
-    procedure Stop_SincronoDepois_Levanta;
-    procedure RefCount_FilaSeguraUmaReferencia;
-    procedure Sincrono_DeDentroDoAtor_Levanta;
-    procedure Estresse_ProdutoresConcorrentesESincronos;
-    procedure Delete_AvisaConsumidoresComCancel;
-    procedure EverHadConsumer_SoViraVerdadeComConsumidor;
-    procedure CaixaSerial_PostNaJanelaDoFimDeRodada_NaoPerdeWakeup;
+    procedure Enqueue_CountsInStats;
+    procedure Get_FifoOrder;
+    procedure Get_EmptyQueue_ReturnsFalse;
+    procedure Get_NoAck_LeavesNoUnacked;
+    procedure Get_WithAck_LeavesUnackedAndAckClears;
+    procedure Ack_Multiple_ClearsUpToTheTag;
+    procedure Nack_Requeue_ReturnsToTheHeadWithRedelivered;
+    procedure Nack_WithoutRequeue_Drops;
+    procedure Reject_Requeue_ReturnsWithRedelivered;
+    procedure RemoveChannel_RemovesConsumersAndReturnsUnacked;
+    procedure Consumers_AddAndRemove;
+    procedure MaxLength_DropsFromTheHeadAndCounts;
+    procedure MaxLengthZero_NoLimit;
+    procedure Purge_ClearsReadyButNotUnacked;
+    procedure Delete_IfUnused_WithConsumer_Refuses;
+    procedure Delete_IfEmpty_WithMessage_Refuses;
+    procedure Delete_ReturnsCountAndStopsTheQueue;
+    procedure Stop_DropsNewPostsWithoutLeaking;
+    procedure Stop_SynchronousAfterwards_Raises;
+    procedure RefCount_QueueHoldsOneReference;
+    procedure Synchronous_FromInsideTheActor_Raises;
+    procedure Stress_ConcurrentAndSynchronousProducers;
+    procedure Delete_NotifiesConsumersWithCancel;
+    procedure EverHadConsumer_OnlyTurnsTrueWithAConsumer;
+    procedure SerialMailbox_PostInEndOfRoundWindow_DoesNotLoseWakeup;
   end;
 
   TQueuePriorityTtlTests = class(TTestCase)
   published
-    procedure Prioridade_MaiorSaiPrimeiro;
-    procedure Prioridade_FifoDentroDoNivel;
-    procedure Prioridade_AcimaDoTetoEhLimitada;
-    procedure Prioridade_RequeueVoltaAoProprioBalde;
-    procedure MaxLength_DescartaDoBaldeMenosPrioritario;
-    procedure Ttl_DaFila_VenceNoPrazo;
-    procedure Ttl_NaoVenceAntesDoPrazo;
-    procedure Ttl_MenorEntreFilaEMensagemVence;
-    procedure Ttl_GetNaoDevolveVencida;
-    procedure Ttl_RequeuePreservaOPrazo;
-    procedure Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo;
-    procedure Prioridade_RequeueAposEntregaAConsumidor_VoltaAoProprioBalde;
+    procedure Priority_HighestComesOutFirst;
+    procedure Priority_FifoWithinLevel;
+    procedure Priority_AboveTheCapIsClamped;
+    procedure Priority_RequeueReturnsToItsOwnBucket;
+    procedure MaxLength_DropsFromTheLowestPriorityBucket;
+    procedure Ttl_QueueLevel_ExpiresOnTime;
+    procedure Ttl_DoesNotExpireBeforeTheDeadline;
+    procedure Ttl_SmallerOfQueueAndMessageWins;
+    procedure Ttl_GetDoesNotReturnExpired;
+    procedure Ttl_RequeuePreservesTheDeadline;
+    procedure Ttl_RequeueAfterDeliveryToConsumer_PreservesTheDeadline;
+    procedure Priority_RequeueAfterDeliveryToConsumer_ReturnsToItsOwnBucket;
   end;
 
   TDeadLetterTests = class(TTestCase)
   published
-    procedure Rejeitada_VaiParaODlx;
-    procedure Ack_NaoVaiParaODlx;
-    procedure NackComRequeue_NaoVaiParaODlx;
-    procedure Expirada_VaiParaODlxComRazaoExpired;
-    procedure EstourouOTeto_VaiParaODlxComRazaoMaxlen;
-    procedure SemRoutingKeyPropria_MantemAOriginal;
-    procedure MesmaFilaEMesmaRazao_ColapsaNoCount;
-    procedure ExpirationEhRetiradaEVaiParaOriginalExpiration;
-    procedure PrimeiraMorte_RegistraXFirstDeath;
-    procedure GuardaDeCiclo_ParaDepoisDoTeto;
-    procedure SemDlx_MorteEhDescarte;
+    procedure Rejected_GoesToTheDlx;
+    procedure Ack_DoesNotGoToTheDlx;
+    procedure NackWithRequeue_DoesNotGoToTheDlx;
+    procedure Expired_GoesToTheDlxWithReasonExpired;
+    procedure CapExceeded_GoesToTheDlxWithReasonMaxlen;
+    procedure NoOwnRoutingKey_KeepsTheOriginal;
+    procedure SameQueueAndSameReason_CollapsesIntoCount;
+    procedure ExpirationIsRemovedAndGoesToOriginalExpiration;
+    procedure FirstDeath_RecordsXFirstDeath;
+    procedure CycleGuard_StopsAfterTheCap;
+    procedure NoDlx_DeathIsADrop;
   end;
 
   TOverflowTests = class(TTestCase)
   published
-    procedure DropHead_DescartaAMaisVelha;
-    procedure MaxLengthBytes_ContaOCorpo;
-    procedure MaxLengthBytes_AcumuladorVoltaAoConsumir;
-    procedure RejectPublish_RecusaQuandoCheia;
-    procedure RejectPublish_VoltaAAceitarAoEsvaziar;
-    procedure RejectPublish_VencidaNaoOcupaVaga;
-    procedure TetoGlobalEDaFila_OMenorVence;
-    procedure DropHead_ContinuaIndoParaODlx;
+    procedure DropHead_DropsTheOldest;
+    procedure MaxLengthBytes_CountsTheBody;
+    procedure MaxLengthBytes_AccumulatorGoesBackOnConsume;
+    procedure RejectPublish_RefusesWhenFull;
+    procedure RejectPublish_AcceptsAgainWhenEmptied;
+    procedure RejectPublish_ExpiredTakesNoSlot;
+    procedure GlobalAndQueueCap_TheSmallerWins;
+    procedure DropHead_StillGoesToTheDlx;
   end;
 
   TIdleExpiryTests = class(TTestCase)
   published
-    procedure NasceUsadaAgora;
-    procedure OciosidadeCresceComORelogio;
-    procedure PublicarNaoContaComoUso;
-    procedure GetContaComoUso;
-    procedure ComConsumidor_OciosidadeEhZero;
-    procedure RelogioComecaQuandoOUltimoConsumidorSai;
-    procedure TouchReiniciaORelogio;
-    procedure SemXExpires_NaoEhCandidata;
+    procedure StartsUsedNow;
+    procedure IdlenessGrowsWithTheClock;
+    procedure PublishingDoesNotCountAsUse;
+    procedure GetCountsAsUse;
+    procedure WithConsumer_IdlenessIsZero;
+    procedure ClockStartsWhenTheLastConsumerLeaves;
+    procedure TouchRestartsTheClock;
+    procedure NoXExpires_IsNotACandidate;
   end;
 
 implementation
 
 { --- helpers --- }
 
-function NovaMensagem(const ATexto: string): TAMQPMessage;
+function NewMessage(const AText: string): TAMQPMessage;
 begin
   Result := TAMQPMessage.Create('ex', 'rk', 'guest', nil,
-    AmqpUtf8Encode(ATexto));
+    AmqpUtf8Encode(AText));
 end;
 
-function CorpoDe(AMsg: TAMQPMessage): string;
+function BodyOf(AMsg: TAMQPMessage): string;
 begin
   Result := AmqpUtf8Decode(AMsg.Body);
 end;
 
 // Takes a message in no-ack and returns the body, releasing the reference that
 // Get hands to the caller.
-function GetCorpo(AQueue: TAMQPServerQueue; ATag: UInt64): string;
+function GetBody(AQueue: TAMQPServerQueue; ATag: UInt64): string;
 var
   LMsg: TAMQPMessage;
   LRedelivered: Boolean;
 begin
   if AQueue.Get(1, ATag, True, LMsg, LRedelivered) then
     try
-      Result := CorpoDe(LMsg);
+      Result := BodyOf(LMsg);
     finally
       LMsg.Release;
     end
@@ -157,27 +157,27 @@ end;
 type
   { Spy subclass: tries a SYNCHRONOUS command from inside the actor itself, which
     is exactly what the thread guard has to block. }
-  TQueueEspia = class(TAMQPServerQueue)
+  TQueueSpy = class(TAMQPServerQueue)
   private
-    FTentou: Boolean;
-    FGuardBarrou: Boolean;
+    FTried: Boolean;
+    FGuardBlocked: Boolean;
   protected
     procedure ExecuteCommand(ACmd: TAMQPQueueCommand); override;
   public
-    property Tentou: Boolean read FTentou;
-    property GuardBarrou: Boolean read FGuardBarrou;
+    property Tried: Boolean read FTried;
+    property GuardBlocked: Boolean read FGuardBlocked;
   end;
 
-procedure TQueueEspia.ExecuteCommand(ACmd: TAMQPQueueCommand);
+procedure TQueueSpy.ExecuteCommand(ACmd: TAMQPQueueCommand);
 begin
-  if (ACmd.Kind = amqqcEnqueue) and not FTentou then
+  if (ACmd.Kind = amqqcEnqueue) and not FTried then
   begin
-    FTentou := True;
+    FTried := True;
     try
       Stats; // synchronous posted from INSIDE the actor: the actor would wait for itself
     except
       on E: EAMQPQueueActor do
-        FGuardBarrou := True;
+        FGuardBlocked := True;
     end;
   end;
   inherited ExecuteCommand(ACmd);
@@ -187,72 +187,72 @@ type
   { Producer for the stress test. TParallel.For does not exist in FPC (see
     CLAUDE.md), so the concurrent producers are work items of the lib's own
     pool. }
-  TProdutorWork = class(TPcWorkItem)
+  TProducerWork = class(TPcWorkItem)
   private
     FQueue: TAMQPServerQueue;
-    FQuantas: Integer;
-    FConcluidos: PInteger;
+    FMessageCount: Integer;
+    FCompleted: PInteger;
   public
-    constructor Create(AQueue: TAMQPServerQueue; AQuantas: Integer;
-      AConcluidos: PInteger);
+    constructor Create(AQueue: TAMQPServerQueue; AMessageCount: Integer;
+      ACompleted: PInteger);
     procedure Execute; override;
   end;
 
-constructor TProdutorWork.Create(AQueue: TAMQPServerQueue; AQuantas: Integer;
-  AConcluidos: PInteger);
+constructor TProducerWork.Create(AQueue: TAMQPServerQueue; AMessageCount: Integer;
+  ACompleted: PInteger);
 begin
   inherited Create;
   FQueue := AQueue;
-  FQuantas := AQuantas;
-  FConcluidos := AConcluidos;
+  FMessageCount := AMessageCount;
+  FCompleted := ACompleted;
 end;
 
-procedure TProdutorWork.Execute;
+procedure TProducerWork.Execute;
 var
   I: Integer;
   LMsg: TAMQPMessage;
 begin
-  for I := 1 to FQuantas do
+  for I := 1 to FMessageCount do
   begin
-    LMsg := NovaMensagem('m' + IntToStr(I));
+    LMsg := NewMessage('m' + IntToStr(I));
     try
       FQueue.PostMessage(LMsg); // the queue drops its reference
     finally
       LMsg.Release; // ours
     end;
   end;
-  PcAtomicInc(FConcluidos^);
+  PcAtomicInc(FCompleted^);
 end;
 
 type
   { Injects a SYNCHRONOUS command from another thread. Used by the end-of-round
     window test. }
-  TInjetorWork = class(TPcWorkItem)
+  TInjectorWork = class(TPcWorkItem)
   private
     FQueue: TAMQPServerQueue;
-    FEnfileirou: PInteger;
-    FConcluiu: PInteger;
+    FEnqueued: PInteger;
+    FFinished: PInteger;
     FOk: PInteger;
   public
     constructor Create(AQueue: TAMQPServerQueue;
-      AEnfileirou, AConcluiu, AOk: PInteger);
+      AEnqueued, AFinished, AOk: PInteger);
     procedure Execute; override;
   end;
 
-constructor TInjetorWork.Create(AQueue: TAMQPServerQueue;
-  AEnfileirou, AConcluiu, AOk: PInteger);
+constructor TInjectorWork.Create(AQueue: TAMQPServerQueue;
+  AEnqueued, AFinished, AOk: PInteger);
 begin
   inherited Create;
   FQueue := AQueue;
-  FEnfileirou := AEnfileirou;
-  FConcluiu := AConcluiu;
+  FEnqueued := AEnqueued;
+  FFinished := AFinished;
   FOk := AOk;
 end;
 
-procedure TInjetorWork.Execute;
+procedure TInjectorWork.Execute;
 begin
   // The actor is stopped in the end-of-round window, waiting for this signal.
-  PcAtomicSet(FEnfileirou^, 1);
+  PcAtomicSet(FEnqueued^, 1);
   try
     FQueue.Stats; // if the wakeup gets lost, this only returns on the 15 s timeout
     PcAtomicSet(FOk^, 1);
@@ -260,7 +260,7 @@ begin
     on E: Exception do
       PcAtomicSet(FOk^, 0);
   end;
-  PcAtomicSet(FConcluiu^, 1);
+  PcAtomicSet(FFinished^, 1);
 end;
 
 type
@@ -269,37 +269,37 @@ type
     mailbox the actor sees the new command and reschedules; with the empty-mailbox
     check done outside the lock, the command is orphaned and the injector's
     synchronous call only returns on the timeout. }
-  TQueueCorrida = class(TAMQPServerQueue)
+  TQueueRace = class(TAMQPServerQueue)
   private
-    FInjetado: Integer;
-    FEnfileirou: Integer;
-    FConcluiu: Integer;
+    FInjected: Integer;
+    FEnqueued: Integer;
+    FFinished: Integer;
     FOk: Integer;
   protected
     procedure ActorRoundEnding; override;
   public
-    property Concluiu: Integer read FConcluiu;
+    property Finished: Integer read FFinished;
     property Ok: Integer read FOk;
   end;
 
-procedure TQueueCorrida.ActorRoundEnding;
+procedure TQueueRace.ActorRoundEnding;
 var
   LDeadline: UInt64;
 begin
-  if PcAtomicCompareExchange(FInjetado, 1, 0) <> 0 then
+  if PcAtomicCompareExchange(FInjected, 1, 0) <> 0 then
     Exit; // only on the first round
-  PcPool.Queue(TInjetorWork.Create(Self, @FEnfileirou, @FConcluiu, @FOk));
+  PcPool.Queue(TInjectorWork.Create(Self, @FEnqueued, @FFinished, @FOk));
   // Holds the round until the injector has POSTED -- that is what puts the post
   // inside the window instead of before or after it.
   LDeadline := PcTickMs + 5000;
-  while (PcAtomicGet(FEnfileirou) = 0) and (PcTickMs < LDeadline) do
+  while (PcAtomicGet(FEnqueued) = 0) and (PcTickMs < LDeadline) do
     Sleep(0);
   Sleep(5); // slack for the injector's Post to actually get into the mailbox
 end;
 
 { --- TQueueActorTests --- }
 
-procedure TQueueActorTests.Enqueue_ContaNasStats;
+procedure TQueueActorTests.Enqueue_CountsInStats;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -307,7 +307,7 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
@@ -324,7 +324,7 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Get_OrdemFifo;
+procedure TQueueActorTests.Get_FifoOrder;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -334,23 +334,23 @@ begin
   try
     for I := 1 to 3 do
     begin
-      LMsg := NovaMensagem('m' + IntToStr(I));
+      LMsg := NewMessage('m' + IntToStr(I));
       try
         LQ.PostMessage(LMsg);
       finally
         LMsg.Release;
       end;
     end;
-    TAssert.AssertEquals('primeira', 'm1', GetCorpo(LQ, 1));
-    TAssert.AssertEquals('segunda', 'm2', GetCorpo(LQ, 2));
-    TAssert.AssertEquals('terceira', 'm3', GetCorpo(LQ, 3));
+    TAssert.AssertEquals('primeira', 'm1', GetBody(LQ, 1));
+    TAssert.AssertEquals('segunda', 'm2', GetBody(LQ, 2));
+    TAssert.AssertEquals('terceira', 'm3', GetBody(LQ, 3));
     TAssert.AssertEquals('esvaziou', 0, LQ.Stats.MessageCount);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Get_FilaVazia_DevolveFalse;
+procedure TQueueActorTests.Get_EmptyQueue_ReturnsFalse;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -365,20 +365,20 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Get_NoAck_NaoDeixaNaoConfirmada;
+procedure TQueueActorTests.Get_NoAck_LeavesNoUnacked;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
-    TAssert.AssertEquals('corpo', 'a', GetCorpo(LQ, 7));
+    TAssert.AssertEquals('corpo', 'a', GetBody(LQ, 7));
     TAssert.AssertEquals('no-ack nao gera nao-confirmada', 0, LQ.Stats.UnackedCount);
     TAssert.AssertEquals('saiu do estoque', 0, LQ.Stats.MessageCount);
   finally
@@ -386,22 +386,22 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Get_ComAck_DeixaNaoConfirmadaEAckLimpa;
+procedure TQueueActorTests.Get_WithAck_LeavesUnackedAndAckClears;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
 
-    TAssert.AssertTrue('get', LQ.Get(5, 100, False, LSaida, LRedelivered));
+    TAssert.AssertTrue('get', LQ.Get(5, 100, False, LOutMsg, LRedelivered));
     try
       TAssert.AssertFalse('primeira entrega nao e reentrega', LRedelivered);
       TAssert.AssertEquals('ficou nao-confirmada', 1, LQ.Stats.UnackedCount);
@@ -412,17 +412,17 @@ begin
       LQ.PostAck(5, 100, False);
       TAssert.AssertEquals('ack limpou', 0, LQ.Stats.UnackedCount);
     finally
-      LSaida.Release;
+      LOutMsg.Release;
     end;
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Ack_Multiple_LimpaAteATag;
+procedure TQueueActorTests.Ack_Multiple_ClearsUpToTheTag;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
   I: Integer;
 begin
@@ -430,7 +430,7 @@ begin
   try
     for I := 1 to 3 do
     begin
-      LMsg := NovaMensagem('m' + IntToStr(I));
+      LMsg := NewMessage('m' + IntToStr(I));
       try
         LQ.PostMessage(LMsg);
       finally
@@ -440,8 +440,8 @@ begin
     for I := 1 to 3 do
     begin
       TAssert.AssertTrue('get ' + IntToStr(I),
-        LQ.Get(9, I, False, LSaida, LRedelivered));
-      LSaida.Release;
+        LQ.Get(9, I, False, LOutMsg, LRedelivered));
+      LOutMsg.Release;
     end;
     TAssert.AssertEquals('tres nao-confirmadas', 3, LQ.Stats.UnackedCount);
 
@@ -454,61 +454,61 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Nack_Requeue_VoltaNaCabecaComRedelivered;
+procedure TQueueActorTests.Nack_Requeue_ReturnsToTheHeadWithRedelivered;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('primeira');
+    LMsg := NewMessage('primeira');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
-    LMsg := NovaMensagem('segunda');
+    LMsg := NewMessage('segunda');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
 
-    TAssert.AssertTrue('get', LQ.Get(1, 10, False, LSaida, LRedelivered));
-    TAssert.AssertEquals('tirou a primeira', 'primeira', CorpoDe(LSaida));
-    LSaida.Release;
+    TAssert.AssertTrue('get', LQ.Get(1, 10, False, LOutMsg, LRedelivered));
+    TAssert.AssertEquals('tirou a primeira', 'primeira', BodyOf(LOutMsg));
+    LOutMsg.Release;
 
     LQ.PostNack(1, 10, False, True); // requeue
     TAssert.AssertEquals('voltou para as prontas', 2, LQ.Stats.MessageCount);
     TAssert.AssertEquals('saiu das nao-confirmadas', 0, LQ.Stats.UnackedCount);
 
     // Comes back at the HEAD (before 'segunda') and flagged as a redelivery.
-    TAssert.AssertTrue('get de novo', LQ.Get(1, 11, True, LSaida, LRedelivered));
+    TAssert.AssertTrue('get de novo', LQ.Get(1, 11, True, LOutMsg, LRedelivered));
     try
-      TAssert.AssertEquals('voltou na cabeca', 'primeira', CorpoDe(LSaida));
+      TAssert.AssertEquals('voltou na cabeca', 'primeira', BodyOf(LOutMsg));
       TAssert.AssertTrue('redelivered', LRedelivered);
     finally
-      LSaida.Release;
+      LOutMsg.Release;
     end;
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Nack_SemRequeue_Descarta;
+procedure TQueueActorTests.Nack_WithoutRequeue_Drops;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
-      TAssert.AssertTrue('get', LQ.Get(1, 1, False, LSaida, LRedelivered));
-      LSaida.Release;
+      TAssert.AssertTrue('get', LQ.Get(1, 1, False, LOutMsg, LRedelivered));
+      LOutMsg.Release;
       LQ.PostNack(1, 1, False, False); // without requeue: drops (DLX is Phase 3)
       TAssert.AssertEquals('nao voltou', 0, LQ.Stats.MessageCount);
       TAssert.AssertEquals('saiu das nao-confirmadas', 0, LQ.Stats.UnackedCount);
@@ -522,57 +522,57 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Reject_Requeue_VoltaComRedelivered;
+procedure TQueueActorTests.Reject_Requeue_ReturnsWithRedelivered;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
-    TAssert.AssertTrue('get', LQ.Get(3, 42, False, LSaida, LRedelivered));
-    LSaida.Release;
+    TAssert.AssertTrue('get', LQ.Get(3, 42, False, LOutMsg, LRedelivered));
+    LOutMsg.Release;
 
     LQ.PostReject(3, 42, True);
     TAssert.AssertEquals('voltou', 1, LQ.Stats.MessageCount);
 
-    TAssert.AssertTrue('get de novo', LQ.Get(3, 43, True, LSaida, LRedelivered));
+    TAssert.AssertTrue('get de novo', LQ.Get(3, 43, True, LOutMsg, LRedelivered));
     try
       TAssert.AssertTrue('redelivered', LRedelivered);
     finally
-      LSaida.Release;
+      LOutMsg.Release;
     end;
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.RemoveChannel_TiraConsumidoresEDevolveNaoConfirmadas;
+procedure TQueueActorTests.RemoveChannel_RemovesConsumersAndReturnsUnacked;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
   LStats: TAMQPQueueStats;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-1', False, False, AlvoQueRecusa(77)));
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-2', False, False, AlvoQueRecusa(88)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-1', False, False, RefusingTarget(77)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ctag-2', False, False, RefusingTarget(88)));
 
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
-    TAssert.AssertTrue('get', LQ.Get(77, 1, False, LSaida, LRedelivered));
-    LSaida.Release;
+    TAssert.AssertTrue('get', LQ.Get(77, 1, False, LOutMsg, LRedelivered));
+    LOutMsg.Release;
 
     LQ.PostRemoveChannel(77);
     LStats := LQ.Stats;
@@ -580,25 +580,25 @@ begin
     TAssert.AssertEquals('nao-confirmada do canal morto saiu', 0, LStats.UnackedCount);
     TAssert.AssertEquals('e voltou para as prontas', 1, LStats.MessageCount);
 
-    TAssert.AssertTrue('get de novo', LQ.Get(88, 1, True, LSaida, LRedelivered));
+    TAssert.AssertTrue('get de novo', LQ.Get(88, 1, True, LOutMsg, LRedelivered));
     try
       TAssert.AssertTrue('redelivered depois da queda do canal', LRedelivered);
     finally
-      LSaida.Release;
+      LOutMsg.Release;
     end;
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Consumidores_AddERemove;
+procedure TQueueActorTests.Consumers_AddAndRemove;
 var
   LQ: TAMQPServerQueue;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, AlvoQueRecusa(1)));
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', True, False, AlvoQueRecusa(1)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, RefusingTarget(1)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', True, False, RefusingTarget(1)));
     TAssert.AssertEquals('dois consumidores', 2, LQ.Stats.ConsumerCount);
 
     // Right tag, wrong channel: does not remove.
@@ -612,7 +612,7 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.MaxLength_DescartaDaCabecaEConta;
+procedure TQueueActorTests.MaxLength_DropsFromTheHeadAndCounts;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -623,7 +623,7 @@ begin
   try
     for I := 1 to 5 do
     begin
-      LMsg := NovaMensagem('m' + IntToStr(I));
+      LMsg := NewMessage('m' + IntToStr(I));
       try
         LQ.PostMessage(LMsg);
       finally
@@ -634,15 +634,15 @@ begin
     TAssert.AssertEquals('segurou o teto', 3, LStats.MessageCount);
     TAssert.AssertEquals('contou os descartes', 2, Integer(LStats.DroppedCount));
     // The NEWEST ones are left: dropping is from the head.
-    TAssert.AssertEquals('cabeca depois do descarte', 'm3', GetCorpo(LQ, 1));
-    TAssert.AssertEquals('seguinte', 'm4', GetCorpo(LQ, 2));
-    TAssert.AssertEquals('ultima', 'm5', GetCorpo(LQ, 3));
+    TAssert.AssertEquals('cabeca depois do descarte', 'm3', GetBody(LQ, 1));
+    TAssert.AssertEquals('seguinte', 'm4', GetBody(LQ, 2));
+    TAssert.AssertEquals('ultima', 'm5', GetBody(LQ, 3));
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.MaxLengthZero_SemLimite;
+procedure TQueueActorTests.MaxLengthZero_NoLimit;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -653,7 +653,7 @@ begin
   try
     for I := 1 to 50 do
     begin
-      LMsg := NovaMensagem('m' + IntToStr(I));
+      LMsg := NewMessage('m' + IntToStr(I));
       try
         LQ.PostMessage(LMsg);
       finally
@@ -668,10 +668,10 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Purge_LimpaProntasENaoAsNaoConfirmadas;
+procedure TQueueActorTests.Purge_ClearsReadyButNotUnacked;
 var
   LQ: TAMQPServerQueue;
-  LMsg, LSaida: TAMQPMessage;
+  LMsg, LOutMsg: TAMQPMessage;
   LRedelivered: Boolean;
   LStats: TAMQPQueueStats;
   I: Integer;
@@ -680,14 +680,14 @@ begin
   try
     for I := 1 to 4 do
     begin
-      LMsg := NovaMensagem('m' + IntToStr(I));
+      LMsg := NewMessage('m' + IntToStr(I));
       try
         LQ.PostMessage(LMsg);
       finally
         LMsg.Release;
       end;
     end;
-    TAssert.AssertTrue('get', LQ.Get(1, 1, False, LSaida, LRedelivered));
+    TAssert.AssertTrue('get', LQ.Get(1, 1, False, LOutMsg, LRedelivered));
     try
       TAssert.AssertEquals('purgou so as prontas', 3, LQ.Purge);
       LStats := LQ.Stats;
@@ -695,21 +695,21 @@ begin
       TAssert.AssertEquals('nao-confirmada intacta', 1, LStats.UnackedCount);
       TAssert.AssertEquals('purge nao e descarte', 0, Integer(LStats.DroppedCount));
     finally
-      LSaida.Release;
+      LOutMsg.Release;
     end;
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Delete_IfUnused_ComConsumidor_Recusa;
+procedure TQueueActorTests.Delete_IfUnused_WithConsumer_Refuses;
 var
   LQ: TAMQPServerQueue;
   LCount: Integer;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False, AlvoQueRecusa(1)));
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False, RefusingTarget(1)));
     TAssert.AssertTrue('if-unused com consumidor',
       LQ.Delete(True, False, LCount) = amqqdInUse);
     // The queue stays alive.
@@ -719,7 +719,7 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Delete_IfEmpty_ComMensagem_Recusa;
+procedure TQueueActorTests.Delete_IfEmpty_WithMessage_Refuses;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -727,7 +727,7 @@ var
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
@@ -741,18 +741,18 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Delete_DevolveContagemEParaAFila;
+procedure TQueueActorTests.Delete_ReturnsCountAndStopsTheQueue;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
   LCount, I: Integer;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
     for I := 1 to 3 do
     begin
-      LMsg := NovaMensagem('m' + IntToStr(I));
+      LMsg := NewMessage('m' + IntToStr(I));
       try
         LQ.PostMessage(LMsg);
       finally
@@ -763,20 +763,20 @@ begin
     TAssert.AssertEquals('contagem do Delete-Ok', 3, LCount);
 
     // A deleted queue does not serve again.
-    LLevantou := False;
+    LRaised := False;
     try
       LQ.Stats;
     except
       on E: EAMQPQueueActor do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('sincrono numa fila apagada levanta', LLevantou);
+    TAssert.AssertTrue('sincrono numa fila apagada levanta', LRaised);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Stop_DescartaPostsNovosSemVazar;
+procedure TQueueActorTests.Stop_DropsNewPostsWithoutLeaking;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
@@ -784,7 +784,7 @@ begin
   LQ := TAMQPServerQueue.Create('q');
   try
     LQ.Stop;
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       // Publish cannot fail because of a teardown race: drops silently.
       LQ.PostMessage(LMsg);
@@ -799,35 +799,35 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Stop_SincronoDepois_Levanta;
+procedure TQueueActorTests.Stop_SynchronousAfterwards_Raises;
 var
   LQ: TAMQPServerQueue;
-  LLevantou: Boolean;
+  LRaised: Boolean;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
     LQ.Stop;
-    LLevantou := False;
+    LRaised := False;
     try
       LQ.Purge;
     except
       on E: EAMQPQueueActor do
-        LLevantou := True;
+        LRaised := True;
     end;
-    TAssert.AssertTrue('sincrono numa fila parada levanta', LLevantou);
+    TAssert.AssertTrue('sincrono numa fila parada levanta', LRaised);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.RefCount_FilaSeguraUmaReferencia;
+procedure TQueueActorTests.RefCount_QueueHoldsOneReference;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       TAssert.AssertEquals('so o criador', 1, LMsg.RefCount);
       LQ.PostMessage(LMsg);
@@ -843,79 +843,79 @@ begin
   end;
 end;
 
-procedure TQueueActorTests.Sincrono_DeDentroDoAtor_Levanta;
+procedure TQueueActorTests.Synchronous_FromInsideTheActor_Raises;
 var
-  LQ: TQueueEspia;
+  LQ: TQueueSpy;
   LMsg: TAMQPMessage;
 begin
-  LQ := TQueueEspia.Create('q');
+  LQ := TQueueSpy.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg);
     finally
       LMsg.Release;
     end;
     LQ.Stats; // barrier
-    TAssert.AssertTrue('a espia rodou dentro do ator', LQ.Tentou);
+    TAssert.AssertTrue('a espia rodou dentro do ator', LQ.Tried);
     TAssert.AssertTrue('sincrono de dentro do ator tem de levantar EAMQPQueueActor',
-      LQ.GuardBarrou);
+      LQ.GuardBlocked);
     TAssert.AssertEquals('o comando seguiu normalmente', 1, LQ.Stats.MessageCount);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Estresse_ProdutoresConcorrentesESincronos;
+procedure TQueueActorTests.Stress_ConcurrentAndSynchronousProducers;
 const
-  PRODUTORES = 8;
-  POR_PRODUTOR = 2000;
+  PRODUCERS = 8;
+  PER_PRODUCER = 2000;
 var
   LQ: TAMQPServerQueue;
-  LConcluidos: Integer;
+  LCompleted: Integer;
   I: Integer;
   LStats: TAMQPQueueStats;
   LDeadline: UInt64;
-  LVoltas: Integer;
+  LRounds: Integer;
 begin
-  LConcluidos := 0;
-  LVoltas := 0;
+  LCompleted := 0;
+  LRounds := 0;
   LQ := TAMQPServerQueue.Create('q');
   try
-    for I := 1 to PRODUTORES do
-      PcPool.Queue(TProdutorWork.Create(LQ, POR_PRODUTOR, @LConcluidos));
+    for I := 1 to PRODUCERS do
+      PcPool.Queue(TProducerWork.Create(LQ, PER_PRODUCER, @LCompleted));
 
     // While the producers pour in, concurrent SYNCHRONOUS commands.
     LDeadline := PcTickMs + 30000;
-    while (PcAtomicGet(LConcluidos) < PRODUTORES) and (PcTickMs < LDeadline) do
+    while (PcAtomicGet(LCompleted) < PRODUCERS) and (PcTickMs < LDeadline) do
     begin
       LQ.Stats;
-      Inc(LVoltas);
+      Inc(LRounds);
     end;
-    TAssert.AssertEquals('produtores terminaram dentro do prazo', PRODUTORES,
-      PcAtomicGet(LConcluidos));
+    TAssert.AssertEquals('produtores terminaram dentro do prazo', PRODUCERS,
+      PcAtomicGet(LCompleted));
     TAssert.AssertTrue('os comandos sincronos concorreram de fato com os produtores',
-      LVoltas > 0);
+      LRounds > 0);
 
     LStats := LQ.Stats;
     TAssert.AssertEquals('nenhum comando perdido nem duplicado',
-      PRODUTORES * POR_PRODUTOR, LStats.MessageCount);
+      PRODUCERS * PER_PRODUCER, LStats.MessageCount);
     TAssert.AssertEquals('nada descartado', 0, Integer(LStats.DroppedCount));
-    TAssert.AssertEquals('purge devolve o total', PRODUTORES * POR_PRODUTOR, LQ.Purge);
+    TAssert.AssertEquals('purge devolve o total', PRODUCERS * PER_PRODUCER, LQ.Purge);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.CaixaSerial_PostNaJanelaDoFimDeRodada_NaoPerdeWakeup;
+procedure TQueueActorTests.SerialMailbox_PostInEndOfRoundWindow_DoesNotLoseWakeup;
 var
-  LQ: TQueueCorrida;
+  LQ: TQueueRace;
   LMsg: TAMQPMessage;
   LDeadline: UInt64;
 begin
-  LQ := TQueueCorrida.Create('q');
+  LQ := TQueueRace.Create('q');
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.PostMessage(LMsg); // fires the round that will inject into the window
     finally
@@ -925,31 +925,31 @@ begin
     // Nobody posts anything else: if the wakeup gets lost, nothing rescues the
     // injector's command (it is exactly the "last post before idleness" case).
     LDeadline := PcTickMs + 5000;
-    while (PcAtomicGet(LQ.FConcluiu) = 0) and (PcTickMs < LDeadline) do
+    while (PcAtomicGet(LQ.FFinished) = 0) and (PcTickMs < LDeadline) do
       Sleep(10);
 
     TAssert.AssertEquals('o comando postado na janela do fim de rodada tem de ser atendido',
-      1, PcAtomicGet(LQ.FConcluiu));
+      1, PcAtomicGet(LQ.FFinished));
     TAssert.AssertEquals('e sem levantar', 1, PcAtomicGet(LQ.FOk));
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.Delete_AvisaConsumidoresComCancel;
+procedure TQueueActorTests.Delete_NotifiesConsumersWithCancel;
 var
   LQ: TAMQPServerQueue;
-  LA, LB: TAlvoFalso;
+  LA, LB: TFakeTarget;
   LRefA, LRefB: IAMQPDeliveryTarget;
   LCount: Integer;
 begin
   LQ := TAMQPServerQueue.Create('q');
   try
-    LA := TAlvoFalso.Create(1);
-    LA.Recusar := True;
+    LA := TFakeTarget.Create(1);
+    LA.Refuse := True;
     LRefA := LA;
-    LB := TAlvoFalso.Create(2);
-    LB.Recusar := True;
+    LB := TFakeTarget.Create(2);
+    LB.Refuse := True;
     LRefB := LB;
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-a', False, False, LRefA));
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct-b', False, False, LRefB));
@@ -957,14 +957,14 @@ begin
     TAssert.AssertTrue('delete', LQ.Delete(False, False, LCount) = amqqdOk);
 
     // The queue vanished from under the consumers: both have to know.
-    TAssert.AssertEquals('o primeiro foi avisado', 'ct-a', LA.Cancelados);
-    TAssert.AssertEquals('o segundo tambem', 'ct-b', LB.Cancelados);
+    TAssert.AssertEquals('o primeiro foi avisado', 'ct-a', LA.Cancelled);
+    TAssert.AssertEquals('o segundo tambem', 'ct-b', LB.Cancelled);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueueActorTests.EverHadConsumer_SoViraVerdadeComConsumidor;
+procedure TQueueActorTests.EverHadConsumer_OnlyTurnsTrueWithAConsumer;
 var
   LQ: TAMQPServerQueue;
 begin
@@ -972,7 +972,7 @@ begin
   try
     TAssert.AssertFalse('fila nova nunca teve consumidor', LQ.Stats.EverHadConsumer);
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
-      AlvoQueRecusa(1)));
+      RefusingTarget(1)));
     TAssert.AssertTrue('agora teve', LQ.Stats.EverHadConsumer);
     LQ.PostRemoveConsumer(1, 'ct');
     // Still true AFTER the consumer leaves -- it is what distinguishes
@@ -986,19 +986,19 @@ end;
 
 // Assertions with the type fixed: the value comes in already converted, and the
 // TAssert overload is the same on both compilers.
-procedure ChecaInt(const AMsg: string; AEsperado, AReal: Int64);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Int64);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaBool(const AMsg: string; AEsperado, AReal: Boolean);
+procedure CheckBool(const AMsg: string; AExpected, AActual: Boolean);
 begin
-  TAssert.AssertTrue(AMsg, AReal = AEsperado);
+  TAssert.AssertTrue(AMsg, AActual = AExpected);
 end;
 
-procedure ChecaStr(const AMsg, AEsperado, AReal: string);
+procedure CheckStr(const AMsg, AExpected, AActual: string);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AReal);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
 { TQueuePriorityTtlTests }
@@ -1007,64 +1007,64 @@ end;
 // Without this, testing TTL would mean a real Sleep -- slow and unstable under
 // load, which is the defect the integration suite has already paid for once.
 type
-  TQueueRelogio = class(TAMQPServerQueue)
+  TQueueClock = class(TAMQPServerQueue)
   private
-    FAgora: UInt64;
+    FNow: UInt64;
   protected
     function NowTick: UInt64; override;
   public
-    procedure Avanca(AMs: UInt64);
+    procedure Advance(AMs: UInt64);
   end;
 
-function TQueueRelogio.NowTick: UInt64;
+function TQueueClock.NowTick: UInt64;
 begin
-  Result := FAgora;
+  Result := FNow;
 end;
 
-procedure TQueueRelogio.Avanca(AMs: UInt64);
+procedure TQueueClock.Advance(AMs: UInt64);
 begin
   // A write from outside the actor, but safe: the field is read only by the actor and the
   // test has no command in flight when it touches the clock (every earlier Post
-  // has already been drained by a SYNCHRONOUS command -- see the comment on Estabiliza).
-  Inc(FAgora, AMs);
+  // has already been drained by a SYNCHRONOUS command -- see the comment on Stabilize).
+  Inc(FNow, AMs);
 end;
 
 // The mailbox is serial and FIFO, so a SYNCHRONOUS command posted after an
 // asynchronous one only returns when the asynchronous one has already run. It is the
 // project's barrier so that tests need no Sleep.
-function Estabiliza(AQ: TAMQPServerQueue): TAMQPQueueStats;
+function Stabilize(AQ: TAMQPServerQueue): TAMQPQueueStats;
 begin
   Result := AQ.Stats;
 end;
 
-function PolPrioridade(AMax: Integer): TAMQPQueuePolicy;
+function PriorityPolicy(AMax: Integer): TAMQPQueuePolicy;
 begin
   Result := TAMQPQueuePolicy.Empty;
   Result.MaxPriority := AMax;
 end;
 
-function PolTtl(AMs: Int64): TAMQPQueuePolicy;
+function TtlPolicy(AMs: Int64): TAMQPQueuePolicy;
 begin
   Result := TAMQPQueuePolicy.Empty;
   Result.MessageTtlMs := AMs;
 end;
 
 // Publishes with its own priority and TTL, releasing the publisher's reference.
-procedure Publica(AQ: TAMQPServerQueue; const ATexto: string;
-  APrio: Byte = 0; ATtlMs: Int64 = -1);
+procedure PublishTo(AQ: TAMQPServerQueue; const AText: string;
+  APriority: Byte = 0; ATtlMs: Int64 = -1);
 var
   LMsg: TAMQPMessage;
 begin
-  LMsg := NovaMensagem(ATexto);
+  LMsg := NewMessage(AText);
   try
-    AQ.PostMessage(LMsg, APrio, ATtlMs);
+    AQ.PostMessage(LMsg, APriority, ATtlMs);
   finally
     LMsg.Release;
   end;
 end;
 
 // Takes in no-ack and returns the body ('' if the queue was empty).
-function TiraCorpo(AQ: TAMQPServerQueue; ATag: UInt64): string;
+function TakeBody(AQ: TAMQPServerQueue; ATag: UInt64): string;
 var
   LMsg: TAMQPMessage;
   LRedel: Boolean;
@@ -1072,42 +1072,42 @@ begin
   if not AQ.Get(1, ATag, True, LMsg, LRedel) then
     Exit('');
   try
-    Result := CorpoDe(LMsg);
+    Result := BodyOf(LMsg);
   finally
     LMsg.Release;
   end;
 end;
 
-procedure TQueuePriorityTtlTests.Prioridade_MaiorSaiPrimeiro;
+procedure TQueuePriorityTtlTests.Priority_HighestComesOutFirst;
 var
   LQ: TAMQPServerQueue;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  LQ := TAMQPServerQueue.Create('q', PriorityPolicy(9));
   try
-    Publica(LQ, 'baixa', 0);
-    Publica(LQ, 'alta', 5);
-    Publica(LQ, 'media', 2);
-    ChecaStr('maior prioridade primeiro', 'alta', TiraCorpo(LQ, 1));
-    ChecaStr('depois a media', 'media', TiraCorpo(LQ, 2));
-    ChecaStr('a baixa por ultimo', 'baixa', TiraCorpo(LQ, 3));
+    PublishTo(LQ, 'baixa', 0);
+    PublishTo(LQ, 'alta', 5);
+    PublishTo(LQ, 'media', 2);
+    CheckStr('maior prioridade primeiro', 'alta', TakeBody(LQ, 1));
+    CheckStr('depois a media', 'media', TakeBody(LQ, 2));
+    CheckStr('a baixa por ultimo', 'baixa', TakeBody(LQ, 3));
   finally
     LQ.Free;
   end;
 end;
 
 // Priority reorders BETWEEN levels, never WITHIN one.
-procedure TQueuePriorityTtlTests.Prioridade_FifoDentroDoNivel;
+procedure TQueuePriorityTtlTests.Priority_FifoWithinLevel;
 var
   LQ: TAMQPServerQueue;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  LQ := TAMQPServerQueue.Create('q', PriorityPolicy(9));
   try
-    Publica(LQ, 'a', 3);
-    Publica(LQ, 'b', 3);
-    Publica(LQ, 'c', 3);
-    ChecaStr('1a', 'a', TiraCorpo(LQ, 1));
-    ChecaStr('2a', 'b', TiraCorpo(LQ, 2));
-    ChecaStr('3a', 'c', TiraCorpo(LQ, 3));
+    PublishTo(LQ, 'a', 3);
+    PublishTo(LQ, 'b', 3);
+    PublishTo(LQ, 'c', 3);
+    CheckStr('1a', 'a', TakeBody(LQ, 1));
+    CheckStr('2a', 'b', TakeBody(LQ, 2));
+    CheckStr('3a', 'c', TakeBody(LQ, 3));
   finally
     LQ.Free;
   end;
@@ -1115,20 +1115,20 @@ end;
 
 // Publishing above the queue's cap neither creates a new bucket nor overflows an index:
 // the priority is clamped to the cap and the message goes into the top bucket.
-procedure TQueuePriorityTtlTests.Prioridade_AcimaDoTetoEhLimitada;
+procedure TQueuePriorityTtlTests.Priority_AboveTheCapIsClamped;
 var
   LQ: TAMQPServerQueue;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolPrioridade(2));
+  LQ := TAMQPServerQueue.Create('q', PriorityPolicy(2));
   try
-    Publica(LQ, 'teto', 2);
-    Publica(LQ, 'acima', 9);   // becomes 2
-    Publica(LQ, 'baixa', 0);
-    ChecaInt('teto em vigor', 2, LQ.MaxPriority);
+    PublishTo(LQ, 'teto', 2);
+    PublishTo(LQ, 'acima', 9);   // becomes 2
+    PublishTo(LQ, 'baixa', 0);
+    CheckInt('teto em vigor', 2, LQ.MaxPriority);
     // 'teto' and 'acima' are in the SAME bucket, so FIFO applies between them.
-    ChecaStr('1a', 'teto', TiraCorpo(LQ, 1));
-    ChecaStr('2a', 'acima', TiraCorpo(LQ, 2));
-    ChecaStr('3a', 'baixa', TiraCorpo(LQ, 3));
+    CheckStr('1a', 'teto', TakeBody(LQ, 1));
+    CheckStr('2a', 'acima', TakeBody(LQ, 2));
+    CheckStr('3a', 'baixa', TakeBody(LQ, 3));
   finally
     LQ.Free;
   end;
@@ -1138,24 +1138,24 @@ end;
 // absolute head, a returned low-priority message would jump the queue
 // of the high ones -- and the test below is built exactly to catch that: after
 // returning a p0, a NEW p5 has to come out ahead of it.
-procedure TQueuePriorityTtlTests.Prioridade_RequeueVoltaAoProprioBalde;
+procedure TQueuePriorityTtlTests.Priority_RequeueReturnsToItsOwnBucket;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
+  LQ := TAMQPServerQueue.Create('q', PriorityPolicy(9));
   try
-    Publica(LQ, 'baixa', 0);
+    PublishTo(LQ, 'baixa', 0);
     // Takes the low one in ACK mode, so it can be returned.
-    ChecaBool('tirou a baixa', True, LQ.Get(1, 10, False, LMsg, LRedel));
+    CheckBool('tirou a baixa', True, LQ.Get(1, 10, False, LMsg, LRedel));
     LMsg.Release;
     LQ.PostNack(1, 10, False, True); // requeue
-    Publica(LQ, 'alta', 5);
-    Estabiliza(LQ);
-    ChecaStr('a alta nova passa na frente da baixa devolvida', 'alta',
-      TiraCorpo(LQ, 2));
-    ChecaStr('so entao a baixa', 'baixa', TiraCorpo(LQ, 3));
+    PublishTo(LQ, 'alta', 5);
+    Stabilize(LQ);
+    CheckStr('a alta nova passa na frente da baixa devolvida', 'alta',
+      TakeBody(LQ, 2));
+    CheckStr('so entao a baixa', 'baixa', TakeBody(LQ, 3));
   finally
     LQ.Free;
   end;
@@ -1164,114 +1164,114 @@ end;
 // D12: the memory cap drops from the LEAST priority bucket. Dropping from the
 // absolute head would throw away precisely what the client marked as most
 // important.
-procedure TQueuePriorityTtlTests.MaxLength_DescartaDoBaldeMenosPrioritario;
+procedure TQueuePriorityTtlTests.MaxLength_DropsFromTheLowestPriorityBucket;
 var
   LQ: TAMQPServerQueue;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9), 2);
+  LQ := TAMQPServerQueue.Create('q', PriorityPolicy(9), 2);
   try
-    Publica(LQ, 'alta1', 9);
-    Publica(LQ, 'baixa', 0);
-    Publica(LQ, 'alta2', 9); // overflows the cap: the LOW one is the one that has to go
-    LStats := Estabiliza(LQ);
-    ChecaInt('duas restantes', 2, LStats.MessageCount);
-    ChecaInt('uma descartada', 1, LStats.DroppedCount);
-    ChecaStr('sobrou alta1', 'alta1', TiraCorpo(LQ, 1));
-    ChecaStr('sobrou alta2', 'alta2', TiraCorpo(LQ, 2));
+    PublishTo(LQ, 'alta1', 9);
+    PublishTo(LQ, 'baixa', 0);
+    PublishTo(LQ, 'alta2', 9); // overflows the cap: the LOW one is the one that has to go
+    LStats := Stabilize(LQ);
+    CheckInt('duas restantes', 2, LStats.MessageCount);
+    CheckInt('uma descartada', 1, LStats.DroppedCount);
+    CheckStr('sobrou alta1', 'alta1', TakeBody(LQ, 1));
+    CheckStr('sobrou alta2', 'alta2', TakeBody(LQ, 2));
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueuePriorityTtlTests.Ttl_DaFila_VenceNoPrazo;
+procedure TQueuePriorityTtlTests.Ttl_QueueLevel_ExpiresOnTime;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  LQ := TQueueClock.Create('q', TtlPolicy(1000));
   try
-    Publica(LQ, 'm');
-    Estabiliza(LQ);
-    LQ.Avanca(1001);
+    PublishTo(LQ, 'm');
+    Stabilize(LQ);
+    LQ.Advance(1001);
     // No consumer: it is the monitor's tick that wakes the queue (D13).
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('venceu', 0, LStats.MessageCount);
-    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
-    ChecaInt('nao conta como descartada por limite', 0, LStats.DroppedCount);
+    LStats := Stabilize(LQ);
+    CheckInt('venceu', 0, LStats.MessageCount);
+    CheckInt('contada como expirada', 1, LStats.ExpiredCount);
+    CheckInt('nao conta como descartada por limite', 0, LStats.DroppedCount);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueuePriorityTtlTests.Ttl_NaoVenceAntesDoPrazo;
+procedure TQueuePriorityTtlTests.Ttl_DoesNotExpireBeforeTheDeadline;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  LQ := TQueueClock.Create('q', TtlPolicy(1000));
   try
-    Publica(LQ, 'm');
-    Estabiliza(LQ);
-    LQ.Avanca(999);
+    PublishTo(LQ, 'm');
+    Stabilize(LQ);
+    LQ.Advance(999);
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('ainda viva', 1, LStats.MessageCount);
-    ChecaInt('nada expirado', 0, LStats.ExpiredCount);
+    LStats := Stabilize(LQ);
+    CheckInt('ainda viva', 1, LStats.MessageCount);
+    CheckInt('nada expirado', 0, LStats.ExpiredCount);
   finally
     LQ.Free;
   end;
 end;
 
 // The SMALLER of the two TTLs wins, whether it comes from the queue or the message.
-procedure TQueuePriorityTtlTests.Ttl_MenorEntreFilaEMensagemVence;
+procedure TQueuePriorityTtlTests.Ttl_SmallerOfQueueAndMessageWins;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
   LStats: TAMQPQueueStats;
 begin
   // The MESSAGE's TTL smaller than the queue's.
-  LQ := TQueueRelogio.Create('q', PolTtl(10000));
+  LQ := TQueueClock.Create('q', TtlPolicy(10000));
   try
-    Publica(LQ, 'curta', 0, 100);
-    Estabiliza(LQ);
-    LQ.Avanca(200);
+    PublishTo(LQ, 'curta', 0, 100);
+    Stabilize(LQ);
+    LQ.Advance(200);
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('a da mensagem venceu', 0, LStats.MessageCount);
+    LStats := Stabilize(LQ);
+    CheckInt('a da mensagem venceu', 0, LStats.MessageCount);
   finally
     LQ.Free;
   end;
 
   // The QUEUE's TTL smaller than the message's.
-  LQ := TQueueRelogio.Create('q', PolTtl(100));
+  LQ := TQueueClock.Create('q', TtlPolicy(100));
   try
-    Publica(LQ, 'longa', 0, 10000);
-    Estabiliza(LQ);
-    LQ.Avanca(200);
+    PublishTo(LQ, 'longa', 0, 10000);
+    Stabilize(LQ);
+    LQ.Advance(200);
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('a da fila venceu', 0, LStats.MessageCount);
+    LStats := Stabilize(LQ);
+    CheckInt('a da fila venceu', 0, LStats.MessageCount);
   finally
     LQ.Free;
   end;
 end;
 
 // Basic.Get is the other exit path: it must not return an expired message.
-procedure TQueuePriorityTtlTests.Ttl_GetNaoDevolveVencida;
+procedure TQueuePriorityTtlTests.Ttl_GetDoesNotReturnExpired;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
 begin
-  LQ := TQueueRelogio.Create('q', PolTtl(500));
+  LQ := TQueueClock.Create('q', TtlPolicy(500));
   try
-    Publica(LQ, 'm');
-    Estabiliza(LQ);
-    LQ.Avanca(501);
-    ChecaBool('Get nao devolve vencida', False,
+    PublishTo(LQ, 'm');
+    Stabilize(LQ);
+    LQ.Advance(501);
+    CheckBool('Get nao devolve vencida', False,
       LQ.Get(1, 1, True, LMsg, LRedel));
-    ChecaInt('e ela foi contada', 1, LQ.Stats.ExpiredCount);
+    CheckInt('e ela foi contada', 1, LQ.Stats.ExpiredCount);
   finally
     LQ.Free;
   end;
@@ -1279,64 +1279,64 @@ end;
 
 // Returning to stock must not grant extra life: the deadline is the ORIGINAL one, not a
 // new one counted from the requeue.
-procedure TQueuePriorityTtlTests.Prioridade_RequeueAposEntregaAConsumidor_VoltaAoProprioBalde;
+procedure TQueuePriorityTtlTests.Priority_RequeueAfterDeliveryToConsumer_ReturnsToItsOwnBucket;
 var
   LQ: TAMQPServerQueue;
-  LAlvo: TAlvoFalso;
-  LAlvoRef: IAMQPDeliveryTarget;
+  LTarget: TFakeTarget;
+  LTargetRef: IAMQPDeliveryTarget;
 begin
   // The PRIORITY HALF of the same defect as
-  // Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo: without copying Priority into
+  // Ttl_RequeueAfterDeliveryToConsumer_PreservesTheDeadline: without copying Priority into
   // the unacked one, the return lands in an arbitrary bucket.
   //
   // The 'media', published AFTER the return, is what makes the test
   // discriminating: if the 'alta' went back to bucket 0, it would come out behind it.
   // Without that third level, returning to the HEAD of the wrong bucket would still
   // look right.
-  LQ := TAMQPServerQueue.Create('q', PolPrioridade(9));
-  LAlvo := TAlvoFalso.Create(1);
-  LAlvoRef := LAlvo;
+  LQ := TAMQPServerQueue.Create('q', PriorityPolicy(9));
+  LTarget := TFakeTarget.Create(1);
+  LTargetRef := LTarget;
   try
     // Both BEFORE the consumer: with a consumer already attached, the
     // enqueue itself delivers right away, and the first one published would come out first
     // regardless of priority. (The first version of this test assumed the
     // opposite and failed -- the wrong premise was the TEST's, not the code's.)
-    Publica(LQ, 'baixa', 0);
-    Publica(LQ, 'alta', 5);
-    Estabiliza(LQ);
+    PublishTo(LQ, 'baixa', 0);
+    PublishTo(LQ, 'alta', 5);
+    Stabilize(LQ);
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
-      LAlvoRef));
+      LTargetRef));
     LQ.PostDeliverTick;
-    Estabiliza(LQ);
-    ChecaInt('as duas foram entregues', 2, LAlvo.Count);
-    ChecaStr('a de maior prioridade saiu primeiro', 'alta',
-      LAlvo.Entrega(0).Corpo);
+    Stabilize(LQ);
+    CheckInt('as duas foram entregues', 2, LTarget.Count);
+    CheckStr('a de maior prioridade saiu primeiro', 'alta',
+      LTarget.DeliveryAt(0).BodyText);
 
     LQ.PostRemoveConsumer(1, 'ct');
-    Estabiliza(LQ);
+    Stabilize(LQ);
 
     // Returns the 'alta' by the tag IT received -- no assuming a number.
-    LQ.PostNack(1, LAlvo.Entrega(0).DeliveryTag, False, True);
-    Estabiliza(LQ);
-    Publica(LQ, 'media', 3);
-    Estabiliza(LQ);
+    LQ.PostNack(1, LTarget.DeliveryAt(0).DeliveryTag, False, True);
+    Stabilize(LQ);
+    PublishTo(LQ, 'media', 3);
+    Stabilize(LQ);
 
-    ChecaStr('a devolvida volta ao balde 5 e sai primeiro', 'alta',
-      TiraCorpo(LQ, 10));
-    ChecaStr('depois a media do balde 3', 'media', TiraCorpo(LQ, 11));
+    CheckStr('a devolvida volta ao balde 5 e sai primeiro', 'alta',
+      TakeBody(LQ, 10));
+    CheckStr('depois a media do balde 3', 'media', TakeBody(LQ, 11));
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueuePriorityTtlTests.Ttl_RequeueAposEntregaAConsumidor_PreservaOPrazo;
+procedure TQueuePriorityTtlTests.Ttl_RequeueAfterDeliveryToConsumer_PreservesTheDeadline;
 var
-  LQ: TQueueRelogio;
-  LAlvo: TAlvoFalso;
-  LAlvoRef: IAMQPDeliveryTarget;
+  LQ: TQueueClock;
+  LTarget: TFakeTarget;
+  LTargetRef: IAMQPDeliveryTarget;
   LStats: TAMQPQueueStats;
 begin
-  // The sibling of Ttl_RequeuePreservaOPrazo, but through the CONSUMER path
+  // The sibling of Ttl_RequeuePreservesTheDeadline, but through the CONSUMER path
   // instead of Basic.Get -- and that is the point. The Get path always copied
   // Priority/ExpiraEm into the unacked one; the consumer delivery path did NOT
   // copy them, and the record was left with stack garbage. Since every requeue test
@@ -1346,57 +1346,57 @@ begin
   // message dies early and the first half fails; with a LARGE garbage deadline (or
   // zero, which here means "never expires") it never dies and the second
   // half fails.
-  LQ := TQueueRelogio.Create('q', PolTtl(1000));
-  LAlvo := TAlvoFalso.Create(1);
-  LAlvoRef := LAlvo; // the test holds the reference (lesson of WS5)
+  LQ := TQueueClock.Create('q', TtlPolicy(1000));
+  LTarget := TFakeTarget.Create(1);
+  LTargetRef := LTarget; // the test holds the reference (lesson of WS5)
   try
     LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', False, False,
-      LAlvoRef));
-    Publica(LQ, 'm');
+      LTargetRef));
+    PublishTo(LQ, 'm');
     LQ.PostDeliverTick;
-    Estabiliza(LQ);
-    ChecaInt('entregue ao consumidor', 1, LAlvo.Count);
+    Stabilize(LQ);
+    CheckInt('entregue ao consumidor', 1, LTarget.Count);
 
     // Removes the consumer so the return is not redelivered right away.
     LQ.PostRemoveConsumer(1, 'ct');
-    Estabiliza(LQ);
+    Stabilize(LQ);
 
-    LQ.Avanca(500);
+    LQ.Advance(500);
     LQ.PostNack(1, 1, False, True); // requeue of tag 1
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('a meio prazo continua viva', 1, LStats.MessageCount);
-    ChecaInt('e nao foi contada como expirada', 0, LStats.ExpiredCount);
+    LStats := Stabilize(LQ);
+    CheckInt('a meio prazo continua viva', 1, LStats.MessageCount);
+    CheckInt('e nao foi contada como expirada', 0, LStats.ExpiredCount);
 
-    LQ.Avanca(600); // 1100 in total, above the 1000 TTL
+    LQ.Advance(600); // 1100 in total, above the 1000 TTL
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('passado o prazo ORIGINAL, vence', 0, LStats.MessageCount);
-    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
+    LStats := Stabilize(LQ);
+    CheckInt('passado o prazo ORIGINAL, vence', 0, LStats.MessageCount);
+    CheckInt('contada como expirada', 1, LStats.ExpiredCount);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TQueuePriorityTtlTests.Ttl_RequeuePreservaOPrazo;
+procedure TQueuePriorityTtlTests.Ttl_RequeuePreservesTheDeadline;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TQueueRelogio.Create('q', PolTtl(1000));
+  LQ := TQueueClock.Create('q', TtlPolicy(1000));
   try
-    Publica(LQ, 'm');
-    Estabiliza(LQ);
-    ChecaBool('tirou em modo ack', True, LQ.Get(1, 7, False, LMsg, LRedel));
+    PublishTo(LQ, 'm');
+    Stabilize(LQ);
+    CheckBool('tirou em modo ack', True, LQ.Get(1, 7, False, LMsg, LRedel));
     LMsg.Release;
-    LQ.Avanca(1500);                 // the deadline passed while it was in flight
+    LQ.Advance(1500);                 // the deadline passed while it was in flight
     LQ.PostNack(1, 7, False, True);  // returns
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('devolvida ja vencida, nao ressuscitada', 0, LStats.MessageCount);
-    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
+    LStats := Stabilize(LQ);
+    CheckInt('devolvida ja vencida, nao ressuscitada', 0, LStats.MessageCount);
+    CheckInt('contada como expirada', 1, LStats.ExpiredCount);
   finally
     LQ.Free;
   end;
@@ -1413,53 +1413,53 @@ end;
 // same sink across several queues, died with an Access violation exactly like that.
 // That is why every test here also keeps an interface LSinkRef.
 type
-  TMortaRegistrada = record
+  TRecordedDeath = record
     Dlx: string;
     RoutingKey: string;
     HeaderPayload: TBytes;
-    Corpo: string;
+    BodyText: string;
     Priority: Byte;
   end;
 
-  TSinkEspia = class(TInterfacedObject, IAMQPDeadLetterSink)
+  TSinkSpy = class(TInterfacedObject, IAMQPDeadLetterSink)
   private
-    FMortas: array of TMortaRegistrada;
+    FDeaths: array of TRecordedDeath;
   public
     procedure DeadLetter(const ADlx, ARoutingKey: string;
       AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
     function Count: Integer;
-    function Item(AIdx: Integer): TMortaRegistrada;
+    function Item(AIdx: Integer): TRecordedDeath;
   end;
 
-procedure TSinkEspia.DeadLetter(const ADlx, ARoutingKey: string;
+procedure TSinkSpy.DeadLetter(const ADlx, ARoutingKey: string;
   AMessage: TAMQPMessage; APriority: Byte; AContentId: UInt64);
 var
   N: Integer;
 begin
-  N := Length(FMortas);
-  SetLength(FMortas, N + 1);
-  FMortas[N].Dlx := ADlx;
-  FMortas[N].RoutingKey := ARoutingKey;
+  N := Length(FDeaths);
+  SetLength(FDeaths, N + 1);
+  FDeaths[N].Dlx := ADlx;
+  FDeaths[N].RoutingKey := ARoutingKey;
   // A COPY: the contract says the reference still belongs to the caller, so
   // keeping the object would be wrong -- and keeping only the buffer proves, as a bonus,
   // that the derived message is complete at the moment of the call.
-  FMortas[N].HeaderPayload := Copy(AMessage.HeaderPayload, 0,
+  FDeaths[N].HeaderPayload := Copy(AMessage.HeaderPayload, 0,
     Length(AMessage.HeaderPayload));
-  FMortas[N].Corpo := CorpoDe(AMessage);
-  FMortas[N].Priority := APriority;
+  FDeaths[N].BodyText := BodyOf(AMessage);
+  FDeaths[N].Priority := APriority;
 end;
 
-function TSinkEspia.Count: Integer;
+function TSinkSpy.Count: Integer;
 begin
-  Result := Length(FMortas);
+  Result := Length(FDeaths);
 end;
 
-function TSinkEspia.Item(AIdx: Integer): TMortaRegistrada;
+function TSinkSpy.Item(AIdx: Integer): TRecordedDeath;
 begin
-  Result := FMortas[AIdx];
+  Result := FDeaths[AIdx];
 end;
 
-function PolDlx(const ADlx: string; ATtlMs: Int64 = -1): TAMQPQueuePolicy;
+function DlxPolicy(const ADlx: string; ATtlMs: Int64 = -1): TAMQPQueuePolicy;
 begin
   Result := TAMQPQueuePolicy.Empty;
   Result.DeadLetterExchange := ADlx;
@@ -1468,8 +1468,8 @@ begin
 end;
 
 // Reads an x-death entry from the payload recorded by the sink.
-function LeMorte(const APayload: TBytes; AIdx: Integer;
-  const ACampo: string): string;
+function ReadDeath(const APayload: TBytes; AIdx: Integer;
+  const AField: string): string;
 var
   LEd: TAMQPHeaderEditor;
   LArr, LElem, LVal: TValue;
@@ -1487,7 +1487,7 @@ begin
     if not (LElem.IsObject and (LElem.AsObject is TAMQPFieldTable)) then
       Exit;
     LTab := TAMQPFieldTable(LElem.AsObject);
-    if LTab.TryGetValue(ACampo, LVal) then
+    if LTab.TryGetValue(AField, LVal) then
     begin
       LVal := AmqpUnwrapValue(LVal);
       if LVal.Kind = tkInt64 then
@@ -1502,7 +1502,7 @@ begin
   end;
 end;
 
-function ContaMortes(const APayload: TBytes): Integer;
+function CountDeaths(const APayload: TBytes): Integer;
 var
   LEd: TAMQPHeaderEditor;
   LArr: TValue;
@@ -1522,61 +1522,61 @@ end;
 
 // Publishes with a real content-header (dead-lettering rewrites the
 // header, so an empty payload would not do).
-procedure PublicaComHeader(AQ: TAMQPServerQueue; const ATexto: string;
-  const AExpiration: string = ''; APrio: Byte = 0);
+procedure PublishWithHeader(AQ: TAMQPServerQueue; const AText: string;
+  const AExpiration: string = ''; APriority: Byte = 0);
 var
   LProps: TAMQPBasicProperties;
   LMsg: TAMQPMessage;
-  LCorpo, LHdr: TBytes;
+  LMsgBody, LHdr: TBytes;
 begin
-  LCorpo := AmqpUtf8Encode(ATexto);
+  LMsgBody := AmqpUtf8Encode(AText);
   LProps := TAMQPBasicProperties.Empty;
   LProps.SetContentType('text/plain');
   if AExpiration <> '' then
     LProps.SetExpiration(AExpiration);
-  LHdr := BuildContentHeader(Length(LCorpo), LProps);
-  LMsg := TAMQPMessage.Create('ex.origem', 'rk.origem', 'guest', LHdr, LCorpo);
+  LHdr := BuildContentHeader(Length(LMsgBody), LProps);
+  LMsg := TAMQPMessage.Create('ex.origem', 'rk.origem', 'guest', LHdr, LMsgBody);
   try
     // On the real path whoever reads 'expiration' is the engine, on the
     // publisher's thread (D1). Here the test is at queue level, so it passes it by hand.
     if AExpiration <> '' then
-      AQ.PostMessage(LMsg, APrio, StrToInt64(AExpiration))
+      AQ.PostMessage(LMsg, APriority, StrToInt64(AExpiration))
     else
-      AQ.PostMessage(LMsg, APrio, -1);
+      AQ.PostMessage(LMsg, APriority, -1);
   finally
     LMsg.Release;
   end;
 end;
 
-procedure TDeadLetterTests.Rejeitada_VaiParaODlx;
+procedure TDeadLetterTests.Rejected_GoesToTheDlx;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
   LStats: TAMQPQueueStats;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q.origem', PolDlx('dlx'));
+  LQ := TAMQPServerQueue.Create('q.origem', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
-    ChecaBool('tirou em modo ack', True, LQ.Get(1, 5, False, LMsg, LRedel));
+    PublishWithHeader(LQ, 'm');
+    CheckBool('tirou em modo ack', True, LQ.Get(1, 5, False, LMsg, LRedel));
     LMsg.Release;
     LQ.PostNack(1, 5, False, False); // reject without requeue = death
-    LStats := Estabiliza(LQ);
-    ChecaInt('uma republicada', 1, LSink.Count);
-    ChecaInt('contada', 1, LStats.DeadLetteredCount);
-    ChecaStr('foi para o dlx', 'dlx', LSink.Item(0).Dlx);
-    ChecaStr('corpo intacto', 'm', LSink.Item(0).Corpo);
-    ChecaStr('razao', 'rejected',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
-    ChecaStr('fila de origem', 'q.origem',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'queue'));
-    ChecaStr('exchange original', 'ex.origem',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'exchange'));
+    LStats := Stabilize(LQ);
+    CheckInt('uma republicada', 1, LSink.Count);
+    CheckInt('contada', 1, LStats.DeadLetteredCount);
+    CheckStr('foi para o dlx', 'dlx', LSink.Item(0).Dlx);
+    CheckStr('corpo intacto', 'm', LSink.Item(0).BodyText);
+    CheckStr('razao', 'rejected',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    CheckStr('fila de origem', 'q.origem',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'queue'));
+    CheckStr('exchange original', 'ex.origem',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'exchange'));
   finally
     LQ.Free;
   end;
@@ -1584,99 +1584,99 @@ end;
 
 // The ACK must not turn into a death. Both reach ResolveUnacked with
 // requeue=false, and confusing them would send EVERY acked message to the DLX.
-procedure TDeadLetterTests.Ack_NaoVaiParaODlx;
+procedure TDeadLetterTests.Ack_DoesNotGoToTheDlx;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'));
+  LQ := TAMQPServerQueue.Create('q', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
-    ChecaBool('tirou', True, LQ.Get(1, 5, False, LMsg, LRedel));
+    PublishWithHeader(LQ, 'm');
+    CheckBool('tirou', True, LQ.Get(1, 5, False, LMsg, LRedel));
     LMsg.Release;
     LQ.PostAck(1, 5, False);
-    Estabiliza(LQ);
-    ChecaInt('ack nao republica nada', 0, LSink.Count);
+    Stabilize(LQ);
+    CheckInt('ack nao republica nada', 0, LSink.Count);
   finally
     LQ.Free;
   end;
 end;
 
 // Nack WITH requeue is not a death either: it goes back to the queue.
-procedure TDeadLetterTests.NackComRequeue_NaoVaiParaODlx;
+procedure TDeadLetterTests.NackWithRequeue_DoesNotGoToTheDlx;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
   LStats: TAMQPQueueStats;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'));
+  LQ := TAMQPServerQueue.Create('q', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
-    ChecaBool('tirou', True, LQ.Get(1, 5, False, LMsg, LRedel));
+    PublishWithHeader(LQ, 'm');
+    CheckBool('tirou', True, LQ.Get(1, 5, False, LMsg, LRedel));
     LMsg.Release;
     LQ.PostNack(1, 5, False, True);
-    LStats := Estabiliza(LQ);
-    ChecaInt('nada republicado', 0, LSink.Count);
-    ChecaInt('voltou para a fila', 1, LStats.MessageCount);
+    LStats := Stabilize(LQ);
+    CheckInt('nada republicado', 0, LSink.Count);
+    CheckInt('voltou para a fila', 1, LStats.MessageCount);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TDeadLetterTests.Expirada_VaiParaODlxComRazaoExpired;
+procedure TDeadLetterTests.Expired_GoesToTheDlxWithReasonExpired;
 var
-  LQ: TQueueRelogio;
-  LSink: TSinkEspia;
+  LQ: TQueueClock;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TQueueRelogio.Create('q.ttl', PolDlx('dlx', 500));
+  LQ := TQueueClock.Create('q.ttl', DlxPolicy('dlx', 500));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
-    Estabiliza(LQ);
-    LQ.Avanca(501);
+    PublishWithHeader(LQ, 'm');
+    Stabilize(LQ);
+    LQ.Advance(501);
     LQ.PostDeliverTick;
-    Estabiliza(LQ);
-    ChecaInt('uma republicada', 1, LSink.Count);
-    ChecaStr('razao', 'expired',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    Stabilize(LQ);
+    CheckInt('uma republicada', 1, LSink.Count);
+    CheckStr('razao', 'expired',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'reason'));
   finally
     LQ.Free;
   end;
 end;
 
-procedure TDeadLetterTests.EstourouOTeto_VaiParaODlxComRazaoMaxlen;
+procedure TDeadLetterTests.CapExceeded_GoesToTheDlxWithReasonMaxlen;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'), 1);
+  LQ := TAMQPServerQueue.Create('q', DlxPolicy('dlx'), 1);
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'primeira');
-    PublicaComHeader(LQ, 'segunda'); // overflows the cap of 1
-    Estabiliza(LQ);
-    ChecaInt('a que saiu foi republicada', 1, LSink.Count);
-    ChecaStr('razao', 'maxlen',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
-    ChecaStr('foi a mais velha', 'primeira', LSink.Item(0).Corpo);
+    PublishWithHeader(LQ, 'primeira');
+    PublishWithHeader(LQ, 'segunda'); // overflows the cap of 1
+    Stabilize(LQ);
+    CheckInt('a que saiu foi republicada', 1, LSink.Count);
+    CheckStr('razao', 'maxlen',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    CheckStr('foi a mais velha', 'primeira', LSink.Item(0).BodyText);
   finally
     LQ.Free;
   end;
@@ -1684,45 +1684,45 @@ end;
 
 // Without x-dead-letter-routing-key, the ORIGINAL key is kept -- it is what makes a
 // topic DLX keep routing by the same criterion.
-procedure TDeadLetterTests.SemRoutingKeyPropria_MantemAOriginal;
+procedure TDeadLetterTests.NoOwnRoutingKey_KeepsTheOriginal;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
-  LPol: TAMQPQueuePolicy;
+  LPolicy: TAMQPQueuePolicy;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q', PolDlx('dlx'));
+  LQ := TAMQPServerQueue.Create('q', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
+    PublishWithHeader(LQ, 'm');
     LQ.Get(1, 5, False, LMsg, LRedel);
     LMsg.Release;
     LQ.PostNack(1, 5, False, False);
-    Estabiliza(LQ);
-    ChecaStr('chave original preservada', 'rk.origem', LSink.Item(0).RoutingKey);
+    Stabilize(LQ);
+    CheckStr('chave original preservada', 'rk.origem', LSink.Item(0).RoutingKey);
   finally
     LQ.Free;
   end;
 
   // With its own key, that key replaces it.
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LPol := PolDlx('dlx');
-  LPol.DeadLetterRoutingKey := 'rk.morta';
-  LPol.HasDeadLetterRoutingKey := True;
-  LQ := TAMQPServerQueue.Create('q', LPol);
+  LPolicy := DlxPolicy('dlx');
+  LPolicy.DeadLetterRoutingKey := 'rk.morta';
+  LPolicy.HasDeadLetterRoutingKey := True;
+  LQ := TAMQPServerQueue.Create('q', LPolicy);
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
+    PublishWithHeader(LQ, 'm');
     LQ.Get(1, 5, False, LMsg, LRedel);
     LMsg.Release;
     LQ.PostNack(1, 5, False, False);
-    Estabiliza(LQ);
-    ChecaStr('chave trocada', 'rk.morta', LSink.Item(0).RoutingKey);
+    Stabilize(LQ);
+    CheckStr('chave trocada', 'rk.morta', LSink.Item(0).RoutingKey);
   finally
     LQ.Free;
   end;
@@ -1731,30 +1731,30 @@ end;
 // Dying TWICE in the same queue for the same reason must not create two
 // entries: the count field exists precisely for that, and without collapsing a retry
 // loop inflates the header on every turn until it blows the frame-max.
-procedure TDeadLetterTests.MesmaFilaEMesmaRazao_ColapsaNoCount;
+procedure TDeadLetterTests.SameQueueAndSameReason_CollapsesIntoCount;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
   LPayload: TBytes;
   I: Integer;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q.retry', PolDlx('dlx'));
+  LQ := TAMQPServerQueue.Create('q.retry', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
     // First death.
-    PublicaComHeader(LQ, 'm');
+    PublishWithHeader(LQ, 'm');
     LQ.Get(1, 1, False, LMsg, LRedel);
     LMsg.Release;
     LQ.PostNack(1, 1, False, False);
-    Estabiliza(LQ);
-    ChecaInt('uma entrada apos a 1a morte', 1,
-      ContaMortes(LSink.Item(0).HeaderPayload));
-    ChecaStr('count 1', '1', LeMorte(LSink.Item(0).HeaderPayload, 0, 'count'));
+    Stabilize(LQ);
+    CheckInt('uma entrada apos a 1a morte', 1,
+      CountDeaths(LSink.Item(0).HeaderPayload));
+    CheckStr('count 1', '1', ReadDeath(LSink.Item(0).HeaderPayload, 0, 'count'));
 
     // Returns the SAME dead message to the queue and kills it again, simulating the
     // retry loop coming around.
@@ -1771,11 +1771,11 @@ begin
       LQ.Get(1, UInt64(I), False, LMsg, LRedel);
       LMsg.Release;
       LQ.PostNack(1, UInt64(I), False, False);
-      Estabiliza(LQ);
+      Stabilize(LQ);
       LPayload := LSink.Item(LSink.Count - 1).HeaderPayload;
-      ChecaInt('continua UMA entrada', 1, ContaMortes(LPayload));
-      ChecaStr('count acumulou', IntToStr(I),
-        LeMorte(LPayload, 0, 'count'));
+      CheckInt('continua UMA entrada', 1, CountDeaths(LPayload));
+      CheckStr('count acumulou', IntToStr(I),
+        ReadDeath(LPayload, 0, 'count'));
     end;
   finally
     LQ.Free;
@@ -1785,29 +1785,29 @@ end;
 // A message killed by TTL must not carry the SAME 'expiration' to the DLQ:
 // it would die on the spot and retry-with-wait would not work. The old value becomes
 // 'original-expiration' in the entry.
-procedure TDeadLetterTests.ExpirationEhRetiradaEVaiParaOriginalExpiration;
+procedure TDeadLetterTests.ExpirationIsRemovedAndGoesToOriginalExpiration;
 var
-  LQ: TQueueRelogio;
-  LSink: TSinkEspia;
+  LQ: TQueueClock;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LEd: TAMQPHeaderEditor;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TQueueRelogio.Create('q', PolDlx('dlx'));
+  LQ := TQueueClock.Create('q', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm', '300');
-    Estabiliza(LQ);
-    LQ.Avanca(301);
+    PublishWithHeader(LQ, 'm', '300');
+    Stabilize(LQ);
+    LQ.Advance(301);
     LQ.PostDeliverTick;
-    Estabiliza(LQ);
-    ChecaInt('republicada', 1, LSink.Count);
-    ChecaStr('registrada na entrada', '300',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'original-expiration'));
+    Stabilize(LQ);
+    CheckInt('republicada', 1, LSink.Count);
+    CheckStr('registrada na entrada', '300',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'original-expiration'));
     LEd := TAMQPHeaderEditor.Create(LSink.Item(0).HeaderPayload);
     try
-      ChecaBool('propriedade expiration removida', False,
+      CheckBool('propriedade expiration removida', False,
         LEd.Properties.Has(bpExpiration));
     finally
       LEd.Free;
@@ -1818,34 +1818,34 @@ begin
 end;
 
 // x-first-death-* records the FIRST death and is never overwritten.
-procedure TDeadLetterTests.PrimeiraMorte_RegistraXFirstDeath;
+procedure TDeadLetterTests.FirstDeath_RecordsXFirstDeath;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LEd: TAMQPHeaderEditor;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
   LVal: TValue;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LQ := TAMQPServerQueue.Create('q.primeira', PolDlx('dlx'));
+  LQ := TAMQPServerQueue.Create('q.primeira', DlxPolicy('dlx'));
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'm');
+    PublishWithHeader(LQ, 'm');
     LQ.Get(1, 1, False, LMsg, LRedel);
     LMsg.Release;
     LQ.PostNack(1, 1, False, False);
-    Estabiliza(LQ);
+    Stabilize(LQ);
     LEd := TAMQPHeaderEditor.Create(LSink.Item(0).HeaderPayload);
     try
-      ChecaBool('tem x-first-death-queue', True,
+      CheckBool('tem x-first-death-queue', True,
         LEd.Headers.TryGetValue('x-first-death-queue', LVal));
-      ChecaStr('fila da primeira morte', 'q.primeira', LVal.AsString);
-      ChecaBool('tem x-first-death-reason', True,
+      CheckStr('fila da primeira morte', 'q.primeira', LVal.AsString);
+      CheckBool('tem x-first-death-reason', True,
         LEd.Headers.TryGetValue('x-first-death-reason', LVal));
-      ChecaStr('razao da primeira morte', 'rejected', LVal.AsString);
+      CheckStr('razao da primeira morte', 'rejected', LVal.AsString);
     finally
       LEd.Free;
     end;
@@ -1856,17 +1856,17 @@ end;
 
 // D14: the DLX graph can have a cycle. After the hop cap the message
 // dies for good, instead of circling forever.
-procedure TDeadLetterTests.GuardaDeCiclo_ParaDepoisDoTeto;
+procedure TDeadLetterTests.CycleGuard_StopsAfterTheCap;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
   LMsg: TAMQPMessage;
   LRedel: Boolean;
   LPayload: TBytes;
-  I, LAntes: Integer;
+  I, LBefore: Integer;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
   // Each turn uses a queue with a DIFFERENT name, otherwise collapsing by (queue,
   // reason) would keep a single entry and the cap (which sums the counts) would be the
@@ -1874,11 +1874,11 @@ begin
   LPayload := nil;
   for I := 1 to AMQP_MAX_DEADLETTER_HOPS + 2 do
   begin
-    LQ := TAMQPServerQueue.Create('q' + IntToStr(I), PolDlx('dlx'));
+    LQ := TAMQPServerQueue.Create('q' + IntToStr(I), DlxPolicy('dlx'));
     try
       LQ.DeadLetterSink := LSink;
       if LPayload = nil then
-        PublicaComHeader(LQ, 'm')
+        PublishWithHeader(LQ, 'm')
       else
       begin
         LMsg := TAMQPMessage.Create('ex.origem', 'rk.origem', 'guest',
@@ -1889,15 +1889,15 @@ begin
           LMsg.Release;
         end;
       end;
-      LAntes := LSink.Count;
+      LBefore := LSink.Count;
       LQ.Get(1, 1, False, LMsg, LRedel);
       LMsg.Release;
       LQ.PostNack(1, 1, False, False);
-      Estabiliza(LQ);
-      if LSink.Count = LAntes then
+      Stabilize(LQ);
+      if LSink.Count = LBefore then
       begin
         // It stopped republishing: that is the guard acting.
-        ChecaBool('parou no teto, nao antes', True,
+        CheckBool('parou no teto, nao antes', True,
           I > AMQP_MAX_DEADLETTER_HOPS);
         Exit;
       end;
@@ -1906,25 +1906,25 @@ begin
       LQ.Free;
     end;
   end;
-  ChecaBool('a guarda de ciclo tinha de ter agido', False, True);
+  CheckBool('a guarda de ciclo tinha de ter agido', False, True);
 end;
 
 // Without a DLX configured, death is a plain drop -- WS4's behavior.
-procedure TDeadLetterTests.SemDlx_MorteEhDescarte;
+procedure TDeadLetterTests.NoDlx_DeathIsADrop;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TQueueRelogio.Create('q', PolTtl(100));
+  LQ := TQueueClock.Create('q', TtlPolicy(100));
   try
-    PublicaComHeader(LQ, 'm');
-    Estabiliza(LQ);
-    LQ.Avanca(101);
+    PublishWithHeader(LQ, 'm');
+    Stabilize(LQ);
+    LQ.Advance(101);
     LQ.PostDeliverTick;
-    LStats := Estabiliza(LQ);
-    ChecaInt('sumiu', 0, LStats.MessageCount);
-    ChecaInt('contada como expirada', 1, LStats.ExpiredCount);
-    ChecaInt('nao contada como republicada', 0, LStats.DeadLetteredCount);
+    LStats := Stabilize(LQ);
+    CheckInt('sumiu', 0, LStats.MessageCount);
+    CheckInt('contada como expirada', 1, LStats.ExpiredCount);
+    CheckInt('nao contada como republicada', 0, LStats.DeadLetteredCount);
   finally
     LQ.Free;
   end;
@@ -1932,7 +1932,7 @@ end;
 
 { TOverflowTests }
 
-function PolMaxLen(AMax: Int64; AOverflow: TAMQPOverflow = amqovDropHead;
+function MaxLenPolicy(AMax: Int64; AOverflow: TAMQPOverflow = amqovDropHead;
   AMaxBytes: Int64 = -1): TAMQPQueuePolicy;
 begin
   Result := TAMQPQueuePolicy.Empty;
@@ -1942,44 +1942,44 @@ begin
 end;
 
 // drop-head is the default: on overflow, the OLDEST goes.
-procedure TOverflowTests.DropHead_DescartaAMaisVelha;
+procedure TOverflowTests.DropHead_DropsTheOldest;
 var
   LQ: TAMQPServerQueue;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(2));
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(2));
   try
-    Publica(LQ, 'a');
-    Publica(LQ, 'b');
-    Publica(LQ, 'c');
-    LStats := Estabiliza(LQ);
-    ChecaInt('teto respeitado', 2, LStats.MessageCount);
-    ChecaInt('uma descartada', 1, LStats.DroppedCount);
-    ChecaStr('a mais velha saiu', 'b', TiraCorpo(LQ, 1));
-    ChecaStr('e a seguinte', 'c', TiraCorpo(LQ, 2));
+    PublishTo(LQ, 'a');
+    PublishTo(LQ, 'b');
+    PublishTo(LQ, 'c');
+    LStats := Stabilize(LQ);
+    CheckInt('teto respeitado', 2, LStats.MessageCount);
+    CheckInt('uma descartada', 1, LStats.DroppedCount);
+    CheckStr('a mais velha saiu', 'b', TakeBody(LQ, 1));
+    CheckStr('e a seguinte', 'c', TakeBody(LQ, 2));
   finally
     LQ.Free;
   end;
 end;
 
 // x-max-length-bytes counts the BODY, not the quantity.
-procedure TOverflowTests.MaxLengthBytes_ContaOCorpo;
+procedure TOverflowTests.MaxLengthBytes_CountsTheBody;
 var
   LQ: TAMQPServerQueue;
   LStats: TAMQPQueueStats;
 begin
   // Cap of 10 bytes; each body below has 4.
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(-1, amqovDropHead, 10));
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(-1, amqovDropHead, 10));
   try
-    Publica(LQ, 'aaaa');
-    Publica(LQ, 'bbbb');
-    LStats := Estabiliza(LQ);
-    ChecaInt('8 bytes cabem', 2, LStats.MessageCount);
-    Publica(LQ, 'cccc'); // 12 bytes: overflows
-    LStats := Estabiliza(LQ);
-    ChecaInt('estourou, uma saiu', 2, LStats.MessageCount);
-    ChecaInt('contada', 1, LStats.DroppedCount);
-    ChecaStr('a mais velha saiu', 'bbbb', TiraCorpo(LQ, 1));
+    PublishTo(LQ, 'aaaa');
+    PublishTo(LQ, 'bbbb');
+    LStats := Stabilize(LQ);
+    CheckInt('8 bytes cabem', 2, LStats.MessageCount);
+    PublishTo(LQ, 'cccc'); // 12 bytes: overflows
+    LStats := Stabilize(LQ);
+    CheckInt('estourou, uma saiu', 2, LStats.MessageCount);
+    CheckInt('contada', 1, LStats.DroppedCount);
+    CheckStr('a mais velha saiu', 'bbbb', TakeBody(LQ, 1));
   finally
     LQ.Free;
   end;
@@ -1988,83 +1988,83 @@ end;
 // The byte accumulator has to GO BACK DOWN when a message is taken -- otherwise the queue stays
 // "full" forever after a peak. It is the real risk of keeping an incremental total
 // instead of summing on the spot.
-procedure TOverflowTests.MaxLengthBytes_AcumuladorVoltaAoConsumir;
+procedure TOverflowTests.MaxLengthBytes_AccumulatorGoesBackOnConsume;
 var
   LQ: TAMQPServerQueue;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(-1, amqovDropHead, 10));
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(-1, amqovDropHead, 10));
   try
-    Publica(LQ, 'aaaa');
-    Publica(LQ, 'bbbb');
-    ChecaStr('consome uma', 'aaaa', TiraCorpo(LQ, 1));
+    PublishTo(LQ, 'aaaa');
+    PublishTo(LQ, 'bbbb');
+    CheckStr('consome uma', 'aaaa', TakeBody(LQ, 1));
     // 4 bytes are left; if the accumulator had not gone back down, this publish
     // would seem to overflow the cap and would drop the previous one.
-    Publica(LQ, 'cccc');
-    LStats := Estabiliza(LQ);
-    ChecaInt('as duas cabem', 2, LStats.MessageCount);
-    ChecaInt('nada descartado', 0, LStats.DroppedCount);
+    PublishTo(LQ, 'cccc');
+    LStats := Stabilize(LQ);
+    CheckInt('as duas cabem', 2, LStats.MessageCount);
+    CheckInt('nada descartado', 0, LStats.DroppedCount);
   finally
     LQ.Free;
   end;
 end;
 
 // D15: with reject-publish, the enqueue is SYNCHRONOUS and returns False when full.
-procedure TOverflowTests.RejectPublish_RecusaQuandoCheia;
+procedure TOverflowTests.RejectPublish_RefusesWhenFull;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
   LStats: TAMQPQueueStats;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(1, amqovRejectPublish));
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(1, amqovRejectPublish));
   try
-    LMsg := NovaMensagem('primeira');
+    LMsg := NewMessage('primeira');
     try
-      ChecaBool('a primeira entra', True, LQ.TryPostMessage(LMsg));
+      CheckBool('a primeira entra', True, LQ.TryPostMessage(LMsg));
     finally
       LMsg.Release;
     end;
-    LMsg := NovaMensagem('segunda');
+    LMsg := NewMessage('segunda');
     try
-      ChecaBool('a segunda e RECUSADA', False, LQ.TryPostMessage(LMsg));
+      CheckBool('a segunda e RECUSADA', False, LQ.TryPostMessage(LMsg));
     finally
       LMsg.Release;
     end;
-    LStats := Estabiliza(LQ);
-    ChecaInt('so a primeira ficou', 1, LStats.MessageCount);
+    LStats := Stabilize(LQ);
+    CheckInt('so a primeira ficou', 1, LStats.MessageCount);
     // Rejecting is NOT dropping: the message never got in, so it does not count as
     // dropped -- the one who was told was the publisher.
-    ChecaInt('recusa nao conta como descarte', 0, LStats.DroppedCount);
-    ChecaStr('e e a primeira', 'primeira', TiraCorpo(LQ, 1));
+    CheckInt('recusa nao conta como descarte', 0, LStats.DroppedCount);
+    CheckStr('e e a primeira', 'primeira', TakeBody(LQ, 1));
   finally
     LQ.Free;
   end;
 end;
 
 // After emptying, the queue accepts again.
-procedure TOverflowTests.RejectPublish_VoltaAAceitarAoEsvaziar;
+procedure TOverflowTests.RejectPublish_AcceptsAgainWhenEmptied;
 var
   LQ: TAMQPServerQueue;
   LMsg: TAMQPMessage;
 begin
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(1, amqovRejectPublish));
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(1, amqovRejectPublish));
   try
-    LMsg := NovaMensagem('a');
+    LMsg := NewMessage('a');
     try
       LQ.TryPostMessage(LMsg);
     finally
       LMsg.Release;
     end;
-    LMsg := NovaMensagem('b');
+    LMsg := NewMessage('b');
     try
-      ChecaBool('cheia recusa', False, LQ.TryPostMessage(LMsg));
+      CheckBool('cheia recusa', False, LQ.TryPostMessage(LMsg));
     finally
       LMsg.Release;
     end;
-    ChecaStr('esvazia', 'a', TiraCorpo(LQ, 1));
-    LMsg := NovaMensagem('c');
+    CheckStr('esvazia', 'a', TakeBody(LQ, 1));
+    LMsg := NewMessage('c');
     try
-      ChecaBool('vazia aceita de novo', True, LQ.TryPostMessage(LMsg));
+      CheckBool('vazia aceita de novo', True, LQ.TryPostMessage(LMsg));
     finally
       LMsg.Release;
     end;
@@ -2074,30 +2074,30 @@ begin
 end;
 
 // An EXPIRED message must not take a slot and cause a live publish to be rejected.
-procedure TOverflowTests.RejectPublish_VencidaNaoOcupaVaga;
+procedure TOverflowTests.RejectPublish_ExpiredTakesNoSlot;
 var
-  LQ: TQueueRelogio;
-  LPol: TAMQPQueuePolicy;
+  LQ: TQueueClock;
+  LPolicy: TAMQPQueuePolicy;
   LMsg: TAMQPMessage;
 begin
-  LPol := PolMaxLen(1, amqovRejectPublish);
-  LPol.MessageTtlMs := 100;
-  LQ := TQueueRelogio.Create('q', LPol);
+  LPolicy := MaxLenPolicy(1, amqovRejectPublish);
+  LPolicy.MessageTtlMs := 100;
+  LQ := TQueueClock.Create('q', LPolicy);
   try
-    LMsg := NovaMensagem('velha');
+    LMsg := NewMessage('velha');
     try
-      ChecaBool('entra', True, LQ.TryPostMessage(LMsg));
+      CheckBool('entra', True, LQ.TryPostMessage(LMsg));
     finally
       LMsg.Release;
     end;
-    LQ.Avanca(101); // the old one expired
-    LMsg := NovaMensagem('nova');
+    LQ.Advance(101); // the old one expired
+    LMsg := NewMessage('nova');
     try
-      ChecaBool('a vaga da vencida e liberada', True, LQ.TryPostMessage(LMsg));
+      CheckBool('a vaga da vencida e liberada', True, LQ.TryPostMessage(LMsg));
     finally
       LMsg.Release;
     end;
-    ChecaStr('e a nova esta la', 'nova', TiraCorpo(LQ, 1));
+    CheckStr('e a nova esta la', 'nova', TakeBody(LQ, 1));
   finally
     LQ.Free;
   end;
@@ -2106,30 +2106,30 @@ end;
 // The GLOBAL cap (D7) and the queue's x-max-length are both an upper limit,
 // so the SMALLER wins -- and the global one is a safety net of the host
 // process, which a client argument cannot loosen.
-procedure TOverflowTests.TetoGlobalEDaFila_OMenorVence;
+procedure TOverflowTests.GlobalAndQueueCap_TheSmallerWins;
 var
   LQ: TAMQPServerQueue;
 begin
   // Global 2, queue asks for 5: 2 applies.
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(5), 2);
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(5), 2);
   try
-    ChecaInt('o global aperta', 2, LQ.MaxLength);
+    CheckInt('o global aperta', 2, LQ.MaxLength);
   finally
     LQ.Free;
   end;
 
   // Global 5, queue asks for 2: 2 applies.
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(2), 5);
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(2), 5);
   try
-    ChecaInt('a fila aperta', 2, LQ.MaxLength);
+    CheckInt('a fila aperta', 2, LQ.MaxLength);
   finally
     LQ.Free;
   end;
 
   // Without a global one (0 = unlimited), the queue's applies.
-  LQ := TAMQPServerQueue.Create('q', PolMaxLen(3), 0);
+  LQ := TAMQPServerQueue.Create('q', MaxLenPolicy(3), 0);
   try
-    ChecaInt('so a fila', 3, LQ.MaxLength);
+    CheckInt('so a fila', 3, LQ.MaxLength);
   finally
     LQ.Free;
   end;
@@ -2137,35 +2137,35 @@ begin
   // With neither of the two: unlimited.
   LQ := TAMQPServerQueue.Create('q', TAMQPQueuePolicy.Empty, 0);
   try
-    ChecaInt('ilimitado', 0, LQ.MaxLength);
+    CheckInt('ilimitado', 0, LQ.MaxLength);
   finally
     LQ.Free;
   end;
 end;
 
 // Dropping by cap is still a death with reason 'maxlen' (WS5).
-procedure TOverflowTests.DropHead_ContinuaIndoParaODlx;
+procedure TOverflowTests.DropHead_StillGoesToTheDlx;
 var
   LQ: TAMQPServerQueue;
-  LSink: TSinkEspia;
+  LSink: TSinkSpy;
   LSinkRef: IAMQPDeadLetterSink;
-  LPol: TAMQPQueuePolicy;
+  LPolicy: TAMQPQueuePolicy;
 begin
-  LSink := TSinkEspia.Create;
+  LSink := TSinkSpy.Create;
   LSinkRef := LSink;
-  LPol := PolMaxLen(1);
-  LPol.DeadLetterExchange := 'dlx';
-  LPol.HasDeadLetterExchange := True;
-  LQ := TAMQPServerQueue.Create('q', LPol);
+  LPolicy := MaxLenPolicy(1);
+  LPolicy.DeadLetterExchange := 'dlx';
+  LPolicy.HasDeadLetterExchange := True;
+  LQ := TAMQPServerQueue.Create('q', LPolicy);
   try
     LQ.DeadLetterSink := LSink;
-    PublicaComHeader(LQ, 'velha');
-    PublicaComHeader(LQ, 'nova');
-    Estabiliza(LQ);
-    ChecaInt('a descartada foi republicada', 1, LSink.Count);
-    ChecaStr('razao', 'maxlen',
-      LeMorte(LSink.Item(0).HeaderPayload, 0, 'reason'));
-    ChecaStr('e foi a mais velha', 'velha', LSink.Item(0).Corpo);
+    PublishWithHeader(LQ, 'velha');
+    PublishWithHeader(LQ, 'nova');
+    Stabilize(LQ);
+    CheckInt('a descartada foi republicada', 1, LSink.Count);
+    CheckStr('razao', 'maxlen',
+      ReadDeath(LSink.Item(0).HeaderPayload, 0, 'reason'));
+    CheckStr('e foi a mais velha', 'velha', LSink.Item(0).BodyText);
   finally
     LQ.Free;
   end;
@@ -2173,34 +2173,34 @@ end;
 
 { TIdleExpiryTests }
 
-function PolExpires(AMs: Int64): TAMQPQueuePolicy;
+function ExpiresPolicy(AMs: Int64): TAMQPQueuePolicy;
 begin
   Result := TAMQPQueuePolicy.Empty;
   Result.ExpiresMs := AMs;
 end;
 
 // A freshly created queue is born "used now": it cannot be idle right out of the gate.
-procedure TIdleExpiryTests.NasceUsadaAgora;
+procedure TIdleExpiryTests.StartsUsedNow;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
   try
-    ChecaInt('ociosidade zero ao nascer', 0, Estabiliza(LQ).IdleMs);
+    CheckInt('ociosidade zero ao nascer', 0, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
 end;
 
-procedure TIdleExpiryTests.OciosidadeCresceComORelogio;
+procedure TIdleExpiryTests.IdlenessGrowsWithTheClock;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
   try
-    Estabiliza(LQ);
-    LQ.Avanca(700);
-    ChecaInt('700 ms sem uso', 700, Estabiliza(LQ).IdleMs);
+    Stabilize(LQ);
+    LQ.Advance(700);
+    CheckInt('700 ms sem uso', 700, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
@@ -2209,35 +2209,35 @@ end;
 // PUBLISHING IS NOT USE -- it is RabbitMQ's rule, and its reason is the purpose
 // of the argument: a queue that only receives and nobody reads is exactly the one
 // you want to collect.
-procedure TIdleExpiryTests.PublicarNaoContaComoUso;
+procedure TIdleExpiryTests.PublishingDoesNotCountAsUse;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
   try
-    Estabiliza(LQ);
-    LQ.Avanca(500);
-    Publica(LQ, 'm');
-    LQ.Avanca(300);
-    ChecaInt('o publish nao reiniciou o relogio', 800, Estabiliza(LQ).IdleMs);
+    Stabilize(LQ);
+    LQ.Advance(500);
+    PublishTo(LQ, 'm');
+    LQ.Advance(300);
+    CheckInt('o publish nao reiniciou o relogio', 800, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
 end;
 
 // Basic.Get IS use.
-procedure TIdleExpiryTests.GetContaComoUso;
+procedure TIdleExpiryTests.GetCountsAsUse;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
   try
-    Publica(LQ, 'm');
-    Estabiliza(LQ);
-    LQ.Avanca(500);
-    TiraCorpo(LQ, 1);
-    LQ.Avanca(200);
-    ChecaInt('o Get reiniciou o relogio', 200, Estabiliza(LQ).IdleMs);
+    PublishTo(LQ, 'm');
+    Stabilize(LQ);
+    LQ.Advance(500);
+    TakeBody(LQ, 1);
+    LQ.Advance(200);
+    CheckInt('o Get reiniciou o relogio', 200, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
@@ -2245,20 +2245,20 @@ end;
 
 // With a consumer the queue is in use BY DEFINITION: idleness is zero, however
 // much time passes.
-procedure TIdleExpiryTests.ComConsumidor_OciosidadeEhZero;
+procedure TIdleExpiryTests.WithConsumer_IdlenessIsZero;
 var
-  LQ: TQueueRelogio;
-  LAlvo: TAlvoFalso;
-  LAlvoRef: IAMQPDeliveryTarget;
+  LQ: TQueueClock;
+  LTarget: TFakeTarget;
+  LTargetRef: IAMQPDeliveryTarget;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
-  LAlvo := TAlvoFalso.Create(1);
-  LAlvoRef := LAlvo; // the test holds the reference (lesson of WS5)
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
+  LTarget := TFakeTarget.Create(1);
+  LTargetRef := LTarget; // the test holds the reference (lesson of WS5)
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LAlvo));
-    Estabiliza(LQ);
-    LQ.Avanca(999999);
-    ChecaInt('consumidor mantem a fila em uso', 0, Estabiliza(LQ).IdleMs);
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LTarget));
+    Stabilize(LQ);
+    LQ.Advance(999999);
+    CheckInt('consumidor mantem a fila em uso', 0, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
@@ -2266,45 +2266,45 @@ end;
 
 // The clock starts when the LAST consumer leaves -- not from the instant
 // it joined.
-procedure TIdleExpiryTests.RelogioComecaQuandoOUltimoConsumidorSai;
+procedure TIdleExpiryTests.ClockStartsWhenTheLastConsumerLeaves;
 var
-  LQ: TQueueRelogio;
-  LAlvo: TAlvoFalso;
-  LAlvoRef: IAMQPDeliveryTarget;
+  LQ: TQueueClock;
+  LTarget: TFakeTarget;
+  LTargetRef: IAMQPDeliveryTarget;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
-  LAlvo := TAlvoFalso.Create(1);
-  LAlvoRef := LAlvo; // the test holds the reference (lesson of WS5)
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
+  LTarget := TFakeTarget.Create(1);
+  LTargetRef := LTarget; // the test holds the reference (lesson of WS5)
   try
-    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LAlvo));
-    Estabiliza(LQ);
-    LQ.Avanca(5000); // a long time WITH a consumer
+    LQ.PostAddConsumer(TAMQPServerConsumer.Create('ct', True, False, LTarget));
+    Stabilize(LQ);
+    LQ.Advance(5000); // a long time WITH a consumer
     LQ.PostRemoveConsumer(1, 'ct');
-    Estabiliza(LQ);
-    ChecaInt('zera na saida do consumidor', 0, Estabiliza(LQ).IdleMs);
-    LQ.Avanca(300);
-    ChecaInt('e passa a contar dali', 300, Estabiliza(LQ).IdleMs);
+    Stabilize(LQ);
+    CheckInt('zera na saida do consumidor', 0, Stabilize(LQ).IdleMs);
+    LQ.Advance(300);
+    CheckInt('e passa a contar dali', 300, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
 end;
 
 // A redeclare counts as use (the engine's PostTouch).
-procedure TIdleExpiryTests.TouchReiniciaORelogio;
+procedure TIdleExpiryTests.TouchRestartsTheClock;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
 begin
-  LQ := TQueueRelogio.Create('q', PolExpires(1000));
+  LQ := TQueueClock.Create('q', ExpiresPolicy(1000));
   try
-    Estabiliza(LQ);
-    LQ.Avanca(800);
+    Stabilize(LQ);
+    LQ.Advance(800);
     LQ.PostTouch;
-    // PostTouch is ASYNCHRONOUS: without the barrier, it would run after the Avanca
+    // PostTouch is ASYNCHRONOUS: without the barrier, it would run after the Advance
     // below and would read the clock already moved forward. A synchronous call posted after an
     // asynchronous one is the project's barrier -- the mailbox is serial and FIFO.
-    Estabiliza(LQ);
-    LQ.Avanca(100);
-    ChecaInt('o touch reiniciou', 100, Estabiliza(LQ).IdleMs);
+    Stabilize(LQ);
+    LQ.Advance(100);
+    CheckInt('o touch reiniciou', 100, Stabilize(LQ).IdleMs);
   finally
     LQ.Free;
   end;
@@ -2312,17 +2312,17 @@ end;
 
 // A queue WITHOUT x-expires pays nothing: the engine's sweep does not even ask it for Stats,
 // and IdleMs stays merely informative.
-procedure TIdleExpiryTests.SemXExpires_NaoEhCandidata;
+procedure TIdleExpiryTests.NoXExpires_IsNotACandidate;
 var
-  LQ: TQueueRelogio;
+  LQ: TQueueClock;
 begin
-  LQ := TQueueRelogio.Create('q', TAMQPQueuePolicy.Empty);
+  LQ := TQueueClock.Create('q', TAMQPQueuePolicy.Empty);
   try
-    ChecaInt('sem x-expires', -1, LQ.Policy.ExpiresMs);
-    Estabiliza(LQ);
-    LQ.Avanca(999999);
+    CheckInt('sem x-expires', -1, LQ.Policy.ExpiresMs);
+    Stabilize(LQ);
+    LQ.Advance(999999);
     // IdleMs is still computed, but nobody acts on it.
-    ChecaBool('ociosidade so informativa', True, Estabiliza(LQ).IdleMs > 0);
+    CheckBool('ociosidade so informativa', True, Stabilize(LQ).IdleMs > 0);
   finally
     LQ.Free;
   end;

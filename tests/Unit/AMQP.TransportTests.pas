@@ -29,20 +29,20 @@ type
     procedure ReadFrame;
   public
     [TearDown] procedure TearDown;
-    [Test] procedure Read_PeerFechou_DevolveZero;
-    [Test] procedure Read_PeerFechou_FrameReaderVeEOF;
-    [Test] procedure Read_ErroDeTransporte_ViraEAMQPTransport;
-    [Test] procedure Read_Timeout_ViraEAMQPTransport;
-    [Test] procedure Read_ErroDeTls_ViraEAMQPTls;
-    [Test] procedure Write_PeerFechou_ViraEAMQPTransport;
-    [Test] procedure Write_ErroDeTls_ViraEAMQPTls;
-    [Test] procedure Mensagem_PreservadaNaTraducao;
-    [Test] procedure EAMQPTls_NaoHerdaDeEAMQPTransport;
-    [Test] procedure Params_Localhost_PadroesDeTls;
-    [Test] procedure ClientTlsOptions_MapeiaTodosOsCampos;
-    [Test] procedure ClientTlsOptions_VerifyPeerPadrao_Valida;
-    [Test] procedure ClientTlsOptions_BackendPadrao_Resolvido;
-    [Test] procedure BackendPadrao_DesteBuild;
+    [Test] procedure Read_PeerClosed_ReturnsZero;
+    [Test] procedure Read_PeerClosed_FrameReaderSeesEOF;
+    [Test] procedure Read_TransportError_BecomesEAMQPTransport;
+    [Test] procedure Read_Timeout_BecomesEAMQPTransport;
+    [Test] procedure Read_TlsError_BecomesEAMQPTls;
+    [Test] procedure Write_PeerClosed_BecomesEAMQPTransport;
+    [Test] procedure Write_TlsError_BecomesEAMQPTls;
+    [Test] procedure Message_PreservedInTranslation;
+    [Test] procedure EAMQPTls_DoesNotInheritFromEAMQPTransport;
+    [Test] procedure Params_Localhost_TlsDefaults;
+    [Test] procedure ClientTlsOptions_MapsAllFields;
+    [Test] procedure ClientTlsOptions_DefaultVerifyPeer_Validates;
+    [Test] procedure ClientTlsOptions_DefaultBackend_Resolved;
+    [Test] procedure DefaultBackend_OfThisBuild;
   end;
 
 implementation
@@ -126,7 +126,7 @@ begin
   TAMQPFrame.ReadFrom(FStream);
 end;
 
-procedure TTransportTests.Read_PeerFechou_DevolveZero;
+procedure TTransportTests.Read_PeerClosed_ReturnsZero;
 var
   B: array[0..7] of Byte;
 begin
@@ -136,47 +136,47 @@ begin
   TAssert.AssertEquals('fim de stream', 0, FStream.Read(B[0], SizeOf(B)));
 end;
 
-procedure TTransportTests.Read_PeerFechou_FrameReaderVeEOF;
+procedure TTransportTests.Read_PeerClosed_FrameReaderSeesEOF;
 begin
   // What the client's and the broker's read loops catch to end normally.
   FStream := NewStream(EPcTransportClosed, 'closed by the peer');
-  ChecaLevanta('peer fechou durante um frame', EAMQPFrameEOF, ReadFrame);
+  CheckRaises('peer fechou durante um frame', EAMQPFrameEOF, ReadFrame);
 end;
 
-procedure TTransportTests.Read_ErroDeTransporte_ViraEAMQPTransport;
+procedure TTransportTests.Read_TransportError_BecomesEAMQPTransport;
 begin
   FStream := NewStream(EPcTransport, 'recv failed');
-  ChecaLevanta('erro de transporte na leitura', EAMQPTransport, ReadOnce);
+  CheckRaises('erro de transporte na leitura', EAMQPTransport, ReadOnce);
 end;
 
-procedure TTransportTests.Read_Timeout_ViraEAMQPTransport;
+procedure TTransportTests.Read_Timeout_BecomesEAMQPTransport;
 begin
   // The library sets no deadline, but the class must not leak if one fires.
   FStream := NewStream(EPcTransportTimeout, 'read timed out');
-  ChecaLevanta('prazo na leitura', EAMQPTransport, ReadOnce);
+  CheckRaises('prazo na leitura', EAMQPTransport, ReadOnce);
 end;
 
-procedure TTransportTests.Read_ErroDeTls_ViraEAMQPTls;
+procedure TTransportTests.Read_TlsError_BecomesEAMQPTls;
 begin
   FStream := NewStream(EPcTls, 'bad record mac');
-  ChecaLevanta('erro de TLS na leitura', EAMQPTls, ReadOnce);
+  CheckRaises('erro de TLS na leitura', EAMQPTls, ReadOnce);
 end;
 
-procedure TTransportTests.Write_PeerFechou_ViraEAMQPTransport;
+procedure TTransportTests.Write_PeerClosed_BecomesEAMQPTransport;
 begin
   // Writing has no "end of stream": a closed peer is an error the writer
   // must see (the client turns it into EAMQPConnection).
   FStream := NewStream(EPcTransportClosed, 'closed by the peer');
-  ChecaLevanta('peer fechou na escrita', EAMQPTransport, WriteOnce);
+  CheckRaises('peer fechou na escrita', EAMQPTransport, WriteOnce);
 end;
 
-procedure TTransportTests.Write_ErroDeTls_ViraEAMQPTls;
+procedure TTransportTests.Write_TlsError_BecomesEAMQPTls;
 begin
   FStream := NewStream(EPcTls, 'encrypt failed');
-  ChecaLevanta('erro de TLS na escrita', EAMQPTls, WriteOnce);
+  CheckRaises('erro de TLS na escrita', EAMQPTls, WriteOnce);
 end;
 
-procedure TTransportTests.Mensagem_PreservadaNaTraducao;
+procedure TTransportTests.Message_PreservedInTranslation;
 var
   LMsg: string;
 begin
@@ -192,7 +192,7 @@ begin
     'certificate verify failed', LMsg);
 end;
 
-procedure TTransportTests.EAMQPTls_NaoHerdaDeEAMQPTransport;
+procedure TTransportTests.EAMQPTls_DoesNotInheritFromEAMQPTransport;
 begin
   // An "except on EAMQPTransport" written before 0.6.0 must not start
   // catching TLS failures.
@@ -200,7 +200,7 @@ begin
     EAMQPTls.InheritsFrom(EAMQPTransport));
 end;
 
-procedure TTransportTests.Params_Localhost_PadroesDeTls;
+procedure TTransportTests.Params_Localhost_TlsDefaults;
 var
   P: TAMQPConnectionParams;
 begin
@@ -216,7 +216,7 @@ begin
     Integer(P.ConnectTimeoutMs));
 end;
 
-procedure TTransportTests.ClientTlsOptions_MapeiaTodosOsCampos;
+procedure TTransportTests.ClientTlsOptions_MapsAllFields;
 var
   P: TAMQPConnectionParams;
   O: TPcTlsOptions;
@@ -241,7 +241,7 @@ begin
     Integer(O.HandshakeTimeoutMs));
 end;
 
-procedure TTransportTests.ClientTlsOptions_VerifyPeerPadrao_Valida;
+procedure TTransportTests.ClientTlsOptions_DefaultVerifyPeer_Validates;
 var
   P: TAMQPConnectionParams;
 begin
@@ -251,7 +251,7 @@ begin
     AmqpClientTlsOptions(P).SkipServerVerification);
 end;
 
-procedure TTransportTests.ClientTlsOptions_BackendPadrao_Resolvido;
+procedure TTransportTests.ClientTlsOptions_DefaultBackend_Resolved;
 var
   P: TAMQPConnectionParams;
 begin
@@ -260,7 +260,7 @@ begin
     AmqpClientTlsOptions(P).Backend = AmqpDefaultTlsBackend);
 end;
 
-procedure TTransportTests.BackendPadrao_DesteBuild;
+procedure TTransportTests.DefaultBackend_OfThisBuild;
 begin
   // AMQP_OPENSSL only changes the default (decision T3).
   {$IFDEF AMQP_OPENSSL}

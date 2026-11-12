@@ -6,7 +6,7 @@ program CrashHostFpc;
   ------------------------------
   This program starts the broker with DataDir, does ONE job, prints a marker
   and STAYS ALIVE. The one who kills it is the driver
-  (tests/tools/matriz_de_queda.py), from outside, without warning. It is real
+  (tests/tools/crash_matrix.py), from outside, without warning. It is real
   process death: no destructor runs, no Stop is called, the journal does not
   drain.
 
@@ -20,7 +20,7 @@ program CrashHostFpc;
 
   The other two layers of D28 already live in the suite: the exhaustive
   truncation sweep (WS1) and the file test double that counts fsyncs and fails
-  at the chosen moment (WS1/WS2, plus WS7's TAMQPWalFileComFalha). This is the
+  at the chosen moment (WS1/WS2, plus WS7's TAMQPFailingWalFile). This is the
   third, and it lives OUTSIDE the runner for the same reason as the SmokeTest:
   a test that needs to kill its own process does not fit in a runner that
   wants to count assertions.
@@ -72,14 +72,14 @@ uses
   AMQP.Server.Broker;
 
 const
-  FILA = 'q.crash';
+  QUEUE_NAME = 'q.crash';
 
 var
   GBroker: TAMQPServer;
   GConn: TAMQPConnection;
   GChan: TAMQPChannel;
 
-procedure Diz(const AMsg: string);
+procedure Say(const AMsg: string);
 begin
   WriteLn(AMsg);
   Flush(Output);
@@ -88,7 +88,7 @@ end;
 // Starts the broker on the directory and connects a client to it. Ephemeral
 // port: the driver does not need to know it, because client and broker are in
 // the same process.
-procedure Sobe(const ADir: string);
+procedure StartUp(const ADir: string);
 var
   LParams: TAMQPConnectionParams;
 begin
@@ -103,47 +103,47 @@ begin
   GConn := TAMQPConnection.Create(LParams);
   GConn.Open;
   GChan := GConn.CreateChannel;
-  GChan.DeclareQueue(TAMQPQueueDeclare.Create(FILA, True));
+  GChan.DeclareQueue(TAMQPQueueDeclare.Create(QUEUE_NAME, True));
 end;
 
 /// Stays alive until someone kills the process. There is NO clean exit from
 /// here: that is the point of the exercise.
-procedure EsperaAMorte;
+procedure WaitForDeath;
 begin
   while True do
     Sleep(50);
 end;
 
-procedure ModoPublica(const ADir: string; AN, AInicio: Integer);
+procedure ModePublish(const ADir: string; AN, AStart: Integer);
 var
   I: Integer;
 begin
-  Sobe(ADir);
+  StartUp(ADir);
   GChan.ConfirmSelect;
-  for I := AInicio to AInicio + AN - 1 do
-    GChan.PublishText('', FILA, IntToStr(I), True);
+  for I := AStart to AStart + AN - 1 do
+    GChan.PublishText('', QUEUE_NAME, IntToStr(I), True);
   if not GChan.WaitForConfirms(30000) then
   begin
-    Diz('ERRO nem tudo foi confirmado');
+    Say('ERRO nem tudo foi confirmado');
     ExitCode := 2;
     Exit;
   end;
-  Diz('PUBLICADAS ' + IntToStr(AN));
-  EsperaAMorte;
+  Say('PUBLICADAS ' + IntToStr(AN));
+  WaitForDeath;
 end;
 
-procedure ModoConsome(const ADir: string; AN: Integer);
+procedure ModeConsume(const ADir: string; AN: Integer);
 var
   I: Integer;
   LGet: TAMQPGetResult;
 begin
-  Sobe(ADir);
+  StartUp(ADir);
   for I := 1 to AN do
   begin
-    LGet := GChan.BasicGet(FILA, False); // ack mode
+    LGet := GChan.BasicGet(QUEUE_NAME, False); // ack mode
     if not LGet.Found then
     begin
-      Diz('ERRO fila vazia em ' + IntToStr(I));
+      Say('ERRO fila vazia em ' + IntToStr(I));
       ExitCode := 2;
       Exit;
     end;
@@ -152,68 +152,68 @@ begin
   // The ack travels and the actor still has to process it and write the DEQ.
   // Without this wait the test would measure the race, not durability.
   Sleep(1000);
-  Diz('CONSUMIDAS ' + IntToStr(AN));
-  EsperaAMorte;
+  Say('CONSUMIDAS ' + IntToStr(AN));
+  WaitForDeath;
 end;
 
-procedure ModoDespeja(const ADir: string);
+procedure ModeFlood(const ADir: string);
 var
   I: Integer;
 begin
-  Sobe(ADir);
+  StartUp(ADir);
   GChan.ConfirmSelect;
   I := 0;
   while True do
   begin
     Inc(I);
-    GChan.PublishText('', FILA, IntToStr(I), True);
+    GChan.PublishText('', QUEUE_NAME, IntToStr(I), True);
     if GChan.WaitForConfirms(30000) then
-      Diz('CONFIRMADA ' + IntToStr(I))
+      Say('CONFIRMADA ' + IntToStr(I))
     else
     begin
-      Diz('NACK ' + IntToStr(I));
+      Say('NACK ' + IntToStr(I));
       ExitCode := 3;
       Exit;
     end;
   end;
 end;
 
-procedure ModoConfere(const ADir: string);
+procedure ModeVerify(const ADir: string);
 var
   LGet: TAMQPGetResult;
   LN: Integer;
-  LForaDeOrdem: Boolean;
-  LUltimo, LAtual: Integer;
+  LOutOfOrder: Boolean;
+  LLast, LCurrent: Integer;
 begin
-  Sobe(ADir);
+  StartUp(ADir);
   LN := 0;
-  LForaDeOrdem := False;
-  LUltimo := 0;
+  LOutOfOrder := False;
+  LLast := 0;
   while True do
   begin
     // ACK MODE, and it NEVER acks: closing the connection returns them all to
     // the queue. A no-ack here would empty the queue -- and the checker would
     // start changing what it measures, which would spoil any scenario with
     // more than one crash.
-    LGet := GChan.BasicGet(FILA, False);
+    LGet := GChan.BasicGet(QUEUE_NAME, False);
     if not LGet.Found then
       Break;
     Inc(LN);
     // The body IS the number: it lets us check INTEGRITY and ORDER, not just
     // count. A recovery that returned the right messages in the wrong order
     // would pass a test that only counted.
-    if TryStrToInt(LGet.BodyAsText, LAtual) then
+    if TryStrToInt(LGet.BodyAsText, LCurrent) then
     begin
-      if LAtual <= LUltimo then
-        LForaDeOrdem := True;
-      LUltimo := LAtual;
+      if LCurrent <= LLast then
+        LOutOfOrder := True;
+      LLast := LCurrent;
     end
     else
-      LForaDeOrdem := True;
+      LOutOfOrder := True;
   end;
-  if LForaDeOrdem then
-    Diz('FORA-DE-ORDEM');
-  Diz('RECUPERADAS ' + IntToStr(LN));
+  if LOutOfOrder then
+    Say('FORA-DE-ORDEM');
+  Say('RECUPERADAS ' + IntToStr(LN));
   GConn.Close;
   GConn.Free;
   // The unacknowledged ones go back to the queue in the connection teardown,
@@ -223,41 +223,41 @@ begin
   Sleep(1000);
   GBroker.Stop;
   GBroker.Free;
-  if LForaDeOrdem then
+  if LOutOfOrder then
     ExitCode := 4;
 end;
 
 var
-  LModo, LDir: string;
-  LN, LInicio: Integer;
+  LMode, LDir: string;
+  LN, LStart: Integer;
 begin
   if ParamCount < 2 then
   begin
-    Diz('uso: CrashHostFpc <publica|consome|despeja|confere> <dir> [n] [inicio]');
+    Say('uso: CrashHostFpc <publica|consome|despeja|confere> <dir> [n] [inicio]');
     ExitCode := 1;
     Exit;
   end;
-  LModo := LowerCase(ParamStr(1));
+  LMode := LowerCase(ParamStr(1));
   LDir := ParamStr(2);
   ForceDirectories(LDir);
   LN := 0;
   if ParamCount >= 3 then
     LN := StrToIntDef(ParamStr(3), 0);
-  LInicio := 1;
+  LStart := 1;
   if ParamCount >= 4 then
-    LInicio := StrToIntDef(ParamStr(4), 1);
+    LStart := StrToIntDef(ParamStr(4), 1);
 
-  if LModo = 'publica' then
-    ModoPublica(LDir, LN, LInicio)
-  else if LModo = 'consome' then
-    ModoConsome(LDir, LN)
-  else if LModo = 'despeja' then
-    ModoDespeja(LDir)
-  else if LModo = 'confere' then
-    ModoConfere(LDir)
+  if LMode = 'publica' then
+    ModePublish(LDir, LN, LStart)
+  else if LMode = 'consome' then
+    ModeConsume(LDir, LN)
+  else if LMode = 'despeja' then
+    ModeFlood(LDir)
+  else if LMode = 'confere' then
+    ModeVerify(LDir)
   else
   begin
-    Diz('modo desconhecido: ' + LModo);
+    Say('modo desconhecido: ' + LMode);
     ExitCode := 1;
   end;
 end.

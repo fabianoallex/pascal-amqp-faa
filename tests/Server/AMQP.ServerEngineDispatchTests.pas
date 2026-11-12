@@ -44,36 +44,36 @@ type
   private
     FBroker: TAMQPServer;
     FLock: TCriticalSection;
-    FCorpos: TStringList;
+    FBodies: TStringList;
     FRedelivered: Integer;
-    FAckManual: Boolean;
+    FManualAck: Boolean;
     procedure OnDelivery(AChannel: TAMQPChannel;
       const ADelivery: TAMQPDelivery);
     function Params: TAMQPConnectionParams;
     /// Waits for ACount deliveries to reach the callback (delivery is asynchronous).
-    function EsperaEntregas(ACount, ATimeoutMs: Integer): Boolean;
+    function WaitDeliveries(ACount, ATimeoutMs: Integer): Boolean;
     /// Bodies received, in order, separated by '|'.
-    function Corpos: string;
-    function QuantasRecebidas: Integer;
+    function Bodies: string;
+    function ReceivedCount: Integer;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
-    [Test] procedure PublicaEConsomeComAck;
-    [Test] procedure PublicaEBuscaComGet;
-    [Test] procedure GetEmFilaVazia_DevolveVazio;
-    [Test] procedure RoteiaPorExchangeTopic;
-    [Test] procedure FanoutEntregaAsDuasFilas;
-    [Test] procedure PrefetchLimitaEntregasNaoConfirmadas;
-    [Test] procedure NackComRequeue_Reentrega;
-    [Test] procedure Cancel_ParaDeEntregar;
-    [Test] procedure DeclareDevolveContagens;
-    [Test] procedure DeleteDevolveContagemEApaga;
-    [Test] procedure ConexaoCai_DevolveNaoConfirmadas;
-    [Test] procedure AckRemoveDeVez_NaoVoltaAposQueda;
-    [Test] procedure FilaAnonima_GanhaNomeGerado;
-    [Test] procedure FilaAnonima_NomeNaoRepeteEntreConexoes;
-    [Test] procedure PublishSemRota_NaoEErro;
+    [Test] procedure PublishesAndConsumesWithAck;
+    [Test] procedure PublishesAndFetchesWithGet;
+    [Test] procedure GetOnEmptyQueue_ReturnsEmpty;
+    [Test] procedure RoutesThroughTopicExchange;
+    [Test] procedure FanoutDeliversToBothQueues;
+    [Test] procedure PrefetchLimitsUnackedDeliveries;
+    [Test] procedure NackWithRequeue_Redelivers;
+    [Test] procedure Cancel_StopsDelivering;
+    [Test] procedure DeclareReturnsCounts;
+    [Test] procedure DeleteReturnsCountAndDeletes;
+    [Test] procedure ConnectionDrops_ReturnsUnacked;
+    [Test] procedure AckRemovesForGood_DoesNotReturnAfterCrash;
+    [Test] procedure AnonymousQueue_GetsAGeneratedName;
+    [Test] procedure AnonymousQueue_NameDoesNotRepeatAcrossConnections;
+    [Test] procedure UnroutedPublish_IsNotAnError;
   end;
 
   [TestFixture]
@@ -87,24 +87,24 @@ type
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
-    [Test] procedure Erro404_ConsumeDeFilaInexistente;
-    [Test] procedure Erro404_GetDeFilaInexistente;
-    [Test] procedure Erro404_BindComFilaInexistente;
-    [Test] procedure Erro404_PublishEmExchangeInexistente;
-    [Test] procedure Erro406_RedeclareDivergente;
-    [Test] procedure Erro406_DeleteIfEmptyComMensagem;
-    [Test] procedure Erro406_DeleteIfUnusedComConsumidor;
-    [Test] procedure Erro406_TipoDeExchangeInvalido;
-    [Test] procedure Erro403_NomeReservadoNoDeclare;
-    [Test] procedure Erro403_UserIdDivergente;
-    [Test] procedure Erro405_FilaExclusivaDeOutraConexao;
-    [Test] procedure Erro406_MaxPriorityForaDaFaixa;
-    [Test] procedure Erro406_TtlComTipoErrado;
-    [Test] procedure Erro406_OverflowDesconhecido;
-    [Test] procedure ArgsValidos_DeclareAceito;
-    [Test] procedure Erro406_AlternateExchangeComTipoErrado;
-    [Test] procedure DeleteIdempotente_FilaInexistente;
-    [Test] procedure ErroDeCanal_NaoDerrubaAConexao;
+    [Test] procedure Error404_ConsumeFromMissingQueue;
+    [Test] procedure Error404_GetFromMissingQueue;
+    [Test] procedure Error404_BindWithMissingQueue;
+    [Test] procedure Error404_PublishToMissingExchange;
+    [Test] procedure Error406_DivergentRedeclare;
+    [Test] procedure Error406_DeleteIfEmptyWithMessage;
+    [Test] procedure Error406_DeleteIfUnusedWithConsumer;
+    [Test] procedure Error406_InvalidExchangeType;
+    [Test] procedure Error403_ReservedNameOnDeclare;
+    [Test] procedure Error403_MismatchedUserId;
+    [Test] procedure Error405_ExclusiveQueueOfAnotherConnection;
+    [Test] procedure Error406_MaxPriorityOutOfRange;
+    [Test] procedure Error406_TtlWithWrongType;
+    [Test] procedure Error406_UnknownOverflow;
+    [Test] procedure ValidArgs_DeclareAccepted;
+    [Test] procedure Error406_AlternateExchangeWithWrongType;
+    [Test] procedure DeleteIdempotent_MissingQueue;
+    [Test] procedure ChannelError_DoesNotDropTheConnection;
   end;
 
   [TestFixture]
@@ -112,23 +112,23 @@ type
   private
     FBroker: TAMQPServer;
     FLock: TCriticalSection;
-    FDevolvidas: TStringList;
+    FReturned: TStringList;
     procedure OnReturn(AChannel: TAMQPChannel;
       const AReturned: TAMQPReturnedMessage);
     function Params: TAMQPConnectionParams;
-    function EsperaDevolucoes(ACount, ATimeoutMs: Integer): Boolean;
-    function QuantasDevolvidas: Integer;
+    function WaitReturns(ACount, ATimeoutMs: Integer): Boolean;
+    function ReturnedCount: Integer;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
-    [Test] procedure Confirm_PublishRecebeAck;
-    [Test] procedure Confirm_SeqNoComecaEmUmESegue;
-    [Test] procedure Confirm_PublishSemRotaTambemEConfirmado;
-    [Test] procedure Confirm_LoteGrandeTodoConfirmado;
-    [Test] procedure Mandatory_SemRota_DisparaBasicReturn;
-    [Test] procedure Mandatory_ComRota_NaoDisparaReturn;
-    [Test] procedure Mandatory_SemConfirmMode_AindaDevolve;
+    [Test] procedure Confirm_PublishReceivesAck;
+    [Test] procedure Confirm_SeqNoStartsAtOneAndIncrements;
+    [Test] procedure Confirm_UnroutedPublishIsAlsoConfirmed;
+    [Test] procedure Confirm_LargeBatchAllConfirmed;
+    [Test] procedure Mandatory_NoRoute_FiresBasicReturn;
+    [Test] procedure Mandatory_WithRoute_DoesNotFireReturn;
+    [Test] procedure Mandatory_WithoutConfirmMode_StillReturns;
   end;
 
   [TestFixture]
@@ -139,26 +139,26 @@ type
     procedure OnDelivery(AChannel: TAMQPChannel;
       const ADelivery: TAMQPDelivery);
     /// Passive declare on a NEW channel (a passive that fails kills the channel).
-    function FilaExiste(AConn: TAMQPConnection; const ANome: string): Boolean;
-    function ExchangeExiste(AConn: TAMQPConnection;
-      const ANome: string): Boolean;
+    function QueueExists(AConn: TAMQPConnection; const AName: string): Boolean;
+    function ExchangeExists(AConn: TAMQPConnection;
+      const AName: string): Boolean;
     /// The server-side teardown is asynchronous: waits for the queue to go away.
-    function EsperaFilaSumir(AConn: TAMQPConnection; const ANome: string;
+    function WaitQueueGone(AConn: TAMQPConnection; const AName: string;
       ATimeoutMs: Integer): Boolean;
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
 
-    [Test] procedure Exclusiva_SomeComAConexaoDona;
-    [Test] procedure Exclusiva_ViveEnquantoADonaVive;
-    [Test] procedure AutoDelete_SomeAoSairOUltimoConsumidor;
-    [Test] procedure AutoDelete_NaoSomeSemNuncaTerConsumidor;
-    [Test] procedure AutoDelete_NaoSomeComOutroConsumidorAtivo;
-    [Test] procedure AutoDelete_SomeQuandoOConsumidorCai;
-    [Test] procedure SemAutoDelete_FicaAposOConsumidorSair;
-    [Test] procedure ExchangeAutoDelete_SomeAoPerderOUltimoBinding;
-    [Test] procedure ExchangeAutoDelete_SomeQuandoAFilaEApagada;
-    [Test] procedure ExchangeAutoDelete_FicaEnquantoHouverBinding;
+    [Test] procedure Exclusive_GoesAwayWithTheOwnerConnection;
+    [Test] procedure Exclusive_LivesWhileTheOwnerLives;
+    [Test] procedure AutoDelete_GoesAwayWhenLastConsumerLeaves;
+    [Test] procedure AutoDelete_StaysIfItNeverHadAConsumer;
+    [Test] procedure AutoDelete_StaysWithAnotherConsumerActive;
+    [Test] procedure AutoDelete_GoesAwayWhenTheConsumerDrops;
+    [Test] procedure NoAutoDelete_StaysAfterTheConsumerLeaves;
+    [Test] procedure ExchangeAutoDelete_GoesAwayOnLosingTheLastBinding;
+    [Test] procedure ExchangeAutoDelete_GoesAwayWhenTheQueueIsDeleted;
+    [Test] procedure ExchangeAutoDelete_StaysWhileThereIsABinding;
   end;
 
   { The broker does NOT share a pool with the rest of the process (F8, migration
@@ -170,28 +170,28 @@ type
   TPoolIsolationTests = class
   private
     FBroker: TAMQPServer;
-    FPortao: TEvent;
-    FPartiram: Integer;
-    FSairam: Integer;
-    FEnfileirados: Integer; // blockers placed in the PcPool (only the test thread touches them)
-    FEntregues: Integer;
+    FGate: TEvent;
+    FStarted: Integer;
+    FExited: Integer;
+    FEnqueuedBlockers: Integer; // blockers placed in the PcPool (only the test thread touches them)
+    FDelivered: Integer;
     function Params: TAMQPConnectionParams;
-    procedure SaturaPcPool;
-    procedure SoltaPcPool;
-    procedure AoEntregar(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
+    procedure SaturatePcPool;
+    procedure ReleasePcPool;
+    procedure HandleDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure PcPoolSaturado_BrokerContinuaRespondendo;
-    [Test] procedure PcPoolSaturado_FreeDoCanalEsperaOCallbackEnfileirado;
-    [Test] procedure PcPoolSaturado_CanalComThreadPropria_NaoDependeDoPcPool;
+    [Test] procedure PcPoolSaturated_BrokerKeepsResponding;
+    [Test] procedure PcPoolSaturated_ChannelFreeWaitsForTheQueuedCallback;
+    [Test] procedure PcPoolSaturated_ChannelWithOwnThread_DoesNotDependOnPcPool;
   end;
 
 implementation
 
 { --- helpers --- }
 
-function NovoBroker: TAMQPServer;
+function NewBroker: TAMQPServer;
 begin
   Result := TAMQPServer.Create;
   Result.BindAddress := '127.0.0.1';
@@ -199,14 +199,14 @@ begin
   Result.Start;
 end;
 
-function ParamsDe(ABroker: TAMQPServer): TAMQPConnectionParams;
+function ParamsOf(ABroker: TAMQPServer): TAMQPConnectionParams;
 begin
   Result := TAMQPConnectionParams.Localhost;
   Result.Host := '127.0.0.1';
   Result.Port := ABroker.Port;
 end;
 
-function NovoBind(const AQueue, AExchange, ARoutingKey: string): TAMQPQueueBind;
+function NewBind(const AQueue, AExchange, ARoutingKey: string): TAMQPQueueBind;
 begin
   Result.QueueName := AQueue;
   Result.ExchangeName := AExchange;
@@ -215,7 +215,7 @@ begin
   Result.Arguments := nil;
 end;
 
-function NovoDelete(const AQueue: string;
+function NewDelete(const AQueue: string;
   AIfUnused, AIfEmpty: Boolean): TAMQPQueueDelete;
 begin
   Result.QueueName := AQueue;
@@ -226,49 +226,49 @@ end;
 
 // Extracts the reply-code from the message the client builds when it receives a
 // Channel.Close from the server ('channel N closed by server: CODE text').
-function CodigoDoErro(const AMensagem: string): Integer;
+function ErrorCodeOf(const AMessage: string): Integer;
 var
   I, J: Integer;
-  LDigitos: string;
+  LDigits: string;
 begin
   Result := 0;
-  I := Pos('server: ', AMensagem);
+  I := Pos('server: ', AMessage);
   if I <= 0 then
     Exit;
   Inc(I, Length('server: '));
-  LDigitos := '';
+  LDigits := '';
   J := I;
-  while (J <= Length(AMensagem)) and (AMensagem[J] >= '0')
-    and (AMensagem[J] <= '9') do
+  while (J <= Length(AMessage)) and (AMessage[J] >= '0')
+    and (AMessage[J] <= '9') do
   begin
-    LDigitos := LDigitos + AMensagem[J];
+    LDigits := LDigits + AMessage[J];
     Inc(J);
   end;
-  if LDigitos <> '' then
-    Result := StrToIntDef(LDigitos, 0);
+  if LDigits <> '' then
+    Result := StrToIntDef(LDigits, 0);
 end;
 
 { --- TEngineDispatchTests --- }
 
 procedure TEngineDispatchTests.SetUp;
 begin
-  FBroker := NovoBroker;
+  FBroker := NewBroker;
   FLock := TCriticalSection.Create;
-  FCorpos := TStringList.Create;
+  FBodies := TStringList.Create;
   FRedelivered := 0;
-  FAckManual := True;
+  FManualAck := True;
 end;
 
 procedure TEngineDispatchTests.TearDown;
 begin
   FBroker.Free;
-  FCorpos.Free;
+  FBodies.Free;
   FLock.Free;
 end;
 
 function TEngineDispatchTests.Params: TAMQPConnectionParams;
 begin
-  Result := ParamsDe(FBroker);
+  Result := ParamsOf(FBroker);
 end;
 
 procedure TEngineDispatchTests.OnDelivery(AChannel: TAMQPChannel;
@@ -276,56 +276,56 @@ procedure TEngineDispatchTests.OnDelivery(AChannel: TAMQPChannel;
 begin
   FLock.Enter;
   try
-    FCorpos.Add(ADelivery.BodyAsText);
+    FBodies.Add(ADelivery.BodyAsText);
     if ADelivery.Redelivered then
       Inc(FRedelivered);
   finally
     FLock.Leave;
   end;
-  if FAckManual then
+  if FManualAck then
     AChannel.Ack(ADelivery.DeliveryTag);
 end;
 
-function TEngineDispatchTests.QuantasRecebidas: Integer;
+function TEngineDispatchTests.ReceivedCount: Integer;
 begin
   FLock.Enter;
   try
-    Result := FCorpos.Count;
+    Result := FBodies.Count;
   finally
     FLock.Leave;
   end;
 end;
 
-function TEngineDispatchTests.EsperaEntregas(ACount,
+function TEngineDispatchTests.WaitDeliveries(ACount,
   ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
 begin
   LDeadline := PcTickMs + UInt64(ATimeoutMs);
-  while (QuantasRecebidas < ACount) and (PcTickMs < LDeadline) do
+  while (ReceivedCount < ACount) and (PcTickMs < LDeadline) do
     Sleep(10);
-  Result := QuantasRecebidas >= ACount;
+  Result := ReceivedCount >= ACount;
 end;
 
-function TEngineDispatchTests.Corpos: string;
+function TEngineDispatchTests.Bodies: string;
 var
   I: Integer;
 begin
   Result := '';
   FLock.Enter;
   try
-    for I := 0 to FCorpos.Count - 1 do
+    for I := 0 to FBodies.Count - 1 do
     begin
       if Result <> '' then
         Result := Result + '|';
-      Result := Result + FCorpos[I];
+      Result := Result + FBodies[I];
     end;
   finally
     FLock.Leave;
   end;
 end;
 
-procedure TEngineDispatchTests.PublicaEConsomeComAck;
+procedure TEngineDispatchTests.PublishesAndConsumesWithAck;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -338,14 +338,14 @@ begin
     LCh.Consume('q.ack', OnDelivery, False);
     LCh.PublishText('', 'q.ack', 'ola');
 
-    TAssert.AssertTrue('a mensagem chegou ao consumidor', EsperaEntregas(1, 5000));
-    TAssert.AssertEquals('corpo integro', 'ola', Corpos);
+    TAssert.AssertTrue('a mensagem chegou ao consumidor', WaitDeliveries(1, 5000));
+    TAssert.AssertEquals('corpo integro', 'ola', Bodies);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TEngineDispatchTests.PublicaEBuscaComGet;
+procedure TEngineDispatchTests.PublishesAndFetchesWithGet;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -372,7 +372,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.GetEmFilaVazia_DevolveVazio;
+procedure TEngineDispatchTests.GetOnEmptyQueue_ReturnsEmpty;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -390,7 +390,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.RoteiaPorExchangeTopic;
+procedure TEngineDispatchTests.RoutesThroughTopicExchange;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -404,8 +404,8 @@ begin
       AMQP_EXCHANGE_TYPE_TOPIC));
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.aprovada'));
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.todas'));
-    LCh.BindQueue(NovoBind('q.aprovada', 'ex.topic', 'nota.aprovada'));
-    LCh.BindQueue(NovoBind('q.todas', 'ex.topic', 'nota.#'));
+    LCh.BindQueue(NewBind('q.aprovada', 'ex.topic', 'nota.aprovada'));
+    LCh.BindQueue(NewBind('q.todas', 'ex.topic', 'nota.#'));
 
     LCh.PublishText('ex.topic', 'nota.aprovada', 'A');
     LCh.PublishText('ex.topic', 'nota.cancelada', 'C');
@@ -427,7 +427,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.FanoutEntregaAsDuasFilas;
+procedure TEngineDispatchTests.FanoutDeliversToBothQueues;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -440,8 +440,8 @@ begin
       AMQP_EXCHANGE_TYPE_FANOUT));
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.f1'));
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.f2'));
-    LCh.BindQueue(NovoBind('q.f1', 'ex.fan', ''));
-    LCh.BindQueue(NovoBind('q.f2', 'ex.fan', ''));
+    LCh.BindQueue(NewBind('q.f1', 'ex.fan', ''));
+    LCh.BindQueue(NewBind('q.f2', 'ex.fan', ''));
 
     LCh.PublishText('ex.fan', 'qualquer', 'broadcast');
 
@@ -453,13 +453,13 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.PrefetchLimitaEntregasNaoConfirmadas;
+procedure TEngineDispatchTests.PrefetchLimitsUnackedDeliveries;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   I: Integer;
 begin
-  FAckManual := False; // nobody acks: the prefetch has to hold
+  FManualAck := False; // nobody acks: the prefetch has to hold
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
@@ -470,15 +470,15 @@ begin
     for I := 1 to 5 do
       LCh.PublishText('', 'q.qos', 'm' + IntToStr(I));
 
-    TAssert.AssertTrue('entregou a primeira', EsperaEntregas(1, 5000));
+    TAssert.AssertTrue('entregou a primeira', WaitDeliveries(1, 5000));
     Sleep(300); // plenty of time to deliver more, if the prefetch failed
-    TAssert.AssertEquals('com prefetch=1 e nenhum ack, so uma entrega fica em voo', 1, QuantasRecebidas);
+    TAssert.AssertEquals('com prefetch=1 e nenhum ack, so uma entrega fica em voo', 1, ReceivedCount);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TEngineDispatchTests.NackComRequeue_Reentrega;
+procedure TEngineDispatchTests.NackWithRequeue_Redelivers;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -505,7 +505,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.Cancel_ParaDeEntregar;
+procedure TEngineDispatchTests.Cancel_StopsDelivering;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -518,12 +518,12 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.cancel'));
     LTag := LCh.Consume('q.cancel', OnDelivery, True);
     LCh.PublishText('', 'q.cancel', 'antes');
-    TAssert.AssertTrue('entregou antes do cancel', EsperaEntregas(1, 5000));
+    TAssert.AssertTrue('entregou antes do cancel', WaitDeliveries(1, 5000));
 
     LCh.Cancel(LTag);
     LCh.PublishText('', 'q.cancel', 'depois');
     Sleep(300);
-    TAssert.AssertEquals('nada foi entregue apos o cancel', 1, QuantasRecebidas);
+    TAssert.AssertEquals('nada foi entregue apos o cancel', 1, ReceivedCount);
     // And the message stays in the queue, waiting for another consumer.
     TAssert.AssertEquals('a mensagem ficou na fila', 'depois', LCh.BasicGet('q.cancel', True).BodyAsText);
   finally
@@ -531,7 +531,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.DeclareDevolveContagens;
+procedure TEngineDispatchTests.DeclareReturnsCounts;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -555,11 +555,11 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.DeleteDevolveContagemEApaga;
+procedure TEngineDispatchTests.DeleteReturnsCountAndDeletes;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
@@ -567,23 +567,23 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.del'));
     LCh.PublishText('', 'q.del', 'a');
-    TAssert.AssertEquals('delete devolve quantas mensagens foram junto', 1, Integer(LCh.DeleteQueue(NovoDelete('q.del', False, False))));
+    TAssert.AssertEquals('delete devolve quantas mensagens foram junto', 1, Integer(LCh.DeleteQueue(NewDelete('q.del', False, False))));
 
     // Really deleted: a consume on it now is 404.
-    LCodigo := 0;
+    LCode := 0;
     try
       LCh.Consume('q.del', OnDelivery, True);
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('a fila sumiu mesmo', 404, LCodigo);
+    TAssert.AssertEquals('a fila sumiu mesmo', 404, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TEngineDispatchTests.ConexaoCai_DevolveNaoConfirmadas;
+procedure TEngineDispatchTests.ConnectionDrops_ReturnsUnacked;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -619,7 +619,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.FilaAnonima_GanhaNomeGerado;
+procedure TEngineDispatchTests.AnonymousQueue_GetsAGeneratedName;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -643,12 +643,12 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.FilaAnonima_NomeNaoRepeteEntreConexoes;
+procedure TEngineDispatchTests.AnonymousQueue_NameDoesNotRepeatAcrossConnections;
 var
   LConns: array[0..1] of TAMQPConnection;
   LDecl: TAMQPQueueDeclare;
-  LNomes: TStringList;
-  LNome: string;
+  LNames: TStringList;
+  LName: string;
   I, K: Integer;
 begin
   // The generated name was 'amq.gen-<sequence OF THE CONNECTION>-<tick>': every new
@@ -656,7 +656,7 @@ begin
   // millisecond generated the same name -- and, with the first queue exclusive and
   // alive, the second got 405. Found in the acceptance suite (Delphi Win64, TLS):
   // the connection of one test and the next one's in the same ms.
-  LNomes := TStringList.Create;
+  LNames := TStringList.Create;
   try
     for I := 1 to 20 do
     begin
@@ -672,22 +672,22 @@ begin
         begin
           LDecl := TAMQPQueueDeclare.Create('');
           LDecl.Exclusive := True;
-          LNome := LConns[K].CreateChannel.DeclareQueue(LDecl).QueueName;
-          TAssert.AssertTrue('nome gerado repetido entre conexoes: ' + LNome, LNomes.IndexOf(LNome) < 0);
-          LNomes.Add(LNome);
+          LName := LConns[K].CreateChannel.DeclareQueue(LDecl).QueueName;
+          TAssert.AssertTrue('nome gerado repetido entre conexoes: ' + LName, LNames.IndexOf(LName) < 0);
+          LNames.Add(LName);
         end;
       finally
         LConns[1].Free;
         LConns[0].Free;
       end;
     end;
-    TAssert.AssertEquals('quarenta nomes distintos', 40, LNomes.Count);
+    TAssert.AssertEquals('quarenta nomes distintos', 40, LNames.Count);
   finally
-    LNomes.Free;
+    LNames.Free;
   end;
 end;
 
-procedure TEngineDispatchTests.PublishSemRota_NaoEErro;
+procedure TEngineDispatchTests.UnroutedPublish_IsNotAnError;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -713,7 +713,7 @@ end;
 
 procedure TErrorTableTests.SetUp;
 begin
-  FBroker := NovoBroker;
+  FBroker := NewBroker;
 end;
 
 procedure TErrorTableTests.TearDown;
@@ -723,7 +723,7 @@ end;
 
 function TErrorTableTests.Params: TAMQPConnectionParams;
 begin
-  Result := ParamsDe(FBroker);
+  Result := ParamsOf(FBroker);
 end;
 
 procedure TErrorTableTests.OnDelivery(AChannel: TAMQPChannel;
@@ -732,80 +732,80 @@ begin
   // never called in the error tests
 end;
 
-procedure TErrorTableTests.Erro404_ConsumeDeFilaInexistente;
+procedure TErrorTableTests.Error404_ConsumeFromMissingQueue;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     try
       LCh.Consume('nao.existe', OnDelivery, True);
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('consume de fila inexistente e 404', 404, LCodigo);
+    TAssert.AssertEquals('consume de fila inexistente e 404', 404, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro404_GetDeFilaInexistente;
+procedure TErrorTableTests.Error404_GetFromMissingQueue;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     try
       LCh.BasicGet('nao.existe', True);
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('get de fila inexistente e 404', 404, LCodigo);
+    TAssert.AssertEquals('get de fila inexistente e 404', 404, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro404_BindComFilaInexistente;
+procedure TErrorTableTests.Error404_BindWithMissingQueue;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     try
-      LCh.BindQueue(NovoBind('nao.existe', 'amq.direct', 'k'));
+      LCh.BindQueue(NewBind('nao.existe', 'amq.direct', 'k'));
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('bind com fila inexistente e 404', 404, LCodigo);
+    TAssert.AssertEquals('bind com fila inexistente e 404', 404, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro404_PublishEmExchangeInexistente;
+procedure TErrorTableTests.Error404_PublishToMissingExchange;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
   LDeadline: UInt64;
 begin
   LConn := TAMQPConnection.Create(Params);
@@ -819,24 +819,24 @@ begin
     while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
     TAssert.AssertFalse('publish em exchange inexistente fecha o canal', LCh.IsOpen);
-    LCodigo := 0;
+    LCode := 0;
     try
       LCh.BasicGet('qualquer', True); // dead channel: the lib raises
     except
       on E: EAMQPChannel do
-        LCodigo := 1;
+        LCode := 1;
     end;
-    TAssert.AssertEquals('e o canal fica inutilizavel', 1, LCodigo);
+    TAssert.AssertEquals('e o canal fica inutilizavel', 1, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro406_RedeclareDivergente;
+procedure TErrorTableTests.Error406_DivergentRedeclare;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
   LDecl: TAMQPQueueDeclare;
 begin
   LConn := TAMQPConnection.Create(Params);
@@ -844,25 +844,25 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.div', True)); // durable
-    LCodigo := 0;
+    LCode := 0;
     try
       LDecl := TAMQPQueueDeclare.Create('q.div', False); // not durable
       LCh.DeclareQueue(LDecl);
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('redeclare divergente e 406', 406, LCodigo);
+    TAssert.AssertEquals('redeclare divergente e 406', 406, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro406_DeleteIfEmptyComMensagem;
+procedure TErrorTableTests.Error406_DeleteIfEmptyWithMessage;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
@@ -870,24 +870,24 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ie'));
     LCh.PublishText('', 'q.ie', 'x');
-    LCodigo := 0;
+    LCode := 0;
     try
-      LCh.DeleteQueue(NovoDelete('q.ie', False, True)); // if-empty
+      LCh.DeleteQueue(NewDelete('q.ie', False, True)); // if-empty
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('if-empty com mensagem e 406', 406, LCodigo);
+    TAssert.AssertEquals('if-empty com mensagem e 406', 406, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro406_DeleteIfUnusedComConsumidor;
+procedure TErrorTableTests.Error406_DeleteIfUnusedWithConsumer;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
@@ -895,68 +895,68 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.iu'));
     LCh.Consume('q.iu', OnDelivery, True);
-    LCodigo := 0;
+    LCode := 0;
     try
-      LCh.DeleteQueue(NovoDelete('q.iu', True, False)); // if-unused
+      LCh.DeleteQueue(NewDelete('q.iu', True, False)); // if-unused
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('if-unused com consumidor e 406', 406, LCodigo);
+    TAssert.AssertEquals('if-unused com consumidor e 406', 406, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro406_TipoDeExchangeInvalido;
+procedure TErrorTableTests.Error406_InvalidExchangeType;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     try
       LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.bad', 'nao-existe'));
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
     // Deliberate deviation from RabbitMQ (which uses 503 and brings down the CONNECTION):
     // here it is a channel error. See CLAUDE.md.
-    TAssert.AssertEquals('tipo de exchange invalido e 406 de canal', 406, LCodigo);
+    TAssert.AssertEquals('tipo de exchange invalido e 406 de canal', 406, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro403_NomeReservadoNoDeclare;
+procedure TErrorTableTests.Error403_ReservedNameOnDeclare;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     try
       LCh.DeclareQueue(TAMQPQueueDeclare.Create('amq.minha'));
     except
       on E: EAMQPChannel do
-        LCodigo := CodigoDoErro(E.Message);
+        LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('nome reservado e 403', 403, LCodigo);
+    TAssert.AssertEquals('nome reservado e 403', 403, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro403_UserIdDivergente;
+procedure TErrorTableTests.Error403_MismatchedUserId;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -982,11 +982,11 @@ begin
   end;
 end;
 
-procedure TErrorTableTests.Erro405_FilaExclusivaDeOutraConexao;
+procedure TErrorTableTests.Error405_ExclusiveQueueOfAnotherConnection;
 var
   LConn1, LConn2: TAMQPConnection;
   LCh1, LCh2: TAMQPChannel;
-  LCodigo: Integer;
+  LCode: Integer;
   LDecl: TAMQPQueueDeclare;
 begin
   LConn1 := TAMQPConnection.Create(Params);
@@ -1001,14 +1001,14 @@ begin
     try
       LConn2.Open;
       LCh2 := LConn2.CreateChannel;
-      LCodigo := 0;
+      LCode := 0;
       try
         LCh2.Consume('q.excl', OnDelivery, True);
       except
         on E: EAMQPChannel do
-          LCodigo := CodigoDoErro(E.Message);
+          LCode := ErrorCodeOf(E.Message);
       end;
-      TAssert.AssertEquals('fila exclusiva de outra conexao e 405 RESOURCE_LOCKED', 405, LCodigo);
+      TAssert.AssertEquals('fila exclusiva de outra conexao e 405 RESOURCE_LOCKED', 405, LCode);
     finally
       LConn2.Free;
     end;
@@ -1017,7 +1017,7 @@ begin
   end;
 end;
 
-procedure TErrorTableTests.ErroDeCanal_NaoDerrubaAConexao;
+procedure TErrorTableTests.ChannelError_DoesNotDropTheConnection;
 var
   LConn: TAMQPConnection;
   LCh1, LCh2: TAMQPChannel;
@@ -1045,7 +1045,7 @@ begin
   end;
 end;
 
-procedure TEngineDispatchTests.AckRemoveDeVez_NaoVoltaAposQueda;
+procedure TEngineDispatchTests.AckRemovesForGood_DoesNotReturnAfterCrash;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1061,7 +1061,7 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.acked'));
     LCh.Consume('q.acked', OnDelivery, False); // the callback acks
     LCh.PublishText('', 'q.acked', 'x');
-    TAssert.AssertTrue('entregou', EsperaEntregas(1, 5000));
+    TAssert.AssertTrue('entregou', WaitDeliveries(1, 5000));
     Sleep(300); // the ack up to the queue is asynchronous
   finally
     LConn.Free; // connection drops AFTER the ack
@@ -1083,21 +1083,21 @@ end;
 
 procedure TConfirmTests.SetUp;
 begin
-  FBroker := NovoBroker;
+  FBroker := NewBroker;
   FLock := TCriticalSection.Create;
-  FDevolvidas := TStringList.Create;
+  FReturned := TStringList.Create;
 end;
 
 procedure TConfirmTests.TearDown;
 begin
   FBroker.Free;
-  FDevolvidas.Free;
+  FReturned.Free;
   FLock.Free;
 end;
 
 function TConfirmTests.Params: TAMQPConnectionParams;
 begin
-  Result := ParamsDe(FBroker);
+  Result := ParamsOf(FBroker);
 end;
 
 procedure TConfirmTests.OnReturn(AChannel: TAMQPChannel;
@@ -1105,33 +1105,33 @@ procedure TConfirmTests.OnReturn(AChannel: TAMQPChannel;
 begin
   FLock.Enter;
   try
-    FDevolvidas.Add(IntToStr(AReturned.ReplyCode) + ':' + AReturned.BodyAsText);
+    FReturned.Add(IntToStr(AReturned.ReplyCode) + ':' + AReturned.BodyAsText);
   finally
     FLock.Leave;
   end;
 end;
 
-function TConfirmTests.QuantasDevolvidas: Integer;
+function TConfirmTests.ReturnedCount: Integer;
 begin
   FLock.Enter;
   try
-    Result := FDevolvidas.Count;
+    Result := FReturned.Count;
   finally
     FLock.Leave;
   end;
 end;
 
-function TConfirmTests.EsperaDevolucoes(ACount, ATimeoutMs: Integer): Boolean;
+function TConfirmTests.WaitReturns(ACount, ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
 begin
   LDeadline := PcTickMs + UInt64(ATimeoutMs);
-  while (QuantasDevolvidas < ACount) and (PcTickMs < LDeadline) do
+  while (ReturnedCount < ACount) and (PcTickMs < LDeadline) do
     Sleep(10);
-  Result := QuantasDevolvidas >= ACount;
+  Result := ReturnedCount >= ACount;
 end;
 
-procedure TConfirmTests.Confirm_PublishRecebeAck;
+procedure TConfirmTests.Confirm_PublishReceivesAck;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1150,7 +1150,7 @@ begin
   end;
 end;
 
-procedure TConfirmTests.Confirm_SeqNoComecaEmUmESegue;
+procedure TConfirmTests.Confirm_SeqNoStartsAtOneAndIncrements;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1173,7 +1173,7 @@ begin
   end;
 end;
 
-procedure TConfirmTests.Confirm_PublishSemRotaTambemEConfirmado;
+procedure TConfirmTests.Confirm_UnroutedPublishIsAlsoConfirmed;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1195,7 +1195,7 @@ begin
   end;
 end;
 
-procedure TConfirmTests.Confirm_LoteGrandeTodoConfirmado;
+procedure TConfirmTests.Confirm_LargeBatchAllConfirmed;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1211,13 +1211,13 @@ begin
       LCh.PublishText('', 'q.lote', 'm' + IntToStr(I));
     TAssert.AssertTrue('as 50 confirmadas', LCh.WaitForConfirms(10000));
     TAssert.AssertEquals('e as 50 chegaram na fila', 50,
-      Integer(LCh.DeleteQueue(NovoDelete('q.lote', False, False))));
+      Integer(LCh.DeleteQueue(NewDelete('q.lote', False, False))));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TConfirmTests.Mandatory_SemRota_DisparaBasicReturn;
+procedure TConfirmTests.Mandatory_NoRoute_FiresBasicReturn;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1232,11 +1232,11 @@ begin
     LCh.Publish('ex.mand', 'sem.bind', AmqpUtf8Encode('devolve'),
       TAMQPBasicProperties.Empty, True); // mandatory
 
-    TAssert.AssertTrue('o broker devolveu a mensagem', EsperaDevolucoes(1, 5000));
+    TAssert.AssertTrue('o broker devolveu a mensagem', WaitReturns(1, 5000));
     FLock.Enter;
     try
       TAssert.AssertEquals('com NO_ROUTE e o corpo intacto', '312:devolve',
-        FDevolvidas[0]);
+        FReturned[0]);
     finally
       FLock.Leave;
     end;
@@ -1245,7 +1245,7 @@ begin
   end;
 end;
 
-procedure TConfirmTests.Mandatory_ComRota_NaoDisparaReturn;
+procedure TConfirmTests.Mandatory_WithRoute_DoesNotFireReturn;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1259,7 +1259,7 @@ begin
     LCh.Publish('', 'q.mand', AmqpUtf8Encode('tem rota'),
       TAMQPBasicProperties.Empty, True); // mandatory, but WITH a route
     Sleep(300);
-    TAssert.AssertEquals('nada devolvido', 0, QuantasDevolvidas);
+    TAssert.AssertEquals('nada devolvido', 0, ReturnedCount);
     TAssert.AssertEquals('a mensagem foi para a fila', 'tem rota',
       LCh.BasicGet('q.mand', True).BodyAsText);
   finally
@@ -1267,7 +1267,7 @@ begin
   end;
 end;
 
-procedure TConfirmTests.Mandatory_SemConfirmMode_AindaDevolve;
+procedure TConfirmTests.Mandatory_WithoutConfirmMode_StillReturns;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1284,7 +1284,7 @@ begin
     LCh.Publish('ex.mand2', 'nada', AmqpUtf8Encode('x'),
       TAMQPBasicProperties.Empty, True);
     TAssert.AssertTrue('Basic.Return nao depende de confirm mode',
-      EsperaDevolucoes(1, 5000));
+      WaitReturns(1, 5000));
   finally
     LConn.Free;
   end;
@@ -1294,7 +1294,7 @@ end;
 
 procedure TLifecycleTests.SetUp;
 begin
-  FBroker := NovoBroker;
+  FBroker := NewBroker;
 end;
 
 procedure TLifecycleTests.TearDown;
@@ -1304,7 +1304,7 @@ end;
 
 function TLifecycleTests.Params: TAMQPConnectionParams;
 begin
-  Result := ParamsDe(FBroker);
+  Result := ParamsOf(FBroker);
 end;
 
 procedure TLifecycleTests.OnDelivery(AChannel: TAMQPChannel;
@@ -1313,8 +1313,8 @@ begin
   // the lifecycle tests do not look at the delivered content
 end;
 
-function TLifecycleTests.FilaExiste(AConn: TAMQPConnection;
-  const ANome: string): Boolean;
+function TLifecycleTests.QueueExists(AConn: TAMQPConnection;
+  const AName: string): Boolean;
 var
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
@@ -1322,7 +1322,7 @@ begin
   // A new channel for each check: a passive that does not find the queue closes the
   // channel with 404, and a dead channel is no good for the next check.
   LCh := AConn.CreateChannel;
-  LDecl := TAMQPQueueDeclare.Create(ANome);
+  LDecl := TAMQPQueueDeclare.Create(AName);
   LDecl.Passive := True;
   Result := True;
   try
@@ -1333,14 +1333,14 @@ begin
   end;
 end;
 
-function TLifecycleTests.ExchangeExiste(AConn: TAMQPConnection;
-  const ANome: string): Boolean;
+function TLifecycleTests.ExchangeExists(AConn: TAMQPConnection;
+  const AName: string): Boolean;
 var
   LCh: TAMQPChannel;
   LDecl: TAMQPExchangeDeclare;
 begin
   LCh := AConn.CreateChannel;
-  LDecl := TAMQPExchangeDeclare.Create(ANome);
+  LDecl := TAMQPExchangeDeclare.Create(AName);
   LDecl.Passive := True;
   Result := True;
   try
@@ -1351,48 +1351,48 @@ begin
   end;
 end;
 
-function TLifecycleTests.EsperaFilaSumir(AConn: TAMQPConnection;
-  const ANome: string; ATimeoutMs: Integer): Boolean;
+function TLifecycleTests.WaitQueueGone(AConn: TAMQPConnection;
+  const AName: string; ATimeoutMs: Integer): Boolean;
 var
   LDeadline: UInt64;
 begin
   LDeadline := PcTickMs + UInt64(ATimeoutMs);
-  while FilaExiste(AConn, ANome) and (PcTickMs < LDeadline) do
+  while QueueExists(AConn, AName) and (PcTickMs < LDeadline) do
     Sleep(20);
-  Result := not FilaExiste(AConn, ANome);
+  Result := not QueueExists(AConn, AName);
 end;
 
-procedure TLifecycleTests.Exclusiva_SomeComAConexaoDona;
+procedure TLifecycleTests.Exclusive_GoesAwayWithTheOwnerConnection;
 var
-  LDona, LOutra: TAMQPConnection;
+  LOwnerConn, LOtherConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
 begin
-  LOutra := TAMQPConnection.Create(Params);
+  LOtherConn := TAMQPConnection.Create(Params);
   try
-    LOutra.Open;
+    LOtherConn.Open;
 
-    LDona := TAMQPConnection.Create(Params);
+    LOwnerConn := TAMQPConnection.Create(Params);
     try
-      LDona.Open;
-      LCh := LDona.CreateChannel;
+      LOwnerConn.Open;
+      LCh := LOwnerConn.CreateChannel;
       LDecl := TAMQPQueueDeclare.Create('q.excl.vida');
       LDecl.Exclusive := True;
       LCh.DeclareQueue(LDecl);
       TAssert.AssertTrue('a fila existe enquanto a dona vive',
-        FilaExiste(LDona, 'q.excl.vida'));
+        QueueExists(LOwnerConn, 'q.excl.vida'));
     finally
-      LDona.Free; // the owner drops
+      LOwnerConn.Free; // the owner drops
     end;
 
     TAssert.AssertTrue('fila exclusiva morre com a conexao dona',
-      EsperaFilaSumir(LOutra, 'q.excl.vida', 5000));
+      WaitQueueGone(LOtherConn, 'q.excl.vida', 5000));
   finally
-    LOutra.Free;
+    LOtherConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.Exclusiva_ViveEnquantoADonaVive;
+procedure TLifecycleTests.Exclusive_LivesWhileTheOwnerLives;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1415,13 +1415,13 @@ begin
       end;
     Sleep(200);
     TAssert.AssertTrue('so a conexao DONA leva a fila exclusiva embora',
-      FilaExiste(LConn, 'q.excl.viva'));
+      QueueExists(LConn, 'q.excl.viva'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.AutoDelete_SomeAoSairOUltimoConsumidor;
+procedure TLifecycleTests.AutoDelete_GoesAwayWhenLastConsumerLeaves;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1436,17 +1436,17 @@ begin
     LDecl.AutoDelete := True;
     LCh.DeclareQueue(LDecl);
     LTag := LCh.Consume('q.ad', OnDelivery, True);
-    TAssert.AssertTrue('existe com consumidor', FilaExiste(LConn, 'q.ad'));
+    TAssert.AssertTrue('existe com consumidor', QueueExists(LConn, 'q.ad'));
 
     LCh.Cancel(LTag); // the Cancel-Ok only comes back after the broker processes it
     TAssert.AssertFalse('auto-delete some quando o ultimo consumidor sai',
-      FilaExiste(LConn, 'q.ad'));
+      QueueExists(LConn, 'q.ad'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.AutoDelete_NaoSomeSemNuncaTerConsumidor;
+procedure TLifecycleTests.AutoDelete_StaysIfItNeverHadAConsumer;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1476,13 +1476,13 @@ begin
     // The queue never had a CONSUMER, only a Get: it must not go away, otherwise it
     // would vanish between the declare and the first consume.
     TAssert.AssertTrue('auto-delete que NUNCA teve consumidor nao some',
-      FilaExiste(LConn, 'q.ad.virgem'));
+      QueueExists(LConn, 'q.ad.virgem'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.AutoDelete_NaoSomeComOutroConsumidorAtivo;
+procedure TLifecycleTests.AutoDelete_StaysWithAnotherConsumerActive;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1501,46 +1501,46 @@ begin
 
     LCh.Cancel(LTag1);
     TAssert.AssertTrue('ainda ha consumidor: a fila fica',
-      FilaExiste(LConn, 'q.ad2'));
+      QueueExists(LConn, 'q.ad2'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.AutoDelete_SomeQuandoOConsumidorCai;
+procedure TLifecycleTests.AutoDelete_GoesAwayWhenTheConsumerDrops;
 var
-  LDono, LOutra: TAMQPConnection;
+  LOwner, LOtherConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
 begin
-  LOutra := TAMQPConnection.Create(Params);
+  LOtherConn := TAMQPConnection.Create(Params);
   try
-    LOutra.Open;
+    LOtherConn.Open;
     // The queue is declared by the OTHER connection (it is not exclusive), and the
     // consumer comes from a connection that is going to drop -- it is the CONSUMER's
     // drop that fires the auto-delete, not the declarer's.
-    LCh := LOutra.CreateChannel;
+    LCh := LOtherConn.CreateChannel;
     LDecl := TAMQPQueueDeclare.Create('q.ad.queda');
     LDecl.AutoDelete := True;
     LCh.DeclareQueue(LDecl);
 
-    LDono := TAMQPConnection.Create(Params);
+    LOwner := TAMQPConnection.Create(Params);
     try
-      LDono.Open;
-      LDono.CreateChannel.Consume('q.ad.queda', OnDelivery, True);
-      TAssert.AssertTrue('existe com consumidor', FilaExiste(LOutra, 'q.ad.queda'));
+      LOwner.Open;
+      LOwner.CreateChannel.Consume('q.ad.queda', OnDelivery, True);
+      TAssert.AssertTrue('existe com consumidor', QueueExists(LOtherConn, 'q.ad.queda'));
     finally
-      LDono.Free; // the consumer drops together with the connection
+      LOwner.Free; // the consumer drops together with the connection
     end;
 
     TAssert.AssertTrue('auto-delete some quando o ultimo consumidor CAI, nao so no cancel',
-      EsperaFilaSumir(LOutra, 'q.ad.queda', 5000));
+      WaitQueueGone(LOtherConn, 'q.ad.queda', 5000));
   finally
-    LOutra.Free;
+    LOtherConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.SemAutoDelete_FicaAposOConsumidorSair;
+procedure TLifecycleTests.NoAutoDelete_StaysAfterTheConsumerLeaves;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1554,13 +1554,13 @@ begin
     LTag := LCh.Consume('q.normal', OnDelivery, True);
     LCh.Cancel(LTag);
     TAssert.AssertTrue('fila comum nao some quando o consumidor sai',
-      FilaExiste(LConn, 'q.normal'));
+      QueueExists(LConn, 'q.normal'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.ExchangeAutoDelete_SomeAoPerderOUltimoBinding;
+procedure TLifecycleTests.ExchangeAutoDelete_GoesAwayOnLosingTheLastBinding;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1575,8 +1575,8 @@ begin
     LDecl.AutoDelete := True;
     LCh.DeclareExchange(LDecl);
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ex.ad'));
-    LCh.BindQueue(NovoBind('q.ex.ad', 'ex.ad', 'k'));
-    TAssert.AssertTrue('existe com binding', ExchangeExiste(LConn, 'ex.ad'));
+    LCh.BindQueue(NewBind('q.ex.ad', 'ex.ad', 'k'));
+    TAssert.AssertTrue('existe com binding', ExchangeExists(LConn, 'ex.ad'));
 
     LUnbind.QueueName := 'q.ex.ad';
     LUnbind.ExchangeName := 'ex.ad';
@@ -1585,13 +1585,13 @@ begin
     LCh.UnbindQueue(LUnbind);
 
     TAssert.AssertFalse('exchange auto-delete some ao perder o ultimo binding',
-      ExchangeExiste(LConn, 'ex.ad'));
+      ExchangeExists(LConn, 'ex.ad'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.ExchangeAutoDelete_SomeQuandoAFilaEApagada;
+procedure TLifecycleTests.ExchangeAutoDelete_GoesAwayWhenTheQueueIsDeleted;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1605,19 +1605,19 @@ begin
     LDecl.AutoDelete := True;
     LCh.DeclareExchange(LDecl);
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ex.ad2'));
-    LCh.BindQueue(NovoBind('q.ex.ad2', 'ex.ad2', 'k'));
+    LCh.BindQueue(NewBind('q.ex.ad2', 'ex.ad2', 'k'));
 
     // Deleting the QUEUE takes its bindings with it -- and the exchange is left orphaned.
-    LCh.DeleteQueue(NovoDelete('q.ex.ad2', False, False));
+    LCh.DeleteQueue(NewDelete('q.ex.ad2', False, False));
 
     TAssert.AssertFalse('o binding que sumiu com a fila tambem conta',
-      ExchangeExiste(LConn, 'ex.ad2'));
+      ExchangeExists(LConn, 'ex.ad2'));
   finally
     LConn.Free;
   end;
 end;
 
-procedure TLifecycleTests.ExchangeAutoDelete_FicaEnquantoHouverBinding;
+procedure TLifecycleTests.ExchangeAutoDelete_StaysWhileThereIsABinding;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1633,8 +1633,8 @@ begin
     LCh.DeclareExchange(LDecl);
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.a'));
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.b'));
-    LCh.BindQueue(NovoBind('q.a', 'ex.ad3', 'k1'));
-    LCh.BindQueue(NovoBind('q.b', 'ex.ad3', 'k2'));
+    LCh.BindQueue(NewBind('q.a', 'ex.ad3', 'k1'));
+    LCh.BindQueue(NewBind('q.b', 'ex.ad3', 'k2'));
 
     LUnbind.QueueName := 'q.a';
     LUnbind.ExchangeName := 'ex.ad3';
@@ -1643,7 +1643,7 @@ begin
     LCh.UnbindQueue(LUnbind);
 
     TAssert.AssertTrue('ainda ha um binding: o exchange fica',
-      ExchangeExiste(LConn, 'ex.ad3'));
+      ExchangeExists(LConn, 'ex.ad3'));
   finally
     LConn.Free;
   end;
@@ -1651,20 +1651,20 @@ end;
 
 // WS2 of Phase 3: an invalid x-argument in the declare closes the CHANNEL with 406,
 // and the connection survives -- same line as the invalid exchange type.
-procedure TErrorTableTests.Erro406_MaxPriorityForaDaFaixa;
+procedure TErrorTableTests.Error406_MaxPriorityOutOfRange;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
   LArgs: TAMQPFieldTable;
   LVal: TValue;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     LArgs := TAMQPFieldTable.Create;
     try
       // Deliberate deviation from RabbitMQ (D12): there the cap is 255, here it is 9 --
@@ -1677,14 +1677,14 @@ begin
         LCh.DeclareQueue(LDecl);
       except
         on E: EAMQPChannel do
-          LCodigo := CodigoDoErro(E.Message);
+          LCode := ErrorCodeOf(E.Message);
       end;
     finally
       // The declare does NOT free the table -- the owner is the caller (same
       // convention as SetHeaders in the publish).
       LArgs.Free;
     end;
-    TAssert.AssertEquals('x-max-priority fora da faixa e 406', 406, LCodigo);
+    TAssert.AssertEquals('x-max-priority fora da faixa e 406', 406, LCode);
     // The connection has to stay usable: it is a channel error, not a connection error.
     TAssert.AssertTrue('conexao sobrevive ao 406', LConn.IsOpen);
   finally
@@ -1692,20 +1692,20 @@ begin
   end;
 end;
 
-procedure TErrorTableTests.Erro406_TtlComTipoErrado;
+procedure TErrorTableTests.Error406_TtlWithWrongType;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
   LArgs: TAMQPFieldTable;
   LVal: TValue;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     LArgs := TAMQPFieldTable.Create;
     try
       // A string where a number is expected: the most common mistake of whoever builds
@@ -1718,31 +1718,31 @@ begin
         LCh.DeclareQueue(LDecl);
       except
         on E: EAMQPChannel do
-          LCodigo := CodigoDoErro(E.Message);
+          LCode := ErrorCodeOf(E.Message);
       end;
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('x-message-ttl como string e 406', 406, LCodigo);
+    TAssert.AssertEquals('x-message-ttl como string e 406', 406, LCode);
   finally
     LConn.Free;
   end;
 end;
 
-procedure TErrorTableTests.Erro406_OverflowDesconhecido;
+procedure TErrorTableTests.Error406_UnknownOverflow;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LDecl: TAMQPQueueDeclare;
   LArgs: TAMQPFieldTable;
   LVal: TValue;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     LArgs := TAMQPFieldTable.Create;
     try
       LVal := TValue.From<string>('reject-publish-dlx');
@@ -1753,12 +1753,12 @@ begin
         LCh.DeclareQueue(LDecl);
       except
         on E: EAMQPChannel do
-          LCodigo := CodigoDoErro(E.Message);
+          LCode := ErrorCodeOf(E.Message);
       end;
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('x-overflow desconhecido e 406', 406, LCodigo);
+    TAssert.AssertEquals('x-overflow desconhecido e 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -1768,7 +1768,7 @@ end;
 // ignored -- none of them has any effect before WS4/WS5/WS6). This is the test
 // that keeps the new validation from becoming a regression for whoever already
 // declares queues with TTL and DLX against this broker.
-procedure TErrorTableTests.ArgsValidos_DeclareAceito;
+procedure TErrorTableTests.ValidArgs_DeclareAccepted;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1804,20 +1804,20 @@ begin
   end;
 end;
 
-procedure TErrorTableTests.Erro406_AlternateExchangeComTipoErrado;
+procedure TErrorTableTests.Error406_AlternateExchangeWithWrongType;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LDecl: TAMQPExchangeDeclare;
   LArgs: TAMQPFieldTable;
   LVal: TValue;
-  LCodigo: Integer;
+  LCode: Integer;
 begin
   LConn := TAMQPConnection.Create(Params);
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCodigo := 0;
+    LCode := 0;
     LArgs := TAMQPFieldTable.Create;
     try
       LVal := TValue.From<Int64>(42); // a number where a name is expected
@@ -1828,12 +1828,12 @@ begin
         LCh.DeclareExchange(LDecl);
       except
         on E: EAMQPChannel do
-          LCodigo := CodigoDoErro(E.Message);
+          LCode := ErrorCodeOf(E.Message);
       end;
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('alternate-exchange com tipo errado e 406', 406, LCodigo);
+    TAssert.AssertEquals('alternate-exchange com tipo errado e 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -1853,7 +1853,7 @@ end;
 // The EXCHANGE side has the same rule in the engine, but it cannot be exercised
 // from here: the CLIENT lib does not expose Exchange.Delete (same limitation already
 // recorded for Queue.Purge).
-procedure TErrorTableTests.DeleteIdempotente_FilaInexistente;
+procedure TErrorTableTests.DeleteIdempotent_MissingQueue;
 var
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
@@ -1882,46 +1882,46 @@ type
     Execute; the exit is counted in the DESTRUCTOR, which also runs when the pool
     frees the item without executing it -- it is the last time the item touches the
     test, so that is what the test waits for before freeing the gate. }
-  TBloqueiaPoolWork = class(TPcWorkItem)
+  TBlockPoolWork = class(TPcWorkItem)
   private
-    FPortao: TEvent;
-    FPartiram: PInteger;
-    FSairam: PInteger;
+    FGate: TEvent;
+    FStarted: PInteger;
+    FExited: PInteger;
   public
-    constructor Create(APortao: TEvent; APartiram, ASairam: PInteger);
+    constructor Create(AGate: TEvent; AStarted, AExited: PInteger);
     destructor Destroy; override;
     procedure Execute; override;
   end;
 
-constructor TBloqueiaPoolWork.Create(APortao: TEvent;
-  APartiram, ASairam: PInteger);
+constructor TBlockPoolWork.Create(AGate: TEvent;
+  AStarted, AExited: PInteger);
 begin
   inherited Create;
-  FPortao := APortao;
-  FPartiram := APartiram;
-  FSairam := ASairam;
+  FGate := AGate;
+  FStarted := AStarted;
+  FExited := AExited;
 end;
 
-destructor TBloqueiaPoolWork.Destroy;
+destructor TBlockPoolWork.Destroy;
 begin
-  PcAtomicInc(FSairam^);
+  PcAtomicInc(FExited^);
   inherited;
 end;
 
-procedure TBloqueiaPoolWork.Execute;
+procedure TBlockPoolWork.Execute;
 begin
-  PcAtomicInc(FPartiram^);
-  FPortao.WaitFor(60000); // safety net: the test always opens the gate in the finally
+  PcAtomicInc(FStarted^);
+  FGate.WaitFor(60000); // safety net: the test always opens the gate in the finally
 end;
 
 procedure TPoolIsolationTests.SetUp;
 begin
-  FBroker := NovoBroker;
-  FPortao := TEvent.Create(nil, True, False, '');
-  FPartiram := 0;
-  FSairam := 0;
-  FEnfileirados := 0;
-  FEntregues := 0;
+  FBroker := NewBroker;
+  FGate := TEvent.Create(nil, True, False, '');
+  FStarted := 0;
+  FExited := 0;
+  FEnqueuedBlockers := 0;
+  FDelivered := 0;
 end;
 
 procedure TPoolIsolationTests.TearDown;
@@ -1929,43 +1929,43 @@ begin
   FBroker.Free;
   // Only frees the gate if no item references it anymore (the test waited for
   // all of them to exit); otherwise it leaks on purpose -- an AV in a worker is worse than a leak.
-  if PcAtomicGet(FSairam) = FEnfileirados then
-    FPortao.Free;
+  if PcAtomicGet(FExited) = FEnqueuedBlockers then
+    FGate.Free;
 end;
 
 function TPoolIsolationTests.Params: TAMQPConnectionParams;
 begin
-  Result := ParamsDe(FBroker);
+  Result := ParamsOf(FBroker);
 end;
 
 type
   { Opens the gate after AMs: the main thread is stuck in the channel's Free
     and cannot open it itself. }
-  TAbrePortaoDepois = class(TThread)
+  TOpenGateLater = class(TThread)
   private
-    FPortao: TEvent;
+    FGate: TEvent;
     FMs: Cardinal;
   protected
     procedure Execute; override;
   public
-    constructor Create(APortao: TEvent; AMs: Cardinal);
+    constructor Create(AGate: TEvent; AMs: Cardinal);
   end;
 
-constructor TAbrePortaoDepois.Create(APortao: TEvent; AMs: Cardinal);
+constructor TOpenGateLater.Create(AGate: TEvent; AMs: Cardinal);
 begin
-  FPortao := APortao;
+  FGate := AGate;
   FMs := AMs;
   FreeOnTerminate := False;
   inherited Create(False);
 end;
 
-procedure TAbrePortaoDepois.Execute;
+procedure TOpenGateLater.Execute;
 begin
   Sleep(FMs);
-  FPortao.SetEvent;
+  FGate.SetEvent;
 end;
 
-procedure TPoolIsolationTests.SaturaPcPool;
+procedure TPoolIsolationTests.SaturatePcPool;
 var
   I: Integer;
   LDeadline: UInt64;
@@ -1978,73 +1978,73 @@ begin
   // called inside the test's try: whoever enqueued has to open the gate.
   for I := 1 to PcPool.MaxWorkers do
   begin
-    PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
-    Inc(FEnfileirados);
+    PcPool.Queue(TBlockPoolWork.Create(FGate, @FStarted, @FExited));
+    Inc(FEnqueuedBlockers);
     LDeadline := PcTickMs + 5000;
-    while (PcAtomicGet(FPartiram) < I) and (PcTickMs < LDeadline) do
+    while (PcAtomicGet(FStarted) < I) and (PcTickMs < LDeadline) do
       Sleep(1);
   end;
-  PcPool.Queue(TBloqueiaPoolWork.Create(FPortao, @FPartiram, @FSairam));
-  Inc(FEnfileirados);
+  PcPool.Queue(TBlockPoolWork.Create(FGate, @FStarted, @FExited));
+  Inc(FEnqueuedBlockers);
   TAssert.AssertTrue(Format('todo worker do PcPool roda um item nosso e sobra um na fila (partiram %d de %d, fila %d)',
-    [PcAtomicGet(FPartiram), PcPool.MaxWorkers, PcPool.QueueDepth]), (PcAtomicGet(FPartiram) = PcPool.MaxWorkers) and (PcPool.QueueDepth > 0));
+    [PcAtomicGet(FStarted), PcPool.MaxWorkers, PcPool.QueueDepth]), (PcAtomicGet(FStarted) = PcPool.MaxWorkers) and (PcPool.QueueDepth > 0));
 end;
 
-procedure TPoolIsolationTests.SoltaPcPool;
+procedure TPoolIsolationTests.ReleasePcPool;
 var
   LDeadline: UInt64;
 begin
-  FPortao.SetEvent;
+  FGate.SetEvent;
   LDeadline := PcTickMs + 30000;
-  while (PcAtomicGet(FSairam) < FEnfileirados) and (PcTickMs < LDeadline) do
+  while (PcAtomicGet(FExited) < FEnqueuedBlockers) and (PcTickMs < LDeadline) do
     Sleep(5);
 end;
 
-procedure TPoolIsolationTests.AoEntregar(AChannel: TAMQPChannel;
+procedure TPoolIsolationTests.HandleDelivery(AChannel: TAMQPChannel;
   const ADelivery: TAMQPDelivery);
 begin
-  PcAtomicInc(FEntregues);
+  PcAtomicInc(FDelivered);
 end;
 
-procedure TPoolIsolationTests.PcPoolSaturado_BrokerContinuaRespondendo;
+procedure TPoolIsolationTests.PcPoolSaturated_BrokerKeepsResponding;
 var
-  LInicio, LGasto: UInt64;
+  LStart, LElapsed: UInt64;
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
   LGet: TAMQPGetResult;
 begin
   try
-    SaturaPcPool;
+    SaturatePcPool;
     LConn := TAMQPConnection.Create(Params);
     try
       LConn.Open;
       LCh := LConn.CreateChannel;
-      LInicio := PcTickMs;
+      LStart := PcTickMs;
       // Declare-Ok and Get-Ok come out of the queue's ACTOR (synchronous command): if it
       // depended on the PcPool, it would wait up to the actor's 15 s timeout.
       LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.pool'));
       LCh.PublishText('', 'q.pool', 'passou');
       LGet := LCh.BasicGet('q.pool', True);
-      LGasto := PcTickMs - LInicio;
+      LElapsed := PcTickMs - LStart;
       TAssert.AssertTrue('o Get achou a mensagem', LGet.Found);
       TAssert.AssertEquals('corpo', 'passou', LGet.BodyAsText);
-      TAssert.AssertTrue('sem esperar pelo PcPool (' + IntToStr(LGasto) + ' ms)', LGasto < 5000);
+      TAssert.AssertTrue('sem esperar pelo PcPool (' + IntToStr(LElapsed) + ' ms)', LElapsed < 5000);
     finally
       LConn.Free;
     end;
   finally
-    SoltaPcPool;
+    ReleasePcPool;
   end;
-  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnfileirados, PcAtomicGet(FSairam));
+  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
 end;
 
-procedure TPoolIsolationTests.PcPoolSaturado_FreeDoCanalEsperaOCallbackEnfileirado;
+procedure TPoolIsolationTests.PcPoolSaturated_ChannelFreeWaitsForTheQueuedCallback;
 var
-  LFila: Integer;
-  LDeadline, LInicio, LGasto: UInt64;
+  LQueue: Integer;
+  LDeadline, LStart, LElapsed: UInt64;
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
-  LAbridor: TAbrePortaoDepois;
+  LOpener: TOpenGateLater;
 begin
   // Measures finding 6 of pascal-dfe-broker: a channel's Free waits for the
   // callbacks counted since ENQUEUEING (DrainInFlight), and the client's
@@ -2053,34 +2053,34 @@ begin
   // the channel's item. That is the documented behavior (no deadline: giving up
   // would free the channel with the item still queued pointing at it); the channel
   // with its own thread, below, is the way out for whoever cannot wait.
-  LGasto := 0;
+  LElapsed := 0;
   try
-    SaturaPcPool;
+    SaturatePcPool;
     LConn := TAMQPConnection.Create(Params);
     try
       LConn.Open;
       LCh := LConn.CreateChannel;
       try
         LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.drain'));
-        LCh.Consume('q.drain', AoEntregar, True);
-        LFila := PcPool.QueueDepth;
+        LCh.Consume('q.drain', HandleDelivery, True);
+        LQueue := PcPool.QueueDepth;
         LCh.PublishText('', 'q.drain', 'x');
         LDeadline := PcTickMs + 5000;
-        while (PcPool.QueueDepth <= LFila) and (PcTickMs < LDeadline) do
+        while (PcPool.QueueDepth <= LQueue) and (PcTickMs < LDeadline) do
           Sleep(5);
-        TAssert.AssertTrue('a entrega ficou na fila do PcPool', PcPool.QueueDepth > LFila);
-        TAssert.AssertEquals('o callback ainda nao rodou (PcPool saturado)', 0, PcAtomicGet(FEntregues));
-        LAbridor := TAbrePortaoDepois.Create(FPortao, 1500);
+        TAssert.AssertTrue('a entrega ficou na fila do PcPool', PcPool.QueueDepth > LQueue);
+        TAssert.AssertEquals('o callback ainda nao rodou (PcPool saturado)', 0, PcAtomicGet(FDelivered));
+        LOpener := TOpenGateLater.Create(FGate, 1500);
         try
-          LInicio := PcTickMs;
+          LStart := PcTickMs;
           FreeAndNil(LCh);
-          LGasto := PcTickMs - LInicio;
+          LElapsed := PcTickMs - LStart;
         finally
-          LAbridor.WaitFor;
-          LAbridor.Free;
+          LOpener.WaitFor;
+          LOpener.Free;
         end;
-        TAssert.AssertEquals('o Free so voltou depois de o callback enfileirado rodar', 1, PcAtomicGet(FEntregues));
-        TAssert.AssertTrue('o Free esperou o PcPool andar (' + IntToStr(LGasto) + ' ms)', LGasto >= 1000);
+        TAssert.AssertEquals('o Free so voltou depois de o callback enfileirado rodar', 1, PcAtomicGet(FDelivered));
+        TAssert.AssertTrue('o Free esperou o PcPool andar (' + IntToStr(LElapsed) + ' ms)', LElapsed >= 1000);
       finally
         LCh.Free;
       end;
@@ -2088,14 +2088,14 @@ begin
       LConn.Free;
     end;
   finally
-    SoltaPcPool;
+    ReleasePcPool;
   end;
-  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnfileirados, PcAtomicGet(FSairam));
+  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
 end;
 
-procedure TPoolIsolationTests.PcPoolSaturado_CanalComThreadPropria_NaoDependeDoPcPool;
+procedure TPoolIsolationTests.PcPoolSaturated_ChannelWithOwnThread_DoesNotDependOnPcPool;
 var
-  LDeadline, LInicio, LGasto: UInt64;
+  LDeadline, LStart, LElapsed: UInt64;
   LConn: TAMQPConnection;
   LCh: TAMQPChannel;
 begin
@@ -2103,25 +2103,25 @@ begin
   // channel itself. With the PcPool saturated, the callback runs and the Free returns
   // right away -- that is what is recommended to whoever needs to stop a consumer
   // without depending on the rest of the process.
-  LGasto := 0;
+  LElapsed := 0;
   try
-    SaturaPcPool;
+    SaturatePcPool;
     LConn := TAMQPConnection.Create(Params);
     try
       LConn.Open;
       LCh := LConn.CreateChannel(True);
       try
         LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.propria'));
-        LCh.Consume('q.propria', AoEntregar, True);
+        LCh.Consume('q.propria', HandleDelivery, True);
         LCh.PublishText('', 'q.propria', 'x');
         LDeadline := PcTickMs + 5000;
-        while (PcAtomicGet(FEntregues) = 0) and (PcTickMs < LDeadline) do
+        while (PcAtomicGet(FDelivered) = 0) and (PcTickMs < LDeadline) do
           Sleep(5);
-        TAssert.AssertEquals('a entrega rodou na thread do canal, com o PcPool saturado', 1, PcAtomicGet(FEntregues));
-        LInicio := PcTickMs;
+        TAssert.AssertEquals('a entrega rodou na thread do canal, com o PcPool saturado', 1, PcAtomicGet(FDelivered));
+        LStart := PcTickMs;
         FreeAndNil(LCh);
-        LGasto := PcTickMs - LInicio;
-        TAssert.AssertTrue('e o Free nao esperou o PcPool (' + IntToStr(LGasto) + ' ms)', LGasto < 1000);
+        LElapsed := PcTickMs - LStart;
+        TAssert.AssertTrue('e o Free nao esperou o PcPool (' + IntToStr(LElapsed) + ' ms)', LElapsed < 1000);
       finally
         LCh.Free;
       end;
@@ -2129,9 +2129,9 @@ begin
       LConn.Free;
     end;
   finally
-    SoltaPcPool;
+    ReleasePcPool;
   end;
-  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnfileirados, PcAtomicGet(FSairam));
+  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
 end;
 
 initialization

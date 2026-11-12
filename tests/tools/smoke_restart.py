@@ -21,7 +21,7 @@ is that what the broker CONFIRMED to a real client is still there after the
 process dies and another one starts on the same directory.
 
 USAGE
-    python tests/tools/smoke_restart.py [--porta 5674] [--n 50]
+    python tests/tools/smoke_restart.py [--port 5674] [--n 50]
                                        [--smoke <path>]
 
 --smoke points to ANOTHER SmokeTest -- that is how the Delphi side is
@@ -98,7 +98,7 @@ def main():
     smoke = SMOKE
     args = sys.argv[1:]
     for i, a in enumerate(args):
-        if a == '--porta' and i + 1 < len(args):
+        if a == '--port' and i + 1 < len(args):
             porta = int(args[i + 1])
         elif a == '--n' and i + 1 < len(args):
             n = int(args[i + 1])

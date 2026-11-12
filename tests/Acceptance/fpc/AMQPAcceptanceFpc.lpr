@@ -19,7 +19,7 @@ program AMQPAcceptanceFpc;
 
   TWO PASSES: TRANSIENT AND DURABLE (WS10 of Phase 4)
   ---------------------------------------------------
-  With AMQP_ACEITACAO_DURAVEL=1 the embedded broker starts with DataDir pointing
+  With AMQP_ACCEPTANCE_DURABLE=1 the embedded broker starts with DataDir pointing
   to a temporary directory, and the SAME 48 run again. The question the second pass
   answers is different from the first, and it is the reason it exists: turning
   durability on MUST NOT CHANGE THE SEMANTICS the client sees.
@@ -34,7 +34,7 @@ program AMQPAcceptanceFpc;
   Two passes, two processes:
 
     .\AMQPAcceptanceFpc.exe --all --format=plain
-    set AMQP_ACEITACAO_DURAVEL=1 && .\AMQPAcceptanceFpc.exe --all --format=plain
+    set AMQP_ACCEPTANCE_DURABLE=1 && .\AMQPAcceptanceFpc.exe --all --format=plain
 
   Separate processes on purpose: a freshly created durable broker in a clean
   directory is the state that matters, and reusing the process would carry
@@ -69,24 +69,24 @@ uses
 // know ("Invalid option at position 1"). A --durable would die before reaching
 // the tests. The variable bypasses both parsers and works exactly the same in
 // both mirrors.
-function PediuDuravel: Boolean;
+function DurableRequested: Boolean;
 var
   LVal: string;
 begin
-  LVal := LowerCase(Trim(GetEnvironmentVariable('AMQP_ACEITACAO_DURAVEL')));
+  LVal := LowerCase(Trim(GetEnvironmentVariable('AMQP_ACCEPTANCE_DURABLE')));
   Result := (LVal <> '') and (LVal <> '0') and (LVal <> 'false');
 end;
 
 // Clean directory for the durable pass. Not reused: a WAL from another run
 // would make the suite start with queues and messages it did not create.
-function DirDuravel: string;
+function DurableDir: string;
 begin
   Result := IncludeTrailingPathDelimiter(GetTempDir)
     + 'amqpaceita-' + IntToStr(GetProcessID);
   ForceDirectories(Result);
 end;
 
-procedure LimpaDir(const ADir: string);
+procedure ClearDir(const ADir: string);
 var
   LRec: TSearchRec;
 begin
@@ -104,7 +104,7 @@ begin
 end;
 
 // Starts the broker on 127.0.0.1 on an ephemeral port. Returns the chosen port.
-function IniciaBroker(out ABroker: TAMQPServer;
+function StartBroker(out ABroker: TAMQPServer;
   const ADataDir: string): Word;
 begin
   ABroker := TAMQPServer.Create;
@@ -118,7 +118,7 @@ end;
 // The embedded TLS broker's certificate: the test PKI of pascal-common-faa
 // (AMQP.TestSupport.Pki), PEM pair on OpenSSL, PFX on SChannel. Since 0.6.0
 // every build has a TLS broker (SChannel serves the server side too).
-procedure ConfiguraCertificado(ABroker: TAMQPServer);
+procedure ConfigureCertificate(ABroker: TAMQPServer);
 begin
   if AmqpResolveTlsBackend(tbDefault) = tbOpenSsl then
   begin
@@ -132,7 +132,7 @@ begin
   end;
 end;
 
-function IniciaBrokerTls(out ABroker: TAMQPServer): Word;
+function StartBrokerTls(out ABroker: TAMQPServer): Word;
 begin
   Result := 0;
   ABroker := TAMQPServer.Create;
@@ -140,7 +140,7 @@ begin
   ABroker.Port := 0;
   ABroker.UseTls := True;
   try
-    ConfiguraCertificado(ABroker);
+    ConfigureCertificate(ABroker);
     ABroker.Start;
     Result := ABroker.Port;
   except
@@ -157,24 +157,24 @@ end;
 var
   ConsoleApp: TTestRunner;
   LBroker: TAMQPServer;
-  LPorta, LPortaTls: Word;
+  LPorta, LTlsPort: Word;
   LDataDir: string;
   LBrokerTls: TAMQPServer;
 begin
   SetMultiByteConversionCodePage(CP_UTF8);
 
   LDataDir := '';
-  if PediuDuravel then
+  if DurableRequested then
   begin
-    LDataDir := DirDuravel;
-    LimpaDir(LDataDir);
+    LDataDir := DurableDir;
+    ClearDir(LDataDir);
   end;
-  LPorta := IniciaBroker(LBroker, LDataDir);
-  LPortaTls := IniciaBrokerTls(LBrokerTls);
+  LPorta := StartBroker(LBroker, LDataDir);
+  LTlsPort := StartBrokerTls(LBrokerTls);
   try
-    AmqpUseEmbeddedBroker(LPorta, LPortaTls);
+    AmqpUseEmbeddedBroker(LPorta, LTlsPort);
     WriteLn('broker embutido em 127.0.0.1:', LPorta,
-      ' (tls: ', LPortaTls, ')');
+      ' (tls: ', LTlsPort, ')');
     if LDataDir <> '' then
       WriteLn('PASSADA DURAVEL -- DataDir: ', LDataDir)
     else
@@ -194,6 +194,6 @@ begin
     LBrokerTls.Free;
     LBroker.Free;
     if LDataDir <> '' then
-      LimpaDir(LDataDir);
+      ClearDir(LDataDir);
   end;
 end.

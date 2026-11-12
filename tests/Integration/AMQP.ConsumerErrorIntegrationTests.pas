@@ -44,14 +44,14 @@ type
     FQueue: string;
     FDlq: string;
     // what the callback does with the 'ruim' (bad) message (MODO_*) and the handler (H_*)
-    FModo: Integer;
-    FHandlerModo: Integer;
+    FMode: Integer;
+    FHandlerMode: Integer;
     FNoAck: Boolean;
     // atomic counters
     FCalls: Integer;      // callbacks called
     FAcks: Integer;       // good messages acked by the callback
     FErrors: Integer;     // OnConsumerError calls that finished
-    FRedeliveredOk: Integer; // the bad one, redelivered, acked (MODO_REQUEUE)
+    FRedeliveredOk: Integer; // the bad one, redelivered, acked (MODE_REQUEUE)
     FReconnected: Integer;
     // what the handler saw (written before FErrors goes up)
     FInitialAction: Integer;
@@ -59,62 +59,62 @@ type
     FErrorMessage: string;
     FErrorBody: string;
     FPendingTag: UInt64;
-    // MODO_RECONEXAO: the old session's delivery holds until the drop
+    // MODE_RECONNECT: the old session's delivery holds until the drop
     FOldStarted: TEvent;
     FReleaseOld: TEvent;
     procedure HandleDelivery(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
     procedure HandleError(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery;
       AError: Exception; var AAction: TAMQPConsumerErrorAction);
     procedure HandleReconnect(AConnection: TAMQPConnection);
-    function Espera(var ACounter: Integer; AValue, ATimeoutMs: Integer): Boolean;
+    function WaitForCount(var ACounter: Integer; AValue, ATimeoutMs: Integer): Boolean;
     /// Main queue dead-lettering to amq.direct + DLQ bound by the main queue's
-    /// key. With an empty ANome both are exclusive and have generated names.
-    procedure DeclaraFilas(AChannel: TAMQPChannel; const ANome: string);
-    function LeDlq(AChannel: TAMQPChannel; ATimeoutMs: Integer): string;
-    procedure PublicaRuimEBoas(ABoas: Integer);
+    /// key. With an empty AName both are exclusive and have generated names.
+    procedure DeclareQueues(AChannel: TAMQPChannel; const AName: string);
+    function ReadDlq(AChannel: TAMQPChannel; ATimeoutMs: Integer): string;
+    procedure PublishBadAndGood(AGoodCount: Integer);
   public
     [Setup] procedure SetUp;
     [TearDown] procedure TearDown;
-    [Test] procedure SemHandler_CallbackLevanta_NackSemRequeue_E_NaoTrava;
-    [Test] procedure Handler_RecebeExcecaoEntrega_E_AcaoInicialReject;
-    [Test] procedure Handler_Requeue_ReentregaComRedelivered;
-    [Test] procedure Handler_None_EntregaFicaComOAplicativo;
-    [Test] procedure CallbackAckouAntesDeLevantar_NaoConfirmaDeNovo;
-    [Test] procedure HandlerConfirmouEleMesmo_NaoConfirmaDeNovo;
-    [Test] procedure HandlerLevanta_AcaoAindaVale;
-    [Test] procedure NoAck_CallbackLevanta_HandlerChamado_SemNack;
-    [Test] procedure Reconexao_CallbackLevantaNaQueda_MensagemVoltaNaSessaoNova;
+    [Test] procedure NoHandler_CallbackRaises_NackWithoutRequeue_And_DoesNotHang;
+    [Test] procedure Handler_ReceivesExceptionDelivery_And_InitialActionReject;
+    [Test] procedure Handler_Requeue_RedeliversWithRedelivered;
+    [Test] procedure Handler_None_DeliveryStaysWithTheApplication;
+    [Test] procedure CallbackAckedBeforeRaising_DoesNotConfirmAgain;
+    [Test] procedure HandlerAckedItself_DoesNotConfirmAgain;
+    [Test] procedure HandlerRaises_ActionStillApplies;
+    [Test] procedure NoAck_CallbackRaises_HandlerCalled_NoNack;
+    [Test] procedure Reconnect_CallbackRaisesOnDrop_MessageReturnsInNewSession;
   end;
 
 implementation
 
 const
-  MODO_LEVANTA = 0;       // raises right away
-  MODO_ACK_E_LEVANTA = 1; // acks and then raises
-  MODO_REQUEUE = 2;       // raises; once redelivered, acks
-  MODO_RECONEXAO = 3;     // see Reconexao_CallbackLevantaNaQueda_MensagemVoltaNaSessaoNova
+  MODE_RAISE = 0;       // raises right away
+  MODE_ACK_AND_RAISE = 1; // acks and then raises
+  MODE_REQUEUE = 2;       // raises; once redelivered, acks
+  MODE_RECONNECT = 3;     // see Reconnect_CallbackRaisesOnDrop_MessageReturnsInNewSession
 
-  H_PADRAO = 0;           // leaves the action alone
+  H_DEFAULT = 0;           // leaves the action alone
   H_REQUEUE = 1;
   H_NONE = 2;             // ceaNone + keeps the tag for the test to ack
-  H_ACK_ELE_MESMO = 3;    // acks in the handler itself and leaves the default action
-  H_LEVANTA = 4;          // raises inside the handler
+  H_ACK_ITSELF = 3;    // acks in the handler itself and leaves the default action
+  H_RAISE = 4;          // raises inside the handler
 
-  ESPERA_MS = 10000;
+  TIMEOUT_MS = 10000;
 
 // Assertions with a fixed type: the value comes in already converted, and the
 // TAssert overload is the same on both compilers.
-procedure ChecaInt(const AMsg: string; AEsperado, AObtido: Integer);
+procedure CheckInt(const AMsg: string; AExpected, AActual: Integer);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaStr(const AMsg: string; const AEsperado, AObtido: string);
+procedure CheckStr(const AMsg: string; const AExpected, AActual: string);
 begin
-  TAssert.AssertEquals(AMsg, AEsperado, AObtido);
+  TAssert.AssertEquals(AMsg, AExpected, AActual);
 end;
 
-procedure ChecaOk(const AMsg: string; ACond: Boolean);
+procedure CheckOk(const AMsg: string; ACond: Boolean);
 begin
   TAssert.AssertTrue(AMsg, ACond);
 end;
@@ -125,8 +125,8 @@ begin
   FConn.Open;
   FChan := FConn.CreateChannel;
   FReconConn := nil;
-  FModo := MODO_LEVANTA;
-  FHandlerModo := H_PADRAO;
+  FMode := MODE_RAISE;
+  FHandlerMode := H_DEFAULT;
   FNoAck := False;
   FCalls := 0;
   FAcks := 0;
@@ -162,17 +162,17 @@ begin
     Exit;
   end;
 
-  case FModo of
-    MODO_ACK_E_LEVANTA:
+  case FMode of
+    MODE_ACK_AND_RAISE:
       AChannel.Ack(ADelivery.DeliveryTag);
-    MODO_REQUEUE:
+    MODE_REQUEUE:
       if ADelivery.Redelivered then
       begin
         AChannel.Ack(ADelivery.DeliveryTag);
         PcAtomicInc(FRedeliveredOk);
         Exit;
       end;
-    MODO_RECONEXAO:
+    MODE_RECONNECT:
       if ADelivery.Redelivered then
       begin
         // redelivery in the new session: process normally
@@ -184,7 +184,7 @@ begin
       begin
         // delivery from the old session: hold until the drop and raise afterwards
         FOldStarted.SetEvent;
-        FReleaseOld.WaitFor(ESPERA_MS);
+        FReleaseOld.WaitFor(TIMEOUT_MS);
       end;
   end;
   raise EConvertError.Create('"quantity":"x" is not a valid integer');
@@ -198,7 +198,7 @@ begin
   FErrorClass := AError.ClassName;
   FErrorMessage := AError.Message;
   FErrorBody := ADelivery.BodyAsText;
-  case FHandlerModo of
+  case FHandlerMode of
     H_REQUEUE:
       if not ADelivery.Redelivered then
         AAction := ceaRequeue;
@@ -207,9 +207,9 @@ begin
         FPendingTag := ADelivery.DeliveryTag;
         AAction := ceaNone;
       end;
-    H_ACK_ELE_MESMO:
+    H_ACK_ITSELF:
       AChannel.Ack(ADelivery.DeliveryTag);
-    H_LEVANTA:
+    H_RAISE:
       begin
         PcAtomicInc(FErrors);
         raise Exception.Create('o handler de erro também quebrou');
@@ -223,7 +223,7 @@ begin
   PcAtomicSet(FReconnected, 1);
 end;
 
-function TAMQPConsumerErrorIntegrationTests.Espera(var ACounter: Integer;
+function TAMQPConsumerErrorIntegrationTests.WaitForCount(var ACounter: Integer;
   AValue, ATimeoutMs: Integer): Boolean;
 var
   LWaited: Integer;
@@ -237,8 +237,8 @@ begin
   Result := PcAtomicGet(ACounter) >= AValue;
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.DeclaraFilas(AChannel: TAMQPChannel;
-  const ANome: string);
+procedure TAMQPConsumerErrorIntegrationTests.DeclareQueues(AChannel: TAMQPChannel;
+  const AName: string);
 var
   LArgs: TAMQPFieldTable;
   LVal: TValue;
@@ -250,8 +250,8 @@ begin
     LVal := TValue.From<string>('amq.direct');
     LArgs.Put('x-dead-letter-exchange', LVal);
     LDecl := Default(TAMQPQueueDeclare);
-    LDecl.QueueName := ANome;
-    LDecl.Exclusive := ANome = '';
+    LDecl.QueueName := AName;
+    LDecl.Exclusive := AName = '';
     LDecl.Arguments := LArgs;
     FQueue := AChannel.DeclareQueue(LDecl).QueueName;
   finally
@@ -259,9 +259,9 @@ begin
   end;
 
   LDecl := Default(TAMQPQueueDeclare);
-  if ANome <> '' then
-    LDecl.QueueName := ANome + '-dlq';
-  LDecl.Exclusive := ANome = '';
+  if AName <> '' then
+    LDecl.QueueName := AName + '-dlq';
+  LDecl.Exclusive := AName = '';
   FDlq := AChannel.DeclareQueue(LDecl).QueueName;
 
   // the dead-lettered message keeps the original key: the main queue's name
@@ -272,7 +272,7 @@ begin
   AChannel.BindQueue(LBind);
 end;
 
-function TAMQPConsumerErrorIntegrationTests.LeDlq(AChannel: TAMQPChannel;
+function TAMQPConsumerErrorIntegrationTests.ReadDlq(AChannel: TAMQPChannel;
   ATimeoutMs: Integer): string;
 var
   LGet: TAMQPGetResult;
@@ -295,157 +295,157 @@ begin
   until False;
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.PublicaRuimEBoas(ABoas: Integer);
+procedure TAMQPConsumerErrorIntegrationTests.PublishBadAndGood(AGoodCount: Integer);
 var
   I: Integer;
 begin
   FChan.PublishText('', FQueue, 'ruim');
-  for I := 1 to ABoas do
+  for I := 1 to AGoodCount do
     FChan.PublishText('', FQueue, 'boa-' + IntToStr(I));
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.SemHandler_CallbackLevanta_NackSemRequeue_E_NaoTrava;
+procedure TAMQPConsumerErrorIntegrationTests.NoHandler_CallbackRaises_NackWithoutRequeue_And_DoesNotHang;
 begin
   // The measured scenario: with no try in the callback and with Qos(1), the
   // bad one held up the whole consumer. Without a handler, it goes to the DLQ
   // and the good ones get through.
-  DeclaraFilas(FChan, '');
-  PublicaRuimEBoas(3);
+  DeclareQueues(FChan, '');
+  PublishBadAndGood(3);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('as 3 boas deveriam passar depois da ruim (Qos 1)', Espera(FAcks, 3, ESPERA_MS));
-  ChecaStr('a ruim deveria ter ido para a DLQ (Nack sem requeue)', 'ruim', LeDlq(FChan, ESPERA_MS));
-  ChecaInt('a ruim não deveria ter sido reentregue', 4, PcAtomicGet(FCalls));
-  ChecaOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckOk('as 3 boas deveriam passar depois da ruim (Qos 1)', WaitForCount(FAcks, 3, TIMEOUT_MS));
+  CheckStr('a ruim deveria ter ido para a DLQ (Nack sem requeue)', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
+  CheckInt('a ruim não deveria ter sido reentregue', 4, PcAtomicGet(FCalls));
+  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.Handler_RecebeExcecaoEntrega_E_AcaoInicialReject;
+procedure TAMQPConsumerErrorIntegrationTests.Handler_ReceivesExceptionDelivery_And_InitialActionReject;
 begin
-  DeclaraFilas(FChan, '');
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(1);
+  PublishBadAndGood(1);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('o handler deveria ter sido chamado', Espera(FErrors, 1, ESPERA_MS));
-  ChecaStr('classe da exceção', 'EConvertError', FErrorClass);
-  ChecaStr('mensagem da exceção', '"quantity":"x" is not a valid integer', FErrorMessage);
-  ChecaStr('a entrega que levantou', 'ruim', FErrorBody);
-  ChecaInt('entrega pendente: a ação inicial é ceaReject', Ord(ceaReject), FInitialAction);
-  ChecaOk('a boa deveria passar', Espera(FAcks, 1, ESPERA_MS));
-  ChecaStr('ação mantida: a ruim vai para a DLQ', 'ruim', LeDlq(FChan, ESPERA_MS));
+  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckStr('classe da exceção', 'EConvertError', FErrorClass);
+  CheckStr('mensagem da exceção', '"quantity":"x" is not a valid integer', FErrorMessage);
+  CheckStr('a entrega que levantou', 'ruim', FErrorBody);
+  CheckInt('entrega pendente: a ação inicial é ceaReject', Ord(ceaReject), FInitialAction);
+  CheckOk('a boa deveria passar', WaitForCount(FAcks, 1, TIMEOUT_MS));
+  CheckStr('ação mantida: a ruim vai para a DLQ', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.Handler_Requeue_ReentregaComRedelivered;
+procedure TAMQPConsumerErrorIntegrationTests.Handler_Requeue_RedeliversWithRedelivered;
 begin
-  FModo := MODO_REQUEUE;
-  FHandlerModo := H_REQUEUE;
-  DeclaraFilas(FChan, '');
+  FMode := MODE_REQUEUE;
+  FHandlerMode := H_REQUEUE;
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(2);
+  PublishBadAndGood(2);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('a ruim deveria voltar (redelivered) e ser confirmada', Espera(FRedeliveredOk, 1, ESPERA_MS));
-  ChecaOk('as boas deveriam passar', Espera(FAcks, 2, ESPERA_MS));
-  ChecaInt('o handler roda só na primeira entrega', 1, PcAtomicGet(FErrors));
-  ChecaStr('com requeue a DLQ fica vazia', '', LeDlq(FChan, 300));
-  ChecaOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckOk('a ruim deveria voltar (redelivered) e ser confirmada', WaitForCount(FRedeliveredOk, 1, TIMEOUT_MS));
+  CheckOk('as boas deveriam passar', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckInt('o handler roda só na primeira entrega', 1, PcAtomicGet(FErrors));
+  CheckStr('com requeue a DLQ fica vazia', '', ReadDlq(FChan, 300));
+  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.Handler_None_EntregaFicaComOAplicativo;
+procedure TAMQPConsumerErrorIntegrationTests.Handler_None_DeliveryStaysWithTheApplication;
 begin
-  FHandlerModo := H_NONE;
-  DeclaraFilas(FChan, '');
+  FHandlerMode := H_NONE;
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(2);
+  PublishBadAndGood(2);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('o handler deveria ter sido chamado', Espera(FErrors, 1, ESPERA_MS));
+  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
   // ceaNone: the library does not ack, so with Qos(1) nothing else arrives...
   TThread.Sleep(300);
-  ChecaInt('com a ruim pendente, nenhuma boa deveria chegar', 0, PcAtomicGet(FAcks));
+  CheckInt('com a ruim pendente, nenhuma boa deveria chegar', 0, PcAtomicGet(FAcks));
   // ...until the application acks on its own.
   FChan.Nack(FPendingTag, False);
-  ChecaOk('confirmada pelo aplicativo, as boas passam', Espera(FAcks, 2, ESPERA_MS));
-  ChecaStr('o Nack do aplicativo mandou a ruim para a DLQ', 'ruim', LeDlq(FChan, ESPERA_MS));
+  CheckOk('confirmada pelo aplicativo, as boas passam', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckStr('o Nack do aplicativo mandou a ruim para a DLQ', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.CallbackAckouAntesDeLevantar_NaoConfirmaDeNovo;
+procedure TAMQPConsumerErrorIntegrationTests.CallbackAckedBeforeRaising_DoesNotConfirmAgain;
 begin
   // Acknowledging the same tag twice is 406 PRECONDITION_FAILED: the broker
   // closes the channel and the good ones never arrive.
-  FModo := MODO_ACK_E_LEVANTA;
-  DeclaraFilas(FChan, '');
+  FMode := MODE_ACK_AND_RAISE;
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(2);
+  PublishBadAndGood(2);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('o handler deveria ter sido chamado', Espera(FErrors, 1, ESPERA_MS));
-  ChecaInt('já confirmada: a ação inicial é ceaNone', Ord(ceaNone), FInitialAction);
-  ChecaOk('as boas deveriam passar (sem 406)', Espera(FAcks, 2, ESPERA_MS));
-  ChecaOk('o canal deveria seguir aberto', FChan.IsOpen);
-  ChecaStr('a ruim foi confirmada com Ack: a DLQ fica vazia', '', LeDlq(FChan, 300));
+  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckInt('já confirmada: a ação inicial é ceaNone', Ord(ceaNone), FInitialAction);
+  CheckOk('as boas deveriam passar (sem 406)', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckStr('a ruim foi confirmada com Ack: a DLQ fica vazia', '', ReadDlq(FChan, 300));
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.HandlerConfirmouEleMesmo_NaoConfirmaDeNovo;
+procedure TAMQPConsumerErrorIntegrationTests.HandlerAckedItself_DoesNotConfirmAgain;
 begin
   // The handler acks and leaves the action at ceaReject: the library checks
   // again after the handler and does not send the Nack.
-  FHandlerModo := H_ACK_ELE_MESMO;
-  DeclaraFilas(FChan, '');
+  FHandlerMode := H_ACK_ITSELF;
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(2);
+  PublishBadAndGood(2);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('o handler deveria ter sido chamado', Espera(FErrors, 1, ESPERA_MS));
-  ChecaInt('a ação inicial era ceaReject', Ord(ceaReject), FInitialAction);
-  ChecaOk('as boas deveriam passar (sem 406)', Espera(FAcks, 2, ESPERA_MS));
-  ChecaOk('o canal deveria seguir aberto', FChan.IsOpen);
-  ChecaStr('o Ack do handler venceu: a DLQ fica vazia', '', LeDlq(FChan, 300));
+  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckInt('a ação inicial era ceaReject', Ord(ceaReject), FInitialAction);
+  CheckOk('as boas deveriam passar (sem 406)', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckStr('o Ack do handler venceu: a DLQ fica vazia', '', ReadDlq(FChan, 300));
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.HandlerLevanta_AcaoAindaVale;
+procedure TAMQPConsumerErrorIntegrationTests.HandlerRaises_ActionStillApplies;
 begin
-  FHandlerModo := H_LEVANTA;
-  DeclaraFilas(FChan, '');
+  FHandlerMode := H_RAISE;
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(2);
+  PublishBadAndGood(2);
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  ChecaOk('as boas deveriam passar mesmo com o handler quebrado', Espera(FAcks, 2, ESPERA_MS));
-  ChecaStr('a ação padrão seguiu valendo', 'ruim', LeDlq(FChan, ESPERA_MS));
+  CheckOk('as boas deveriam passar mesmo com o handler quebrado', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckStr('a ação padrão seguiu valendo', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.NoAck_CallbackLevanta_HandlerChamado_SemNack;
+procedure TAMQPConsumerErrorIntegrationTests.NoAck_CallbackRaises_HandlerCalled_NoNack;
 begin
   // On a no-ack consumer there is nothing to acknowledge: a Nack would be 406
   // (unknown tag) and would close the channel.
   FNoAck := True;
-  DeclaraFilas(FChan, '');
+  DeclareQueues(FChan, '');
   FChan.OnConsumerError := HandleError;
-  PublicaRuimEBoas(2);
+  PublishBadAndGood(2);
   FChan.Consume(FQueue, HandleDelivery, True);
 
-  ChecaOk('o handler deveria ser chamado também no no-ack', Espera(FErrors, 1, ESPERA_MS));
-  ChecaInt('no-ack: a ação inicial é ceaNone', Ord(ceaNone), FInitialAction);
-  ChecaOk('as boas deveriam chegar', Espera(FAcks, 2, ESPERA_MS));
+  CheckOk('o handler deveria ser chamado também no no-ack', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckInt('no-ack: a ação inicial é ceaNone', Ord(ceaNone), FInitialAction);
+  CheckOk('as boas deveriam chegar', WaitForCount(FAcks, 2, TIMEOUT_MS));
   // a 406 arrives asynchronously: give it time before looking at the channel
-  ChecaStr('no-ack: nada vai para a DLQ', '', LeDlq(FChan, 300));
-  ChecaOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckStr('no-ack: nada vai para a DLQ', '', ReadDlq(FChan, 300));
+  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
 end;
 
-procedure TAMQPConsumerErrorIntegrationTests.Reconexao_CallbackLevantaNaQueda_MensagemVoltaNaSessaoNova;
+procedure TAMQPConsumerErrorIntegrationTests.Reconnect_CallbackRaisesOnDrop_MessageReturnsInNewSession;
 var
   LParams: TAMQPConnectionParams;
   LChan: TAMQPChannel;
   LDel: TAMQPQueueDelete;
-  LNome: string;
+  LName: string;
 begin
   // The callback raises AFTER the connection drops. The reconnection waits
   // for the old session's callbacks to finish before reopening the channel
@@ -454,8 +454,8 @@ begin
   // queue, and it comes back with Redelivered=True in the new session. If the
   // Nack reached the broker, the message would go to the DLQ and never be
   // redelivered.
-  FModo := MODO_RECONEXAO;
-  LNome := 'test-consumer-err-' + IntToStr(PcTickMs);
+  FMode := MODE_RECONNECT;
+  LName := 'test-consumer-err-' + IntToStr(PcTickMs);
   LParams := IntegrationParams;
   LParams.AutoReconnect := True;
   LParams.ReconnectDelayMs := 200;
@@ -465,23 +465,23 @@ begin
   LChan := FReconConn.CreateChannel;
   try
     LChan.OnConsumerError := HandleError;
-    DeclaraFilas(LChan, LNome); // named and non-exclusive: they survive the drop
+    DeclareQueues(LChan, LName); // named and non-exclusive: they survive the drop
     try
       LChan.PublishText('', FQueue, 'ruim');
       LChan.Consume(FQueue, HandleDelivery);
-      ChecaOk('a entrega velha deveria começar', FOldStarted.WaitFor(ESPERA_MS) = wrSignaled);
+      CheckOk('a entrega velha deveria começar', FOldStarted.WaitFor(TIMEOUT_MS) = wrSignaled);
 
       FReconConn.DropConnectionForTest;
       FReleaseOld.SetEvent; // the old one raises now, with the socket already closed
-      ChecaOk('o handler deveria ter sido chamado', Espera(FErrors, 1, ESPERA_MS));
-      ChecaInt('a entrega ainda estava pendente: ceaReject', Ord(ceaReject), FInitialAction);
+      CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
+      CheckInt('a entrega ainda estava pendente: ceaReject', Ord(ceaReject), FInitialAction);
 
-      ChecaOk('deveria reconectar', Espera(FReconnected, 1, ESPERA_MS));
-      ChecaOk('a mensagem deveria voltar na sessão nova e ser confirmada',
-        Espera(FRedeliveredOk, 1, ESPERA_MS));
+      CheckOk('deveria reconectar', WaitForCount(FReconnected, 1, TIMEOUT_MS));
+      CheckOk('a mensagem deveria voltar na sessão nova e ser confirmada',
+        WaitForCount(FRedeliveredOk, 1, TIMEOUT_MS));
       LChan.PublishText('', FQueue, 'depois');
-      ChecaOk('o canal deveria seguir consumindo', Espera(FAcks, 1, ESPERA_MS));
-      ChecaStr('o Nack no socket morto não chegou ao broker', '', LeDlq(LChan, 300));
+      CheckOk('o canal deveria seguir consumindo', WaitForCount(FAcks, 1, TIMEOUT_MS));
+      CheckStr('o Nack no socket morto não chegou ao broker', '', ReadDlq(LChan, 300));
     finally
       LDel := Default(TAMQPQueueDelete);
       LDel.QueueName := FQueue;

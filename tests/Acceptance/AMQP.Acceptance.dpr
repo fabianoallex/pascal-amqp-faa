@@ -9,7 +9,7 @@
 
   TWO PASSES: TRANSIENT AND DURABLE (WS10 of Phase 4)
   ---------------------------------------------------
-  With the environment variable AMQP_ACEITACAO_DURAVEL=1 the embedded broker
+  With the environment variable AMQP_ACCEPTANCE_DURABLE=1 the embedded broker
   starts with DataDir in a temporary directory, and the SAME 48 run again. The
   question of the second pass is different from the first: turning durability
   on MUST NOT CHANGE THE SEMANTICS the client sees. It is easy to break
@@ -24,7 +24,7 @@
   before reaching the tests.
 
     AMQP.Acceptance.exe
-    set AMQP_ACEITACAO_DURAVEL=1 && AMQP.Acceptance.exe
+    set AMQP_ACCEPTANCE_DURABLE=1 && AMQP.Acceptance.exe
 
   Every build has a TLS broker since 0.6.0 (both backends serve the server
   side). If the encrypted port does not come up (no PKI found, for example),
@@ -91,7 +91,7 @@ uses
 // The embedded TLS broker's certificate: the test PKI of pascal-common-faa
 // (AMQP.TestSupport.Pki), PEM pair on OpenSSL, PFX on SChannel. Since 0.6.0
 // every build has a TLS broker (SChannel serves the server side too).
-procedure ConfiguraCertificado(ABroker: TAMQPServer);
+procedure ConfigureCertificate(ABroker: TAMQPServer);
 begin
   if AmqpResolveTlsBackend(tbDefault) = tbOpenSsl then
   begin
@@ -106,17 +106,17 @@ begin
 end;
 
 // True when the environment variable asks for the durable pass.
-function PediuDuravel: Boolean;
+function DurableRequested: Boolean;
 var
   LVal: string;
 begin
-  LVal := LowerCase(Trim(GetEnvironmentVariable('AMQP_ACEITACAO_DURAVEL')));
+  LVal := LowerCase(Trim(GetEnvironmentVariable('AMQP_ACCEPTANCE_DURABLE')));
   Result := (LVal <> '') and (LVal <> '0') and (LVal <> 'false');
 end;
 
 // Clean directory for the durable pass. Not reused: a WAL from another run
 // would make the suite start with queues and messages it did not create.
-function DirDuravel: string;
+function DurableDir: string;
 begin
   // Unique name without needing the PID -- getting the PID would require
   // Winapi.Windows, and that unit shadows FindClose and DeleteFile from
@@ -127,7 +127,7 @@ begin
   ForceDirectories(Result);
 end;
 
-procedure LimpaDir(const ADir: string);
+procedure ClearDir(const ADir: string);
 var
   LRec: TSearchRec;
 begin
@@ -151,22 +151,22 @@ var
   logger: ITestLogger;
   nunitLogger: ITestLogger;
   broker: TAMQPServer;
-  portaTls: Word;
+  tlsPort: Word;
   dataDir: string;
   brokerTls: TAMQPServer;
 begin
   ReportMemoryLeaksOnShutdown := True;
   broker := TAMQPServer.Create;
-  portaTls := 0;
+  tlsPort := 0;
   brokerTls := nil;
   try
     broker.BindAddress := '127.0.0.1';
     broker.Port := 0; // ephemeral port
     dataDir := '';
-    if PediuDuravel then
+    if DurableRequested then
     begin
-      dataDir := DirDuravel;
-      LimpaDir(dataDir);
+      dataDir := DurableDir;
+      ClearDir(dataDir);
     end;
     broker.DataDir := dataDir; // '' = the Phase 3 broker, to the letter (D19)
     broker.Start;
@@ -184,9 +184,9 @@ begin
     brokerTls.Port := 0;
     brokerTls.UseTls := True;
     try
-      ConfiguraCertificado(brokerTls);
+      ConfigureCertificate(brokerTls);
       brokerTls.Start;
-      portaTls := brokerTls.Port;
+      tlsPort := brokerTls.Port;
     except
       on E: Exception do
       begin
@@ -195,9 +195,9 @@ begin
       end;
     end;
 
-    AmqpUseEmbeddedBroker(broker.Port, portaTls);
+    AmqpUseEmbeddedBroker(broker.Port, tlsPort);
     System.Writeln('broker embutido em 127.0.0.1:', broker.Port,
-      ' (tls: ', portaTls, ')');
+      ' (tls: ', tlsPort, ')');
 
     try
       TDUnitX.CheckCommandLine;
