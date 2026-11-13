@@ -328,7 +328,7 @@ begin
   try
     Inc(FWriteCount);
     if FWriteCount = FFailWriteAt then
-      raise EAMQPWal.Create('falha de escrita injetada');
+      raise EAMQPWal.Create('injected write failure');
     LBefore := Length(FBuf);
     SetLength(FBuf, LBefore + Length(ABytes));
     if Length(ABytes) > 0 then

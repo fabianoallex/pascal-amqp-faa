@@ -133,33 +133,33 @@ begin
   // The peer closing is the end of the stream for a frame reader, as with
   // the old socket stream (Receive <= 0), not an error.
   FStream := NewStream(EPcTransportClosed, 'closed by the peer');
-  TAssert.AssertEquals('fim de stream', 0, FStream.Read(B[0], SizeOf(B)));
+  TAssert.AssertEquals('end of stream', 0, FStream.Read(B[0], SizeOf(B)));
 end;
 
 procedure TTransportTests.Read_PeerClosed_FrameReaderSeesEOF;
 begin
   // What the client's and the broker's read loops catch to end normally.
   FStream := NewStream(EPcTransportClosed, 'closed by the peer');
-  CheckRaises('peer fechou durante um frame', EAMQPFrameEOF, ReadFrame);
+  CheckRaises('peer closed mid-frame', EAMQPFrameEOF, ReadFrame);
 end;
 
 procedure TTransportTests.Read_TransportError_BecomesEAMQPTransport;
 begin
   FStream := NewStream(EPcTransport, 'recv failed');
-  CheckRaises('erro de transporte na leitura', EAMQPTransport, ReadOnce);
+  CheckRaises('transport error on read', EAMQPTransport, ReadOnce);
 end;
 
 procedure TTransportTests.Read_Timeout_BecomesEAMQPTransport;
 begin
   // The library sets no deadline, but the class must not leak if one fires.
   FStream := NewStream(EPcTransportTimeout, 'read timed out');
-  CheckRaises('prazo na leitura', EAMQPTransport, ReadOnce);
+  CheckRaises('read deadline', EAMQPTransport, ReadOnce);
 end;
 
 procedure TTransportTests.Read_TlsError_BecomesEAMQPTls;
 begin
   FStream := NewStream(EPcTls, 'bad record mac');
-  CheckRaises('erro de TLS na leitura', EAMQPTls, ReadOnce);
+  CheckRaises('TLS error on read', EAMQPTls, ReadOnce);
 end;
 
 procedure TTransportTests.Write_PeerClosed_BecomesEAMQPTransport;
@@ -167,13 +167,13 @@ begin
   // Writing has no "end of stream": a closed peer is an error the writer
   // must see (the client turns it into EAMQPConnection).
   FStream := NewStream(EPcTransportClosed, 'closed by the peer');
-  CheckRaises('peer fechou na escrita', EAMQPTransport, WriteOnce);
+  CheckRaises('peer closed on write', EAMQPTransport, WriteOnce);
 end;
 
 procedure TTransportTests.Write_TlsError_BecomesEAMQPTls;
 begin
   FStream := NewStream(EPcTls, 'encrypt failed');
-  CheckRaises('erro de TLS na escrita', EAMQPTls, WriteOnce);
+  CheckRaises('TLS error on write', EAMQPTls, WriteOnce);
 end;
 
 procedure TTransportTests.Message_PreservedInTranslation;
@@ -188,7 +188,7 @@ begin
     on E: EAMQPTls do
       LMsg := E.Message;
   end;
-  TAssert.AssertEquals('a mensagem da common, sem mudanca',
+  TAssert.AssertEquals('the common''s message, unchanged',
     'certificate verify failed', LMsg);
 end;
 
@@ -196,7 +196,7 @@ procedure TTransportTests.EAMQPTls_DoesNotInheritFromEAMQPTransport;
 begin
   // An "except on EAMQPTransport" written before 0.6.0 must not start
   // catching TLS failures.
-  TAssert.AssertFalse('EAMQPTls fora da hierarquia de EAMQPTransport',
+  TAssert.AssertFalse('EAMQPTls outside the EAMQPTransport hierarchy',
     EAMQPTls.InheritsFrom(EAMQPTransport));
 end;
 
@@ -205,14 +205,14 @@ var
   P: TAMQPConnectionParams;
 begin
   P := TAMQPConnectionParams.Localhost;
-  TAssert.AssertFalse('TLS desligado', P.UseTls);
-  TAssert.AssertTrue('valida o servidor', P.TlsVerifyPeer);
-  TAssert.AssertEquals('sem CA privada', '', P.TlsCaFile);
-  TAssert.AssertEquals('sem certificado de cliente', '', P.TlsCertFile);
-  TAssert.AssertEquals('sem chave', '', P.TlsKeyFile);
-  TAssert.AssertEquals('sem senha', '', P.TlsCertPassword);
-  TAssert.AssertTrue('backend padrao', P.TlsBackend = tbDefault);
-  TAssert.AssertEquals('connect: o padrao da common', 0,
+  TAssert.AssertFalse('TLS off', P.UseTls);
+  TAssert.AssertTrue('verifies the server', P.TlsVerifyPeer);
+  TAssert.AssertEquals('no private CA', '', P.TlsCaFile);
+  TAssert.AssertEquals('no client certificate', '', P.TlsCertFile);
+  TAssert.AssertEquals('no key', '', P.TlsKeyFile);
+  TAssert.AssertEquals('no password', '', P.TlsCertPassword);
+  TAssert.AssertTrue('default backend', P.TlsBackend = tbDefault);
+  TAssert.AssertEquals('connect: the common''s default', 0,
     Integer(P.ConnectTimeoutMs));
 end;
 
@@ -225,19 +225,19 @@ begin
   P.TlsCaFile := 'ca.pem';
   P.TlsCertFile := 'cli.pem';
   P.TlsKeyFile := 'cli.key';
-  P.TlsCertPassword := 'segredo';
+  P.TlsCertPassword := 'secret';
   P.TlsVerifyPeer := False;
   P.TlsBackend := tbOpenSsl;
   O := AmqpClientTlsOptions(P);
   TAssert.AssertEquals('CaFile', 'ca.pem', O.CaFile);
   TAssert.AssertEquals('CertFile', 'cli.pem', O.CertFile);
   TAssert.AssertEquals('KeyFile', 'cli.key', O.KeyFile);
-  TAssert.AssertEquals('CertPassword', 'segredo', O.CertPassword);
-  TAssert.AssertTrue('TlsVerifyPeer=False pula a validacao',
+  TAssert.AssertEquals('CertPassword', 'secret', O.CertPassword);
+  TAssert.AssertTrue('TlsVerifyPeer=False skips verification',
     O.SkipServerVerification);
-  TAssert.AssertTrue('backend pedido', O.Backend = tbOpenSsl);
+  TAssert.AssertTrue('requested backend', O.Backend = tbOpenSsl);
   // No socket deadline: only the handshake's, the common's default.
-  TAssert.AssertEquals('prazo do handshake: o padrao da common', 0,
+  TAssert.AssertEquals('handshake deadline: the common''s default', 0,
     Integer(O.HandshakeTimeoutMs));
 end;
 
@@ -247,7 +247,7 @@ var
 begin
   P := TAMQPConnectionParams.Localhost;
   P.UseTls := True;
-  TAssert.AssertFalse('o padrao valida o servidor',
+  TAssert.AssertFalse('the default verifies the server',
     AmqpClientTlsOptions(P).SkipServerVerification);
 end;
 
@@ -256,7 +256,7 @@ var
   P: TAMQPConnectionParams;
 begin
   P := TAMQPConnectionParams.Localhost;
-  TAssert.AssertTrue('tbDefault resolvido pelo build',
+  TAssert.AssertTrue('tbDefault resolved by the build',
     AmqpClientTlsOptions(P).Backend = AmqpDefaultTlsBackend);
 end;
 
@@ -269,10 +269,10 @@ begin
     {$IFDEF MSWINDOWS}
   TAssert.AssertTrue('Windows: SChannel', AmqpDefaultTlsBackend = tbSChannel);
     {$ELSE}
-  TAssert.AssertTrue('fora do Windows: OpenSSL', AmqpDefaultTlsBackend = tbOpenSsl);
+  TAssert.AssertTrue('outside Windows: OpenSSL', AmqpDefaultTlsBackend = tbOpenSsl);
     {$ENDIF}
   {$ENDIF}
-  TAssert.AssertEquals('nome do backend', 'OpenSSL',
+  TAssert.AssertEquals('backend name', 'OpenSSL',
     AmqpTlsBackendName(tbOpenSsl));
 end;
 

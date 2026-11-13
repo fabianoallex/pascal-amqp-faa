@@ -52,12 +52,12 @@ const
   // Phase 3: TTL+DLX and priority. They run against RabbitMQ AND against the
   // embedded broker -- it is the double proof that the implemented semantics are the spec's.
   DLX = 'pascal-amqp-faa.smoke.dlx';
-  QUEUE_WAIT = 'pascal-amqp-faa.smoke.espera';
-  QUEUE_DEAD = 'pascal-amqp-faa.smoke.morta';
+  QUEUE_WAIT = 'pascal-amqp-faa.smoke.wait';
+  QUEUE_DEAD = 'pascal-amqp-faa.smoke.dead';
   QUEUE_PRIO = 'pascal-amqp-faa.smoke.prio';
 
 type
-  { Callbacks sao `of object`: o estado do teste vive nesta classe. }
+  { Callbacks are `of object`: the test state lives in this class. }
   TSmoke = class
   private
     FExpected: Integer;
@@ -272,16 +272,16 @@ begin
     LArgs.Free; // the declare does NOT free it: the owner is the caller
   end;
 
-  AChan.PublishText('', QUEUE_WAIT, 'vai-morrer');
+  AChan.PublishText('', QUEUE_WAIT, 'about-to-die');
   Check(WaitForCount(AChan, QUEUE_DEAD, 1, 10000),
-    'mensagem venceu o TTL e caiu na fila do DLX');
+    'message hit the TTL and landed in the DLX queue');
 
   LGet := AChan.BasicGet(QUEUE_DEAD, True);
-  Check(LGet.Found, 'mensagem encontrada na fila morta');
-  Check(LGet.BodyAsText = 'vai-morrer', 'corpo integro apos o dead-letter');
-  Check(LGet.Properties.Has(bpHeaders), 'a mensagem morta ganhou headers');
+  Check(LGet.Found, 'message found in the dead-letter queue');
+  Check(LGet.BodyAsText = 'about-to-die', 'body intact after the dead-letter');
+  Check(LGet.Properties.Has(bpHeaders), 'the dead-lettered message got headers');
   Check(LGet.Properties.Headers.ContainsKey('x-death'),
-    'header x-death presente');
+    'x-death header present');
 end;
 
 // Priority: with the consumer stopped, a batch of mixed priorities comes out
@@ -324,7 +324,7 @@ begin
       AmqpUtf8Encode('p' + IntToStr(PRIOS[I])), LProps);
   end;
   Check(WaitForCount(AChan, QUEUE_PRIO, Length(PRIOS), 10000),
-    'lote de prioridades enfileirado');
+    'priority batch enqueued');
 
   LOrder := '';
   LPrevious := 999;
@@ -336,10 +336,10 @@ begin
     LCurrent := LGet.Properties.Priority;
     LOrder := LOrder + IntToStr(LCurrent) + ' ';
     Check(LCurrent <= LPrevious,
-      'ordem decrescente de prioridade (saiu: ' + LOrder + ')');
+      'descending priority order (got: ' + LOrder + ')');
     LPrevious := LCurrent;
   end;
-  Check(LOrder = '9 8 7 5 2 1 ', 'drenou em ordem de prioridade: ' + LOrder);
+  Check(LOrder = '9 8 7 5 2 1 ', 'drained in priority order: ' + LOrder);
 end;
 
 // Drops the socket in the middle of consumption and checks that the lib reconnects
@@ -375,14 +375,14 @@ begin
     LConn.DropConnectionForTest; // simulated abrupt drop
 
     // Waits for OnReconnect (fires after handshake + topology recovery).
-    Check(LSmoke.WaitReconnected(15000), 'reconectou e recuperou a topologia');
-    Check(LConn.IsOpen, 'conexao aberta apos reconexao');
+    Check(LSmoke.WaitReconnected(15000), 'reconnected and recovered the topology');
+    Check(LConn.IsOpen, 'connection open after reconnect');
 
     // The channel was recovered: confirmed publish and re-armed consumer deliver.
-    LSeqNo := LChan.PublishText(EXCHANGE, ROUTING_KEY, 'pos-reconexao');
-    Check(LChan.WaitForConfirm(LSeqNo, 5000), 'publish pos-reconexao confirmado');
-    Check(LSmoke.WaitAll(10000), 'mensagem entregue ao consumer recuperado');
-    Check(LSmoke.LastBody = 'pos-reconexao', 'corpo integro pos-reconexao');
+    LSeqNo := LChan.PublishText(EXCHANGE, ROUTING_KEY, 'after-reconnect');
+    Check(LChan.WaitForConfirm(LSeqNo, 5000), 'post-reconnect publish confirmed');
+    Check(LSmoke.WaitAll(10000), 'message delivered to the recovered consumer');
+    Check(LSmoke.LastBody = 'after-reconnect', 'body intact after reconnect');
 
     LChan.Close;
     LChan.Free;
@@ -406,7 +406,7 @@ var
   LDecl: TAMQPQueueDeclare;
   I: Integer;
 begin
-  WriteLn('[durable-publish] ', AN, ' persistentes em ', DURABLE_QUEUE);
+  WriteLn('[durable-publish] ', AN, ' persistent to ', DURABLE_QUEUE);
   LConn := TAMQPConnection.Create(AParams);
   try
     LConn.Open;
@@ -416,8 +416,8 @@ begin
     LChan.ConfirmSelect;
     for I := 1 to AN do
       LChan.PublishText('', DURABLE_QUEUE, IntToStr(I), True); // persistent
-    Check(LChan.WaitForConfirms(30000), 'o broker confirmou as ' +
-      IntToStr(AN) + ' persistentes');
+    Check(LChan.WaitForConfirms(30000), 'the broker confirmed the ' +
+      IntToStr(AN) + ' persistent');
     LConn.Close;
   finally
     LConn.Free;
@@ -433,7 +433,7 @@ var
   LGet: TAMQPGetResult;
   I: Integer;
 begin
-  WriteLn('[durable-verify] esperando ', AN, ' de volta em ', DURABLE_QUEUE);
+  WriteLn('[durable-verify] expecting ', AN, ' back in ', DURABLE_QUEUE);
   LConn := TAMQPConnection.Create(AParams);
   try
     LConn.Open;
@@ -441,17 +441,17 @@ begin
     for I := 1 to AN do
     begin
       LGet := LChan.BasicGet(DURABLE_QUEUE, True);
-      Check(LGet.Found, Format('mensagem %d sobreviveu ao restart', [I]));
+      Check(LGet.Found, Format('message %d survived the restart', [I]));
       Check(LGet.BodyAsText = IntToStr(I),
-        Format('mensagem %d na ordem e integra (veio "%s")',
+        Format('message %d in order and intact (got "%s")',
           [I, LGet.BodyAsText]));
       // D27 in one line, seen by the CLIENT: every recovered entry comes back
       // marked as redelivered. Persisting the flag would be false precision --
       // after a crash the broker does not know whether anyone got to see it.
-      Check(LGet.Redelivered, Format('mensagem %d veio redelivered', [I]));
+      Check(LGet.Redelivered, Format('message %d came back redelivered', [I]));
     end;
     LGet := LChan.BasicGet(DURABLE_QUEUE, True);
-    Check(not LGet.Found, 'e nada a mais voltou');
+    Check(not LGet.Found, 'and nothing extra came back');
     LConn.Close;
   finally
     LConn.Free;
@@ -505,13 +505,13 @@ begin
   LConn := TAMQPConnection.Create(SmokeParams);
   try
     try
-      WriteLn('[1] conexao + handshake');
+      WriteLn('[1] connection + handshake');
       LConn.Open;
-      Check(LConn.IsOpen, 'conexao aberta');
+      Check(LConn.IsOpen, 'connection open');
       if SmokeParams.UseTls then
         WriteLn('  tls: ', AmqpTlsBackendInfo); // engine actually loaded
 
-      WriteLn('[2] canal + topologia');
+      WriteLn('[2] channel + topology');
       LChan := LConn.CreateChannel;
       LChan.DeclareExchange(TAMQPExchangeDeclare.Create(EXCHANGE));
       LChan.DeclareQueue(TAMQPQueueDeclare.Create(QUEUE));
@@ -520,7 +520,7 @@ begin
       LBind.ExchangeName := EXCHANGE;
       LBind.RoutingKey := ROUTING_KEY;
       LChan.BindQueue(LBind);
-      Check(LChan.IsOpen, 'canal aberto e topologia declarada');
+      Check(LChan.IsOpen, 'channel open and topology declared');
 
       // Clean queue so the test is deterministic (drains leftovers from earlier
       // rounds; the lib does not expose queue.purge on the channel for now).
@@ -530,40 +530,40 @@ begin
 
       WriteLn('[3] publisher confirms');
       LChan.ConfirmSelect;
-      LSeqNo := LChan.PublishText(EXCHANGE, ROUTING_KEY, 'ola do pascal-amqp-faa');
-      Check(LSeqNo = 1, Format('publish recebeu seq-no 1 (veio %d)', [LSeqNo]));
-      Check(LChan.WaitForConfirm(LSeqNo, 5000), 'broker confirmou o publish');
+      LSeqNo := LChan.PublishText(EXCHANGE, ROUTING_KEY, 'hello from pascal-amqp-faa');
+      Check(LSeqNo = 1, Format('publish got seq-no 1 (got %d)', [LSeqNo]));
+      Check(LChan.WaitForConfirm(LSeqNo, 5000), 'broker confirmed the publish');
 
       WriteLn('[4] basic.get');
       LGet := LChan.BasicGet(QUEUE, True);
-      Check(LGet.Found, 'mensagem encontrada na fila');
-      Check(LGet.BodyAsText = 'ola do pascal-amqp-faa',
-        'corpo integro (' + LGet.BodyAsText + ')');
+      Check(LGet.Found, 'message found in the queue');
+      Check(LGet.BodyAsText = 'hello from pascal-amqp-faa',
+        'body intact (' + LGet.BodyAsText + ')');
 
-      WriteLn('[5] consume com ack manual (thread pool)');
+      WriteLn('[5] consume with manual ack (thread pool)');
       LSmoke := TSmoke.Create(CONSUME_COUNT);
       LChan.Qos(10);
       LTag := LChan.Consume(QUEUE, LSmoke.OnDelivery);
       for I := 1 to CONSUME_COUNT do
         LChan.PublishText(EXCHANGE, ROUTING_KEY, Format('msg-%d', [I]));
-      Check(LChan.WaitForConfirms(5000), 'todos os publishes confirmados');
+      Check(LChan.WaitForConfirms(5000), 'all publishes confirmed');
       Check(LSmoke.WaitAll(10000),
-        Format('%d mensagens entregues ao consumer', [CONSUME_COUNT]));
+        Format('%d messages delivered to the consumer', [CONSUME_COUNT]));
       LChan.Cancel(LTag);
 
-      WriteLn('[6] ttl + dead-letter (Fase 3)');
+      WriteLn('[6] ttl + dead-letter (Phase 3)');
       StepTtlDlx(LChan);
 
-      WriteLn('[7] fila com prioridade (Fase 3)');
+      WriteLn('[7] priority queue (Phase 3)');
       StepPriority(LChan);
 
       WriteLn('[8] teardown');
       LChan.Close;
       LChan.Free;
       LConn.Close;
-      Check(not LConn.IsOpen, 'conexao fechada');
+      Check(not LConn.IsOpen, 'connection closed');
 
-      WriteLn('[9] reconexao automatica + recovery de topologia');
+      WriteLn('[9] automatic reconnect + topology recovery');
       RunReconnectTest;
 
       WriteLn;

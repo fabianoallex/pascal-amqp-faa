@@ -1,7 +1,7 @@
 object frmAuthorizer: TfrmAuthorizer
   Left = 0
   Top = 0
-  Caption = 'AutorizadorSim (VCL)'
+  Caption = 'AuthorizerSim (VCL)'
   ClientHeight = 450
   ClientWidth = 500
   Color = clBtnFace
@@ -22,7 +22,7 @@ object frmAuthorizer: TfrmAuthorizer
     Top = 8
     Width = 484
     Height = 170
-    Caption = ' Conex'#227'o '
+    Caption = ' Connection '
     TabOrder = 0
     object lblHost: TLabel
       Left = 16
@@ -36,7 +36,7 @@ object frmAuthorizer: TfrmAuthorizer
       Top = 28
       Width = 31
       Height = 15
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 16
@@ -50,21 +50,21 @@ object frmAuthorizer: TfrmAuthorizer
       Top = 57
       Width = 43
       Height = 15
-      Caption = 'Usu'#225'rio:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 16
       Top = 86
       Width = 35
       Height = 15
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 140
       Top = 145
       Width = 79
       Height = 15
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clRed
       Font.Height = -12
@@ -118,7 +118,7 @@ object frmAuthorizer: TfrmAuthorizer
       Top = 85
       Width = 190
       Height = 17
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -127,7 +127,7 @@ object frmAuthorizer: TfrmAuthorizer
       Top = 108
       Width = 190
       Height = 17
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -137,7 +137,7 @@ object frmAuthorizer: TfrmAuthorizer
       Top = 140
       Width = 110
       Height = 25
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -147,21 +147,21 @@ object frmAuthorizer: TfrmAuthorizer
     Top = 186
     Width = 484
     Height = 90
-    Caption = ' Publica'#231#227'o '
+    Caption = ' Publishing '
     TabOrder = 1
     object lblQueue: TLabel
       Left = 16
       Top = 28
       Width = 21
       Height = 15
-      Caption = 'Fila:'
+      Caption = 'Queue:'
     end
     object lblCount: TLabel
       Left = 310
       Top = 28
       Width = 65
       Height = 15
-      Caption = 'Quantidade:'
+      Caption = 'Count:'
     end
     object edtQueue: TEdit
       Left = 90
@@ -169,7 +169,7 @@ object frmAuthorizer: TfrmAuthorizer
       Width = 200
       Height = 23
       TabOrder = 0
-      Text = 'sefaz-respostas'
+      Text = 'authorizer-replies'
     end
     object edtCount: TEdit
       Left = 390
@@ -184,7 +184,7 @@ object frmAuthorizer: TfrmAuthorizer
       Top = 56
       Width = 130
       Height = 25
-      Caption = 'Publicar notas'
+      Caption = 'Publish invoices'
       Enabled = False
       TabOrder = 2
       OnClick = btnPublishClick
@@ -196,7 +196,7 @@ object frmAuthorizer: TfrmAuthorizer
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 2
     OnClick = btnClearLogClick
   end

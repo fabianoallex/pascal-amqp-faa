@@ -8,9 +8,9 @@
   main thread, so it needs no lock of its own. Same simulated "processing" as
   the console sample (a random Sleep playing the part of fetching the XML).
 
-  "Confirmacao manual" mode: instead of Sleep+automatic ack, the consumer
+  "Manual confirmation" mode: instead of Sleep+automatic ack, the consumer
   thread stays blocked on a TEvent per message (FPending, protected by
-  FPendingLock) until the user clicks Accept/Rejeitar on the screen for the
+  FPendingLock) until the user clicks Accept/Reject on the screen for the
   invoice selected in the ListView. On disconnect/close, CancelPendingApprovals
   releases any thread still blocked (as nack+requeue) before cancelling the
   consumer and closing the channel.
@@ -276,7 +276,7 @@ var
 begin
   if lvInvoices.Selected = nil then
   begin
-    Log('Selecione uma nota na lista antes de aceitar/rejeitar.');
+    Log('Select an invoice in the list before accepting/rejecting.');
     Exit;
   end;
   LKey := lvInvoices.Selected.Caption;
@@ -284,7 +284,7 @@ begin
   try
     if not FPending.TryGetValue(LKey, LApproval) then
     begin
-      Log('Nota "' + LKey + '" nao esta aguardando aprovacao.');
+      Log('Invoice "' + LKey + '" is not awaiting approval.');
       Exit;
     end;
     LApproval.Accept := AAccept;
@@ -327,19 +327,19 @@ procedure TfrmBackOffice.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -359,7 +359,7 @@ end;
 
 procedure TfrmBackOffice.RefreshTotals;
 begin
-  lblTotals.Caption := Format('Recebidas: %d   |   Prontas: %d   |   Rejeitadas: %d',
+  lblTotals.Caption := Format('Received: %d   |   Ready: %d   |   Rejected: %d',
     [FReceived, FReady, FRejected]);
 end;
 
@@ -371,7 +371,7 @@ begin
   LAtBottom := ScrollAtBottom(lvInvoices.Handle);
   LItem := lvInvoices.Items.Add;
   LItem.Caption := AKey;
-  LItem.SubItems.Add('Recebida');
+  LItem.SubItems.Add('Received');
   LItem.SubItems.Add(AWorker);
   LItem.SubItems.Add(FormatDateTime('hh:nn:ss', Now));
   LItem.SubItems.Add('');
@@ -389,13 +389,13 @@ begin
   if not FItems.TryGetValue(AKey, LItem) then
     Exit;
   LItem.SubItems[0] := AStatus;
-  if AStatus = 'Pronta' then
+  if AStatus = 'Ready' then
   begin
     LItem.SubItems[3] := FormatDateTime('hh:nn:ss', Now);
     Inc(FReady);
     RefreshTotals;
   end
-  else if (AStatus = 'Rejeitada') or (AStatus = 'Rejeitada (requeue)') then
+  else if (AStatus = 'Rejected') or (AStatus = 'Rejected (requeue)') then
   begin
     LItem.SubItems[3] := FormatDateTime('hh:nn:ss', Now);
     Inc(FRejected);
@@ -458,11 +458,11 @@ begin
     begin
       // Leaves without ack/nack: closing the channel returns the message to the queue.
       // A Nack here would restart the immediate redelivery cycle.
-      QueueInvoiceStatus(LKey, 'Devolvida (desconexão)');
+      QueueInvoiceStatus(LKey, 'Returned (disconnected)');
       Exit;
     end;
 
-    QueueInvoiceStatus(LKey, 'Aguardando aprovação');
+    QueueInvoiceStatus(LKey, 'Awaiting approval');
 
     LApproval.Event.WaitFor(INFINITE);
 
@@ -477,15 +477,15 @@ begin
       if LApproval.Accept then
       begin
         AChannel.Ack(ADelivery.DeliveryTag);
-        QueueInvoiceStatus(LKey, 'Pronta');
+        QueueInvoiceStatus(LKey, 'Ready');
       end
       else
       begin
         AChannel.Nack(ADelivery.DeliveryTag, LApproval.Requeue);
         if LApproval.Requeue then
-          QueueInvoiceStatus(LKey, 'Rejeitada (requeue)')
+          QueueInvoiceStatus(LKey, 'Rejected (requeue)')
         else
-          QueueInvoiceStatus(LKey, 'Rejeitada');
+          QueueInvoiceStatus(LKey, 'Rejected');
       end;
     finally
       LApproval.Event.Free;
@@ -495,16 +495,16 @@ begin
   end;
 
   LDelay := 300 + Random(2200);
-  QueueInvoiceStatus(LKey, 'Processando');
+  QueueInvoiceStatus(LKey, 'Processing');
 
   Sleep(LDelay);
 
   try
-    QueueInvoiceStatus(LKey, 'Pronta');
+    QueueInvoiceStatus(LKey, 'Ready');
     AChannel.Ack(ADelivery.DeliveryTag);
   except
     AChannel.Nack(ADelivery.DeliveryTag, True);
-    QueueInvoiceStatus(LKey, 'Erro');
+    QueueInvoiceStatus(LKey, 'Error');
   end;
 end;
 
@@ -524,10 +524,10 @@ begin
       FConsumerTag := '';
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConnected(False);
     Exit;
@@ -549,19 +549,19 @@ begin
 
     FConsumerTag := FChannel.Consume(LQueue, OnDelivery);
 
-    LMsg := Format('Conectado a %s:%d%s. Consumindo "%s" (prefetch %d).',
+    LMsg := Format('Connected to %s:%d%s. Consuming "%s" (prefetch %d).',
       [LParams.Host, LParams.Port, LParams.VirtualHost, LQueue, LPrefetch]);
     if FManualMode then
-      LMsg := LMsg + ' Confirmação manual ativada.';
+      LMsg := LMsg + ' Manual confirmation on.';
     if chkDedicated.Checked then
-      LMsg := LMsg + ' Thread dedicada (sem concorrência, ordem preservada).';
+      LMsg := LMsg + ' Dedicated thread (no concurrency, order preserved).';
     Log(LMsg);
 
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       SetConnected(False);

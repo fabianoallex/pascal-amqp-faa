@@ -27,22 +27,22 @@ program CrashHostFpc;
 
   MODES
 
-    CrashHostFpc publica <dir> <n> [inicio]
+    CrashHostFpc publish <dir> <n> [start]
                                      starts, publishes n persistent messages
-                                     with confirm, numbered from `inicio` (1
-                                     if omitted), prints PUBLICADAS n and
-                                     waits to be killed. `inicio` exists so
+                                     with confirm, numbered from `start` (1
+                                     if omitted), prints PUBLISHED n and
+                                     waits to be killed. `start` exists so
                                      that several crashes in a row produce a
                                      GLOBALLY increasing sequence -- otherwise
-                                     confere would report "out of order" just
+                                     verify would report "out of order" just
                                      because each round restarted from 1
-    CrashHostFpc consome <dir> <n>   starts, consumes and acks n, prints
-                                     CONSUMIDAS n and waits to be killed
-    CrashHostFpc despeja <dir>       starts, publishes nonstop printing
-                                     CONFIRMADA <seq> on each confirm -- lets
+    CrashHostFpc consume <dir> <n>   starts, consumes and acks n, prints
+                                     CONSUMED n and waits to be killed
+    CrashHostFpc dump <dir>          starts, publishes nonstop printing
+                                     CONFIRMED <seq> on each confirm -- lets
                                      the driver kill IN THE MIDDLE of a write
-    CrashHostFpc confere <dir>       starts, counts what came back, prints
-                                     RECUPERADAS n and EXITS (this one shuts
+    CrashHostFpc verify <dir>        starts, counts what came back, prints
+                                     RECOVERED n and EXITS (this one shuts
                                      down cleanly). It does NOT CONSUME: it
                                      gets in ack mode and never acks, so
                                      closing the connection returns everything
@@ -51,7 +51,7 @@ program CrashHostFpc;
                                      without changing what is being measured.
 
   The queue is always q.crash, durable, and each message's body is its own
-  number -- so "confere" checks integrity, not just count.
+  number -- so "verify" checks integrity, not just count.
 
   A CAVEAT THAT COST HALF AN HOUR: Halt is NOT used here outside the main
   block. `Halt` abandons the frames without finalizing the MANAGED locals
@@ -124,11 +124,11 @@ begin
     GChan.PublishText('', QUEUE_NAME, IntToStr(I), True);
   if not GChan.WaitForConfirms(30000) then
   begin
-    Say('ERRO nem tudo foi confirmado');
+    Say('ERROR not everything was confirmed');
     ExitCode := 2;
     Exit;
   end;
-  Say('PUBLICADAS ' + IntToStr(AN));
+  Say('PUBLISHED ' + IntToStr(AN));
   WaitForDeath;
 end;
 
@@ -143,7 +143,7 @@ begin
     LGet := GChan.BasicGet(QUEUE_NAME, False); // ack mode
     if not LGet.Found then
     begin
-      Say('ERRO fila vazia em ' + IntToStr(I));
+      Say('ERROR queue empty at ' + IntToStr(I));
       ExitCode := 2;
       Exit;
     end;
@@ -152,7 +152,7 @@ begin
   // The ack travels and the actor still has to process it and write the DEQ.
   // Without this wait the test would measure the race, not durability.
   Sleep(1000);
-  Say('CONSUMIDAS ' + IntToStr(AN));
+  Say('CONSUMED ' + IntToStr(AN));
   WaitForDeath;
 end;
 
@@ -168,7 +168,7 @@ begin
     Inc(I);
     GChan.PublishText('', QUEUE_NAME, IntToStr(I), True);
     if GChan.WaitForConfirms(30000) then
-      Say('CONFIRMADA ' + IntToStr(I))
+      Say('CONFIRMED ' + IntToStr(I))
     else
     begin
       Say('NACK ' + IntToStr(I));
@@ -212,14 +212,14 @@ begin
       LOutOfOrder := True;
   end;
   if LOutOfOrder then
-    Say('FORA-DE-ORDEM');
-  Say('RECUPERADAS ' + IntToStr(LN));
+    Say('OUT-OF-ORDER');
+  Say('RECOVERED ' + IntToStr(LN));
   GConn.Close;
   GConn.Free;
   // The unacknowledged ones go back to the queue in the connection teardown,
   // and that happens in the ACTOR. Stopping the broker without letting that
   // round trip happen would lose from MEMORY what is still on disk -- it would
-  // not be data loss, but the next confere would measure a race.
+  // not be data loss, but the next verify would measure a race.
   Sleep(1000);
   GBroker.Stop;
   GBroker.Free;
@@ -233,7 +233,7 @@ var
 begin
   if ParamCount < 2 then
   begin
-    Say('uso: CrashHostFpc <publica|consome|despeja|confere> <dir> [n] [inicio]');
+    Say('usage: CrashHostFpc <publish|consume|dump|verify> <dir> [n] [start]');
     ExitCode := 1;
     Exit;
   end;
@@ -247,17 +247,17 @@ begin
   if ParamCount >= 4 then
     LStart := StrToIntDef(ParamStr(4), 1);
 
-  if LMode = 'publica' then
+  if LMode = 'publish' then
     ModePublish(LDir, LN, LStart)
-  else if LMode = 'consome' then
+  else if LMode = 'consume' then
     ModeConsume(LDir, LN)
-  else if LMode = 'despeja' then
+  else if LMode = 'dump' then
     ModeFlood(LDir)
-  else if LMode = 'confere' then
+  else if LMode = 'verify' then
     ModeVerify(LDir)
   else
   begin
-    Say('modo desconhecido: ' + LMode);
+    Say('unknown mode: ' + LMode);
     ExitCode := 1;
   end;
 end.

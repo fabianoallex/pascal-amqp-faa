@@ -47,7 +47,7 @@ type
     FReconConn: TAMQPConnection;
     FQueue: string;
     FDlq: string;
-    // what the callback does with the 'ruim' (bad) message (MODO_*) and the handler (H_*)
+    // what the callback does with the 'bad' (bad) message (MODO_*) and the handler (H_*)
     FMode: Integer;
     FHandlerMode: Integer;
     FNoAck: Boolean;
@@ -159,7 +159,7 @@ procedure TAMQPConsumerErrorIntegrationTests.HandleDelivery(AChannel: TAMQPChann
   const ADelivery: TAMQPDelivery);
 begin
   PcAtomicInc(FCalls);
-  if ADelivery.BodyAsText <> 'ruim' then
+  if ADelivery.BodyAsText <> 'bad' then
   begin
     if not FNoAck then
       AChannel.Ack(ADelivery.DeliveryTag);
@@ -217,7 +217,7 @@ begin
     H_RAISE:
       begin
         PcAtomicInc(FErrors);
-        raise Exception.Create('o handler de erro também quebrou');
+        raise Exception.Create('the error handler broke too');
       end;
   end;
   PcAtomicInc(FErrors);
@@ -304,9 +304,9 @@ procedure TAMQPConsumerErrorIntegrationTests.PublishBadAndGood(AGoodCount: Integ
 var
   I: Integer;
 begin
-  FChan.PublishText('', FQueue, 'ruim');
+  FChan.PublishText('', FQueue, 'bad');
   for I := 1 to AGoodCount do
-    FChan.PublishText('', FQueue, 'boa-' + IntToStr(I));
+    FChan.PublishText('', FQueue, 'good-' + IntToStr(I));
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.NoHandler_CallbackRaises_NackWithoutRequeue_And_DoesNotHang;
@@ -319,10 +319,10 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('as 3 boas deveriam passar depois da ruim (Qos 1)', WaitForCount(FAcks, 3, TIMEOUT_MS));
-  CheckStr('a ruim deveria ter ido para a DLQ (Nack sem requeue)', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
-  CheckInt('a ruim não deveria ter sido reentregue', 4, PcAtomicGet(FCalls));
-  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckOk('the 3 good ones should pass after the bad one (Qos 1)', WaitForCount(FAcks, 3, TIMEOUT_MS));
+  CheckStr('the bad one should have gone to the DLQ (Nack without requeue)', 'bad', ReadDlq(FChan, TIMEOUT_MS));
+  CheckInt('the bad one should not have been redelivered', 4, PcAtomicGet(FCalls));
+  CheckOk('the channel should stay open', FChan.IsOpen);
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.Handler_ReceivesExceptionDelivery_And_InitialActionReject;
@@ -333,13 +333,13 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
-  CheckStr('classe da exceção', 'EConvertError', FErrorClass);
-  CheckStr('mensagem da exceção', '"quantity":"x" is not a valid integer', FErrorMessage);
-  CheckStr('a entrega que levantou', 'ruim', FErrorBody);
-  CheckInt('entrega pendente: a ação inicial é ceaReject', Ord(ceaReject), FInitialAction);
-  CheckOk('a boa deveria passar', WaitForCount(FAcks, 1, TIMEOUT_MS));
-  CheckStr('ação mantida: a ruim vai para a DLQ', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
+  CheckOk('the handler should have been called', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckStr('exception class', 'EConvertError', FErrorClass);
+  CheckStr('exception message', '"quantity":"x" is not a valid integer', FErrorMessage);
+  CheckStr('the delivery that raised', 'bad', FErrorBody);
+  CheckInt('pending delivery: the initial action is ceaReject', Ord(ceaReject), FInitialAction);
+  CheckOk('the good one should pass', WaitForCount(FAcks, 1, TIMEOUT_MS));
+  CheckStr('action kept: the bad one goes to the DLQ', 'bad', ReadDlq(FChan, TIMEOUT_MS));
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.Handler_Requeue_RedeliversWithRedelivered;
@@ -352,11 +352,11 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('a ruim deveria voltar (redelivered) e ser confirmada', WaitForCount(FRedeliveredOk, 1, TIMEOUT_MS));
-  CheckOk('as boas deveriam passar', WaitForCount(FAcks, 2, TIMEOUT_MS));
-  CheckInt('o handler roda só na primeira entrega', 1, PcAtomicGet(FErrors));
-  CheckStr('com requeue a DLQ fica vazia', '', ReadDlq(FChan, 300));
-  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckOk('the bad one should come back (redelivered) and be acked', WaitForCount(FRedeliveredOk, 1, TIMEOUT_MS));
+  CheckOk('the good ones should pass', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckInt('the handler runs only on the first delivery', 1, PcAtomicGet(FErrors));
+  CheckStr('with requeue the DLQ stays empty', '', ReadDlq(FChan, 300));
+  CheckOk('the channel should stay open', FChan.IsOpen);
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.Handler_None_DeliveryStaysWithTheApplication;
@@ -368,14 +368,14 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckOk('the handler should have been called', WaitForCount(FErrors, 1, TIMEOUT_MS));
   // ceaNone: the library does not ack, so with Qos(1) nothing else arrives...
   TThread.Sleep(300);
-  CheckInt('com a ruim pendente, nenhuma boa deveria chegar', 0, PcAtomicGet(FAcks));
+  CheckInt('with the bad one pending, no good one should arrive', 0, PcAtomicGet(FAcks));
   // ...until the application acks on its own.
   FChan.Nack(FPendingTag, False);
-  CheckOk('confirmada pelo aplicativo, as boas passam', WaitForCount(FAcks, 2, TIMEOUT_MS));
-  CheckStr('o Nack do aplicativo mandou a ruim para a DLQ', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
+  CheckOk('acked by the application, the good ones pass', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckStr('the application''s Nack sent the bad one to the DLQ', 'bad', ReadDlq(FChan, TIMEOUT_MS));
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.CallbackAckedBeforeRaising_DoesNotConfirmAgain;
@@ -389,11 +389,11 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
-  CheckInt('já confirmada: a ação inicial é ceaNone', Ord(ceaNone), FInitialAction);
-  CheckOk('as boas deveriam passar (sem 406)', WaitForCount(FAcks, 2, TIMEOUT_MS));
-  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
-  CheckStr('a ruim foi confirmada com Ack: a DLQ fica vazia', '', ReadDlq(FChan, 300));
+  CheckOk('the handler should have been called', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckInt('already acked: the initial action is ceaNone', Ord(ceaNone), FInitialAction);
+  CheckOk('the good ones should pass (no 406)', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckOk('the channel should stay open', FChan.IsOpen);
+  CheckStr('the bad one was acked: the DLQ stays empty', '', ReadDlq(FChan, 300));
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.HandlerAckedItself_DoesNotConfirmAgain;
@@ -407,11 +407,11 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
-  CheckInt('a ação inicial era ceaReject', Ord(ceaReject), FInitialAction);
-  CheckOk('as boas deveriam passar (sem 406)', WaitForCount(FAcks, 2, TIMEOUT_MS));
-  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
-  CheckStr('o Ack do handler venceu: a DLQ fica vazia', '', ReadDlq(FChan, 300));
+  CheckOk('the handler should have been called', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckInt('the initial action was ceaReject', Ord(ceaReject), FInitialAction);
+  CheckOk('the good ones should pass (no 406)', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckOk('the channel should stay open', FChan.IsOpen);
+  CheckStr('the handler''s Ack won: the DLQ stays empty', '', ReadDlq(FChan, 300));
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.HandlerRaises_ActionStillApplies;
@@ -423,8 +423,8 @@ begin
   FChan.Qos(1);
   FChan.Consume(FQueue, HandleDelivery);
 
-  CheckOk('as boas deveriam passar mesmo com o handler quebrado', WaitForCount(FAcks, 2, TIMEOUT_MS));
-  CheckStr('a ação padrão seguiu valendo', 'ruim', ReadDlq(FChan, TIMEOUT_MS));
+  CheckOk('the good ones should pass even with the handler broken', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckStr('the default action still applied', 'bad', ReadDlq(FChan, TIMEOUT_MS));
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.NoAck_CallbackRaises_HandlerCalled_NoNack;
@@ -437,12 +437,12 @@ begin
   PublishBadAndGood(2);
   FChan.Consume(FQueue, HandleDelivery, True);
 
-  CheckOk('o handler deveria ser chamado também no no-ack', WaitForCount(FErrors, 1, TIMEOUT_MS));
-  CheckInt('no-ack: a ação inicial é ceaNone', Ord(ceaNone), FInitialAction);
-  CheckOk('as boas deveriam chegar', WaitForCount(FAcks, 2, TIMEOUT_MS));
+  CheckOk('the handler should be called on no-ack too', WaitForCount(FErrors, 1, TIMEOUT_MS));
+  CheckInt('no-ack: the initial action is ceaNone', Ord(ceaNone), FInitialAction);
+  CheckOk('the good ones should arrive', WaitForCount(FAcks, 2, TIMEOUT_MS));
   // a 406 arrives asynchronously: give it time before looking at the channel
-  CheckStr('no-ack: nada vai para a DLQ', '', ReadDlq(FChan, 300));
-  CheckOk('o canal deveria seguir aberto', FChan.IsOpen);
+  CheckStr('no-ack: nothing goes to the DLQ', '', ReadDlq(FChan, 300));
+  CheckOk('the channel should stay open', FChan.IsOpen);
 end;
 
 procedure TAMQPConsumerErrorIntegrationTests.Reconnect_CallbackRaisesOnDrop_MessageReturnsInNewSession;
@@ -472,21 +472,21 @@ begin
     LChan.OnConsumerError := HandleError;
     DeclareQueues(LChan, LName); // named and non-exclusive: they survive the drop
     try
-      LChan.PublishText('', FQueue, 'ruim');
+      LChan.PublishText('', FQueue, 'bad');
       LChan.Consume(FQueue, HandleDelivery);
-      CheckOk('a entrega velha deveria começar', FOldStarted.WaitFor(TIMEOUT_MS) = wrSignaled);
+      CheckOk('the old delivery should start', FOldStarted.WaitFor(TIMEOUT_MS) = wrSignaled);
 
       FReconConn.DropConnectionForTest;
       FReleaseOld.SetEvent; // the old one raises now, with the socket already closed
-      CheckOk('o handler deveria ter sido chamado', WaitForCount(FErrors, 1, TIMEOUT_MS));
-      CheckInt('a entrega ainda estava pendente: ceaReject', Ord(ceaReject), FInitialAction);
+      CheckOk('the handler should have been called', WaitForCount(FErrors, 1, TIMEOUT_MS));
+      CheckInt('the delivery was still pending: ceaReject', Ord(ceaReject), FInitialAction);
 
-      CheckOk('deveria reconectar', WaitForCount(FReconnected, 1, TIMEOUT_MS));
-      CheckOk('a mensagem deveria voltar na sessão nova e ser confirmada',
+      CheckOk('should reconnect', WaitForCount(FReconnected, 1, TIMEOUT_MS));
+      CheckOk('the message should come back in the new session and be acked',
         WaitForCount(FRedeliveredOk, 1, TIMEOUT_MS));
-      LChan.PublishText('', FQueue, 'depois');
-      CheckOk('o canal deveria seguir consumindo', WaitForCount(FAcks, 1, TIMEOUT_MS));
-      CheckStr('o Nack no socket morto não chegou ao broker', '', ReadDlq(LChan, 300));
+      LChan.PublishText('', FQueue, 'after');
+      CheckOk('the channel should keep consuming', WaitForCount(FAcks, 1, TIMEOUT_MS));
+      CheckStr('the Nack on the dead socket did not reach the broker', '', ReadDlq(LChan, 300));
     finally
       LDel := Default(TAMQPQueueDelete);
       LDel.QueueName := FQueue;

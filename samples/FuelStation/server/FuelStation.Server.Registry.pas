@@ -33,7 +33,7 @@ type
     CurrentPos: string;           // refusal because already locked
     CurrentSale: string;
     Version: Int64;
-    PreviousState: TFuelingState;   // liberar_forcado
+    PreviousState: TFuelingState;   // force_release
     PreviousPos: string;
   end;
 

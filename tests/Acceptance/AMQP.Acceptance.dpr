@@ -123,7 +123,7 @@ begin
   // System.SysUtils (see the pitfalls table in CLAUDE.md). Not worth it just
   // for a folder name.
   Result := IncludeTrailingPathDelimiter(TPath.GetTempPath)
-    + 'amqpaceita-' + TPath.GetGUIDFileName(False);
+    + 'amqpaccept-' + TPath.GetGUIDFileName(False);
   ForceDirectories(Result);
 end;
 
@@ -171,9 +171,9 @@ begin
     broker.DataDir := dataDir; // '' = the Phase 3 broker, to the letter (D19)
     broker.Start;
     if dataDir <> '' then
-      WriteLn('PASSADA DURAVEL -- DataDir: ', dataDir)
+      WriteLn('DURABLE PASS -- DataDir: ', dataDir)
     else
-      WriteLn('passada transiente -- sem DataDir');
+      WriteLn('transient pass -- no DataDir');
 
     // Without this the OpenSSL build ran the acceptance suite WITHOUT
     // exercising server-side TLS: the 5 TLS tests ignored themselves in 0.000s
@@ -190,13 +190,13 @@ begin
     except
       on E: Exception do
       begin
-        System.Writeln('AVISO: broker TLS nao subiu (', E.Message, ')');
+        System.Writeln('WARNING: TLS broker did not start (', E.Message, ')');
         FreeAndNil(brokerTls);
       end;
     end;
 
     AmqpUseEmbeddedBroker(broker.Port, tlsPort);
-    System.Writeln('broker embutido em 127.0.0.1:', broker.Port,
+    System.Writeln('embedded broker on 127.0.0.1:', broker.Port,
       ' (tls: ', tlsPort, ')');
 
     try

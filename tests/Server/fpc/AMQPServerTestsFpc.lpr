@@ -53,7 +53,7 @@ begin
     ConsoleApp := TTestRunner.Create(nil);
     try
       ConsoleApp.Initialize;
-      ConsoleApp.Title := 'pascal-amqp-faa - testes do broker (FPCUnit)';
+      ConsoleApp.Title := 'pascal-amqp-faa - broker tests (FPCUnit)';
       ConsoleApp.Run;
     finally
       ConsoleApp.Free;

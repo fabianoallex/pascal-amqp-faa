@@ -86,8 +86,8 @@ begin
   FPendLock := TCriticalSection.Create;
   FPend := TObjectDictionary<string, TEvent>.Create([doOwnsValues]);
   FResp := TDictionary<string, TBytes>.Create;
-  FReplyQueue := 'pdv-resp-' + APosName + '-' + Copy(NewCorrId, 2, 8);
-  FEventQueue := 'pdv-eventos-' + APosName + '-' + Copy(NewCorrId, 2, 8);
+  FReplyQueue := 'pos-reply-' + APosName + '-' + Copy(NewCorrId, 2, 8);
+  FEventQueue := 'pos-events-' + APosName + '-' + Copy(NewCorrId, 2, 8);
 end;
 
 destructor TFuelStationPosClient.Destroy;

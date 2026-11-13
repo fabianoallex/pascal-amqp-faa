@@ -46,12 +46,12 @@ Every message goes out **persistent** (`delivery-mode 2`), on a `topic` exchange
 ```pascal
 uses PascalDb.Outbox, AMQP.Connection, AMQP.Outbox;
 
-OutboxAmqpDeclareExchange(Canal, 'loja.eventos');
+OutboxAmqpDeclareExchange(Channel, 'shop.events');
 Relay := TOutboxRelay.Create(Factory,
-  TOutboxAmqpSink.Create(CanalDoRelay, 'loja.eventos'),
+  TOutboxAmqpSink.Create(RelayChannel, 'shop.events'),
   PdbOutboxNewOwner('relay'), TOutboxOptions.Default);
 // in a timer or in a worker thread:
-Relay.RunOnce(AgoraEmSegundosUnix);
+Relay.RunOnce(NowInUnixSeconds);
 ```
 
 - The constructor puts the channel in **confirm mode**, and each `Deliver` waits for the broker's ack
@@ -66,18 +66,18 @@ Relay.RunOnce(AgoraEmSegundosUnix);
 ## The consumer: `TOutboxAmqpConsumer`
 
 ```pascal
-Fila := TOutboxAmqpQueue.Create('loja.email', 'loja.eventos', 'pedido.#');
-Fila.RetryDelayMs := 30000; // default
-Fila.MaxAttempts := 10;     // default (OUTBOX_DEFAULT_MAX_ATTEMPTS)
-OutboxAmqpDeclareQueues(Canal, Fila);
+Queue := TOutboxAmqpQueue.Create('shop.email', 'shop.events', 'order.#');
+Queue.RetryDelayMs := 30000; // default
+Queue.MaxAttempts := 10;     // default (OUTBOX_DEFAULT_MAX_ATTEMPTS)
+OutboxAmqpDeclareQueues(Channel, Queue);
 
-Consumidor := TOutboxAmqpConsumer.Create(Factory, CanalDoConsumidor, Fila, 'email', HandlerDeEmail);
-Consumidor.OnError := Log.OnOutboxError; // a method
-Consumidor.Start;
+Consumer := TOutboxAmqpConsumer.Create(Factory, ConsumerChannel, Queue, 'email', EmailHandler);
+Consumer.OnError := Log.OnOutboxError; // a method
+Consumer.Start;
 ...
-Consumidor.Stop;           // before closing the channel and freeing the consumer
-CanalDoConsumidor.Free;
-Consumidor.Free;
+Consumer.Stop;           // before closing the channel and freeing the consumer
+ConsumerChannel.Free;
+Consumer.Free;
 ```
 
 ### Three queues per consumer
@@ -85,17 +85,17 @@ Consumidor.Free;
 `OutboxAmqpDeclareQueues` declares, all durable:
 
 ```
-exchange (topic) --binding--> loja.email --nack--> loja.email.retry --TTL--> loja.email
+exchange (topic) --binding--> shop.email --nack--> shop.email.retry --TTL--> shop.email
                                   |                (no consumer)
-                                  +--(MaxAttempts)--> loja.email.dead
+                                  +--(MaxAttempts)--> shop.email.dead
 ```
 
-- **`loja.email`**, the work queue, bound to the exchange by the binding key, with dead-letter to
+- **`shop.email`**, the work queue, bound to the exchange by the binding key, with dead-letter to
   the retry queue (through the default exchange, which routes by queue name).
-- **`loja.email.retry`**, with no consumer, with `x-message-ttl = RetryDelayMs` and dead-letter back
+- **`shop.email.retry`**, with no consumer, with `x-message-ttl = RetryDelayMs` and dead-letter back
   to the work queue. It is the **queue's** TTL, not a per-message one: a message's `expiration`
   only expires when the message reaches the head of the queue.
-- **`loja.email.dead`**, where the message that used up its attempts stays parked, as it arrived.
+- **`shop.email.dead`**, where the message that used up its attempts stays parked, as it arrived.
 
 Changing `RetryDelayMs` changes the retry queue's arguments, and redeclaring a queue with other
 arguments is `PRECONDITION_FAILED` (406): delete the queue first.

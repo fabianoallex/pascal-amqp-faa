@@ -114,7 +114,7 @@ begin
 
   W := TAMQPWriter.Create;
   try
-    W.WriteShortStr('x-lista');
+    W.WriteShortStr('x-list');
     W.WriteOctet(Ord('A'));
     W.WriteLongUInt(Cardinal(Length(LElems)));
     W.WriteRaw(LElems);
@@ -148,7 +148,7 @@ var
 begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, nil);
   try
-    TAssert.AssertEquals('refcount inicial', 1, LMsg.RefCount);
+    TAssert.AssertEquals('initial refcount', 1, LMsg.RefCount);
   finally
     LMsg.Release; // only Release: reaches 0 and really frees
   end;
@@ -159,10 +159,10 @@ var
   LMsg: TAMQPMessage;
 begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, nil);
-  TAssert.AssertEquals('AddRef devolve o novo valor', 2, LMsg.AddRef);
-  TAssert.AssertEquals('refcount apos AddRef', 2, LMsg.RefCount);
-  TAssert.AssertEquals('Release devolve o novo valor', 1, LMsg.Release);
-  TAssert.AssertEquals('refcount apos o primeiro Release', 1, LMsg.RefCount);
+  TAssert.AssertEquals('AddRef returns the new value', 2, LMsg.AddRef);
+  TAssert.AssertEquals('refcount after AddRef', 2, LMsg.RefCount);
+  TAssert.AssertEquals('Release returns the new value', 1, LMsg.Release);
+  TAssert.AssertEquals('refcount after the first Release', 1, LMsg.RefCount);
   LMsg.Release; // second Release: reaches 0 and really frees
 end;
 
@@ -175,7 +175,7 @@ begin
   // assert about LMsg after that (the test itself proves it neither leaked nor
   // double-freed: FPC's heaptrc and Delphi's ReportMemoryLeaksOnShutdown
   // complain if this Release does not really free).
-  TAssert.AssertEquals('ultimo release chega a 0', 0, LMsg.Release);
+  TAssert.AssertEquals('last release reaches 0', 0, LMsg.Release);
 end;
 
 procedure TMessageTests.SharedBodyWithoutCopy;
@@ -187,7 +187,7 @@ begin
   LOriginal[0] := 1;
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', nil, LOriginal);
   try
-    TAssert.AssertTrue('corpo compartilhado -- mesmo buffer, sem copia',
+    TAssert.AssertTrue('shared body -- same buffer, no copy',
       Pointer(LMsg.Body) = Pointer(LOriginal));
   finally
     LMsg.Release;
@@ -206,9 +206,9 @@ begin
   LMsg := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, nil);
   try
     LGot := LMsg.HeaderPayload;
-    TAssert.AssertEquals('tamanho do header payload', Length(LHdr), Length(LGot));
+    TAssert.AssertEquals('header payload size', Length(LHdr), Length(LGot));
     for I := 0 to High(LHdr) do
-      TAssert.AssertEquals(Format('octeto %d do header payload', [I]),
+      TAssert.AssertEquals(Format('header payload octet %d', [I]),
         Integer(LHdr[I]), Integer(LGot[I]));
   finally
     LMsg.Release;
@@ -224,16 +224,16 @@ begin
   LSrv.RoutingKey := 'rk.ws1';
   LSrv.UserId := 'guest';
   LSrv.HeaderPayload := AmqpUtf8Encode('hdr');
-  LSrv.Body := AmqpUtf8Encode('corpo');
+  LSrv.Body := AmqpUtf8Encode('bytes');
 
   LMsg := TAMQPMessage.FromServerMessage(LSrv);
   try
-    TAssert.AssertEquals('refcount inicial', 1, LMsg.RefCount);
+    TAssert.AssertEquals('initial refcount', 1, LMsg.RefCount);
     TAssert.AssertEquals('exchange', 'x.ws1', LMsg.Exchange);
     TAssert.AssertEquals('routing key', 'rk.ws1', LMsg.RoutingKey);
     TAssert.AssertEquals('user id', 'guest', LMsg.UserId);
     TAssert.AssertEquals('header payload', 'hdr', AmqpUtf8Decode(LMsg.HeaderPayload));
-    TAssert.AssertEquals('body', 'corpo', AmqpUtf8Decode(LMsg.Body));
+    TAssert.AssertEquals('body', 'bytes', AmqpUtf8Decode(LMsg.Body));
     TAssert.AssertEquals('body size', 5, LMsg.BodySize);
   finally
     LMsg.Release;
@@ -245,7 +245,7 @@ var
   LChunks: TAMQPBodyChunks;
 begin
   LChunks := AmqpSplitBody(nil, 4096);
-  TAssert.AssertEquals('corpo vazio -> 0 pedacos', 0, Length(LChunks));
+  TAssert.AssertEquals('empty body -> 0 chunks', 0, Length(LChunks));
 end;
 
 procedure TMessageTests.Split_BodySmallerThanTheMaximum;
@@ -253,10 +253,10 @@ var
   LBody: TBytes;
   LChunks: TAMQPBodyChunks;
 begin
-  LBody := AmqpUtf8Encode('um corpo pequeno');
+  LBody := AmqpUtf8Encode('a small body');
   LChunks := AmqpSplitBody(LBody, 4096);
-  TAssert.AssertEquals('um pedaco so', 1, Length(LChunks));
-  TAssert.AssertEquals('tamanho do pedaco unico', Length(LBody), Length(LChunks[0]));
+  TAssert.AssertEquals('a single chunk', 1, Length(LChunks));
+  TAssert.AssertEquals('size of the single chunk', Length(LBody), Length(LChunks[0]));
 end;
 
 procedure TMessageTests.Split_LargeBodyInSeveralPieces;
@@ -272,16 +272,16 @@ begin
     LBody[I] := Byte(I and $FF);
 
   LChunks := AmqpSplitBody(LBody, 4096);
-  TAssert.AssertEquals('numero de pedacos', 75, Length(LChunks));
+  TAssert.AssertEquals('number of chunks', 75, Length(LChunks));
 
   LTotal := 0;
   for I := 0 to High(LChunks) do
   begin
-    TAssert.AssertTrue(Format('pedaco %d nao excede o maximo', [I]),
+    TAssert.AssertTrue(Format('chunk %d does not exceed the maximum', [I]),
       Length(LChunks[I]) <= 4096);
     Inc(LTotal, Length(LChunks[I]));
   end;
-  TAssert.AssertEquals('soma dos pedacos bate com o corpo', Length(LBody), LTotal);
+  TAssert.AssertEquals('sum of the chunks matches the body', Length(LBody), LTotal);
 
   // Concatenating the pieces reproduces the original body.
   SetLength(LRebuilt, LTotal);
@@ -294,7 +294,7 @@ begin
   end;
   for I := 0 to High(LBody) do
     if LRebuilt[I] <> LBody[I] then
-      TAssert.Fail(Format('corpo remontado diverge no octeto %d', [I]));
+      TAssert.Fail(Format('reassembled body differs at octet %d', [I]));
 end;
 
 procedure TMessageTests.Split_MaximumZero_SinglePiece;
@@ -304,8 +304,8 @@ var
 begin
   SetLength(LBody, 10000);
   LChunks := AmqpSplitBody(LBody, 0);
-  TAssert.AssertEquals('maximo 0 -> um pedaco unico', 1, Length(LChunks));
-  TAssert.AssertEquals('pedaco unico tem o corpo inteiro',
+  TAssert.AssertEquals('maximum 0 -> a single chunk', 1, Length(LChunks));
+  TAssert.AssertEquals('the single chunk holds the whole body',
     Length(LBody), Length(LChunks[0]));
 end;
 
@@ -322,7 +322,7 @@ begin
     A.Put('n', 42);
     B.Put('x-match', 'all');
     B.Put('n', 42);
-    TAssert.AssertTrue('tabelas com as mesmas chaves/valores', AmqpArgsEqual(A, B));
+    TAssert.AssertTrue('tables with the same keys/values', AmqpArgsEqual(A, B));
   finally
     A.Free;
     B.Free;
@@ -338,7 +338,7 @@ begin
   try
     A.Put('n', 1);
     B.Put('n', 2);
-    TAssert.AssertFalse('mesma chave, valor diferente', AmqpArgsEqual(A, B));
+    TAssert.AssertFalse('same key, different value', AmqpArgsEqual(A, B));
   finally
     A.Free;
     B.Free;
@@ -355,7 +355,7 @@ begin
     A.Put('n', 1);
     B.Put('n', 1);
     B.Put('extra', 2);
-    TAssert.AssertFalse('B tem uma chave a mais', AmqpArgsEqual(A, B));
+    TAssert.AssertFalse('B has one extra key', AmqpArgsEqual(A, B));
   finally
     A.Free;
     B.Free;
@@ -368,8 +368,8 @@ var
 begin
   LEmptyTable := TAMQPFieldTable.Create;
   try
-    TAssert.AssertTrue('nil == tabela vazia', AmqpArgsEqual(nil, LEmptyTable));
-    TAssert.AssertTrue('tabela vazia == nil', AmqpArgsEqual(LEmptyTable, nil));
+    TAssert.AssertTrue('nil == empty table', AmqpArgsEqual(nil, LEmptyTable));
+    TAssert.AssertTrue('empty table == nil', AmqpArgsEqual(LEmptyTable, nil));
     TAssert.AssertTrue('nil == nil', AmqpArgsEqual(nil, nil));
   finally
     LEmptyTable.Free;
@@ -378,8 +378,8 @@ begin
   LWithItem := TAMQPFieldTable.Create;
   try
     LWithItem.Put('a', 1);
-    TAssert.AssertFalse('nil != tabela com item', AmqpArgsEqual(nil, LWithItem));
-    TAssert.AssertFalse('tabela com item != nil', AmqpArgsEqual(LWithItem, nil));
+    TAssert.AssertFalse('nil != table with an item', AmqpArgsEqual(nil, LWithItem));
+    TAssert.AssertFalse('table with an item != nil', AmqpArgsEqual(LWithItem, nil));
   finally
     LWithItem.Free;
   end;
@@ -404,8 +404,8 @@ begin
     A.Put('nested', TValue.From<TAMQPFieldTable>(LInnerA));
     B.Put('nested', TValue.From<TAMQPFieldTable>(LInnerB));
     C.Put('nested', TValue.From<TAMQPFieldTable>(LInnerC));
-    TAssert.AssertTrue('tabelas aninhadas iguais', AmqpArgsEqual(A, B));
-    TAssert.AssertFalse('tabela aninhada diverge', AmqpArgsEqual(A, C));
+    TAssert.AssertTrue('equal nested tables', AmqpArgsEqual(A, B));
+    TAssert.AssertFalse('nested table differs', AmqpArgsEqual(A, C));
   finally
     A.Free; // also frees the nested table (the owner is the parent table)
     B.Free;
@@ -417,17 +417,17 @@ procedure TResourceTests.ArgsEqual_ArrayOfValues;
 var
   A, B, C, D, E: TAMQPFieldTable;
 begin
-  A := TableWithArray('nfe', 7);
-  B := TableWithArray('nfe', 7);
-  C := TableWithArray('cte', 7);  // string element differs
-  D := TableWithArray('nfe', 8);  // integer element differs
+  A := TableWithArray('invoice', 7);
+  B := TableWithArray('invoice', 7);
+  C := TableWithArray('waybill', 7);  // string element differs
+  D := TableWithArray('invoice', 8);  // integer element differs
   E := TAMQPFieldTable.Create;
   try
-    E.Put('x-lista', 7); // scalar where the other has an array
-    TAssert.AssertTrue('arrays iguais elemento a elemento', AmqpArgsEqual(A, B));
-    TAssert.AssertFalse('elemento string diverge', AmqpArgsEqual(A, C));
-    TAssert.AssertFalse('elemento inteiro diverge', AmqpArgsEqual(A, D));
-    TAssert.AssertFalse('escalar nao e igual a array', AmqpArgsEqual(A, E));
+    E.Put('x-list', 7); // scalar where the other has an array
+    TAssert.AssertTrue('arrays equal element by element', AmqpArgsEqual(A, B));
+    TAssert.AssertFalse('string element differs', AmqpArgsEqual(A, C));
+    TAssert.AssertFalse('integer element differs', AmqpArgsEqual(A, D));
+    TAssert.AssertFalse('a scalar is not equal to an array', AmqpArgsEqual(A, E));
   finally
     A.Free;
     B.Free;
@@ -439,11 +439,11 @@ end;
 
 procedure TResourceTests.ReservedName;
 begin
-  TAssert.AssertTrue('prefixo amq.', AmqpIsReservedName('amq.direct'));
-  TAssert.AssertTrue('so o prefixo', AmqpIsReservedName('amq.'));
-  TAssert.AssertFalse('sem o prefixo', AmqpIsReservedName('minha.fila'));
-  TAssert.AssertFalse('prefixo parcial nao conta', AmqpIsReservedName('am.direct'));
-  TAssert.AssertFalse('vazio', AmqpIsReservedName(''));
+  TAssert.AssertTrue('amq. prefix', AmqpIsReservedName('amq.direct'));
+  TAssert.AssertTrue('just the prefix', AmqpIsReservedName('amq.'));
+  TAssert.AssertFalse('without the prefix', AmqpIsReservedName('my.queue'));
+  TAssert.AssertFalse('a partial prefix does not count', AmqpIsReservedName('am.direct'));
+  TAssert.AssertFalse('empty', AmqpIsReservedName(''));
 end;
 
 procedure TResourceTests.ValidExchangeType;
@@ -452,8 +452,8 @@ begin
   TAssert.AssertTrue('fanout', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_FANOUT));
   TAssert.AssertTrue('topic', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_TOPIC));
   TAssert.AssertTrue('headers', AmqpIsValidExchangeType(AMQP_EXCHANGE_TYPE_HEADERS));
-  TAssert.AssertFalse('tipo desconhecido', AmqpIsValidExchangeType('custom'));
-  TAssert.AssertFalse('case-sensitive: maiusculas nao contam',
+  TAssert.AssertFalse('unknown type', AmqpIsValidExchangeType('custom'));
+  TAssert.AssertFalse('case-sensitive: uppercase does not count',
     AmqpIsValidExchangeType('Direct'));
 end;
 
@@ -479,9 +479,9 @@ begin
   D := TAMQPExchangeDef.Create('ex', AMQP_EXCHANGE_TYPE_TOPIC, False, False,
     False, LArgsD);
   try
-    TAssert.AssertTrue('mesmo tipo/flags/argumentos', A.EquivalentTo(B));
-    TAssert.AssertFalse('argumentos divergem', A.EquivalentTo(C));
-    TAssert.AssertFalse('durable diverge', A.EquivalentTo(D));
+    TAssert.AssertTrue('same type/flags/arguments', A.EquivalentTo(B));
+    TAssert.AssertFalse('arguments differ', A.EquivalentTo(C));
+    TAssert.AssertFalse('durable differs', A.EquivalentTo(D));
   finally
     A.Free;
     B.Free;
@@ -508,14 +508,14 @@ begin
   C := TAMQPQueueDef.Create('q', True, False, False, LArgsC);
   D := TAMQPQueueDef.Create('q', True, True, False, LArgsD);
   try
-    TAssert.AssertTrue('mesmos flags/argumentos', A.EquivalentTo(B));
-    TAssert.AssertFalse('argumentos divergem', A.EquivalentTo(C));
-    TAssert.AssertFalse('exclusive diverge', A.EquivalentTo(D));
+    TAssert.AssertTrue('same flags/arguments', A.EquivalentTo(B));
+    TAssert.AssertFalse('arguments differ', A.EquivalentTo(C));
+    TAssert.AssertFalse('exclusive differs', A.EquivalentTo(D));
 
     // OwnerId is not part of the comparison -- the owner is not part of the redeclare.
     A.OwnerId := 123;
     B.OwnerId := 456;
-    TAssert.AssertTrue('OwnerId nao afeta EquivalentTo', A.EquivalentTo(B));
+    TAssert.AssertTrue('OwnerId does not affect EquivalentTo', A.EquivalentTo(B));
   finally
     A.Free;
     B.Free;
@@ -530,7 +530,7 @@ end;
   compilers. }
 procedure CheckOk(AOk: Boolean; const AError: string);
 begin
-  TAssert.AssertTrue('parse deveria passar, erro: ' + AError, AOk);
+  TAssert.AssertTrue('parse should pass, error: ' + AError, AOk);
 end;
 
 procedure CheckInt(const AMsg: string; AExpected, AActual: Int64);
@@ -577,11 +577,11 @@ var
 begin
   // nil is the common case: most Queue.Declare calls send no argument.
   CheckOk(AmqpParseQueuePolicy(nil, LPolicy, LError), LError);
-  CheckInt('ttl ausente', -1, LPolicy.MessageTtlMs);
-  CheckInt('expires ausente', -1, LPolicy.ExpiresMs);
-  CheckInt('max-length ausente', -1, LPolicy.MaxLength);
-  CheckInt('max-priority ausente', -1, LPolicy.MaxPriority);
-  CheckBool('sem dead-letter', False, LPolicy.HasDeadLetterExchange);
+  CheckInt('ttl absent', -1, LPolicy.MessageTtlMs);
+  CheckInt('expires absent', -1, LPolicy.ExpiresMs);
+  CheckInt('max-length absent', -1, LPolicy.MaxLength);
+  CheckInt('max-priority absent', -1, LPolicy.MaxPriority);
+  CheckBool('no dead-letter', False, LPolicy.HasDeadLetterExchange);
   CheckBool('HasAny False', False, LPolicy.HasAny);
 end;
 
@@ -600,7 +600,7 @@ begin
     LVal := TValue.From<Integer>(60000);
     LTab.Put('x-message-ttl', LVal);
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckInt('ttl como Integer', 60000, LPolicy.MessageTtlMs);
+    CheckInt('ttl as Integer', 60000, LPolicy.MessageTtlMs);
   finally
     LTab.Free;
   end;
@@ -608,7 +608,7 @@ begin
   LTab := TabInt('x-message-ttl', 60000);
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckInt('ttl como Int64', 60000, LPolicy.MessageTtlMs);
+    CheckInt('ttl as Int64', 60000, LPolicy.MessageTtlMs);
     CheckBool('HasAny True', True, LPolicy.HasAny);
   finally
     LTab.Free;
@@ -623,10 +623,10 @@ var
 begin
   LTab := TabInt('x-message-ttl', -1);
   try
-    CheckBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('must refuse', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
     // The message must NAME the argument -- that is what separates an actionable
     // error from a "precondition failed" the user has to guess at.
-    CheckBool('erro cita o argumento', True,
+    CheckBool('error names the argument', True,
       Pos('x-message-ttl', LError) > 0);
   finally
     LTab.Free;
@@ -641,8 +641,8 @@ var
 begin
   LTab := TabStr('x-message-ttl', '60000'); // string, not a number
   try
-    CheckBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
-    CheckBool('erro diz integer', True, Pos('integer', LError) > 0);
+    CheckBool('must refuse', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('error says integer', True, Pos('integer', LError) > 0);
   finally
     LTab.Free;
   end;
@@ -657,15 +657,15 @@ begin
   // A queue that expires in 0 ms would vanish at the instant of its own declare.
   LTab := TabInt('x-expires', 0);
   try
-    CheckBool('deve recusar', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
-    CheckBool('erro cita o argumento', True, Pos('x-expires', LError) > 0);
+    CheckBool('must refuse', False, AmqpParseQueuePolicy(LTab, LPolicy, LError));
+    CheckBool('error names the argument', True, Pos('x-expires', LError) > 0);
   finally
     LTab.Free;
   end;
   LTab := TabInt('x-expires', 1);
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckInt('1 ms e valido', 1, LPolicy.ExpiresMs);
+    CheckInt('1 ms is valid', 1, LPolicy.ExpiresMs);
   finally
     LTab.Free;
   end;
@@ -682,8 +682,8 @@ begin
   LTab := TabInt('x-max-length', 0);
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckInt('zero preservado', 0, LPolicy.MaxLength);
-    CheckBool('HasAny True com zero', True, LPolicy.HasAny);
+    CheckInt('zero preserved', 0, LPolicy.MaxLength);
+    CheckBool('HasAny True with zero', True, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
@@ -698,7 +698,7 @@ begin
   LTab := TabInt('x-max-priority', AMQP_MAX_PRIORITY_LEVEL);
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckInt('teto aceito', AMQP_MAX_PRIORITY_LEVEL, LPolicy.MaxPriority);
+    CheckInt('ceiling accepted', AMQP_MAX_PRIORITY_LEVEL, LPolicy.MaxPriority);
   finally
     LTab.Free;
   end;
@@ -707,9 +707,9 @@ begin
   // and rejects instead of silently clamping.
   LTab := TabInt('x-max-priority', AMQP_MAX_PRIORITY_LEVEL + 1);
   try
-    CheckBool('acima do teto recusa', False,
+    CheckBool('above the ceiling refuses', False,
       AmqpParseQueuePolicy(LTab, LPolicy, LError));
-    CheckBool('erro cita o argumento', True,
+    CheckBool('error names the argument', True,
       Pos('x-max-priority', LError) > 0);
   finally
     LTab.Free;
@@ -717,7 +717,7 @@ begin
 
   LTab := TabInt('x-max-priority', -1);
   try
-    CheckBool('negativo recusa', False,
+    CheckBool('negative refuses', False,
       AmqpParseQueuePolicy(LTab, LPolicy, LError));
   finally
     LTab.Free;
@@ -750,9 +750,9 @@ begin
   // RabbitMQ's 'reject-publish-dlx' is not part of this implementation.
   LTab := TabStr('x-overflow', 'reject-publish-dlx');
   try
-    CheckBool('politica desconhecida recusa', False,
+    CheckBool('unknown policy refuses', False,
       AmqpParseQueuePolicy(LTab, LPolicy, LError));
-    CheckBool('erro cita o argumento', True, Pos('x-overflow', LError) > 0);
+    CheckBool('error names the argument', True, Pos('x-overflow', LError) > 0);
   finally
     LTab.Free;
   end;
@@ -769,19 +769,19 @@ begin
   LTab := TabStr('x-dead-letter-exchange', '');
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckBool('presente', True, LPolicy.HasDeadLetterExchange);
-    CheckStr('valor vazio', '', LPolicy.DeadLetterExchange);
+    CheckBool('present', True, LPolicy.HasDeadLetterExchange);
+    CheckStr('empty value', '', LPolicy.DeadLetterExchange);
     CheckBool('HasAny True', True, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
 
-  LTab := TabStr('x-dead-letter-routing-key', 'falhou');
+  LTab := TabStr('x-dead-letter-routing-key', 'failed');
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckBool('dlrk presente', True, LPolicy.HasDeadLetterRoutingKey);
-    CheckStr('dlrk valor', 'falhou', LPolicy.DeadLetterRoutingKey);
-    CheckBool('dlx continua ausente', False, LPolicy.HasDeadLetterExchange);
+    CheckBool('dlrk present', True, LPolicy.HasDeadLetterRoutingKey);
+    CheckStr('dlrk value', 'failed', LPolicy.DeadLetterRoutingKey);
+    CheckBool('dlx still absent', False, LPolicy.HasDeadLetterExchange);
   finally
     LTab.Free;
   end;
@@ -795,10 +795,10 @@ var
 begin
   // Rejecting an unknown 'x-' would break a client that sends an argument for an
   // extension this broker does not have. Same behaviour as RabbitMQ.
-  LTab := TabInt('x-invencao-do-cliente', 7);
+  LTab := TabInt('x-client-invention', 7);
   try
     CheckOk(AmqpParseQueuePolicy(LTab, LPolicy, LError), LError);
-    CheckBool('nao vira politica', False, LPolicy.HasAny);
+    CheckBool('does not become a policy', False, LPolicy.HasAny);
   finally
     LTab.Free;
   end;
@@ -811,22 +811,22 @@ var
   LPresent: Boolean;
 begin
   CheckOk(AmqpParseAlternateExchange(nil, LName, LPresent, LError), LError);
-  CheckBool('ausente', False, LPresent);
+  CheckBool('absent', False, LPresent);
 
   LTab := TabStr('alternate-exchange', 'ae');
   try
     CheckOk(AmqpParseAlternateExchange(LTab, LName, LPresent, LError), LError);
-    CheckBool('presente', True, LPresent);
-    CheckStr('nome', 'ae', LName);
+    CheckBool('present', True, LPresent);
+    CheckStr('name', 'ae', LName);
   finally
     LTab.Free;
   end;
 
   LTab := TabInt('alternate-exchange', 42); // number where a string is expected
   try
-    CheckBool('tipo errado recusa', False,
+    CheckBool('wrong type refuses', False,
       AmqpParseAlternateExchange(LTab, LName, LPresent, LError));
-    CheckBool('erro cita o argumento', True,
+    CheckBool('error names the argument', True,
       Pos('alternate-exchange', LError) > 0);
   finally
     LTab.Free;
@@ -849,9 +849,9 @@ begin
 
   LDef := TAMQPQueueDef.Create('q', True, False, False, LTab);
   try
-    CheckInt('ttl derivado', 30000, LDef.Policy.MessageTtlMs);
-    CheckBool('dlx derivado', True, LDef.Policy.HasDeadLetterExchange);
-    CheckStr('dlx nome', 'dlx', LDef.Policy.DeadLetterExchange);
+    CheckInt('derived ttl', 30000, LDef.Policy.MessageTtlMs);
+    CheckBool('derived dlx', True, LDef.Policy.HasDeadLetterExchange);
+    CheckStr('dlx name', 'dlx', LDef.Policy.DeadLetterExchange);
   finally
     LDef.Free; // owner of the table
   end;
@@ -869,8 +869,8 @@ begin
 
   LDef := TAMQPExchangeDef.Create('x', 'direct', True, False, False, LTab);
   try
-    CheckBool('tem AE', True, LDef.HasAlternateExchange);
-    CheckStr('nome do AE', 'ae', LDef.AlternateExchange);
+    CheckBool('has AE', True, LDef.HasAlternateExchange);
+    CheckStr('AE name', 'ae', LDef.AlternateExchange);
   finally
     LDef.Free;
   end;
@@ -902,21 +902,21 @@ begin
   Result.SetContentType('application/json');       //  1
   Result.SetContentEncoding('gzip');               //  2
   LTab := TAMQPFieldTable.Create;                  //  3
-  LVal := TValue.From<string>('sul');
-  LTab.Put('regiao', LVal);
+  LVal := TValue.From<string>('south');
+  LTab.Put('region', LVal);
   LVal := TValue.From<Int64>(7);
-  LTab.Put('tentativa', LVal);
+  LTab.Put('attempt', LVal);
   Result.SetHeaders(LTab);
   Result.SetDeliveryMode(2);                       //  4
   Result.SetPriority(5);                           //  5
   Result.SetCorrelationId('corr-123');             //  6
-  Result.SetReplyTo('fila.resposta');              //  7
+  Result.SetReplyTo('reply.queue');              //  7
   Result.SetExpiration('60000');                   //  8
   Result.SetMessageId('msg-1');                    //  9
   Result.SetTimestamp(1756900000);                 // 10
-  Result.SetMsgType('nota.emitida');               // 11
+  Result.SetMsgType('invoice.issued');               // 11
   Result.SetUserId('guest');                       // 12
-  Result.SetAppId('retaguarda');                   // 13
+  Result.SetAppId('backoffice');                   // 13
   Result.SetClusterId('cluster-a');                // 14
 end;
 
@@ -939,13 +939,13 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B1);
   try
-    CheckInt('body-size lido do payload', 4321, Int64(LEd.BodySizeOriginal));
+    CheckInt('body-size read from the payload', 4321, Int64(LEd.BodySizeOriginal));
     B2 := LEd.BuildPayload(LEd.BodySizeOriginal);
   finally
     LEd.Free;
   end;
 
-  CheckStr('bytes identicos apos ida e volta', HexOf(B1), HexOf(B2));
+  CheckStr('identical bytes after a round trip', HexOf(B1), HexOf(B2));
 end;
 
 // Complements the bytes test: if it ever fails, this one says WHICH
@@ -983,20 +983,20 @@ begin
     LP := LEd.Properties;
     CheckStr('content-type', 'application/json', LP.ContentType);
     CheckStr('content-encoding', 'gzip', LP.ContentEncoding);
-    CheckBool('headers presente', True, LP.Has(bpHeaders));
-    CheckBool('headers tem regiao', True,
-      LEd.Headers.TryGetValue('regiao', LVal));
-    CheckStr('headers.regiao', 'sul', LVal.AsString);
+    CheckBool('headers present', True, LP.Has(bpHeaders));
+    CheckBool('headers has region', True,
+      LEd.Headers.TryGetValue('region', LVal));
+    CheckStr('headers.region', 'south', LVal.AsString);
     CheckInt('delivery-mode', 2, LP.DeliveryMode);
     CheckInt('priority', 5, LP.Priority);
     CheckStr('correlation-id', 'corr-123', LP.CorrelationId);
-    CheckStr('reply-to', 'fila.resposta', LP.ReplyTo);
+    CheckStr('reply-to', 'reply.queue', LP.ReplyTo);
     CheckStr('expiration', '60000', LP.Expiration);
     CheckStr('message-id', 'msg-1', LP.MessageId);
     CheckInt('timestamp', 1756900000, Int64(LP.Timestamp));
-    CheckStr('type', 'nota.emitida', LP.MsgType);
+    CheckStr('type', 'invoice.issued', LP.MsgType);
     CheckStr('user-id', 'guest', LP.UserId);
-    CheckStr('app-id', 'retaguarda', LP.AppId);
+    CheckStr('app-id', 'backoffice', LP.AppId);
     CheckStr('cluster-id', 'cluster-a', LP.ClusterId);
     CheckInt('body-size', 10, Int64(LEd.BodySizeOriginal));
   finally
@@ -1023,24 +1023,24 @@ begin
   LEd := TAMQPHeaderEditor.Create(B);
   try
     LVal := TValue.From<string>('expired');
-    LEd.Headers.Put('x-motivo', LVal);
+    LEd.Headers.Put('x-reason', LVal);
     B2 := LEd.BuildPayload(10);
   finally
     LEd.Free;
   end;
 
-  CheckBool('o header mudou', True, HexOf(B) <> HexOf(B2));
+  CheckBool('the header changed', True, HexOf(B) <> HexOf(B2));
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    CheckBool('chave nova presente', True,
-      LEd.Headers.TryGetValue('x-motivo', LVal));
-    CheckStr('valor da chave nova', 'expired', LVal.AsString);
-    CheckBool('chave antiga sobreviveu', True,
-      LEd.Headers.TryGetValue('regiao', LVal));
-    CheckStr('valor antigo', 'sul', LVal.AsString);
-    CheckStr('correlation-id intacto', 'corr-123', LEd.Properties.CorrelationId);
-    CheckInt('priority intacta', 5, LEd.Properties.Priority);
+    CheckBool('new key present', True,
+      LEd.Headers.TryGetValue('x-reason', LVal));
+    CheckStr('value of the new key', 'expired', LVal.AsString);
+    CheckBool('old key survived', True,
+      LEd.Headers.TryGetValue('region', LVal));
+    CheckStr('old value', 'south', LVal.AsString);
+    CheckStr('correlation-id intact', 'corr-123', LEd.Properties.CorrelationId);
+    CheckInt('priority intact', 5, LEd.Properties.Priority);
   finally
     LEd.Free;
   end;
@@ -1061,7 +1061,7 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B);
   try
-    CheckBool('original nao tinha headers', False, LEd.HadHeaders);
+    CheckBool('the original had no headers', False, LEd.HadHeaders);
     LVal := TValue.From<Int64>(1);
     LEd.Headers.Put('x-death-count', LVal);
     B2 := LEd.BuildPayload(3);
@@ -1071,11 +1071,11 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    CheckBool('agora tem headers', True, LEd.HadHeaders);
-    CheckBool('chave presente', True,
+    CheckBool('now has headers', True, LEd.HadHeaders);
+    CheckBool('key present', True,
       LEd.Headers.TryGetValue('x-death-count', LVal));
-    CheckInt('valor', 1, LVal.AsInt64);
-    CheckStr('content-type intacto', 'text/plain', LEd.Properties.ContentType);
+    CheckInt('value', 1, LVal.AsInt64);
+    CheckStr('content-type intact', 'text/plain', LEd.Properties.ContentType);
   finally
     LEd.Free;
   end;
@@ -1100,7 +1100,7 @@ begin
   LEd := TAMQPHeaderEditor.Create(B);
   try
     LEntry := TAMQPFieldTable.Create;
-    LEntry.Put('queue', 'fila-origem');
+    LEntry.Put('queue', 'source-queue');
     LEntry.Put('reason', 'expired');
     LEntry.Put('count', Int64(1));
     SetLength(LArr, 1);
@@ -1114,13 +1114,13 @@ begin
 
   LEd := TAMQPHeaderEditor.Create(B2);
   try
-    CheckBool('x-death presente', True,
+    CheckBool('x-death present', True,
       LEd.Headers.TryGetValue('x-death', LVal));
     LVal := AmqpUnwrapValue(LVal);
-    CheckBool('e array', True, LVal.IsArray);
-    CheckInt('uma entrada', 1, LVal.GetArrayLength);
+    CheckBool('is an array', True, LVal.IsArray);
+    CheckInt('one entry', 1, LVal.GetArrayLength);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
-    CheckBool('entrada e tabela', True,
+    CheckBool('entry is a table', True,
       LElem.IsObject and (LElem.AsObject is TAMQPFieldTable));
     TAMQPFieldTable(LElem.AsObject).TryGetValue('reason', LField);
     CheckStr('reason', 'expired', LField.AsString);
@@ -1145,11 +1145,11 @@ begin
 
   LOrig := TAMQPMessage.Create('ex', 'rk', 'guest', LHdr, LMsgBody);
   try
-    LNew := AmqpDeriveMessage(LOrig, LHdr, 'dlx', 'morta');
+    LNew := AmqpDeriveMessage(LOrig, LHdr, 'dlx', 'dead');
     try
-      CheckBool('mesmo buffer de corpo, sem copia', True,
+      CheckBool('same body buffer, no copy', True,
         Pointer(LNew.Body) = Pointer(LOrig.Body));
-      CheckInt('tamanho do corpo', 64, Length(LNew.Body));
+      CheckInt('body size', 64, Length(LNew.Body));
     finally
       LNew.Release;
     end;
@@ -1177,22 +1177,22 @@ begin
     LEd := TAMQPHeaderEditor.Create(LOrig.HeaderPayload);
     try
       LVal := TValue.From<Int64>(1);
-      LEd.Headers.Put('x-novo', LVal);
+      LEd.Headers.Put('x-new', LVal);
       LHdr2 := LEd.BuildPayload(4);
     finally
       LEd.Free;
     end;
 
-    LNew := AmqpDeriveMessage(LOrig, LHdr2, 'dlx', 'morta');
+    LNew := AmqpDeriveMessage(LOrig, LHdr2, 'dlx', 'dead');
     try
-      CheckStr('header da origem intacto', HexOf(LHdr),
+      CheckStr('source header intact', HexOf(LHdr),
         HexOf(LOrig.HeaderPayload));
-      CheckBool('header da nova e diferente', True,
+      CheckBool('header of the new one differs', True,
         HexOf(LNew.HeaderPayload) <> HexOf(LOrig.HeaderPayload));
-      CheckInt('refcount da origem inalterado', 1, LOrig.RefCount);
-      CheckStr('exchange novo', 'dlx', LNew.Exchange);
-      CheckStr('routing key nova', 'morta', LNew.RoutingKey);
-      CheckStr('user-id herdado da origem', 'guest', LNew.UserId);
+      CheckInt('source refcount unchanged', 1, LOrig.RefCount);
+      CheckStr('new exchange', 'dlx', LNew.Exchange);
+      CheckStr('new routing key', 'dead', LNew.RoutingKey);
+      CheckStr('user-id inherited from the source', 'guest', LNew.UserId);
     finally
       LNew.Release;
     end;
@@ -1218,14 +1218,14 @@ begin
     LEd := TAMQPHeaderEditor.Create(LOrig.HeaderPayload);
     try
       LNew := AmqpDeriveMessage(LOrig, LEd.BuildPayload(LOrig.BodySize),
-        'dlx', 'morta');
+        'dlx', 'dead');
     finally
       LEd.Free;
     end;
     try
       LEd := TAMQPHeaderEditor.Create(LNew.HeaderPayload);
       try
-        CheckInt('body-size do header bate com o corpo',
+        CheckInt('body-size in the header matches the body',
           Int64(Length(LNew.Body)), Int64(LEd.BodySizeOriginal));
       finally
         LEd.Free;
@@ -1251,7 +1251,7 @@ begin
     on E: Exception do
       LOk := True;
   end;
-  CheckBool('payload truncado tem de levantar', True, LOk);
+  CheckBool('a truncated payload must raise', True, LOk);
 end;
 
 initialization

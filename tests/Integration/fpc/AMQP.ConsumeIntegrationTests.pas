@@ -158,7 +158,7 @@ var
   LList: TList<string>;
 begin
   LQueue := DeclareTempQueue;
-  FChan.PublishText('', LQueue, 'resposta-nfe-123');
+  FChan.PublishText('', LQueue, 'response-nfe-123');
 
   FChan.Consume(LQueue, HandleDeliverySimple);
 
@@ -166,8 +166,8 @@ begin
 
   LList := FReceived.LockList;
   try
-    TAssert.AssertEquals('deveria ter recebido 1 mensagem', 1, LList.Count);
-    TAssert.AssertEquals('resposta-nfe-123', LList[0]);
+    TAssert.AssertEquals('should have received 1 message', 1, LList.Count);
+    TAssert.AssertEquals('response-nfe-123', LList[0]);
   finally
     FReceived.UnlockList;
   end;
@@ -195,11 +195,11 @@ begin
 
   LList := FReceived.LockList;
   try
-    TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
+    TAssert.AssertEquals('every message should have been processed', N, LList.Count);
   finally
     FReceived.UnlockList;
   end;
-  TAssert.AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
+  TAssert.AssertTrue('processing should be concurrent (peak > 1), not serialized',
     PcAtomicGet(FPeak) > 1);
 end;
 
@@ -226,14 +226,14 @@ begin
 
   LList := FReceived.LockList;
   try
-    TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas', N, LList.Count);
+    TAssert.AssertEquals('every message should have been processed', N, LList.Count);
     for I := 1 to N do
-      TAssert.AssertEquals('worker dedicado deveria preservar a ordem de entrega',
+      TAssert.AssertEquals('dedicated worker should preserve delivery order',
         Format('msg-%d', [I]), LList[I - 1]);
   finally
     FReceived.UnlockList;
   end;
-  TAssert.AssertEquals('worker dedicado nunca deveria rodar 2 callbacks ao mesmo tempo (pico deveria ser 1)',
+  TAssert.AssertEquals('dedicated worker should never run 2 callbacks at once (peak should be 1)',
     1, PcAtomicGet(FPeak));
 end;
 

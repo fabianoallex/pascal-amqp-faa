@@ -1,7 +1,7 @@
 object frmPanel: TfrmPanel
   Left = 0
   Top = 0
-  Caption = 'Posto - Painel da Automacao'
+  Caption = 'Fuel Station - Automation Panel'
   ClientHeight = 660
   ClientWidth = 960
   Color = clBtnFace

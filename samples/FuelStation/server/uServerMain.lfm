@@ -3,7 +3,7 @@ object frmPanel: TfrmPanel
   Height = 660
   Top = 0
   Width = 960
-  Caption = 'Posto - Painel da Automacao'
+  Caption = 'Fuel Station - Automation Panel'
   ClientHeight = 660
   ClientWidth = 960
   DesignTimePPI = 96

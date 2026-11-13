@@ -94,7 +94,7 @@ var
   LInfo: TPresenceInfo;
 begin
   if (AUser = '') or (Copy(AUser, 1, Length(POS_USER_PREFIX)) <> POS_USER_PREFIX) then
-    Exit;   // POS terminals only; the 'automacao' connection is not in the table
+    Exit;   // POS terminals only; the 'automation' connection is not in the table
 
   FLock.Enter;
   try

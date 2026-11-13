@@ -1,7 +1,7 @@
 object frmQuery: TfrmQuery
   Left = 0
   Top = 0
-  Caption = 'Consulta de Status (RPC)'
+  Caption = 'Status Query (RPC)'
   ClientHeight = 640
   ClientWidth = 700
   Color = clBtnFace
@@ -23,7 +23,7 @@ object frmQuery: TfrmQuery
     Top = 8
     Width = 684
     Height = 170
-    Caption = ' Conex'#227'o '
+    Caption = ' Connection '
     TabOrder = 0
     object lblHost: TLabel
       Left = 16
@@ -37,7 +37,7 @@ object frmQuery: TfrmQuery
       Top = 28
       Width = 31
       Height = 15
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 16
@@ -51,21 +51,21 @@ object frmQuery: TfrmQuery
       Top = 57
       Width = 43
       Height = 15
-      Caption = 'Usu'#225'rio:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 16
       Top = 86
       Width = 35
       Height = 15
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 140
       Top = 145
       Width = 79
       Height = 15
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clRed
       Font.Height = -12
@@ -119,7 +119,7 @@ object frmQuery: TfrmQuery
       Top = 85
       Width = 190
       Height = 17
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -128,7 +128,7 @@ object frmQuery: TfrmQuery
       Top = 108
       Width = 190
       Height = 17
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -138,7 +138,7 @@ object frmQuery: TfrmQuery
       Top = 140
       Width = 110
       Height = 25
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -148,28 +148,28 @@ object frmQuery: TfrmQuery
     Top = 186
     Width = 335
     Height = 120
-    Caption = ' Servidor (responde consultas) '
+    Caption = ' Server (answers queries) '
     TabOrder = 1
     object lblRequestQueue: TLabel
       Left = 16
       Top = 28
       Width = 84
       Height = 15
-      Caption = 'Fila de pedidos:'
+      Caption = 'Request queue:'
     end
     object lblDelay: TLabel
       Left = 16
       Top = 57
       Width = 93
       Height = 15
-      Caption = 'Demora m'#225'x (ms):'
+      Caption = 'Max delay (ms):'
     end
     object lblServed: TLabel
       Left = 170
       Top = 89
       Width = 65
       Height = 15
-      Caption = 'Atendidas: 0'
+      Caption = 'Answered: 0'
     end
     object edtRequestQueue: TEdit
       Left = 116
@@ -177,7 +177,7 @@ object frmQuery: TfrmQuery
       Width = 200
       Height = 23
       TabOrder = 0
-      Text = 'consulta-status'
+      Text = 'status-query'
     end
     object edtDelay: TEdit
       Left = 116
@@ -192,7 +192,7 @@ object frmQuery: TfrmQuery
       Top = 84
       Width = 130
       Height = 25
-      Caption = 'Iniciar servidor'
+      Caption = 'Start server'
       Enabled = False
       TabOrder = 2
       OnClick = btnServerClick
@@ -203,21 +203,21 @@ object frmQuery: TfrmQuery
     Top = 186
     Width = 341
     Height = 120
-    Caption = ' Cliente (consulta status) '
+    Caption = ' Client (queries status) '
     TabOrder = 2
     object lblKey: TLabel
       Left = 12
       Top = 28
       Width = 37
       Height = 15
-      Caption = 'Chave:'
+      Caption = 'Key:'
     end
     object lblQueryCount: TLabel
       Left = 232
       Top = 28
       Width = 24
       Height = 15
-      Caption = 'Qtd:'
+      Caption = 'Count:'
     end
     object lblTimeout: TLabel
       Left = 12
@@ -255,7 +255,7 @@ object frmQuery: TfrmQuery
       Top = 84
       Width = 130
       Height = 25
-      Caption = 'Consultar status'
+      Caption = 'Query status'
       Enabled = False
       TabOrder = 3
       OnClick = btnQueryClick
@@ -265,7 +265,7 @@ object frmQuery: TfrmQuery
       Top = 88
       Width = 185
       Height = 17
-      Caption = 'Usar Direct Reply-to'
+      Caption = 'Use Direct Reply-to'
       TabOrder = 4
     end
   end
@@ -277,11 +277,11 @@ object frmQuery: TfrmQuery
     Anchors = [akLeft, akTop, akRight]
     Columns = <
       item
-        Caption = 'Chave'
+        Caption = 'Key'
         Width = 150
       end
       item
-        Caption = 'Correla'#231#227'o'
+        Caption = 'Correlation'
         Width = 110
       end
       item
@@ -289,11 +289,11 @@ object frmQuery: TfrmQuery
         Width = 200
       end
       item
-        Caption = 'Enviada'
+        Caption = 'Sent'
         Width = 100
       end
       item
-        Caption = 'Tempo'
+        Caption = 'Elapsed'
         Width = 90
       end>
     GridLines = True
@@ -308,7 +308,7 @@ object frmQuery: TfrmQuery
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar lista'
+    Caption = 'Clear list'
     TabOrder = 4
     OnClick = btnClearListClick
   end
@@ -318,7 +318,7 @@ object frmQuery: TfrmQuery
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 5
     OnClick = btnClearLogClick
   end

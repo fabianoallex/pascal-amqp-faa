@@ -1,7 +1,7 @@
 object frmHeaders: TfrmHeaders
   Left = 0
   Top = 0
-  Caption = 'Eventos (exchange headers)'
+  Caption = 'Events (headers exchange)'
   ClientHeight = 640
   ClientWidth = 700
   Color = clBtnFace
@@ -23,7 +23,7 @@ object frmHeaders: TfrmHeaders
     Top = 8
     Width = 684
     Height = 170
-    Caption = ' Conex'#227'o '
+    Caption = ' Connection '
     TabOrder = 0
     object lblHost: TLabel
       Left = 16
@@ -37,7 +37,7 @@ object frmHeaders: TfrmHeaders
       Top = 28
       Width = 31
       Height = 15
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 16
@@ -51,21 +51,21 @@ object frmHeaders: TfrmHeaders
       Top = 57
       Width = 43
       Height = 15
-      Caption = 'Usu'#225'rio:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 16
       Top = 86
       Width = 35
       Height = 15
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 140
       Top = 145
       Width = 79
       Height = 15
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clRed
       Font.Height = -12
@@ -119,7 +119,7 @@ object frmHeaders: TfrmHeaders
       Top = 85
       Width = 190
       Height = 17
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -128,7 +128,7 @@ object frmHeaders: TfrmHeaders
       Top = 108
       Width = 190
       Height = 17
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -138,7 +138,7 @@ object frmHeaders: TfrmHeaders
       Top = 140
       Width = 110
       Height = 25
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -148,7 +148,7 @@ object frmHeaders: TfrmHeaders
     Top = 186
     Width = 400
     Height = 120
-    Caption = ' Publicar evento '
+    Caption = ' Publish event '
     TabOrder = 1
     object lblExchange: TLabel
       Left = 16
@@ -162,21 +162,21 @@ object frmHeaders: TfrmHeaders
       Top = 57
       Width = 26
       Height = 15
-      Caption = 'Tipo:'
+      Caption = 'Type:'
     end
     object lblRegion: TLabel
       Left = 205
       Top = 57
       Width = 44
       Height = 15
-      Caption = 'Regi'#227'o:'
+      Caption = 'Region:'
     end
     object lblMessage: TLabel
       Left = 16
       Top = 86
       Width = 62
       Height = 15
-      Caption = 'Mensagem:'
+      Caption = 'Message:'
     end
     object edtExchange: TEdit
       Left = 90
@@ -184,7 +184,7 @@ object frmHeaders: TfrmHeaders
       Width = 190
       Height = 23
       TabOrder = 0
-      Text = 'notas-headers'
+      Text = 'invoice-headers'
     end
     object edtType: TEdit
       Left = 90
@@ -200,7 +200,7 @@ object frmHeaders: TfrmHeaders
       Width = 90
       Height = 23
       TabOrder = 2
-      Text = 'sul'
+      Text = 'south'
     end
     object edtMessage: TEdit
       Left = 90
@@ -214,7 +214,7 @@ object frmHeaders: TfrmHeaders
       Top = 80
       Width = 95
       Height = 25
-      Caption = 'Publicar'
+      Caption = 'Publish'
       Enabled = False
       TabOrder = 4
       OnClick = btnPublishClick
@@ -225,7 +225,7 @@ object frmHeaders: TfrmHeaders
     Top = 186
     Width = 276
     Height = 120
-    Caption = ' Assinantes '
+    Caption = ' Subscribers '
     TabOrder = 2
     object lblMatch: TLabel
       Left = 12
@@ -239,14 +239,14 @@ object frmHeaders: TfrmHeaders
       Top = 28
       Width = 26
       Height = 15
-      Caption = 'Tipo:'
+      Caption = 'Type:'
     end
     object lblCritRegion: TLabel
       Left = 12
       Top = 60
       Width = 44
       Height = 15
-      Caption = 'Regi'#227'o:'
+      Caption = 'Region:'
     end
     object cmbMatch: TComboBox
       Left = 66
@@ -275,14 +275,14 @@ object frmHeaders: TfrmHeaders
       Width = 90
       Height = 23
       TabOrder = 2
-      Text = 'sul'
+      Text = 'south'
     end
     object btnSubscribe: TButton
       Left = 12
       Top = 86
       Width = 100
       Height = 25
-      Caption = 'Assinar'
+      Caption = 'Subscribe'
       Enabled = False
       TabOrder = 3
       OnClick = btnSubscribeClick
@@ -292,7 +292,7 @@ object frmHeaders: TfrmHeaders
       Top = 86
       Width = 140
       Height = 25
-      Caption = 'Remover selecionado'
+      Caption = 'Remove selected'
       Enabled = False
       TabOrder = 4
       OnClick = btnRemoveClick
@@ -306,7 +306,7 @@ object frmHeaders: TfrmHeaders
     Anchors = [akLeft, akTop, akRight]
     Columns = <
       item
-        Caption = 'N'#186
+        Caption = 'No.'
         Width = 36
       end
       item
@@ -314,15 +314,15 @@ object frmHeaders: TfrmHeaders
         Width = 56
       end
       item
-        Caption = 'Crit'#233'rios'
+        Caption = 'Criteria'
         Width = 210
       end
       item
-        Caption = 'Fila'
+        Caption = 'Queue'
         Width = 300
       end
       item
-        Caption = 'Recebidas'
+        Caption = 'Received'
         Width = 80
       end>
     GridLines = True
@@ -339,23 +339,23 @@ object frmHeaders: TfrmHeaders
     Anchors = [akLeft, akTop, akRight]
     Columns = <
       item
-        Caption = 'Hora'
+        Caption = 'Time'
         Width = 90
       end
       item
-        Caption = 'Assinante'
+        Caption = 'Subscriber'
         Width = 170
       end
       item
-        Caption = 'Tipo'
+        Caption = 'Type'
         Width = 90
       end
       item
-        Caption = 'Regi'#227'o'
+        Caption = 'Region'
         Width = 90
       end
       item
-        Caption = 'Mensagem'
+        Caption = 'Message'
         Width = 220
       end>
     GridLines = True
@@ -370,7 +370,7 @@ object frmHeaders: TfrmHeaders
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar eventos'
+    Caption = 'Clear events'
     TabOrder = 5
     OnClick = btnClearListClick
   end
@@ -380,7 +380,7 @@ object frmHeaders: TfrmHeaders
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 6
     OnClick = btnClearLogClick
   end

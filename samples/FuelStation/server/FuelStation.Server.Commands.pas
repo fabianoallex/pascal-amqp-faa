@@ -2,7 +2,7 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Consumer of the posto.comandos queue (ARCHITECTURE.md §6.2). For each
+{ Consumer of the station.commands queue (ARCHITECTURE.md §6.2). For each
   RPC request: parses the body, applies the transition to the authoritative
   registry, publishes the change's event(s) and replies through reply-to echoing
   the correlation-id. Manual ack only after replying.
@@ -112,8 +112,8 @@ begin
     except
       on E: Exception do
       begin
-        Log('Comando invalido: ' + E.Message);
-        LResp := EncRespRefusal('ERRO_FORMATO', '', '');
+        Log('Invalid command: ' + E.Message);
+        LResp := EncRespRefusal('BAD_FORMAT', '', '');
       end;
     end;
     Reply(AChannel, ADelivery, LResp);
@@ -152,8 +152,8 @@ begin
     Result := HandleDiscard(J)
   else
   begin
-    Log('Comando desconhecido: "' + LCmd + '"');
-    Result := EncRespRefusal('CMD_DESCONHECIDO', '', '');
+    Log('Unknown command: "' + LCmd + '"');
+    Result := EncRespRefusal('UNKNOWN_CMD', '', '');
   end;
 end;
 
@@ -163,22 +163,22 @@ var
   LR: TTransitionResult;
 begin
   LId := J.AsStr('id');
-  LPosName := J.AsStr('pdv');
-  LSale := J.AsStr('venda');
+  LPosName := J.AsStr('pos');
+  LSale := J.AsStr('sale');
   LR := FRegistry.Post(LId, LPosName, LSale);
   if LR.Ok then
   begin
     if LR.Changed then
     begin
       FEvents.Posting(LId, LPosName, LSale, LR.Version);
-      Log(Format('lancar: %s -> %s (venda %s), versao %d',
+      Log(Format('post: %s -> %s (sale %s), version %d',
         [LId, LPosName, LSale, LR.Version]));
     end;
     Result := EncRespOk(LR.Version);
   end
   else
   begin
-    Log(Format('lancar RECUSADO: %s por %s (motivo %s, dono %s)',
+    Log(Format('post REFUSED: %s by %s (reason %s, owner %s)',
       [LId, LPosName, LR.Reason, LR.CurrentPos]));
     Result := EncRespRefusal(LR.Reason, LR.CurrentPos, LR.CurrentSale);
   end;
@@ -190,16 +190,16 @@ var
   LR: TTransitionResult;
 begin
   LId := J.AsStr('id');
-  LPosName := J.AsStr('pdv');
-  LSale := J.AsStr('venda');
-  LReason := J.AsStr('motivo', RSN_ITEM_UNPOST);
+  LPosName := J.AsStr('pos');
+  LSale := J.AsStr('sale');
+  LReason := J.AsStr('reason', RSN_ITEM_UNPOST);
   LR := FRegistry.Unpost(LId, LPosName, LSale);
   if LR.Ok then
   begin
     if LR.Changed then
     begin
       FEvents.Available(LId, LReason, LR.Version);
-      Log(Format('estornar: %s liberada por %s (%s), versao %d',
+      Log(Format('unpost: %s released by %s (%s), version %d',
         [LId, LPosName, LReason, LR.Version]));
     end;
     Result := EncRespOk(LR.Version);
@@ -218,8 +218,8 @@ var
   LItems: array of TItemResult;
   LReason: string;
 begin
-  LPosName := J.AsStr('pdv');
-  LSale := J.AsStr('venda');
+  LPosName := J.AsStr('pos');
+  LSale := J.AsStr('sale');
   LIds := J.Get('ids');
   if ACancellation then
     LReason := RSN_CANCEL_INVOICE
@@ -251,9 +251,9 @@ begin
     end;
 
   if ACancellation then
-    Log(Format('cancelar_finalizada: venda %s (%d itens)', [LSale, Length(LItems)]))
+    Log(Format('cancel_finished: sale %s (%d items)', [LSale, Length(LItems)]))
   else
-    Log(Format('finalizar: venda %s (%d itens)', [LSale, Length(LItems)]));
+    Log(Format('finish: sale %s (%d items)', [LSale, Length(LItems)]));
   Result := EncRespItems(FRegistry.Version, LItems);
 end;
 
@@ -263,22 +263,22 @@ var
   LR: TTransitionResult;
 begin
   LId := J.AsStr('id');
-  LOperator := J.AsStr('operador');
-  LReason := J.AsStr('motivo');
+  LOperator := J.AsStr('operator');
+  LReason := J.AsStr('reason');
   LR := FRegistry.ForceRelease(LId);
   if not LR.Ok then
     Exit(EncRespRefusal(LR.Reason, '', ''));
   if LR.Changed then
   begin
     FEvents.Available(LId, RSN_MANUAL_RELEASE, LR.Version);
-    Log(Format('LIBERACAO MANUAL: %s (era %s de %s) por "%s": %s',
+    Log(Format('MANUAL RELEASE: %s (was %s of %s) by "%s": %s',
       [LId, StateToStr(LR.PreviousState), LR.PreviousPos, LOperator,
        LReason]));
     Result := EncRespForceRelease(LR.Version,
       StateToStr(LR.PreviousState), LR.PreviousPos);
   end
   else
-    Result := EncRespForceRelease(LR.Version, 'disponivel', '');
+    Result := EncRespForceRelease(LR.Version, 'available', '');
 end;
 
 function TFuelStationCommands.HandleDiscard(J: TJsonValue): TBytes;
@@ -287,15 +287,15 @@ var
   LR: TTransitionResult;
 begin
   LId := J.AsStr('id');
-  LOperator := J.AsStr('operador');
-  LReason := J.AsStr('motivo');
+  LOperator := J.AsStr('operator');
+  LReason := J.AsStr('reason');
   LR := FRegistry.Discard(LId);
   if not LR.Ok then
     Exit(EncRespRefusal(LR.Reason, '', ''));
   if LR.Changed then
   begin
     FEvents.Discarded(LId, LR.Version);
-    Log(Format('DESCARTE: %s por "%s": %s', [LId, LOperator, LReason]));
+    Log(Format('DISCARD: %s by "%s": %s', [LId, LOperator, LReason]));
   end;
   Result := EncRespOk(LR.Version);
 end;

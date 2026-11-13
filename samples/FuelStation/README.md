@@ -1,7 +1,7 @@
-﻿# Posto Automação
+﻿# Fuel Station
 
 A base for a real application: a **fuel-pump automation server** with this
-library's AMQP 0-9-1 broker **embedded**, and **POS terminals** (PDVs) on the
+library's AMQP 0-9-1 broker **embedded**, and **POS terminals** on the
 store network that see the fuel deliveries and put them into sales.
 
 The full design (states, message contract, failure rules) is in
@@ -10,20 +10,20 @@ The full design (states, message contract, failure rules) is in
 ## What it demonstrates
 
 - An **embedded broker** in a Delphi/FPC app (`TAMQPServer`), with its own
-  authenticator (`automacao` + `pdv-*`).
-- **Pub/sub** (topic exchange `posto.eventos`) to broadcast every state change
-  to all the PDVs + **RPC** (queue `posto.comandos`, `reply-to` +
+  authenticator (`automation` + `pos-*`).
+- **Pub/sub** (topic exchange `station.events`) to broadcast every state change
+  to all the POS terminals + **RPC** (queue `station.commands`, `reply-to` +
   `correlation-id`) for the commands.
 - **Authoritative state on the server** — the broker is transport, not a
   database. A fuel delivery belongs to **exactly one sale**; it leaves the
   reservation only through a void, finalization or a supervisor's manual release.
 - **Late-join** via snapshot + replay of buffered events, with version-gap
   detection → re-snapshot.
-- **Offline operation**: the PDV has a local outbox, works offline and
+- **Offline operation**: the POS has a local outbox, works offline and
   reconciles on reconnection; a double-sale conflict is **detected and flagged**,
   never resolved silently.
 - **Phase 4.1 observability** (`IAMQPEventSink`) feeding the supervisor panel
-  with each PDV's presence — **without** automatic action.
+  with each POS terminal's presence — **without** automatic action.
 
 ## Build
 
@@ -46,27 +46,27 @@ from the command line). All three compile from the same source as the FPC versio
 
 `samples\FuelStation\smoke\FuelStationSmoke` — console, same source for FPC and
 Delphi (like `samples/SmokeTest`). It brings the automation up in-process (no
-GUI, no pumps), connects two PDVs and exercises snapshot → add → refusal due to
+GUI, no pumps), connects two POS terminals and exercises snapshot → add → refusal due to
 concurrency → finalize → void → forced release. Exits with code 0 if
 everything passed.
 
 ## Manual walkthrough (the two GUIs)
 
 1. **Server**: run `FuelStationServer`, set the port (default 5680), click
-   **Iniciar**. The pump simulator starts generating fuel deliveries.
-2. **PDV 1**: run `FuelStationPos`, PDV = `pdv-01`, password `pdv`, same port as the
-   server, **Conectar**. The list on the left fills with the pending fuel
+   **Start**. The pump simulator starts generating fuel deliveries.
+2. **POS 1**: run `FuelStationPos`, POS = `pos-01`, password `pos`, same port as the
+   server, **Connect**. The list on the left fills with the pending fuel
    deliveries.
-3. **PDV 2**: another instance, PDV = `pdv-02`, connects. It sees the **same** list.
-4. On PDV 1, select a fuel delivery and **Adicionar à venda** → it disappears
-   from PDV 2's list (it became `lancando`).
-5. On PDV 1, **Remover item** → it shows up again on both.
-6. On PDV 1, add it again and **Finalizar venda** → it disappears for good.
-7. Bring up a **PDV 3** now → it receives the pending ones by snapshot.
-8. Close PDV 2 with an open sale → the server panel shows
-   `pdv-02 DESCONECTADO`, and the fuel delivery **stays reserved**. Select it
-   in the panel and **Liberar forçado** → it goes back to the others.
-9. Offline operation: on the server, **Parar**; PDV 1 and PDV 2 add the **same**
-   fuel delivery (each from its own frozen list) and finalize; **Iniciar** the
+3. **POS 2**: another instance, POS = `pos-02`, connects. It sees the **same** list.
+4. On POS 1, select a fuel delivery and **Add to sale >>** → it disappears
+   from POS 2's list (it became `posting`).
+5. On POS 1, **Remove item** → it shows up again on both.
+6. On POS 1, add it again and **Finish sale** → it disappears for good.
+7. Bring up a **POS 3** now → it receives the pending ones by snapshot.
+8. Close POS 2 with an open sale → the server panel shows
+   `pos-02 DISCONNECTED`, and the fuel delivery **stays reserved**. Select it
+   in the panel and **Force release (selected)** → it goes back to the others.
+9. Offline operation: on the server, **Stop**; POS 1 and POS 2 add the **same**
+   fuel delivery (each from its own frozen list) and finalize; **Start** the
    server again → the first outbox to arrive wins, the other marks the item
-   as **CONFLITO**.
+   as **CONFLICT**.

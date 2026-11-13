@@ -136,15 +136,15 @@ begin
   LProps.SetMessageId('msg-77');
 
   // The default exchange ('') routes by routing-key = queue name.
-  FChan.Publish('', LQueue, TEncoding.UTF8.GetBytes('{"chave":"NFe123"}'), LProps);
+  FChan.Publish('', LQueue, TEncoding.UTF8.GetBytes('{"key":"NFe123"}'), LProps);
 
   LResult := GetWithRetry(LQueue);
-  TAssert.AssertTrue('mensagem deveria ter sido entregue', LResult.Found);
-  TAssert.AssertEquals('corpo', '{"chave":"NFe123"}', LResult.BodyAsText);
+  TAssert.AssertTrue('message should have been delivered', LResult.Found);
+  TAssert.AssertEquals('body', '{"key":"NFe123"}', LResult.BodyAsText);
   TAssert.AssertEquals('content-type', 'application/json', LResult.Properties.ContentType);
   TAssert.AssertEquals('correlation-id', 'corr-99', LResult.Properties.CorrelationId);
   TAssert.AssertEquals('message-id', 'msg-77', LResult.Properties.MessageId);
-  TAssert.AssertEquals('delivery-mode persistente', 2, Integer(LResult.Properties.DeliveryMode));
+  TAssert.AssertEquals('persistent delivery-mode', 2, Integer(LResult.Properties.DeliveryMode));
 end;
 
 procedure TAMQPChannelIntegrationTests.PublishText_AndGet;
@@ -153,11 +153,11 @@ var
   LResult: TAMQPGetResult;
 begin
   LQueue := DeclareTempQueue;
-  FChan.PublishText('', LQueue, 'olá mundo NFe');
+  FChan.PublishText('', LQueue, 'héllo wörld NFe');
 
   LResult := GetWithRetry(LQueue);
   TAssert.AssertTrue(LResult.Found);
-  TAssert.AssertEquals('olá mundo NFe', LResult.BodyAsText);
+  TAssert.AssertEquals('héllo wörld NFe', LResult.BodyAsText);
   TAssert.AssertEquals('text/plain', LResult.Properties.ContentType);
 end;
 
@@ -168,7 +168,7 @@ var
 begin
   LQueue := DeclareTempQueue;
   LResult := FChan.BasicGet(LQueue, True);
-  TAssert.AssertFalse('fila recém-criada deveria estar vazia', LResult.Found);
+  TAssert.AssertFalse('freshly created queue should be empty', LResult.Found);
 end;
 
 procedure TAMQPChannelIntegrationTests.DeclareQueue_ReturnsGeneratedName;
@@ -176,7 +176,7 @@ var
   LQueue: string;
 begin
   LQueue := DeclareTempQueue;
-  TAssert.AssertTrue('servidor deveria gerar um nome de fila', LQueue <> '');
+  TAssert.AssertTrue('server should generate a queue name', LQueue <> '');
 end;
 
 procedure TAMQPChannelIntegrationTests.Unbind_StopsRoutingToTheQueue;
@@ -188,7 +188,7 @@ var
   LResult: TAMQPGetResult;
 begin
   LExchange := 'test-unbind-ex-' + TGUID.NewGuid.ToString;
-  LRk := 'rota.teste';
+  LRk := 'route.test';
   // NON-durable exchange (goes away when the connection closes) and NOT
   // auto-delete: if it were auto-delete, the unbind would remove the last
   // binding and the broker would delete the exchange — the next publish would
@@ -207,10 +207,10 @@ begin
   FChan.BindQueue(LBind);
 
   // With the bind, the message reaches the queue.
-  FChan.PublishText(LExchange, LRk, 'antes-do-unbind');
+  FChan.PublishText(LExchange, LRk, 'before-unbind');
   LResult := GetWithRetry(LQueue);
-  TAssert.AssertTrue('com o bind, a mensagem deveria chegar', LResult.Found);
-  TAssert.AssertEquals('antes-do-unbind', LResult.BodyAsText);
+  TAssert.AssertTrue('with the bind, the message should arrive', LResult.Found);
+  TAssert.AssertEquals('before-unbind', LResult.BodyAsText);
 
   // Removes the binding.
   LUnbind := Default(TAMQPQueueUnbind);
@@ -220,10 +220,10 @@ begin
   FChan.UnbindQueue(LUnbind);
 
   // Without the bind, the same publication is no longer routed to the queue.
-  FChan.PublishText(LExchange, LRk, 'depois-do-unbind');
+  FChan.PublishText(LExchange, LRk, 'after-unbind');
   TThread.Sleep(200); // gives the broker time to route (or drop)
   LResult := FChan.BasicGet(LQueue, True);
-  TAssert.AssertFalse('após o unbind, a fila não deveria mais receber', LResult.Found);
+  TAssert.AssertFalse('after the unbind, the queue should no longer receive', LResult.Found);
 end;
 
 procedure TAMQPChannelIntegrationTests.ExchangeBind_RoutesSourceToDest;
@@ -239,7 +239,7 @@ begin
   // queue goes away -> dest loses its binding -> goes away -> source loses its
   // binding -> goes away (a clean cascade, no garbage on the broker and no
   // publishing to a deleted exchange).
-  LRk := 'rota.ex';
+  LRk := 'route.ex';
   LSource := 'test-exsrc-' + TGUID.NewGuid.ToString;
   LDest := 'test-exdst-' + TGUID.NewGuid.ToString;
 
@@ -267,7 +267,7 @@ begin
   // Publishes to source with the binding's routing-key: source -> dest -> queue.
   FChan.PublishText(LSource, LRk, 'via-exchange-bind');
   LResult := GetWithRetry(LQueue);
-  TAssert.AssertTrue('a mensagem deveria rotear source->dest->fila', LResult.Found);
+  TAssert.AssertTrue('the message should route source->dest->queue', LResult.Found);
   TAssert.AssertEquals('via-exchange-bind', LResult.BodyAsText);
 end;
 
@@ -278,8 +278,8 @@ begin
   FChan.OnBasicReturn := HandleBasicReturn;
 
   // Default exchange + a routing-key with no queue bound: unroutable.
-  FChan.Publish('', 'rota.inexistente.' + TGUID.NewGuid.ToString,
-    TEncoding.UTF8.GetBytes('sem destino'), TAMQPBasicProperties.Empty, True {mandatory});
+  FChan.Publish('', 'route.nonexistent.' + TGUID.NewGuid.ToString,
+    TEncoding.UTF8.GetBytes('no destination'), TAMQPBasicProperties.Empty, True {mandatory});
 
   for I := 1 to 80 do
   begin
@@ -288,8 +288,8 @@ begin
     TThread.Sleep(25);
   end;
 
-  TAssert.AssertEquals('OnBasicReturn deveria disparar', 1, PcAtomicGet(FGotReturn));
-  TAssert.AssertEquals('sem destino', FReturned.BodyAsText);
+  TAssert.AssertEquals('OnBasicReturn should fire', 1, PcAtomicGet(FGotReturn));
+  TAssert.AssertEquals('no destination', FReturned.BodyAsText);
 end;
 
 procedure TAMQPChannelIntegrationTests.Confirm_RoutablePublish_Acked;
@@ -303,9 +303,9 @@ begin
   FChan.ConfirmSelect;
 
   // Default exchange + routing-key = queue name: routable, the broker confirms.
-  LSeq := FChan.PublishText('', LQueue, 'confirma isso');
-  TAssert.AssertTrue('primeiro publish em confirm mode deveria receber seq-no 1', UInt64(1) = LSeq);
-  TAssert.AssertTrue('broker deveria confirmar (ack) o publish', FChan.WaitForConfirm(LSeq, 5000));
+  LSeq := FChan.PublishText('', LQueue, 'confirm this');
+  TAssert.AssertTrue('first publish in confirm mode should get seq-no 1', UInt64(1) = LSeq);
+  TAssert.AssertTrue('broker should confirm (ack) the publish', FChan.WaitForConfirm(LSeq, 5000));
 
   for I := 1 to 80 do
   begin
@@ -313,8 +313,8 @@ begin
       Break;
     TThread.Sleep(25);
   end;
-  TAssert.AssertEquals('OnConfirm deveria disparar com ack', 1, PcAtomicGet(FAckFlag));
-  TAssert.AssertTrue('OnConfirm deveria trazer o seq-no 1', UInt64(1) = FConfirmedSeq);
+  TAssert.AssertEquals('OnConfirm should fire with ack', 1, PcAtomicGet(FAckFlag));
+  TAssert.AssertTrue('OnConfirm should carry seq-no 1', UInt64(1) = FConfirmedSeq);
 end;
 
 procedure TAMQPChannelIntegrationTests.Confirm_WaitForConfirms_SeveralPublishes;
@@ -329,9 +329,9 @@ begin
   LLast := 0;
   for I := 1 to 10 do
     LLast := FChan.PublishText('', LQueue, 'msg ' + IntToStr(I));
-  TAssert.AssertTrue('décimo publish deveria receber seq-no 10', UInt64(10) = LLast);
+  TAssert.AssertTrue('tenth publish should get seq-no 10', UInt64(10) = LLast);
 
-  TAssert.AssertTrue('todos os publishes roteáveis deveriam ser confirmados',
+  TAssert.AssertTrue('every routable publish should be confirmed',
     FChan.WaitForConfirms(5000));
 end;
 
@@ -382,12 +382,12 @@ begin
 
   // Proves the scenario worked (1 ack + 1 nack) — if the broker does not nack,
   // this assertion fails with a clear message, instead of masking the real test.
-  TAssert.AssertEquals('o publish B deveria ter sido nack-ado (reject-publish)',
+  TAssert.AssertEquals('publish B should have been nacked (reject-publish)',
     1, PcAtomicGet(FNackCount));
 
   // Finding #1: since a publish in the batch was nacked, WaitForConfirms must
   // return False — even though the nack arrived BEFORE the call.
-  TAssert.AssertFalse('WaitForConfirms deve reportar False quando um publish do lote foi nack-ado',
+  TAssert.AssertFalse('WaitForConfirms must report False when a publish of the batch was nacked',
     FChan.WaitForConfirms(2000));
 end;
 

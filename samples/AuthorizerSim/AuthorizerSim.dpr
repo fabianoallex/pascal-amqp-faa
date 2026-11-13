@@ -26,7 +26,7 @@ uses
   AMQP.Queue.Methods;
 
 const
-  QUEUE_NAME = 'sefaz-respostas';
+  QUEUE_NAME = 'authorizer-replies';
   INVOICE_COUNT = 6;
 
 procedure Main;
@@ -54,7 +54,7 @@ begin
       begin
         InvoiceKey := Format('NFE-%s-%.4d', [RunId, I]);
         LChannel.PublishText('', QUEUE_NAME, InvoiceKey);
-        Writeln('[Autorizador] Publicado retorno da nota ', InvoiceKey);
+        Writeln('[Authorizer] Published reply for invoice ', InvoiceKey);
       end;
     finally
       LChannel.Free;
@@ -69,6 +69,6 @@ begin
     Main;
   except
     on E: Exception do
-      Writeln('Erro: ', E.Message);
+      Writeln('Error: ', E.Message);
   end;
 end.

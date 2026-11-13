@@ -3,7 +3,7 @@ object frmPublisher: TfrmPublisher
   Height = 800
   Top = 0
   Width = 875
-  Caption = 'Publicador Confiável (VCL)'
+  Caption = 'Reliable Publisher (VCL)'
   ClientHeight = 800
   ClientWidth = 875
   Color = clBtnFace
@@ -21,7 +21,7 @@ object frmPublisher: TfrmPublisher
     Height = 212
     Top = 10
     Width = 855
-    Caption = ' Conexão '
+    Caption = ' Connection '
     ClientHeight = 187
     ClientWidth = 851
     ParentBackground = False
@@ -38,7 +38,7 @@ object frmPublisher: TfrmPublisher
       Height = 20
       Top = 18
       Width = 37
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 20
@@ -52,21 +52,21 @@ object frmPublisher: TfrmPublisher
       Height = 20
       Top = 54
       Width = 53
-      Caption = 'Usuário:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 20
       Height = 20
       Top = 91
       Width = 43
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 175
       Height = 20
       Top = 156
       Width = 98
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Color = clRed
       Font.Height = -15
       Font.Name = 'Segoe UI'
@@ -120,7 +120,7 @@ object frmPublisher: TfrmPublisher
       Height = 24
       Top = 89
       Width = 136
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -129,7 +129,7 @@ object frmPublisher: TfrmPublisher
       Height = 24
       Top = 118
       Width = 212
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -139,7 +139,7 @@ object frmPublisher: TfrmPublisher
       Height = 24
       Top = 120
       Width = 312
-      Caption = 'Reenviar não confirmadas na reconexão'
+      Caption = 'Resend unconfirmed on reconnect'
       Checked = True
       State = cbChecked
       TabOrder = 7
@@ -149,7 +149,7 @@ object frmPublisher: TfrmPublisher
       Height = 31
       Top = 150
       Width = 138
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 8
       OnClick = btnConnectClick
     end
@@ -159,7 +159,7 @@ object frmPublisher: TfrmPublisher
     Height = 115
     Top = 232
     Width = 855
-    Caption = ' Publicação (confirm mode) '
+    Caption = ' Publishing (confirm mode) '
     ClientHeight = 90
     ClientWidth = 851
     ParentBackground = False
@@ -169,21 +169,21 @@ object frmPublisher: TfrmPublisher
       Height = 20
       Top = 8
       Width = 26
-      Caption = 'Fila:'
+      Caption = 'Queue:'
     end
     object lblCount: TLabel
       Left = 356
       Height = 20
       Top = 8
       Width = 30
-      Caption = 'Qtd:'
+      Caption = 'Count:'
     end
     object lblInterval: TLabel
       Left = 475
       Height = 20
       Top = 8
       Width = 96
-      Caption = 'Intervalo (ms):'
+      Caption = 'Interval (ms):'
     end
     object edtQueue: TEdit
       Left = 112
@@ -191,7 +191,7 @@ object frmPublisher: TfrmPublisher
       Top = 3
       Width = 225
       TabOrder = 0
-      Text = 'sefaz-respostas'
+      Text = 'authorizer-replies'
     end
     object edtCount: TEdit
       Left = 400
@@ -214,7 +214,7 @@ object frmPublisher: TfrmPublisher
       Height = 31
       Top = 45
       Width = 150
-      Caption = 'Publicar lote'
+      Caption = 'Publish batch'
       Enabled = False
       TabOrder = 3
       OnClick = btnPublishClick
@@ -224,7 +224,7 @@ object frmPublisher: TfrmPublisher
       Height = 31
       Top = 45
       Width = 238
-      Caption = 'Publicar sem rota (mandatory)'
+      Caption = 'Publish unroutable (mandatory)'
       Enabled = False
       TabOrder = 4
       OnClick = btnNoRouteClick
@@ -238,11 +238,11 @@ object frmPublisher: TfrmPublisher
     Anchors = [akTop, akLeft, akRight]
     Columns = <
       item
-        Caption = 'Nº'
+        Caption = 'No.'
         Width = 58
       end
       item
-        Caption = 'Chave'
+        Caption = 'Key'
         Width = 238
       end
       item
@@ -250,11 +250,11 @@ object frmPublisher: TfrmPublisher
         Width = 238
       end
       item
-        Caption = 'Enviada'
+        Caption = 'Sent'
         Width = 100
       end
       item
-        Caption = 'Resolvida'
+        Caption = 'Resolved'
         Width = 100
       end>
     GridLines = True
@@ -268,7 +268,7 @@ object frmPublisher: TfrmPublisher
     Height = 20
     Top = 605
     Width = 90
-    Caption = 'Publicadas: 0'
+    Caption = 'Published: 0'
   end
   object btnClearList: TButton
     Left = 600
@@ -276,7 +276,7 @@ object frmPublisher: TfrmPublisher
     Top = 600
     Width = 125
     Anchors = [akTop, akRight]
-    Caption = 'Limpar lista'
+    Caption = 'Clear list'
     TabOrder = 3
     OnClick = btnClearListClick
   end
@@ -286,7 +286,7 @@ object frmPublisher: TfrmPublisher
     Top = 600
     Width = 125
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 4
     OnClick = btnClearLogClick
   end

@@ -6,6 +6,23 @@ a minor version may change the API; every such change shows up here.
 
 ## [Unreleased]
 
+The repository is English-only: comments, docs, identifiers, string literals and tool
+interfaces. The client's public API is unchanged.
+
+### Changed
+
+- **Broker:** `TAMQPWal.BytesDescartados` is now `DiscardedBytes`, and the minimum-version
+  build error reads `pascal-amqp-faa needs pascal-common-faa 1.27.0 or newer`.
+- **Samples** moved to English folders and names: `PostoAutomacao` → `FuelStation` (with
+  `pos`/`server`/`common`, and its AMQP/JSON contract in English), `PublicadorConfiavelVcl` →
+  `ReliablePublisherVcl`, `EventosTopicVcl` → `TopicEventsVcl`, `EventosHeadersVcl` →
+  `HeadersEventsVcl`, `PrioridadeVcl` → `PriorityVcl`, `ConsultaStatusVcl` → `StatusQueryVcl`,
+  `Retaguarda(Vcl)` → `BackOffice(Vcl)`, `AutorizadorSim(Vcl)` → `AuthorizerSim(Vcl)`. Queue,
+  exchange and header names used by the samples changed with them.
+- **Tools:** `AMQP_ACEITACAO_DURAVEL` → `AMQP_ACCEPTANCE_DURABLE`, `tests/tools/matriz_de_queda.py`
+  → `crash_matrix.py`, `tests/tools/verifica_espelhos.py` → `check_mirrors.py`; CLI options
+  `--porta`/`--segundos`/`--tipos todos`/`--dedicado` → `--port`/`--seconds`/`--types all`/`--dedicated`.
+
 ## [0.6.0] - 2026-11-02
 
 TCP and TLS through **pascal-common-faa 1.27.0** (step 5 of the "Migration order" in
@@ -176,8 +193,8 @@ Defect found while measuring pascal-api-infra-faa's `docs/guide/dtos-json.md` gu
 
 ### Added
 
-- **`TAMQPChannel.OnConsumerError(Canal, DeliveryAt, Erro, var Acao)`**, called when a consumer
-  callback raises, on the same pool thread. `Acao` (`TAMQPConsumerErrorAction`)
+- **`TAMQPChannel.OnConsumerError(AChannel, ADelivery, AError, var AAction)`**, called when a consumer
+  callback raises, on the same pool thread. `AAction` (`TAMQPConsumerErrorAction`)
   arrives as `ceaReject` if the delivery is pending, or `ceaNone` if it was already settled or if the
   consumer is no-ack; the handler can change it to `ceaRequeue` (Nack with requeue) or `ceaNone`
   (the application settles later). The lib never settles twice: if the callback or the handler already
@@ -242,7 +259,7 @@ client, on top of pascal-common-faa's `PascalCommon.Tracing`. Details and decisi
 
 - **The minimum pascal-common-faa version goes up from 1.1.3 to 1.8.0**, which brings
   `PascalCommon.Tracing`; it is the same one the other `*-faa` libs require. An older copy
-  stops the build with `pascal-amqp-faa precisa da pascal-common-faa 1.8.0 ou mais nova`; both
+  stops the build with `pascal-amqp-faa needs pascal-common-faa 1.8.0 or newer`; both
   `.lpk` require `MinVersion` 1.8.
 - Submodule `external/pascal-common-faa` (tests and samples only) from v1.2.0 to v1.8.0.
 
@@ -255,7 +272,7 @@ client, on top of pascal-common-faa's `PascalCommon.Tracing`. Details and decisi
   ran one at a time, and a callback waiting for another one queued behind it only moved
   when another item arrived (found here, fixed there). The client's callbacks run on
   `PcPool`, so an older copy is a production defect. A copy older than 1.1.3 stops the
-  build with `pascal-amqp-faa precisa da pascal-common-faa 1.1.3 ou mais nova`; both `.lpk`
+  build with `pascal-amqp-faa needs pascal-common-faa 1.1.3 or newer`; both `.lpk`
   require `MinVersion` 1.1.3.
 - Submodule `external/pascal-common-faa` (tests and samples only) from v1.1.2 to v1.2.0, which
   also counts the real cores on FPC/Linux (`PcPool`'s ceiling there was always 16).
@@ -327,7 +344,7 @@ application (separate package).
   confirm tied to the watermark, compaction, disk cap that refuses); opt-in observability
   (events through a notifier thread, best-effort). Deliberate deviations from RabbitMQ listed in the
   README.
-- Messaging pattern samples (dual VCL/LCL GUI) and `PostoAutomacao`; unit,
+- Messaging pattern samples (dual VCL/LCL GUI) and `FuelStation`; unit,
   integration, broker and acceptance suites (the client's integration suite against the embedded
   broker), mirrored in DUnitX and FPCUnit.
 

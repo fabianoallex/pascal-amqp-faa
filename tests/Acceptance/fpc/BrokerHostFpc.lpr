@@ -107,7 +107,7 @@ begin
     // lives there, and the host survives its own restart.
     LBroker.DataDir := LDataDir;
     LBroker.Start;
-    WriteLn('broker embutido ouvindo em 127.0.0.1:', LBroker.Port);
+    WriteLn('embedded broker listening on 127.0.0.1:', LBroker.Port);
 
     if LTlsPort <> 0 then
     begin
@@ -131,14 +131,14 @@ begin
           LBrokerTls.TlsCertPassword := 'pipestest';
         end;
         LBrokerTls.Start;
-        WriteLn('broker TLS (', AmqpTlsBackendName, ') ouvindo em 127.0.0.1:',
+        WriteLn('broker TLS (', AmqpTlsBackendName, ') listening on 127.0.0.1:',
           LBrokerTls.Port);
       end
       else
-        WriteLn('AVISO: external/pascal-common-faa/tests/pki nao encontrado -- sem porta TLS');
+        WriteLn('WARNING: external/pascal-common-faa/tests/pki not found -- no TLS port');
     end;
 
-    WriteLn('no ar por ate ', LSeconds, 's (ou ate uma linha na entrada padrao)');
+    WriteLn('up for at most ', LSeconds, 's (or until a line on standard input)');
     Flush(Output);
 
     // Exits on a deadline OR on a line on standard input: with the deadline
@@ -158,5 +158,5 @@ begin
     LBrokerTls.Free;
     LBroker.Free;
   end;
-  WriteLn('broker encerrado');
+  WriteLn('broker stopped');
 end.

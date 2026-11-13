@@ -82,7 +82,7 @@ end;
 function DurableDir: string;
 begin
   Result := IncludeTrailingPathDelimiter(GetTempDir)
-    + 'amqpaceita-' + IntToStr(GetProcessID);
+    + 'amqpaccept-' + IntToStr(GetProcessID);
   ForceDirectories(Result);
 end;
 
@@ -146,8 +146,8 @@ begin
   except
     on E: Exception do
     begin
-      WriteLn('AVISO: broker TLS nao subiu (', E.Message,
-        ') -- testes TLS vao se auto-ignorar');
+      WriteLn('WARNING: TLS broker did not start (', E.Message,
+        ') -- TLS tests will skip themselves');
       FreeAndNil(ABroker);
       Result := 0;
     end;
@@ -157,7 +157,7 @@ end;
 var
   ConsoleApp: TTestRunner;
   LBroker: TAMQPServer;
-  LPorta, LTlsPort: Word;
+  LPort, LTlsPort: Word;
   LDataDir: string;
   LBrokerTls: TAMQPServer;
 begin
@@ -169,23 +169,23 @@ begin
     LDataDir := DurableDir;
     ClearDir(LDataDir);
   end;
-  LPorta := StartBroker(LBroker, LDataDir);
+  LPort := StartBroker(LBroker, LDataDir);
   LTlsPort := StartBrokerTls(LBrokerTls);
   try
-    AmqpUseEmbeddedBroker(LPorta, LTlsPort);
-    WriteLn('broker embutido em 127.0.0.1:', LPorta,
+    AmqpUseEmbeddedBroker(LPort, LTlsPort);
+    WriteLn('embedded broker on 127.0.0.1:', LPort,
       ' (tls: ', LTlsPort, ')');
     if LDataDir <> '' then
-      WriteLn('PASSADA DURAVEL -- DataDir: ', LDataDir)
+      WriteLn('DURABLE PASS -- DataDir: ', LDataDir)
     else
-      WriteLn('passada transiente -- sem DataDir');
+      WriteLn('transient pass -- no DataDir');
 
     DefaultFormat := fPlain;
     DefaultRunAllTests := True;
     ConsoleApp := TTestRunner.Create(nil);
     try
       ConsoleApp.Initialize;
-      ConsoleApp.Title := 'pascal-amqp-faa - aceitacao contra o broker embutido';
+      ConsoleApp.Title := 'pascal-amqp-faa - acceptance against the embedded broker';
       ConsoleApp.Run;
     finally
       ConsoleApp.Free;

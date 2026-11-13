@@ -1,7 +1,7 @@
 ﻿unit uEventsMain;
 
 { Pub/sub with a TOPIC exchange: events published with a hierarchical routing
-  key (e.g. 'nota.aprovada', 'pdv.7.venda') reach EVERY subscriber whose
+  key (e.g. 'invoice.approved', 'pos.7.sale') reach EVERY subscriber whose
   binding key matches: '*' matches exactly one word, '#' matches zero or
   more. Unlike the work queues of the other samples (each message goes to
   ONE consumer), here each subscriber has its OWN queue (exclusive +
@@ -335,26 +335,26 @@ begin
   Result.AutoReconnect := True;
   Result.ReconnectDelayMs := 2000;
   Result.MaxReconnectAttempts := 0;
-  Result.ConnectionName := 'EventosTopicVcl';
+  Result.ConnectionName := 'TopicEventsVcl';
 end;
 
 procedure TfrmEvents.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -384,7 +384,7 @@ begin
   LBind := Trim(edtBindingKey.Text);
   if LBind = '' then
   begin
-    Log('Informe a binding key (ex.: nota.#, nota.aprovada, pdv.*.venda).');
+    Log('Enter the binding key (e.g. invoice.#, invoice.approved, pos.*.sale).');
     Exit;
   end;
 
@@ -393,7 +393,7 @@ begin
     Inc(FNextNumber);
     LSubscriber.Number := FNextNumber;
     LSubscriber.BindingKey := LBind;
-    LSubscriber.SubscriberQueue := Format('eventos-sub%d-%s', [LSubscriber.Number, NewSuffix]);
+    LSubscriber.SubscriberQueue := Format('events-sub%d-%s', [LSubscriber.Number, NewSuffix]);
 
     // The subscriber's disposable queue: exclusive (this connection only) and
     // auto-delete (dies when the consumer cancels / the connection drops).
@@ -412,7 +412,7 @@ begin
   except
     on E: Exception do
     begin
-      Log('Erro ao assinar "' + LBind + '": ' + E.Message);
+      Log('Error subscribing "' + LBind + '": ' + E.Message);
       LSubscriber.Free;
       Exit;
     end;
@@ -425,7 +425,7 @@ begin
   LSubscriber.Item.SubItems.Add('0');
   LSubscriber.Item.Data := LSubscriber;
   FSubscribers.Add(LSubscriber.Tag, LSubscriber);
-  Log(Format('Assinante %d criado: binding "%s" na fila "%s".',
+  Log(Format('Subscriber %d created: binding "%s" on queue "%s".',
     [LSubscriber.Number, LSubscriber.BindingKey, LSubscriber.SubscriberQueue]));
 end;
 
@@ -449,12 +449,12 @@ begin
     FChannel.DeleteQueue(LDelete);   // deletes the queue (and removes the declare from recovery)
   except
     on E: Exception do
-      Log('Erro ao remover assinante ' + IntToStr(ASubscriber.Number) + ': ' + E.Message);
+      Log('Error removing subscriber ' + IntToStr(ASubscriber.Number) + ': ' + E.Message);
   end;
   FSubscribers.Remove(ASubscriber.Tag);
   if ASubscriber.Item <> nil then
     ASubscriber.Item.Delete;
-  Log(Format('Assinante %d removido (binding "%s").',
+  Log(Format('Subscriber %d removed (binding "%s").',
     [ASubscriber.Number, ASubscriber.BindingKey]));
   ASubscriber.Free;
 end;
@@ -465,7 +465,7 @@ begin
     Exit;
   if (lvSubscribers.Selected = nil) or (lvSubscribers.Selected.Data = nil) then
   begin
-    Log('Selecione um assinante na lista para remover.');
+    Log('Select a subscriber in the list to remove.');
     Exit;
   end;
   RemoveSubscriber(TSubscriber(lvSubscribers.Selected.Data));
@@ -544,8 +544,8 @@ end;
 
 procedure TfrmEvents.EventReturned(const ARoutingKey, ABody: string);
 begin
-  Log(Format('Evento "%s" (rk=%s) DEVOLVIDO: nenhum assinante com binding ' +
-    'que case — pub/sub sem assinante perde o evento.', [ABody, ARoutingKey]));
+  Log(Format('Event "%s" (rk=%s) RETURNED: no subscriber with a matching ' +
+    'binding — pub/sub without a subscriber loses the event.', [ABody, ARoutingKey]));
 end;
 
 { --- publishing ------------------------------------------------------------- }
@@ -560,7 +560,7 @@ begin
   LRk := Trim(edtRoutingKey.Text);
   if LRk = '' then
   begin
-    Log('Informe a routing key (ex.: nota.aprovada).');
+    Log('Enter the routing key (e.g. invoice.approved).');
     Exit;
   end;
   LMsgBody := Trim(edtMessage.Text);
@@ -572,10 +572,10 @@ begin
     // mandatory=True: with NO matching binding, the broker returns the event
     // (Basic.Return) instead of dropping it silently, so it is visible in the log.
     FChannel.Publish(FExchange, LRk, AmqpUtf8Encode(LMsgBody), LProps, True);
-    Log(Format('Publicado "%s" com routing key "%s".', [LMsgBody, LRk]));
+    Log(Format('Published "%s" with routing key "%s".', [LMsgBody, LRk]));
   except
     on E: Exception do
-      Log('Erro ao publicar: ' + E.Message);
+      Log('Error publishing: ' + E.Message);
   end;
 end;
 
@@ -583,23 +583,23 @@ end;
 
 procedure TfrmEvents.ConnectionDropped;
 begin
-  lblStatus.Caption := 'Conexão caiu — reconectando...';
+  lblStatus.Caption := 'Connection lost — reconnecting...';
   lblStatus.Font.Color := clMaroon;
-  Log('Conexão caiu. Reconexão automática em andamento; filas exclusivas e ' +
-    'bindings serão recriados no recovery.');
+  Log('Connection lost. Automatic reconnection in progress; exclusive queues and ' +
+    'bindings will be recreated by the recovery.');
 end;
 
 procedure TfrmEvents.ConnectionRestored;
 begin
   SetConnected(True);
-  Log('Reconectado: exchange, filas, bindings e consumers restaurados.');
+  Log('Reconnected: exchange, queues, bindings and consumers restored.');
 end;
 
 procedure TfrmEvents.ConnectionFailed;
 begin
-  lblStatus.Caption := 'Reconexão esgotada';
+  lblStatus.Caption := 'Reconnection exhausted';
   lblStatus.Font.Color := clRed;
-  Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
+  Log('Reconnection gave up (MaxReconnectAttempts reached).');
 end;
 
 // The three connection events hop through PcPool instead of posting directly
@@ -631,10 +631,10 @@ begin
       RemoveAllSubscribers;
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConnected(False);
     Exit;
@@ -654,16 +654,16 @@ begin
     FChannel.DeclareExchange(TAMQPExchangeDeclare.Create(FExchange,
       AMQP_EXCHANGE_TYPE_TOPIC));
 
-    Log(Format('Conectado a %s:%d%s. Exchange topic "%s" declarado.',
+    Log(Format('Connected to %s:%d%s. Topic exchange "%s" declared.',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FExchange]));
-    Log('Dica: crie assinantes com bindings diferentes (nota.#, ' +
-      'nota.aprovada, pdv.*.venda) e publique routing keys variadas — ' +
-      'o mesmo evento chega a todo assinante que casar.');
+    Log('Tip: create subscribers with different bindings (invoice.#, ' +
+      'invoice.approved, pos.*.sale) and publish varied routing keys — ' +
+      'the same event reaches every subscriber that matches.');
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       SetConnected(False);

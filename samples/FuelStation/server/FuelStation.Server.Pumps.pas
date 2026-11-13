@@ -141,7 +141,7 @@ var
   LWait: Integer;
 begin
   {$IFNDEF FPC}
-  TThread.NameThreadForDebugging('PostoBombas');
+  TThread.NameThreadForDebugging('StationPumps');
   {$ENDIF}
   Randomize;
   while not Terminated do

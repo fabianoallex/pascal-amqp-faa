@@ -38,7 +38,7 @@ uses
 // 1.27.0: the TCP and TLS transport (PascalCommon.Transport*), which the
 // client and the broker use since 0.6.0.
 {$IF PASCALCOMMON_VERSION < 12700}
-  {$MESSAGE FATAL 'pascal-amqp-faa precisa da pascal-common-faa 1.27.0 ou mais nova'}
+  {$MESSAGE FATAL 'pascal-amqp-faa needs pascal-common-faa 1.27.0 or newer'}
 {$IFEND}
 
 /// WALL-CLOCK milliseconds since the Unix epoch, in UTC.

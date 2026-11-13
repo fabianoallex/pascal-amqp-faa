@@ -9,20 +9,20 @@
   thread (TBatchThread), with a configurable interval between messages, so you
   can bring the broker down IN THE MIDDLE of the batch (docker stop/start on
   RabbitMQ) and watch the whole sequence: send failure, automatic reconnection,
-  replay of the topology + confirm mode and, with "Reenviar não confirmadas na
-  reconexão" checked (RepublishUnconfirmedOnReconnect), the automatic resend of
+  replay of the topology + confirm mode and, with "Resend unconfirmed on
+  reconnect" checked (RepublishUnconfirmedOnReconnect), the automatic resend of
   what was left unconfirmed. At the end of the batch the thread calls
   WaitForConfirms and logs the result (all confirmed or not, and how long it took).
 
   Two subtleties of confirms that the screen makes visible:
   - A connection drop does NOT fire OnConfirm: the publishes pending at the drop
-    are marked in the list by the reconnection event ("Reenviada (novo nº)" with
-    resend on, "Perdida na queda" without). The resend happens with NEW
+    are marked in the list by the reconnection event ("Resent (new no.)" with
+    resend on, "Lost in the drop" without). The resend happens with NEW
     seq-nos assigned by the lib, so the confirms of those resends arrive
-    without a matching row; they go into the "reenvios confirmados" counter.
+    without a matching row; they go into the "Resends confirmed" counter.
   - An unroutable mandatory publish is RETURNED (Basic.Return) and still
     CONFIRMED (ack): confirm means "the broker took responsibility",
-    not "it reached a queue". The row becomes "Devolvida (sem rota)".
+    not "it reached a queue". The row becomes "Returned (no route)".
 
   When sending a message fails (socket down), the batch thread does NOT
   republish on its own: the seq-no was assigned and the content went into the
@@ -146,7 +146,7 @@ type
     function BuildParams: TAMQPConnectionParams;
     procedure RefreshTotals;
     /// Ends the batch thread (if any), waiting for it to exit. Called only on the
-    /// UI thread (disconnect/close). The "Shutdown lote" click does NOT use
+    /// UI thread (disconnect/close). The "Stop batch" click does NOT use
     /// this: it only signals and leaves the join to BatchFinished, without freezing the UI.
     procedure StopBatch;
     // UI updates (run on the UI thread, called by the marshals):
@@ -187,12 +187,12 @@ const
 {$ENDIF}
 
 const
-  cStatusPending   = 'Aguardando confirmação';
-  cStatusConfirmed = 'Confirmada';
-  cStatusNack       = 'Nack do broker';
-  cStatusReturned  = 'Devolvida (sem rota)';
-  cStatusResent  = 'Reenviada (novo nº)';
-  cStatusLost    = 'Perdida na queda (sem reenvio)';
+  cStatusPending   = 'Awaiting confirm';
+  cStatusConfirmed = 'Confirmed';
+  cStatusNack       = 'Nack from broker';
+  cStatusReturned  = 'Returned (no route)';
+  cStatusResent  = 'Resent (new no.)';
+  cStatusLost    = 'Lost in the drop (no resend)';
 
 // Builds the properties and publishes an invoice (body = the key itself, as in
 // the other samples). Used by the batch thread and by the mandatory button.
@@ -409,11 +409,11 @@ begin
         // enabled) BEFORE the send failed; the lib republishes on its own after
         // reconnecting. Publishing again here would DUPLICATE the message; we only
         // wait for the connection to come back and move on to the next one.
-        FForm.QueueLog(Format('Falha ao enviar %s: %s — aguardando reconexão.',
+        FForm.QueueLog(Format('Failed to send %s: %s — waiting for reconnection.',
           [LKey, E.Message]));
         if not WaitForReconnect then
           Break;
-        FForm.QueueLog('Conexão restabelecida; retomando o lote.');
+        FForm.QueueLog('Connection restored; resuming the batch.');
       end;
     end;
     if not InterruptibleSleep(FIntervalMs) then
@@ -422,17 +422,17 @@ begin
 
   if not FStop then
   begin
-    FForm.QueueLog('Lote enviado. Aguardando confirmações pendentes (WaitForConfirms)...');
+    FForm.QueueLog('Batch sent. Waiting for pending confirms (WaitForConfirms)...');
     LStart := PcTickMs;
     try
       if FPubChannel.WaitForConfirms(5000) then
-        FForm.QueueLog(Format('WaitForConfirms: todas confirmadas (%d ms).',
+        FForm.QueueLog(Format('WaitForConfirms: all confirmed (%d ms).',
           [Int64(PcTickMs - LStart)]))
       else
-        FForm.QueueLog('WaitForConfirms: nem todas confirmadas (nack, perda na queda ou timeout).');
+        FForm.QueueLog('WaitForConfirms: not all confirmed (nack, lost in the drop or timeout).');
     except
       on E: Exception do
-        FForm.QueueLog('WaitForConfirms falhou: ' + E.Message);
+        FForm.QueueLog('WaitForConfirms failed: ' + E.Message);
     end;
   end;
   FForm.QueueBatchFinished;
@@ -544,26 +544,26 @@ begin
   Result.ReconnectDelayMs := 2000;
   Result.MaxReconnectAttempts := 0; // keeps trying until it comes back
   Result.RepublishUnconfirmedOnReconnect := chkRepublish.Checked;
-  Result.ConnectionName := 'PublicadorConfiavelVcl';
+  Result.ConnectionName := 'ReliablePublisherVcl';
 end;
 
 procedure TfrmPublisher.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -582,9 +582,9 @@ end;
 procedure TfrmPublisher.SetBatchRunning(ARunning: Boolean);
 begin
   if ARunning then
-    btnPublish.Caption := 'Parar lote'
+    btnPublish.Caption := 'Stop batch'
   else
-    btnPublish.Caption := 'Publicar lote';
+    btnPublish.Caption := 'Publish batch';
   btnPublish.Enabled := Assigned(FConn);
   edtCount.Enabled := not ARunning;
   edtInterval.Enabled := not ARunning;
@@ -593,7 +593,7 @@ end;
 procedure TfrmPublisher.RefreshTotals;
 begin
   lblTotals.Caption := Format(
-    'Publicadas: %d | Confirmadas: %d | Nacks: %d | Devolvidas: %d | Reenvios confirmados: %d',
+    'Published: %d | Confirmed: %d | Nacks: %d | Returned: %d | Resends confirmed: %d',
     [FPublished, FConfirmed, FNacks, FReturned, FConfirmedResends]);
 end;
 
@@ -649,12 +649,12 @@ begin
     if AAck then
     begin
       Inc(FConfirmedResends);
-      Log(Format('Reenvio confirmado pelo broker (nº %d).', [Int64(ASeqNo)]));
+      Log(Format('Resend confirmed by the broker (no. %d).', [Int64(ASeqNo)]));
     end
     else
     begin
       Inc(FNacks);
-      Log(Format('Broker nack-ou o reenvio nº %d.', [Int64(ASeqNo)]));
+      Log(Format('Broker nacked resend no. %d.', [Int64(ASeqNo)]));
     end;
     RefreshTotals;
     Exit;
@@ -663,7 +663,7 @@ begin
   if AAck then
   begin
     Inc(FConfirmed);
-    // Does not downgrade a more informative status (e.g. "Devolvida (sem rota)":
+    // Does not downgrade a more informative status (e.g. "Returned (no route)":
     // the broker returns AND confirms an unroutable mandatory).
     if LItem.SubItems[1] = cStatusPending then
       LItem.SubItems[1] := cStatusConfirmed;
@@ -672,7 +672,7 @@ begin
   begin
     Inc(FNacks);
     LItem.SubItems[1] := cStatusNack;
-    Log(Format('Broker nack-ou o publish nº %d.', [Int64(ASeqNo)]));
+    Log(Format('Broker nacked publish no. %d.', [Int64(ASeqNo)]));
   end;
   LItem.SubItems[3] := FormatDateTime('hh:nn:ss', Now);
   RefreshTotals;
@@ -682,7 +682,7 @@ procedure TfrmPublisher.MsgReturned(const AKey, AReason: string);
 var
   LItem: TListItem;
 begin
-  Log('Basic.Return: "' + AKey + '" devolvida (' + AReason + ').');
+  Log('Basic.Return: "' + AKey + '" returned (' + AReason + ').');
   if FByKey.TryGetValue(AKey, LItem) then
   begin
     LItem.SubItems[1] := cStatusReturned;
@@ -694,14 +694,14 @@ end;
 
 procedure TfrmPublisher.ConnectionDropped;
 begin
-  lblStatus.Caption := 'Conexão caiu — reconectando...';
+  lblStatus.Caption := 'Connection lost — reconnecting...';
   lblStatus.Font.Color := clMaroon;
   if FRepublishing then
-    Log('Conexão caiu. Reconexão automática em andamento; publishes sem ' +
-      'confirmação serão reenviados após reconectar.')
+    Log('Connection lost. Automatic reconnection in progress; unconfirmed ' +
+      'publishes will be resent after reconnecting.')
   else
-    Log('Conexão caiu. Reconexão automática em andamento; publishes sem ' +
-      'confirmação NÃO serão reenviados (checkbox desmarcado).');
+    Log('Connection lost. Automatic reconnection in progress; unconfirmed ' +
+      'publishes will NOT be resent (checkbox unchecked).');
 end;
 
 procedure TfrmPublisher.ConnectionRestored;
@@ -710,8 +710,8 @@ var
   LItem: TListItem;
 begin
   SetConnected(True);
-  Log('Reconectado: topologia e confirm mode restaurados' +
-    IfThen(FRepublishing, '; reenvio automático disparado.', '.'));
+  Log('Reconnected: topology and confirm mode restored' +
+    IfThen(FRepublishing, '; automatic resend triggered.', '.'));
   // Rows left pending at the drop will never get the confirm for the old
   // seq-no; mark their outcome here.
   for I := 0 to lvMessages.Items.Count - 1 do
@@ -730,9 +730,9 @@ end;
 
 procedure TfrmPublisher.ConnectionFailed;
 begin
-  lblStatus.Caption := 'Reconexão esgotada';
+  lblStatus.Caption := 'Reconnection exhausted';
   lblStatus.Font.Color := clRed;
-  Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
+  Log('Reconnection gave up (MaxReconnectAttempts reached).');
 end;
 
 procedure TfrmPublisher.BatchFinished;
@@ -752,7 +752,7 @@ begin
     LBatch.Free;
   end;
   SetBatchRunning(False);
-  Log('Lote finalizado.');
+  Log('Batch finished.');
 end;
 
 { --- marshalling (callable from any thread) ------------------------------- }
@@ -852,10 +852,10 @@ begin
       StopBatch; // the batch thread publishes on the channel we are about to close
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConnected(False);
     Exit;
@@ -881,17 +881,17 @@ begin
     // so the old rows do not collide with the new seq-nos.
     btnClearListClick(nil);
 
-    Log(Format('Conectado a %s:%d%s. Confirm mode ativo na fila "%s"; ' +
-      'reenvio na reconexão: %s.',
+    Log(Format('Connected to %s:%d%s. Confirm mode on for queue "%s"; ' +
+      'resend on reconnect: %s.',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FQueue,
-       IfThen(FRepublishing, 'ligado', 'desligado')]));
-    Log('Dica: publique um lote e derrube o broker no meio ' +
-      '(docker stop delphi-amqp-faa-rabbitmq) para ver a reconexão e o reenvio.');
+       IfThen(FRepublishing, 'on', 'off')]));
+    Log('Tip: publish a batch and take the broker down halfway ' +
+      '(docker stop delphi-amqp-faa-rabbitmq) to see the reconnection and the resend.');
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       SetConnected(False);
@@ -911,7 +911,7 @@ begin
       // WaitForConfirms; a WaitFor here would freeze the UI for seconds).
       FBatch.Shutdown;
       btnPublish.Enabled := False;
-      btnPublish.Caption := 'Parando...';
+      btnPublish.Caption := 'Stopping...';
       Exit;
     end;
   finally
@@ -920,13 +920,13 @@ begin
 
   if not Assigned(FChannel) then
   begin
-    Log('Conecte antes de publicar.');
+    Log('Connect before publishing.');
     Exit;
   end;
   LCount := StrToIntDef(Trim(edtCount.Text), 0);
   if LCount <= 0 then
   begin
-    Log('Quantidade inválida.');
+    Log('Invalid count.');
     Exit;
   end;
   LInterval := StrToIntDef(Trim(edtInterval.Text), 300);
@@ -938,7 +938,7 @@ begin
     FBatchLock.Leave;
   end;
   SetBatchRunning(True);
-  Log(Format('Lote de %d mensagens iniciado (intervalo de %d ms).',
+  Log(Format('Batch of %d messages started (interval of %d ms).',
     [LCount, LInterval]));
 end;
 
@@ -949,21 +949,21 @@ var
 begin
   if not Assigned(FChannel) then
   begin
-    Log('Conecte antes de publicar.');
+    Log('Connect before publishing.');
     Exit;
   end;
-  LKey := 'SEM-ROTA-' + FormatDateTime('hhnnsszzz', Now);
+  LKey := 'NO-ROUTE-' + FormatDateTime('hhnnsszzz', Now);
   try
     // mandatory=True for a route that does not exist: the broker returns the
     // message (Basic.Return) and STILL confirms it (ack); confirm
     // means "I took responsibility", not "I routed it to a queue".
-    LSeq := PublishInvoice(FChannel, 'fila-inexistente-demo', LKey, True);
+    LSeq := PublishInvoice(FChannel, 'missing-queue-demo', LKey, True);
     MsgPublished(LSeq, LKey); // we are already on the UI thread
-    Log('Publicada "' + LKey + '" (mandatory) para rota inexistente — ' +
-      'aguarde o Basic.Return.');
+    Log('Published "' + LKey + '" (mandatory) to a route that does not exist — ' +
+      'wait for the Basic.Return.');
   except
     on E: Exception do
-      Log('Erro ao publicar sem rota: ' + E.Message);
+      Log('Error publishing unroutable: ' + E.Message);
   end;
 end;
 

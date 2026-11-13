@@ -43,20 +43,20 @@ import sys
 import tempfile
 import time
 
-RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-HOST_PADRAO = os.path.join(RAIZ, 'tests', 'Acceptance', 'fpc',
+DEFAULT_HOST = os.path.join(ROOT, 'tests', 'Acceptance', 'fpc',
                            'CrashHostFpc.exe' if os.name == 'nt'
                            else 'CrashHostFpc')
 
-TIMEOUT_MARCA = 60  # seconds waiting for the marker to appear in the output
+MARK_TIMEOUT = 60  # seconds waiting for the marker to appear in the output
 
 
-class Falha(Exception):
+class Failure(Exception):
     pass
 
 
-def mata(proc):
+def kill_proc(proc):
     """Death WITHOUT WARNING -- the point of the exercise.
 
     No polite terminate(): on Windows, TerminateProcess; on Unix, SIGKILL.
@@ -76,7 +76,7 @@ def mata(proc):
         pass
 
 
-def roda_ate_marca(host, args, marca, timeout=TIMEOUT_MARCA):
+def run_until_mark(host, args, mark, timeout=MARK_TIMEOUT):
     """Starts the host, waits for the line starting with `marca` and returns
     (proc, linha).
 
@@ -84,62 +84,62 @@ def roda_ate_marca(host, args, marca, timeout=TIMEOUT_MARCA):
     """
     proc = subprocess.Popen([host] + args, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1)
-    limite = time.time() + timeout
-    while time.time() < limite:
-        linha = proc.stdout.readline()
-        if not linha:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        line = proc.stdout.readline()
+        if not line:
             if proc.poll() is not None:
-                raise Falha('o host morreu antes da marca %r' % marca)
+                raise Failure('the host died before the marker %r' % mark)
             continue
-        linha = linha.strip()
-        if linha.startswith('ERRO') or linha.startswith('NACK'):
-            mata(proc)
-            raise Falha('o host reclamou: ' + linha)
-        if linha.startswith(marca):
-            return proc, linha
-    mata(proc)
-    raise Falha('a marca %r nao apareceu em %ds' % (marca, timeout))
+        line = line.strip()
+        if line.startswith('ERROR') or line.startswith('NACK'):
+            kill_proc(proc)
+            raise Failure('the host complained: ' + line)
+        if line.startswith(mark):
+            return proc, line
+    kill_proc(proc)
+    raise Failure('the marker %r did not appear within %ds' % (mark, timeout))
 
 
-def confere(host, diretorio):
-    """Starts the host in confere mode (it exits by itself) and returns the count."""
-    r = subprocess.run([host, 'confere', diretorio], capture_output=True,
+def verify(host, directory):
+    """Starts the host in verify mode (it exits by itself) and returns the count."""
+    r = subprocess.run([host, 'verify', directory], capture_output=True,
                        text=True, timeout=120)
-    saida = r.stdout + r.stderr
-    if 'FORA-DE-ORDEM' in saida:
-        raise Falha('as mensagens voltaram fora de ordem:\n' + saida)
-    m = re.search(r'RECUPERADAS (\d+)', saida)
+    output = r.stdout + r.stderr
+    if 'OUT-OF-ORDER' in output:
+        raise Failure('the messages came back out of order:\n' + output)
+    m = re.search(r'RECOVERED (\d+)', output)
     if not m:
-        raise Falha('o confere nao respondeu (codigo %d):\n%s'
-                    % (r.returncode, saida))
+        raise Failure('verify did not answer (exit code %d):\n%s'
+                    % (r.returncode, output))
     return int(m.group(1))
 
 
 # -------------------------------------------------------------- scenarios ---
 
-def cenario_confirmado_volta(host, d):
+def scenario_confirmed_returns(host, d):
     """(1) Killed after the confirm: everything that was confirmed must come back."""
-    proc, _ = roda_ate_marca(host, ['publica', d, '200'], 'PUBLICADAS')
-    mata(proc)
-    n = confere(host, d)
+    proc, _ = run_until_mark(host, ['publish', d, '200'], 'PUBLISHED')
+    kill_proc(proc)
+    n = verify(host, d)
     if n != 200:
-        raise Falha('esperava 200 de volta, vieram %d' % n)
-    return 'as 200 confirmadas voltaram'
+        raise Failure('expected 200 back, got %d' % n)
+    return 'the 200 confirmed came back'
 
 
-def cenario_consumido_nao_volta(host, d):
+def scenario_consumed_does_not_return(host, d):
     """(2) Killed after the ack: what was consumed must not come back to life."""
-    proc, _ = roda_ate_marca(host, ['publica', d, '100'], 'PUBLICADAS')
-    mata(proc)
-    proc, _ = roda_ate_marca(host, ['consome', d, '40'], 'CONSUMIDAS')
-    mata(proc)
-    n = confere(host, d)
+    proc, _ = run_until_mark(host, ['publish', d, '100'], 'PUBLISHED')
+    kill_proc(proc)
+    proc, _ = run_until_mark(host, ['consume', d, '40'], 'CONSUMED')
+    kill_proc(proc)
+    n = verify(host, d)
     if n != 60:
-        raise Falha('esperava 60 (100 - 40), vieram %d' % n)
-    return '40 consumidas nao ressuscitaram'
+        raise Failure('expected 60 (100 - 40), got %d' % n)
+    return '40 consumed did not come back to life'
 
 
-def cenario_morte_no_meio_da_escrita(host, d):
+def scenario_death_mid_write(host, d):
     """(3) Killed IN THE MIDDLE of a write: the boot survives the torn tail.
 
     The criterion is not "N came back": it is that the broker STARTS, that it
@@ -147,45 +147,45 @@ def cenario_morte_no_meio_da_escrita(host, d):
     corrupted or out of order.
 
     THERE IS NO CHECKABLE UPPER BOUND, and the first version of this scenario
-    was wrong for trying: the driver reads the CONFIRMADA markers through a
+    was wrong for trying: the driver reads the CONFIRMED markers through a
     pipe, and the reading lags behind the writing. When it decides to kill, the
     host has already confirmed much more than the driver read -- "407 came
     back for 150 read" is no violation at all, it is the lagging pipe. What can
     be asserted from outside is the floor: everything the driver SAW confirmed
     must be there.
     """
-    proc = subprocess.Popen([host, 'despeja', d], stdout=subprocess.PIPE,
+    proc = subprocess.Popen([host, 'dump', d], stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1)
-    ultimo = 0
-    limite = time.time() + TIMEOUT_MARCA
+    last = 0
+    deadline = time.time() + MARK_TIMEOUT
     try:
-        while time.time() < limite:
-            linha = proc.stdout.readline()
-            if not linha:
+        while time.time() < deadline:
+            line = proc.stdout.readline()
+            if not line:
                 if proc.poll() is not None:
-                    raise Falha('o host morreu sozinho no despejo')
+                    raise Failure('the host died on its own during the dump')
                 continue
-            m = re.match(r'CONFIRMADA (\d+)', linha.strip())
+            m = re.match(r'CONFIRMED (\d+)', line.strip())
             if m:
-                ultimo = int(m.group(1))
-                if ultimo >= 150:
+                last = int(m.group(1))
+                if last >= 150:
                     break
-        if ultimo < 150:
-            raise Falha('o despejo nao alcancou 150 confirmadas em %ds'
-                        % TIMEOUT_MARCA)
+        if last < 150:
+            raise Failure('the dump did not reach 150 confirmed within %ds'
+                        % MARK_TIMEOUT)
     finally:
         # Kill IN THE MIDDLE: the next write is in flight at this instant.
-        mata(proc)
+        kill_proc(proc)
 
-    n = confere(host, d)
-    if n < ultimo:
-        raise Falha('voltaram %d, MENOS que as %d que o driver viu confirmadas '
-                    '-- perda de dado confirmado' % (n, ultimo))
-    return ('morto em voo: >=%d confirmadas, %d recuperadas, em ordem, '
-            'boot limpo' % (ultimo, n))
+    n = verify(host, d)
+    if n < last:
+        raise Failure('%d came back, FEWER than the %d the driver saw confirmed '
+                    '-- confirmed data was lost' % (n, last))
+    return ('killed in flight: >=%d confirmed, %d recovered, in order, '
+            'clean boot' % (last, n))
 
 
-def cenario_restart_repetido(host, d):
+def scenario_repeated_restart(host, d):
     """(4) Several crashes in a row on the SAME directory.
 
     Each boot recovers, publishes more and dies. Pins down two things that a
@@ -195,61 +195,61 @@ def cenario_restart_repetido(host, d):
     """
     total = 0
     for _ in range(4):
-        # `inicio` keeps the numbering GLOBALLY increasing across the rounds:
-        # without it, each crash would restart from 1 and confere -- which
+        # `start` keeps the numbering GLOBALLY increasing across the rounds:
+        # without it, each crash would restart from 1 and verify -- which
         # checks ORDER, not just count -- would report out-of-order for a
         # reason that is not the broker's.
-        proc, _ = roda_ate_marca(
-            host, ['publica', d, '50', str(total + 1)], 'PUBLICADAS')
-        mata(proc)
+        proc, _ = run_until_mark(
+            host, ['publish', d, '50', str(total + 1)], 'PUBLISHED')
+        kill_proc(proc)
         total += 50
-        n = confere(host, d)
+        n = verify(host, d)
         if n != total:
-            raise Falha('depois de %d publicadas em quedas sucessivas, '
-                        'voltaram %d' % (total, n))
-    return '4 quedas seguidas, 200 acumuladas sem duplicar'
+            raise Failure('after %d published across successive crashes, '
+                        '%d came back' % (total, n))
+    return '4 crashes in a row, 200 accumulated without duplicates'
 
 
-CENARIOS = [
-    ('o que foi confirmado volta', cenario_confirmado_volta),
-    ('o que foi consumido nao ressuscita', cenario_consumido_nao_volta),
-    ('morte no meio da escrita', cenario_morte_no_meio_da_escrita),
-    ('quedas sucessivas no mesmo diretorio', cenario_restart_repetido),
+SCENARIOS = [
+    ('what was confirmed comes back', scenario_confirmed_returns),
+    ('what was consumed does not come back to life', scenario_consumed_does_not_return),
+    ('death in the middle of a write', scenario_death_mid_write),
+    ('successive crashes on the same directory', scenario_repeated_restart),
 ]
 
 
 def main():
-    host = sys.argv[1] if len(sys.argv) > 1 else HOST_PADRAO
+    host = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_HOST
     if not os.path.exists(host):
-        print('nao achei o CrashHostFpc em %s' % host)
-        print('compile com: lazbuild tests/Acceptance/fpc/CrashHostFpc.lpi')
+        print('CrashHostFpc not found at %s' % host)
+        print('build it with: lazbuild tests/Acceptance/fpc/CrashHostFpc.lpi')
         return 1
 
-    print('MATRIZ DE MORTE DE PROCESSO')
+    print('PROCESS-DEATH MATRIX')
     print('  host: %s' % host)
-    print('  (lembrete: matar o processo NAO testa fsync -- ver D28)')
+    print('  (reminder: killing the process does NOT test fsync -- see D28)')
     print('')
 
-    falhou = False
-    for nome, fn in CENARIOS:
+    failed = False
+    for name_, fn in SCENARIOS:
         d = tempfile.mkdtemp(prefix='amqpcrash-')
-        print('[%s]' % nome)
+        print('[%s]' % name_)
         try:
             print('    ok  ' + fn(host, d))
-        except Falha as e:
-            falhou = True
-            print('    FALHA  %s' % e)
+        except Failure as e:
+            failed = True
+            print('    FAIL  %s' % e)
         except Exception as e:  # noqa: BLE001 -- the driver must not bring everything down
-            falhou = True
-            print('    ERRO  %s: %s' % (type(e).__name__, e))
+            failed = True
+            print('    ERROR  %s: %s' % (type(e).__name__, e))
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
     print('')
-    if falhou:
-        print('MATRIZ COM FALHAS')
+    if failed:
+        print('MATRIX HAS FAILURES')
         return 1
-    print('matriz limpa')
+    print('matrix clean')
     return 0
 
 

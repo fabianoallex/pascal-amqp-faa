@@ -1,9 +1,9 @@
 program FuelStationSmoke;
 
-{ Smoke test of the Posto Automacao sample: brings up TFuelStationServerApp in-process
+{ Smoke test of the FuelStation sample: brings up TFuelStationServerApp in-process
   (no GUI, no pumps), connects two POS terminals through TFuelStationPosClient and
-  exercises the full message path -- snapshot, lancar, refusal on concurrency,
-  finalizar, estornar, liberar_forcado.
+  exercises the full message path -- snapshot, post, refusal on concurrency,
+  finish, unpost, force_release.
 
   Compiles in both worlds from the SAME source:
     FPC:    lazbuild FuelStationSmoke.lpi
@@ -27,7 +27,7 @@ uses
   FuelStation.POS.Client;
 
 const
-  PORTA = 5799;
+  SMOKE_PORT = 5799;
 
 var
   GFailures: Integer = 0;
@@ -38,7 +38,7 @@ begin
     WriteLn('  ok  ', AMsg)
   else
   begin
-    WriteLn('  FALHA  ', AMsg);
+    WriteLn('  FAIL  ', AMsg);
     Inc(GFailures);
   end;
 end;
@@ -75,7 +75,7 @@ begin
   LPosClient1 := nil;
   LPosClient2 := nil;
   try
-    LApp.Startup(PORTA, '', 'pdv', False);
+    LApp.Startup(SMOKE_PORT, '', 'pos', False);
 
     LA1 := MakeFueling(1, 1, 'GC', 40.0, 5.899);
     LA2 := MakeFueling(2, 1, 'S10', 55.5, 6.19);
@@ -84,67 +84,67 @@ begin
     LApp.Registry.RegisterFueling(LA2, LV);
     LApp.Events.NewFueling(LA2, LV);
 
-    LPosClient1 := TFuelStationPosClient.Create('127.0.0.1', PORTA, 'pdv-01', 'pdv');
+    LPosClient1 := TFuelStationPosClient.Create('127.0.0.1', SMOKE_PORT, 'pos-01', 'pos');
     LPosClient1.Connect(nil, nil, nil);
-    LPosClient2 := TFuelStationPosClient.Create('127.0.0.1', PORTA, 'pdv-02', 'pdv');
+    LPosClient2 := TFuelStationPosClient.Create('127.0.0.1', SMOKE_PORT, 'pos-02', 'pos');
     LPosClient2.Connect(nil, nil, nil);
 
     WriteLn('--- snapshot ---');
     LR := LPosClient1.Call(EncReqSnapshot, 3000);
-    Check(LR.Arrived, 'snapshot respondeu');
+    Check(LR.Arrived, 'snapshot replied');
     if LR.Arrived then
     begin
-      LArr := LR.Json.Get('disponiveis');
-      Check((LArr <> nil) and (LArr.Count = 2), 'snapshot tem 2 disponiveis');
+      LArr := LR.Json.Get('available');
+      Check((LArr <> nil) and (LArr.Count = 2), 'snapshot has 2 available');
       LR.Json.Free;
     end;
 
-    WriteLn('--- lancar (pdv-01) ---');
-    LR := LPosClient1.Call(EncReqPost(LA1.Id, 'pdv-01', 'V-1'), 3000);
-    Check(LR.Arrived and LR.Json.AsBool('ok'), 'pdv-01 lancou A1');
+    WriteLn('--- post (pos-01) ---');
+    LR := LPosClient1.Call(EncReqPost(LA1.Id, 'pos-01', 'S-1'), 3000);
+    Check(LR.Arrived and LR.Json.AsBool('ok'), 'pos-01 posted A1');
     if LR.Arrived then LR.Json.Free;
 
-    WriteLn('--- lancar concorrente (pdv-02) ---');
-    LR := LPosClient2.Call(EncReqPost(LA1.Id, 'pdv-02', 'V-2'), 3000);
+    WriteLn('--- concurrent post (pos-02) ---');
+    LR := LPosClient2.Call(EncReqPost(LA1.Id, 'pos-02', 'S-2'), 3000);
     Check(LR.Arrived and (not LR.Json.AsBool('ok')) and
-      (LR.Json.AsStr('motivo') = REF_ALREADY_POSTING), 'pdv-02 recusado (JA_LANCANDO)');
+      (LR.Json.AsStr('reason') = REF_ALREADY_POSTING), 'pos-02 refused (ALREADY_POSTING)');
     if LR.Arrived then
     begin
-      Check(LR.Json.AsStr('pdvAtual') = 'pdv-01', 'recusa aponta o caixa pdv-01');
+      Check(LR.Json.AsStr('currentPos') = 'pos-01', 'refusal names POS pos-01');
       LR.Json.Free;
     end;
 
-    WriteLn('--- finalizar (pdv-01) ---');
-    LR := LPosClient1.Call(EncReqFinish('pdv-01', 'V-1', [LA1.Id]), 3000);
-    Check(LR.Arrived and LR.Json.AsBool('ok'), 'finalizar respondeu ok');
+    WriteLn('--- finish (pos-01) ---');
+    LR := LPosClient1.Call(EncReqFinish('pos-01', 'S-1', [LA1.Id]), 3000);
+    Check(LR.Arrived and LR.Json.AsBool('ok'), 'finish replied ok');
     if LR.Arrived then
     begin
-      LArr := LR.Json.Get('itens');
+      LArr := LR.Json.Get('items');
       Check((LArr <> nil) and (LArr.Count = 1) and LArr.Item(0).AsBool('ok'),
-        'item A1 finalizado');
+        'item A1 finished');
       LR.Json.Free;
     end;
 
-    WriteLn('--- lancar + estornar A2 (pdv-02) ---');
-    LR := LPosClient2.Call(EncReqPost(LA2.Id, 'pdv-02', 'V-9'), 3000);
-    Check(LR.Arrived and LR.Json.AsBool('ok'), 'pdv-02 lancou A2');
+    WriteLn('--- post + unpost A2 (pos-02) ---');
+    LR := LPosClient2.Call(EncReqPost(LA2.Id, 'pos-02', 'S-9'), 3000);
+    Check(LR.Arrived and LR.Json.AsBool('ok'), 'pos-02 posted A2');
     if LR.Arrived then LR.Json.Free;
-    LR := LPosClient2.Call(EncReqUnpost(LA2.Id, 'pdv-02', 'V-9'), 3000);
-    Check(LR.Arrived and LR.Json.AsBool('ok'), 'pdv-02 estornou A2');
+    LR := LPosClient2.Call(EncReqUnpost(LA2.Id, 'pos-02', 'S-9'), 3000);
+    Check(LR.Arrived and LR.Json.AsBool('ok'), 'pos-02 unposted A2');
     if LR.Arrived then LR.Json.Free;
     LR := LPosClient1.Call(EncReqSnapshot, 3000);
     if LR.Arrived then
     begin
-      LArr := LR.Json.Get('disponiveis');
-      Check((LArr <> nil) and (LArr.Count = 1), 'A2 voltou a disponivel (1 disponivel)');
+      LArr := LR.Json.Get('available');
+      Check((LArr <> nil) and (LArr.Count = 1), 'A2 back to available (1 available)');
       LR.Json.Free;
     end;
 
-    WriteLn('--- liberar_forcado A1 (supervisor via RPC) ---');
+    WriteLn('--- force_release A1 (supervisor via RPC) ---');
     LR := LPosClient1.Call(EncReqForceRelease(LA1.Id, 'sup', 'smoke'), 3000);
     Check(LR.Arrived and LR.Json.AsBool('ok') and
-      (LR.Json.AsStr('estadoAnterior') = 'lancado'),
-      'liberar_forcado devolveu estadoAnterior=lancado');
+      (LR.Json.AsStr('previousState') = 'posted'),
+      'force_release returned previousState=posted');
     if LR.Arrived then LR.Json.Free;
 
     Sleep(300);  // let the last events drain
@@ -158,6 +158,6 @@ begin
   if GFailures = 0 then
     WriteLn('SMOKE OK')
   else
-    WriteLn('SMOKE FAILED: ', GFailures, ' checagem(ns)');
+    WriteLn('SMOKE FAILED: ', GFailures, ' check(s)');
   ExitCode := Ord(GFailures <> 0);
 end.

@@ -20,35 +20,35 @@ uses
 
 const
   { --- topology --- }
-  EVENTS_EXCHANGE = 'posto.eventos';
-  COMMANDS_QUEUE    = 'posto.comandos';
-  EVENTS_BINDING     = 'abastecida.#';
+  EVENTS_EXCHANGE = 'station.events';
+  COMMANDS_QUEUE    = 'station.commands';
+  EVENTS_BINDING     = 'fueling.#';
 
   { --- AMQP users --- }
-  AUTOMATION_USER   = 'automacao';
-  POS_USER_PREFIX = 'pdv-';      // pdv-01, pdv-02, ...
+  AUTOMATION_USER   = 'automation';
+  POS_USER_PREFIX = 'pos-';      // pos-01, pos-02, ...
 
-  { --- events (routing key on posto.eventos) --- }
-  EVT_NEW       = 'abastecida.nova';
-  EVT_POSTING   = 'abastecida.lancando';
-  EVT_POSTED    = 'abastecida.lancado';
-  EVT_AVAILABLE = 'abastecida.disponivel';
-  EVT_DISCARDED = 'abastecida.descartada';
+  { --- events (routing key on station.events) --- }
+  EVT_NEW       = 'fueling.new';
+  EVT_POSTING   = 'fueling.posting';
+  EVT_POSTED    = 'fueling.posted';
+  EVT_AVAILABLE = 'fueling.available';
+  EVT_DISCARDED = 'fueling.discarded';
 
   { --- commands ('type' property and "cmd" field) --- }
   CMD_SNAPSHOT            = 'snapshot';
-  CMD_POST             = 'lancar';
-  CMD_UNPOST           = 'estornar';
-  CMD_FINISH          = 'finalizar';
-  CMD_CANCEL_FINISHED = 'cancelar_finalizada';
-  CMD_FORCE_RELEASE    = 'liberar_forcado';
-  CMD_DISCARD          = 'descartar';
+  CMD_POST             = 'post';
+  CMD_UNPOST           = 'unpost';
+  CMD_FINISH          = 'finish';
+  CMD_CANCEL_FINISHED = 'cancel_finished';
+  CMD_FORCE_RELEASE    = 'force_release';
+  CMD_DISCARD          = 'discard';
 
-  { the reasons for abastecida.disponivel (MOT_*) and for refusal (REC_*) live in
+  { the reasons for fueling.available (MOT_*) and for refusal (REC_*) live in
     FuelStation.Fueling; they are outcomes of the state machine. }
 
 type
-  { Result for one id inside finalizar / cancelar_finalizada. }
+  { Result for one id inside finish / cancel_finished. }
   TItemResult = record
     Id: string;
     Ok: Boolean;
@@ -68,7 +68,7 @@ function BytesToText(const ABytes: TBytes): string;
 function FuelingToJson(const A: TFueling): TJsonValue;
 procedure JsonToFueling(J: TJsonValue; out A: TFueling);
 
-{ Object node for the snapshot's "bloqueadas" list. }
+{ Object node for the snapshot's "locked" list. }
 function StateToJson(const AE: TTrackedFueling): TJsonValue;
 
 { ------------------------------------------------------- events (server) ---- }
@@ -137,16 +137,16 @@ function FuelingToJson(const A: TFueling): TJsonValue;
 begin
   Result := TJsonValue.NewObject;
   Result.Put('id', A.Id);
-  Result.PutInt('bomba', A.Pump);
-  Result.PutInt('bico', A.Nozzle);
-  Result.Put('produto', A.Product);
-  Result.Put('litros', A.Liters);
-  Result.Put('valorLitro', A.PricePerLiter);
-  Result.Put('valorTotal', A.TotalAmount);
-  Result.Put('encerranteInicio', A.StartTotalizer);
-  Result.Put('encerranteFim', A.EndTotalizer);
-  Result.PutInt('dataHoraMs', A.TimestampMs);
-  Result.Put('tipo', FuelingTypeToStr(A.Kind));
+  Result.PutInt('pump', A.Pump);
+  Result.PutInt('nozzle', A.Nozzle);
+  Result.Put('product', A.Product);
+  Result.Put('liters', A.Liters);
+  Result.Put('pricePerLiter', A.PricePerLiter);
+  Result.Put('totalAmount', A.TotalAmount);
+  Result.Put('startTotalizer', A.StartTotalizer);
+  Result.Put('endTotalizer', A.EndTotalizer);
+  Result.PutInt('timestampMs', A.TimestampMs);
+  Result.Put('kind', FuelingTypeToStr(A.Kind));
 end;
 
 procedure JsonToFueling(J: TJsonValue; out A: TFueling);
@@ -155,26 +155,26 @@ begin
   if J = nil then
     Exit;
   A.Id := J.AsStr('id');
-  A.Pump := J.AsInt('bomba');
-  A.Nozzle := J.AsInt('bico');
-  A.Product := J.AsStr('produto');
-  A.Liters := J.AsNum('litros');
-  A.PricePerLiter := J.AsNum('valorLitro');
-  A.TotalAmount := J.AsNum('valorTotal');
-  A.StartTotalizer := J.AsNum('encerranteInicio');
-  A.EndTotalizer := J.AsNum('encerranteFim');
-  A.TimestampMs := J.AsInt('dataHoraMs');
-  A.Kind := StrToFuelingType(J.AsStr('tipo'));
+  A.Pump := J.AsInt('pump');
+  A.Nozzle := J.AsInt('nozzle');
+  A.Product := J.AsStr('product');
+  A.Liters := J.AsNum('liters');
+  A.PricePerLiter := J.AsNum('pricePerLiter');
+  A.TotalAmount := J.AsNum('totalAmount');
+  A.StartTotalizer := J.AsNum('startTotalizer');
+  A.EndTotalizer := J.AsNum('endTotalizer');
+  A.TimestampMs := J.AsInt('timestampMs');
+  A.Kind := StrToFuelingType(J.AsStr('kind'));
 end;
 
 function StateToJson(const AE: TTrackedFueling): TJsonValue;
 begin
   Result := TJsonValue.NewObject;
   Result.Put('id', AE.Data.Id);
-  Result.Put('estado', StateToStr(AE.State));
-  Result.Put('pdv', AE.PosName);
-  Result.Put('venda', AE.Sale);
-  Result.PutInt('desde', AE.SinceMs);
+  Result.Put('state', StateToStr(AE.State));
+  Result.Put('pos', AE.PosName);
+  Result.Put('sale', AE.Sale);
+  Result.PutInt('since', AE.SinceMs);
 end;
 
 { ------------------------------------------------------- events --- }
@@ -184,8 +184,8 @@ var
   J: TJsonValue;
 begin
   J := TJsonValue.NewObject;
-  J.PutRaw('abastecida', FuelingToJson(A));
-  J.PutInt('versao', AVersion);
+  J.PutRaw('fueling', FuelingToJson(A));
+  J.PutInt('version', AVersion);
   Result := Serialize(J);
 end;
 
@@ -196,9 +196,9 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('id', AId);
-  J.Put('pdv', APosName);
-  J.Put('venda', ASale);
-  J.PutInt('versao', AVersion);
+  J.Put('pos', APosName);
+  J.Put('sale', ASale);
+  J.PutInt('version', AVersion);
   Result := Serialize(J);
 end;
 
@@ -220,8 +220,8 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('id', AId);
-  J.Put('motivo', AReason);
-  J.PutInt('versao', AVersion);
+  J.Put('reason', AReason);
+  J.PutInt('version', AVersion);
   Result := Serialize(J);
 end;
 
@@ -231,7 +231,7 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('id', AId);
-  J.PutInt('versao', AVersion);
+  J.PutInt('version', AVersion);
   Result := Serialize(J);
 end;
 
@@ -245,11 +245,11 @@ var
   I: Integer;
 begin
   J := TJsonValue.NewObject;
-  J.PutInt('versao', AVersion);
-  LArr := J.PutArray('disponiveis');
+  J.PutInt('version', AVersion);
+  LArr := J.PutArray('available');
   for I := 0 to High(AAvailable) do
     LArr.AddItem(FuelingToJson(AAvailable[I]));
-  LArr := J.PutArray('bloqueadas');
+  LArr := J.PutArray('locked');
   for I := 0 to High(ALocked) do
     LArr.AddItem(StateToJson(ALocked[I]));
   Result := Serialize(J);
@@ -261,7 +261,7 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('ok', True);
-  J.PutInt('versao', AVersion);
+  J.PutInt('version', AVersion);
   Result := Serialize(J);
 end;
 
@@ -271,11 +271,11 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('ok', False);
-  J.Put('motivo', AReason);
+  J.Put('reason', AReason);
   if ACurrentPos <> '' then
-    J.Put('pdvAtual', ACurrentPos);
+    J.Put('currentPos', ACurrentPos);
   if ACurrentSale <> '' then
-    J.Put('vendaAtual', ACurrentSale);
+    J.Put('currentSale', ACurrentSale);
   Result := Serialize(J);
 end;
 
@@ -287,15 +287,15 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('ok', True);
-  J.PutInt('versao', AVersion);
-  LArr := J.PutArray('itens');
+  J.PutInt('version', AVersion);
+  LArr := J.PutArray('items');
   for I := 0 to High(AItems) do
   begin
     LItem := LArr.AddItemObject;
     LItem.Put('id', AItems[I].Id);
     LItem.Put('ok', AItems[I].Ok);
     if AItems[I].Reason <> '' then
-      LItem.Put('motivo', AItems[I].Reason);
+      LItem.Put('reason', AItems[I].Reason);
   end;
   Result := Serialize(J);
 end;
@@ -307,9 +307,9 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('ok', True);
-  J.PutInt('versao', AVersion);
-  J.Put('estadoAnterior', APreviousState);
-  J.Put('pdvAnterior', APreviousPos);
+  J.PutInt('version', AVersion);
+  J.Put('previousState', APreviousState);
+  J.Put('previousPos', APreviousPos);
   Result := Serialize(J);
 end;
 
@@ -331,8 +331,8 @@ begin
   J := TJsonValue.NewObject;
   J.Put('cmd', ACmd);
   J.Put('id', AId);
-  J.Put('pdv', APosName);
-  J.Put('venda', ASale);
+  J.Put('pos', APosName);
+  J.Put('sale', ASale);
   Result := Serialize(J);
 end;
 
@@ -368,8 +368,8 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('cmd', CMD_FINISH);
-  J.Put('pdv', APosName);
-  J.Put('venda', ASale);
+  J.Put('pos', APosName);
+  J.Put('sale', ASale);
   PutIds(J, AIds);
   Result := Serialize(J);
 end;
@@ -381,9 +381,9 @@ var
 begin
   J := TJsonValue.NewObject;
   J.Put('cmd', CMD_CANCEL_FINISHED);
-  J.Put('pdv', APosName);
-  J.Put('venda', ASale);
-  J.Put('operador', AOperator);
+  J.Put('pos', APosName);
+  J.Put('sale', ASale);
+  J.Put('operator', AOperator);
   PutIds(J, AIds);
   Result := Serialize(J);
 end;
@@ -395,8 +395,8 @@ begin
   J := TJsonValue.NewObject;
   J.Put('cmd', ACmd);
   J.Put('id', AId);
-  J.Put('operador', AOperator);
-  J.Put('motivo', AReason);
+  J.Put('operator', AOperator);
+  J.Put('reason', AReason);
   Result := Serialize(J);
 end;
 

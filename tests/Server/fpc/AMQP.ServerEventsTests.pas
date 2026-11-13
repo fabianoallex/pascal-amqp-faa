@@ -302,7 +302,7 @@ end;
 procedure TRaisingHandler.Handle(const AEvent: TAMQPServerEvent);
 begin
   Inc(FCalls);
-  raise Exception.Create('handler de teste explodiu');
+  raise Exception.Create('test handler blew up');
 end;
 
 { SLOW handler -- the test double of the D2 anchor. Sleeps on every event, on
@@ -344,23 +344,23 @@ begin
   // D29 in one assertion: with no subscriber, Wants is False for EVERYTHING -- and
   // that is what makes the emitter not even build the record.
   for LType := Low(TAMQPServerEventType) to High(TAMQPServerEventType) do
-    CheckNot('nao quer ' + AmqpEventTypeName(LType), FBus.Wants(LType));
+    CheckNot('does not want ' + AmqpEventTypeName(LType), FBus.Wants(LType));
 end;
 
 procedure TEventBusTests.Subscription_FiltersByType;
 begin
   FBus.Subscribe(FCapture.Handle, [seChannelOpened, seMessageAcked]);
-  CheckOk('quer o que assinou', FBus.Wants(seChannelOpened));
-  CheckOk('quer o outro que assinou', FBus.Wants(seMessageAcked));
-  CheckNot('nao quer o que nao assinou', FBus.Wants(seConnectionClosed));
+  CheckOk('wants what it subscribed to', FBus.Wants(seChannelOpened));
+  CheckOk('wants the other one it subscribed to', FBus.Wants(seMessageAcked));
+  CheckNot('does not want what it did not subscribe to', FBus.Wants(seConnectionClosed));
 
   // And the filter applies at DELIVERY, not only in Wants.
   FBus.Start;
   FBus.Emit(AmqpNewEvent(seChannelOpened));
   FBus.Emit(AmqpNewEvent(seConnectionClosed));
   FBus.Emit(AmqpNewEvent(seMessageAcked));
-  CheckOk('drenou', FBus.Drain(2000));
-  CheckInt('so os dois assinados chegaram', 2, FCapture.Count);
+  CheckOk('drained', FBus.Drain(2000));
+  CheckInt('only the two subscribed ones arrived', 2, FCapture.Count);
 end;
 
 procedure TEventBusTests.DeliversInEmissionOrder;
@@ -376,10 +376,10 @@ begin
     LEv.Count := I;
     FBus.Emit(LEv);
   end;
-  CheckOk('drenou', FBus.Drain(2000));
-  CheckInt('chegaram todos', 50, FCapture.Count);
+  CheckOk('drained', FBus.Drain(2000));
+  CheckInt('all arrived', 50, FCapture.Count);
   for I := 0 to 49 do
-    CheckInt('ordem preservada', I + 1, Integer(FCapture.Item(I).Count));
+    CheckInt('order preserved', I + 1, Integer(FCapture.Item(I).Count));
 end;
 
 procedure TEventBusTests.FullRing_DropsTheNewestAndCounts;
@@ -399,18 +399,18 @@ begin
     FBus.Emit(LEv);
   end;
 
-  CheckInt('so cabe a capacidade', 4, Integer(FBus.EmittedCount));
-  CheckInt('o resto foi contado como descartado', 6,
+  CheckInt('only the capacity fits', 4, Integer(FBus.EmittedCount));
+  CheckInt('the rest was counted as dropped', 6,
     Integer(FBus.DroppedCount));
 
   // And now what D31 has to PROVE: what is left is the PREFIX (1..4), not
   // the tail (7..10). Dropping the head would pass the counter above and fail
   // here -- it is the mutation this test exists to catch.
   FBus.Start;
-  CheckOk('drenou', FBus.Drain(2000));
-  CheckInt('entregou os que couberam', 4, FCapture.Count);
+  CheckOk('drained', FBus.Drain(2000));
+  CheckInt('delivered the ones that fit', 4, FCapture.Count);
   for I := 0 to 3 do
-    CheckInt('e sao os PRIMEIROS, nao os ultimos', I + 1,
+    CheckInt('and they are the FIRST ones, not the last', I + 1,
       Integer(FCapture.Item(I).Count));
 end;
 
@@ -428,13 +428,13 @@ begin
     FBus.Start;
     for I := 1 to 3 do
       FBus.Emit(AmqpNewEvent(seChannelOpened));
-    CheckOk('drenou', FBus.Drain(2000));
+    CheckOk('drained', FBus.Drain(2000));
 
-    CheckInt('as tres excecoes foram contadas', 3, Integer(FBus.FailedCount));
-    CheckOk('e a ultima ficou registrada', FBus.LastFailure <> '');
+    CheckInt('the three exceptions were counted', 3, Integer(FBus.FailedCount));
+    CheckOk('and the last one was recorded', FBus.LastFailure <> '');
     // What separates "survived" from "died on the first one": the SECOND handler
     // kept receiving, event after event.
-    CheckInt('o handler seguinte recebeu tudo', 3, FCapture.Count);
+    CheckInt('the next handler received everything', 3, FCapture.Count);
   finally
     FBus.Unsubscribe(LPump.Handle);
     LPump.Free;
@@ -444,19 +444,19 @@ end;
 procedure TEventBusTests.ResubscribeReplacesTheMask;
 begin
   FBus.Subscribe(FCapture.Handle);
-  CheckInt('um assinante', 1, FBus.SubscriberCount);
-  CheckOk('quer tudo', FBus.Wants(seConnectionClosed));
+  CheckInt('one subscriber', 1, FBus.SubscriberCount);
+  CheckOk('wants everything', FBus.Wants(seConnectionClosed));
 
   FBus.Subscribe(FCapture.Handle, [seChannelOpened]);
-  CheckInt('continua sendo UM assinante', 1, FBus.SubscriberCount);
-  CheckOk('quer o novo tipo', FBus.Wants(seChannelOpened));
-  CheckNot('e nao quer mais o antigo', FBus.Wants(seConnectionClosed));
+  CheckInt('still ONE subscriber', 1, FBus.SubscriberCount);
+  CheckOk('wants the new type', FBus.Wants(seChannelOpened));
+  CheckNot('and no longer wants the old one', FBus.Wants(seConnectionClosed));
 
   // Replacing, not duplicating, means delivering ONCE.
   FBus.Start;
   FBus.Emit(AmqpNewEvent(seChannelOpened));
-  CheckOk('drenou', FBus.Drain(2000));
-  CheckInt('entregue uma unica vez', 1, FCapture.Count);
+  CheckOk('drained', FBus.Drain(2000));
+  CheckInt('delivered exactly once', 1, FCapture.Count);
 end;
 
 procedure TEventBusTests.Unsubscribe_StopsDelivering;
@@ -464,15 +464,15 @@ begin
   FBus.Subscribe(FCapture.Handle);
   FBus.Start;
   FBus.Emit(AmqpNewEvent(seChannelOpened));
-  CheckOk('drenou', FBus.Drain(2000));
-  CheckInt('chegou', 1, FCapture.Count);
+  CheckOk('drained', FBus.Drain(2000));
+  CheckInt('arrived', 1, FCapture.Count);
 
   FBus.Unsubscribe(FCapture.Handle);
-  CheckInt('nenhum assinante', 0, FBus.SubscriberCount);
-  CheckNot('e nao quer mais nada', FBus.Wants(seChannelOpened));
+  CheckInt('no subscriber', 0, FBus.SubscriberCount);
+  CheckNot('and wants nothing anymore', FBus.Wants(seChannelOpened));
   FBus.Emit(AmqpNewEvent(seChannelOpened));
-  CheckOk('drenou', FBus.Drain(2000));
-  CheckInt('e nao chegou mais nada', 1, FCapture.Count);
+  CheckOk('drained', FBus.Drain(2000));
+  CheckInt('and nothing else arrived', 1, FCapture.Count);
 end;
 
 procedure TEventBusTests.EveryTypeHasAName;
@@ -486,10 +486,10 @@ begin
   for LType := Low(TAMQPServerEventType) to High(TAMQPServerEventType) do
   begin
     LName := AmqpEventTypeName(LType);
-    CheckOk('nome nao vazio', LName <> '');
+    CheckOk('non-empty name', LName <> '');
     for LOther := Low(TAMQPServerEventType) to High(TAMQPServerEventType) do
       if LOther <> LType then
-        CheckOk('nome distinto: ' + LName,
+        CheckOk('distinct name: ' + LName,
           AmqpEventTypeName(LOther) <> LName);
   end;
 end;
@@ -564,22 +564,22 @@ var
   LEv: TAMQPServerEvent;
 begin
   StartAndConnect(True);
-  CheckOk('chegou a autenticada', FCapture.WaitForCount(seConnectionAuthenticated, 1, 3000));
+  CheckOk('the authenticated one arrived', FCapture.WaitForCount(seConnectionAuthenticated, 1, 3000));
 
-  CheckInt('uma conexao estabelecida', 1,
+  CheckInt('one connection established', 1,
     FCapture.CountOf(seConnectionEstablished));
-  CheckOk('achou a estabelecida', FCapture.FirstOf(seConnectionEstablished, LEv));
-  CheckOk('com endereco do peer', LEv.RemoteAddr <> '');
-  CheckOk('e com id de conexao', LEv.ConnectionId > 0);
+  CheckOk('found the established one', FCapture.FirstOf(seConnectionEstablished, LEv));
+  CheckOk('with the peer address', LEv.RemoteAddr <> '');
+  CheckOk('and with a connection id', LEv.ConnectionId > 0);
   // The established one is born BEFORE the handshake: user and vhost do not exist yet,
   // and D34 says that an unpopulated field comes out ZEROED.
-  CheckStr('sem usuario ainda', '', LEv.Username);
-  CheckStr('sem vhost ainda', '', LEv.VHost);
+  CheckStr('no user yet', '', LEv.Username);
+  CheckStr('no vhost yet', '', LEv.VHost);
 
-  CheckOk('achou a autenticada', FCapture.FirstOf(seConnectionAuthenticated, LEv));
-  CheckStr('com o usuario autenticado', 'guest', LEv.Username);
-  CheckStr('e com o vhost aberto', '/', LEv.VHost);
-  CheckInt('evento de conexao vai no canal 0', 0, LEv.ChannelNumber);
+  CheckOk('found the authenticated one', FCapture.FirstOf(seConnectionAuthenticated, LEv));
+  CheckStr('with the authenticated user', 'guest', LEv.Username);
+  CheckStr('and with the opened vhost', '/', LEv.VHost);
+  CheckInt('connection event goes on channel 0', 0, LEv.ChannelNumber);
 end;
 
 procedure TServerEventTests.Channel_EmitsOpenAndClose;
@@ -595,13 +595,13 @@ begin
     // A channel CLOSED by the client leaves its owner (the connection) -- whoever closes, frees.
     LCh.Free;
   end;
-  CheckOk('chegou o fechamento', FCapture.WaitForCount(seChannelClosed, 1, 3000));
+  CheckOk('the close arrived', FCapture.WaitForCount(seChannelClosed, 1, 3000));
 
-  CheckOk('achou a abertura', FCapture.FirstOf(seChannelOpened, LEv));
-  CheckOk('com numero de canal', LEv.ChannelNumber > 0);
-  CheckInt('um fechamento', 1, FCapture.CountOf(seChannelClosed));
-  CheckOk('achou o fechamento', FCapture.FirstOf(seChannelClosed, LEv));
-  CheckOk('no mesmo canal', LEv.ChannelNumber > 0);
+  CheckOk('found the open', FCapture.FirstOf(seChannelOpened, LEv));
+  CheckOk('with a channel number', LEv.ChannelNumber > 0);
+  CheckInt('one close', 1, FCapture.CountOf(seChannelClosed));
+  CheckOk('found the close', FCapture.FirstOf(seChannelClosed, LEv));
+  CheckOk('on the same channel', LEv.ChannelNumber > 0);
 end;
 
 procedure TServerEventTests.Publish_EmitsWithSizeAndKey;
@@ -613,16 +613,16 @@ begin
   StartAndConnect(True);
   LCh := FConn.CreateChannel;
   MakeQueue(LCh, 'obs.q');
-  LMsgBody := 'doze bytes!!';
+  LMsgBody := 'twelve bytes';
   LCh.PublishText('', 'obs.q', LMsgBody);
-  CheckOk('chegou o publish', FCapture.WaitForCount(seMessagePublished, 1, 3000));
+  CheckOk('the publish arrived', FCapture.WaitForCount(seMessagePublished, 1, 3000));
 
-  CheckOk('achou o publish', FCapture.FirstOf(seMessagePublished, LEv));
-  CheckStr('exchange default', '', LEv.ExchangeName);
+  CheckOk('found the publish', FCapture.FirstOf(seMessagePublished, LEv));
+  CheckStr('default exchange', '', LEv.ExchangeName);
   CheckStr('routing key', 'obs.q', LEv.RoutingKey);
   // D34 in one assertion: the SIZE goes, never the body.
-  CheckInt('tamanho do corpo', Length(LMsgBody), Integer(LEv.MessageSize));
-  CheckStr('roteou, entao sem motivo', '', LEv.Reason);
+  CheckInt('body size', Length(LMsgBody), Integer(LEv.MessageSize));
+  CheckStr('routed, so no reason', '', LEv.Reason);
 end;
 
 procedure TServerEventTests.UnroutedPublish_SetsUnroutable;
@@ -632,16 +632,16 @@ var
 begin
   StartAndConnect(True);
   LCh := FConn.CreateChannel;
-  LCh.PublishText('', 'fila.que.nao.existe', 'x');
-  CheckOk('chegou o publish', FCapture.WaitForCount(seMessagePublished, 1, 3000));
+  LCh.PublishText('', 'queue.that.does.not.exist', 'x');
+  CheckOk('the publish arrived', FCapture.WaitForCount(seMessagePublished, 1, 3000));
 
   // No route is NOT a refused publish: it is a successful publish that found no
   // queue (it gets an ack, and a Return if mandatory). Confusing the two would make
   // the observer count an error where there is none.
-  CheckInt('nenhum publish recusado', 0,
+  CheckInt('no publish refused', 0,
     FCapture.CountOf(seMessagePublishRejected));
-  CheckOk('achou o publish', FCapture.FirstOf(seMessagePublished, LEv));
-  CheckStr('marcado como sem rota', 'unroutable', LEv.Reason);
+  CheckOk('found the publish', FCapture.FirstOf(seMessagePublished, LEv));
+  CheckStr('marked as unroutable', 'unroutable', LEv.Reason);
 end;
 
 procedure TServerEventTests.ConsumeAndAck_Emit;
@@ -653,17 +653,17 @@ begin
   StartAndConnect(True);
   LCh := FConn.CreateChannel;
   MakeQueue(LCh, 'obs.ack');
-  LCh.PublishText('', 'obs.ack', 'um');
+  LCh.PublishText('', 'obs.ack', 'one');
   LMsg := LCh.BasicGet('obs.ack', False);
-  CheckOk('veio mensagem', LMsg.Found);
+  CheckOk('got a message', LMsg.Found);
   LCh.Ack(LMsg.DeliveryTag, False);
-  CheckOk('chegou o ack', FCapture.WaitForCount(seMessageAcked, 1, 3000));
+  CheckOk('the ack arrived', FCapture.WaitForCount(seMessageAcked, 1, 3000));
 
-  CheckInt('um ack', 1, FCapture.CountOf(seMessageAcked));
-  CheckOk('achou o ack', FCapture.FirstOf(seMessageAcked, LEv));
-  CheckOk('com delivery tag', LEv.DeliveryTag > 0);
-  CheckNot('sem multiple', LEv.Multiple);
-  CheckInt('resolveu uma entrega', 1, Integer(LEv.Count));
+  CheckInt('one ack', 1, FCapture.CountOf(seMessageAcked));
+  CheckOk('found the ack', FCapture.FirstOf(seMessageAcked, LEv));
+  CheckOk('with a delivery tag', LEv.DeliveryTag > 0);
+  CheckNot('without multiple', LEv.Multiple);
+  CheckInt('settled one delivery', 1, Integer(LEv.Count));
 end;
 
 procedure TServerEventTests.Connection_EmitsCloseOnTeardown;
@@ -671,12 +671,12 @@ begin
   StartAndConnect(True);
   FConn.Close;
   FreeAndNil(FConn);
-  CheckOk('chegou o fechamento',
+  CheckOk('the close arrived',
     FCapture.WaitForCount(seConnectionClosed, 1, 3000));
 
   // The close is born in the read thread's teardown -- and it only arrives because
   // the notifier is the LAST one to go down (see TAMQPServer.Stop).
-  CheckInt('uma conexao fechada', 1, FCapture.CountOf(seConnectionClosed));
+  CheckInt('one connection closed', 1, FCapture.CountOf(seConnectionClosed));
 end;
 
 procedure TServerEventTests.ChannelDiesWithTheConnection_EmitsClose;
@@ -690,14 +690,14 @@ begin
   // closes), and it is the mutation this test exists to catch.
   StartAndConnect(True);
   FConn.CreateChannel;
-  CheckOk('chegou a abertura', FCapture.WaitForCount(seChannelOpened, 1, 3000));
+  CheckOk('the open arrived', FCapture.WaitForCount(seChannelOpened, 1, 3000));
 
   FConn.Close;
   FreeAndNil(FConn);
-  CheckOk('chegou o fechamento do canal',
+  CheckOk('the channel close arrived',
     FCapture.WaitForCount(seChannelClosed, 1, 3000));
-  CheckOk('achou o fechamento', FCapture.FirstOf(seChannelClosed, LEv));
-  CheckStr('e vem marcado como teardown', 'connection teardown', LEv.Reason);
+  CheckOk('found the close', FCapture.FirstOf(seChannelClosed, LEv));
+  CheckStr('and it comes marked as teardown', 'connection teardown', LEv.Reason);
 end;
 
 procedure TServerEventTests.NoSubscriber_BrokerEmitsNothing;
@@ -709,8 +709,8 @@ begin
   // kill this test is emitting without checking Wants.
   StartAndConnect(False);
   LCh := FConn.CreateChannel;
-  MakeQueue(LCh, 'obs.silencio');
-  LCh.PublishText('', 'obs.silencio', 'nada disso deve virar evento');
+  MakeQueue(LCh, 'obs.silence');
+  LCh.PublishText('', 'obs.silence', 'none of this may become an event');
   try
     LCh.Close; // round-trip: the broker HAS processed everything above when it returns
   finally
@@ -719,11 +719,11 @@ begin
   // Here Drain is the right barrier: the assertion is of ABSENCE, and the
   // Close-Ok round-trip guarantees the broker has already gone through every
   // emission point.
-  CheckOk('drenou', FBroker.DrainEvents(3000));
+  CheckOk('drained', FBroker.DrainEvents(3000));
 
-  CheckInt('nada emitido', 0, Integer(FBroker.EventsEmitted));
-  CheckInt('e nada descartado', 0, Integer(FBroker.EventsDropped));
-  CheckInt('e nenhum handler falhou', 0, Integer(FBroker.EventsFailed));
+  CheckInt('nothing emitted', 0, Integer(FBroker.EventsEmitted));
+  CheckInt('and nothing dropped', 0, Integer(FBroker.EventsDropped));
+  CheckInt('and no handler failed', 0, Integer(FBroker.EventsFailed));
 end;
 
 procedure TServerEventTests.Enqueue_AndDelivery_EmitFromTheActor;
@@ -737,21 +737,21 @@ begin
   // for both origins, with the SAME contract.
   StartAndConnect(True);
   LCh := FConn.CreateChannel;
-  MakeQueue(LCh, 'obs.ator');
-  LCh.PublishText('', 'obs.ator', 'do ator');
-  CheckOk('chegou o enqueue', FCapture.WaitForCount(seMessageEnqueued, 1, 3000));
+  MakeQueue(LCh, 'obs.actor');
+  LCh.PublishText('', 'obs.actor', 'actor!!');
+  CheckOk('the enqueue arrived', FCapture.WaitForCount(seMessageEnqueued, 1, 3000));
 
-  CheckOk('achou o enqueue', FCapture.FirstOf(seMessageEnqueued, LEv));
-  CheckStr('com a fila', 'obs.ator', LEv.QueueName);
-  CheckStr('e o vhost', '/', LEv.VHost);
-  CheckInt('e o tamanho', 7, Integer(LEv.MessageSize));
+  CheckOk('found the enqueue', FCapture.FirstOf(seMessageEnqueued, LEv));
+  CheckStr('with the queue', 'obs.actor', LEv.QueueName);
+  CheckStr('and the vhost', '/', LEv.VHost);
+  CheckInt('and the size', 7, Integer(LEv.MessageSize));
   // The actor lives on the other side of the mailbox: it knows neither connection
   // nor user, and D34 says an unpopulated field comes out ZEROED instead of garbage.
-  CheckInt('ator nao conhece a conexao', 0, Integer(LEv.ConnectionId));
-  CheckStr('nem o usuario', '', LEv.Username);
+  CheckInt('actor does not know the connection', 0, Integer(LEv.ConnectionId));
+  CheckStr('nor the user', '', LEv.Username);
 
-  LMsg := LCh.BasicGet('obs.ator', True);
-  CheckOk('veio mensagem', LMsg.Found);
+  LMsg := LCh.BasicGet('obs.actor', True);
+  CheckOk('got a message', LMsg.Found);
 end;
 
 procedure TServerEventTests.Consume_EmitsDeliveryWithTag;
@@ -762,17 +762,17 @@ var
 begin
   StartAndConnect(True);
   LCh := FConn.CreateChannel;
-  MakeQueue(LCh, 'obs.entrega');
-  LTag := LCh.Consume('obs.entrega', TestConsumer);
-  CheckOk('consumidor registrado', LTag <> '');
-  LCh.PublishText('', 'obs.entrega', 'entrega');
-  CheckOk('chegou a entrega', FCapture.WaitForCount(seMessageDelivered, 1, 3000));
+  MakeQueue(LCh, 'obs.delivery');
+  LTag := LCh.Consume('obs.delivery', TestConsumer);
+  CheckOk('consumer registered', LTag <> '');
+  LCh.PublishText('', 'obs.delivery', 'deliver');
+  CheckOk('the delivery arrived', FCapture.WaitForCount(seMessageDelivered, 1, 3000));
 
-  CheckOk('achou a entrega', FCapture.FirstOf(seMessageDelivered, LEv));
-  CheckStr('com a fila', 'obs.entrega', LEv.QueueName);
-  CheckStr('e a tag do consumidor', LTag, LEv.ConsumerTag);
-  CheckOk('e a tag de entrega', LEv.DeliveryTag > 0);
-  CheckInt('e o tamanho', 7, Integer(LEv.MessageSize));
+  CheckOk('found the delivery', FCapture.FirstOf(seMessageDelivered, LEv));
+  CheckStr('with the queue', 'obs.delivery', LEv.QueueName);
+  CheckStr('and the consumer tag', LTag, LEv.ConsumerTag);
+  CheckOk('and the delivery tag', LEv.DeliveryTag > 0);
+  CheckInt('and the size', 7, Integer(LEv.MessageSize));
 end;
 
 procedure TServerEventTests.TtlExpired_EmitsExpired;
@@ -795,12 +795,12 @@ begin
   finally
     LArgs.Free; // whoever creates the table frees it -- the declare does not become its owner
   end;
-  LCh.PublishText('', 'obs.ttl', 'vou vencer');
+  LCh.PublishText('', 'obs.ttl', 'will expire');
 
-  CheckOk('chegou a expiracao', FCapture.WaitForCount(seMessageExpired, 1, 5000));
-  CheckOk('achou a expiracao', FCapture.FirstOf(seMessageExpired, LEv));
-  CheckStr('na fila certa', 'obs.ttl', LEv.QueueName);
-  CheckStr('com a razao do x-death', 'expired', LEv.Reason);
+  CheckOk('the expiry arrived', FCapture.WaitForCount(seMessageExpired, 1, 5000));
+  CheckOk('found the expiry', FCapture.FirstOf(seMessageExpired, LEv));
+  CheckStr('on the right queue', 'obs.ttl', LEv.QueueName);
+  CheckStr('with the x-death reason', 'expired', LEv.Reason);
 end;
 
 procedure TServerEventTests.QueueCap_EmitsDrop;
@@ -815,7 +815,7 @@ begin
   LCh := FConn.CreateChannel;
   LArgs := TAMQPFieldTable.Create;
   LArgs.Put('x-max-length', 2);
-  LDecl := TAMQPQueueDeclare.Create('obs.teto', False);
+  LDecl := TAMQPQueueDeclare.Create('obs.cap', False);
   LDecl.Arguments := LArgs;
   try
     LCh.DeclareQueue(LDecl);
@@ -823,12 +823,12 @@ begin
     LArgs.Free; // whoever creates the table frees it -- the declare does not become its owner
   end;
   for I := 1 to 5 do
-    LCh.PublishText('', 'obs.teto', 'enche');
+    LCh.PublishText('', 'obs.cap', 'fill');
 
-  CheckOk('chegou o descarte', FCapture.WaitForCount(seMessageDropped, 1, 3000));
-  CheckOk('achou o descarte', FCapture.FirstOf(seMessageDropped, LEv));
-  CheckStr('na fila certa', 'obs.teto', LEv.QueueName);
-  CheckStr('com a razao do x-death', 'maxlen', LEv.Reason);
+  CheckOk('the drop arrived', FCapture.WaitForCount(seMessageDropped, 1, 3000));
+  CheckOk('found the drop', FCapture.FirstOf(seMessageDropped, LEv));
+  CheckStr('on the right queue', 'obs.cap', LEv.QueueName);
+  CheckStr('with the x-death reason', 'maxlen', LEv.Reason);
 end;
 
 procedure TServerEventTests.SlowHandler_DoesNotBlockTheActor;
@@ -858,16 +858,16 @@ begin
     ConnectClient;
 
     LCh := FConn.CreateChannel;
-    MakeQueue(LCh, 'obs.lenta');
+    MakeQueue(LCh, 'obs.slow');
     for I := 1 to 200 do
-      LCh.PublishText('', 'obs.lenta', 'carga');
+      LCh.PublishText('', 'obs.slow', 'load');
 
     // The queue is the witness: if the actor had waited for the handler, the 200
     // would not be in there within this deadline (200 x 40 ms = 8 s of handler alone).
     LQueue := nil;
     LEnqueued := 0;
-    LQueue := FBroker.Engine.FindQueue('/', 'obs.lenta');
-    CheckOk('a fila existe', LQueue <> nil);
+    LQueue := FBroker.Engine.FindQueue('/', 'obs.slow');
+    CheckOk('the queue exists', LQueue <> nil);
     for I := 1 to 100 do
     begin
       LStats := LQueue.Stats;
@@ -876,12 +876,12 @@ begin
         Break;
       Sleep(20);
     end;
-    CheckInt('o ator enfileirou tudo sem esperar o handler', 200,
+    CheckInt('the actor enqueued everything without waiting for the handler', 200,
       LEnqueued);
 
     // And the price of best-effort shows up: with the handler at 40 ms per event and 8
     // slots, there were drops. This is D31 collecting its due, not a defect.
-    CheckOk('e houve descarte contado', FBroker.EventsDropped > 0);
+    CheckOk('and a counted drop happened', FBroker.EventsDropped > 0);
   finally
     FBroker.Unsubscribe(LSlow.Handle);
     // Stop the broker BEFORE freeing the slow handler: Stop drains the ring, and
@@ -911,15 +911,15 @@ begin
   // broker with DataDir. With any one missing, nothing touches the journal.
   LDecl := TAMQPQueueDeclare.Create('obs.wal', True);
   LCh.DeclareQueue(LDecl);
-  LCh.PublishText('', 'obs.wal', 'vai pro disco', True);
+  LCh.PublishText('', 'obs.wal', 'goes to disk', True);
 
-  CheckOk('chegou o flush', FCapture.WaitForCount(seJournalFlushed, 1, 5000));
-  CheckOk('achou o flush', FCapture.FirstOf(seJournalFlushed, LEv));
-  CheckOk('com a marca d''agua', LEv.Lsn > 0);
-  CheckOk('e com registros no lote', LEv.Count > 0);
+  CheckOk('the flush arrived', FCapture.WaitForCount(seJournalFlushed, 1, 5000));
+  CheckOk('found the flush', FCapture.FirstOf(seJournalFlushed, LEv));
+  CheckOk('with the watermark', LEv.Lsn > 0);
+  CheckOk('and with records in the batch', LEv.Count > 0);
   // An event from the journal thread has neither queue nor connection: it speaks of the BATCH.
-  CheckStr('sem fila', '', LEv.QueueName);
-  CheckInt('e sem conexao', 0, Integer(LEv.ConnectionId));
+  CheckStr('no queue', '', LEv.QueueName);
+  CheckInt('and no connection', 0, Integer(LEv.ConnectionId));
 end;
 
 initialization

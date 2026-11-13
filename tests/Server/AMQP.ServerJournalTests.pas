@@ -206,7 +206,7 @@ end;
 
 procedure TJournalWithWindow.BatchTaken;
 const
-  MARKER = 'injetado na janela';
+  MARKER = 'injected in the window';
 var
   LRecs: TAMQPJournalRecords;
   I: Integer;
@@ -384,10 +384,10 @@ begin
     J.Start;
     SetLength(LRecs, 3);
     LRecs[0] := Rec(1, 'um');
-    LRecs[1] := Rec(1, 'dois');
-    LRecs[2] := Rec(1, 'tres');
-    TAssert.AssertEquals('LSN do ultimo do lote', Int64(3), Int64(J.Submit(LRecs)));
-    TAssert.AssertTrue('e ele fica duravel', J.WaitDurable(3, 5000));
+    LRecs[1] := Rec(1, 'two');
+    LRecs[2] := Rec(1, 'three');
+    TAssert.AssertEquals('LSN of the last one in the batch', Int64(3), Int64(J.Submit(LRecs)));
+    TAssert.AssertTrue('and it becomes durable', J.WaitDurable(3, 5000));
   finally
     J.Free;
   end;
@@ -400,10 +400,10 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    TAssert.AssertEquals('1o lote', Int64(1), Int64(J.Submit(OneRecord(1, 'a'))));
-    TAssert.AssertEquals('2o lote continua', Int64(2), Int64(J.Submit(OneRecord(1, 'b'))));
-    TAssert.AssertEquals('3o lote continua', Int64(3), Int64(J.Submit(OneRecord(1, 'c'))));
-    TAssert.AssertTrue('tudo duravel', J.WaitDurable(3, 5000));
+    TAssert.AssertEquals('1st batch', Int64(1), Int64(J.Submit(OneRecord(1, 'a'))));
+    TAssert.AssertEquals('2nd batch continues', Int64(2), Int64(J.Submit(OneRecord(1, 'b'))));
+    TAssert.AssertEquals('3rd batch continues', Int64(3), Int64(J.Submit(OneRecord(1, 'c'))));
+    TAssert.AssertTrue('all durable', J.WaitDurable(3, 5000));
   finally
     J.Free;
   end;
@@ -426,7 +426,7 @@ begin
       on E: EAMQPJournal do
         LRaised := True;
     end;
-    TAssert.AssertTrue('submit sem registro tem de levantar', LRaised);
+    TAssert.AssertTrue('submit without a record must raise', LRaised);
   finally
     J.Free;
   end;
@@ -446,7 +446,7 @@ begin
       on E: EAMQPJournal do
         LRaised := True;
     end;
-    TAssert.AssertTrue('journal parado nao aceita submit', LRaised);
+    TAssert.AssertTrue('a stopped journal does not accept submit', LRaised);
   finally
     J.Free;
   end;
@@ -469,7 +469,7 @@ begin
       on E: EAMQPJournal do
         LRaised := True;
     end;
-    TAssert.AssertTrue('depois do Stop nao aceita mais', LRaised);
+    TAssert.AssertTrue('no longer accepts after Stop', LRaised);
   finally
     J.Free;
   end;
@@ -495,16 +495,16 @@ begin
     for I := 0 to 3 do
     begin
       P[I].WaitFor;
-      TAssert.AssertEquals('produtor sem erro', 0, P[I].Errors);
+      TAssert.AssertEquals('producer without error', 0, P[I].Errors);
       P[I].Free;
     end;
-    TAssert.AssertTrue('tudo duravel', J.WaitDurable(2000, 30000));
+    TAssert.AssertTrue('all durable', J.WaitDurable(2000, 30000));
     LS := J.Stats;
-    TAssert.AssertEquals('gravou tudo', Int64(2000), LS.Records);
-    TAssert.AssertTrue('agrupou: menos fsyncs que registros ('
+    TAssert.AssertEquals('wrote everything', Int64(2000), LS.Records);
+    TAssert.AssertTrue('grouped: fewer fsyncs than records ('
       + IntToStr(LS.Syncs) + ' x ' + IntToStr(LS.Records) + ')',
       LS.Syncs < LS.Records);
-    TAssert.AssertTrue('lote medio bem acima de 1 ('
+    TAssert.AssertTrue('average batch well above 1 ('
       + IntToStr(LS.Records div LS.Syncs) + ')',
       (LS.Records div LS.Syncs) >= 3);
   finally
@@ -533,7 +533,7 @@ begin
       P[I].WaitFor;
       P[I].Free;
     end;
-    TAssert.AssertTrue('tudo duravel', J.WaitDurable(2000, 30000));
+    TAssert.AssertTrue('all durable', J.WaitDurable(2000, 30000));
   finally
     J.Free;
   end;
@@ -543,7 +543,7 @@ begin
   LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
   try
     LN := LSeg.ReadPrefix(LWalRecords, LStop);
-    TAssert.AssertEquals('leu tudo do arquivo', 2000, LN);
+    TAssert.AssertEquals('read everything from the file', 2000, LN);
     LPairs := 0;
     LBreaks := 0;
     I := 0;
@@ -564,8 +564,8 @@ begin
       else
         Inc(I);
     end;
-    TAssert.AssertEquals('nenhum par quebrado', 0, LBreaks);
-    TAssert.AssertEquals('os 1000 pares adjacentes', 1000, LPairs);
+    TAssert.AssertEquals('no broken pair', 0, LBreaks);
+    TAssert.AssertEquals('all 1000 pairs adjacent', 1000, LPairs);
   finally
     LSeg.Free;
     LWalFile := nil;
@@ -579,11 +579,11 @@ begin
   J := TJournalWithWindow.Create(FDir);
   try
     J.Start;
-    TAssert.AssertTrue('o gatilho fica duravel', J.WaitDurable(J.Submit(OneRecord(1, 'gatilho')),
+    TAssert.AssertTrue('the trigger becomes durable', J.WaitDurable(J.Submit(OneRecord(1, 'trigger')),
       5000));
-    TAssert.AssertTrue('o injetado NA JANELA tambem',
+    TAssert.AssertTrue('the one injected IN THE WINDOW too',
       J.WaitDurable(J.InjectedLsn, 5000));
-    TAssert.AssertEquals('e nada se perdeu', Int64(2), J.Stats.Records);
+    TAssert.AssertEquals('and nothing was lost', Int64(2), J.Stats.Records);
   finally
     J.Free;
   end;
@@ -600,8 +600,8 @@ begin
   try
     J.Start;
     LSN := J.Submit(OneRecord(1, 'a'));
-    TAssert.AssertTrue('ficou duravel', J.WaitDurable(LSN, 5000));
-    TAssert.AssertTrue('marca d agua alcancou o LSN', J.DurableLsn >= LSN);
+    TAssert.AssertTrue('became durable', J.WaitDurable(LSN, 5000));
+    TAssert.AssertTrue('watermark reached the LSN', J.DurableLsn >= LSN);
   finally
     J.Free;
   end;
@@ -616,15 +616,15 @@ begin
   J := TJournalOverDouble.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(OneRecord(1, 'antes'));
+    LSN := J.Submit(OneRecord(1, 'before'));
     J.WaitDurable(LSN, 5000);
     LBefore := J.DurableLsn;
 
     J.WalFile.SetSyncOk(False);
-    LSN := J.Submit(OneRecord(1, 'com fsync falhando'));
-    TAssert.AssertFalse('nao pode ficar duravel', J.WaitDurable(LSN, 800));
-    TAssert.AssertEquals('marca d agua nao andou', Int64(LBefore), Int64(J.DurableLsn));
-    TAssert.AssertTrue('e o fsync falho foi contado', J.Stats.FailedSyncs > 0);
+    LSN := J.Submit(OneRecord(1, 'with fsync failing'));
+    TAssert.AssertFalse('must not become durable', J.WaitDurable(LSN, 800));
+    TAssert.AssertEquals('watermark did not move', Int64(LBefore), Int64(J.DurableLsn));
+    TAssert.AssertTrue('and the failed fsync was counted', J.Stats.FailedSyncs > 0);
   finally
     J.Free;
   end;
@@ -641,7 +641,7 @@ begin
     J.WalFile.SetSyncOk(False);
     J.Submit(OneRecord(1, 'x'));
     Sleep(300);
-    TAssert.AssertFalse('journal continua de pe', J.Failed);
+    TAssert.AssertFalse('journal still standing', J.Failed);
   finally
     J.Free;
   end;
@@ -656,11 +656,11 @@ begin
   try
     J.Start;
     J.WalFile.SetSyncOk(False);
-    LSN := J.Submit(OneRecord(1, 'no escuro'));
-    TAssert.AssertFalse('ainda nao', J.WaitDurable(LSN, 500));
+    LSN := J.Submit(OneRecord(1, 'in the dark'));
+    TAssert.AssertFalse('not yet', J.WaitDurable(LSN, 500));
     J.WalFile.SetSyncOk(True);
-    J.Submit(OneRecord(1, 'com fsync de novo'));
-    TAssert.AssertTrue('o fsync seguinte cobre o lote anterior',
+    J.Submit(OneRecord(1, 'with fsync again'));
+    TAssert.AssertTrue('the next fsync covers the previous batch',
       J.WaitDurable(LSN, 5000));
   finally
     J.Free;
@@ -681,7 +681,7 @@ begin
     J.DurabilitySink := ISink;
     J.Start;
     LSN := J.Submit(OneRecord(1, 'a'));
-    TAssert.AssertTrue('duravel', J.WaitDurable(LSN, 5000));
+    TAssert.AssertTrue('durable', J.WaitDurable(LSN, 5000));
     // WAITS for the notice, instead of demanding it right when WaitDurable returns: the
     // watermark advances BEFORE the sink is called, and that order is deliberate --
     // inverting it would put an outside callback ahead of waking the waiters. They are
@@ -690,8 +690,8 @@ begin
     LDeadline := PcTickMs + 5000;
     while (S.Notifications = 0) and (PcTickMs < LDeadline) do
       Sleep(2);
-    TAssert.AssertTrue('sink foi avisado', S.Notifications > 0);
-    TAssert.AssertEquals('com o MAIOR LSN do lote', Int64(LSN), Int64(S.Last));
+    TAssert.AssertTrue('sink was notified', S.Notifications > 0);
+    TAssert.AssertEquals('with the HIGHEST LSN of the batch', Int64(LSN), Int64(S.Last));
   finally
     J.Free;
   end;
@@ -712,12 +712,12 @@ begin
     J.Submit(OneRecord(1, 'ok'));
     J.WaitDurable(1, 5000);
     J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
-    J.Submit(OneRecord(1, 'vai falhar'));
+    J.Submit(OneRecord(1, 'will fail'));
     LDeadline := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
-    TAssert.AssertTrue('journal em falha', J.Failed);
-    TAssert.AssertTrue('com mensagem', J.LastError <> '');
+    TAssert.AssertTrue('journal failed', J.Failed);
+    TAssert.AssertTrue('with a message', J.LastError <> '');
   finally
     J.Free;
   end;
@@ -737,11 +737,11 @@ begin
     J.DurabilitySink := ISink;
     J.Start;
     J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
-    J.Submit(OneRecord(1, 'vai falhar'));
+    J.Submit(OneRecord(1, 'will fail'));
     LDeadline := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
-    TAssert.AssertEquals('avisado exatamente uma vez', 1, S.Failures);
+    TAssert.AssertEquals('notified exactly once', 1, S.Failures);
   finally
     J.Free;
   end;
@@ -757,18 +757,18 @@ begin
   try
     J.Start;
     J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
-    J.Submit(OneRecord(1, 'vai falhar'));
+    J.Submit(OneRecord(1, 'will fail'));
     LDeadline := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
     LRaised := False;
     try
-      J.Submit(OneRecord(1, 'depois'));
+      J.Submit(OneRecord(1, 'after'));
     except
       on E: EAMQPJournal do
         LRaised := True;
     end;
-    TAssert.AssertTrue('submit depois da falha tem de levantar', LRaised);
+    TAssert.AssertTrue('submit after the failure must raise', LRaised);
   finally
     J.Free;
   end;
@@ -783,11 +783,11 @@ begin
   try
     J.Start;
     J.WalFile.SetFailWriteAt(J.WalFile.WriteCount + 1);
-    J.Submit(OneRecord(1, 'vai falhar'));
+    J.Submit(OneRecord(1, 'will fail'));
     LDeadline := PcTickMs + 5000;
     while (not J.Failed) and (PcTickMs < LDeadline) do
       Sleep(5);
-    TAssert.AssertFalse('quem esperava durabilidade e' + ' liberado com False',
+    TAssert.AssertFalse('whoever waited for durability is' + ' released with False',
       J.WaitDurable(99, 300));
   finally
     J.Free;
@@ -811,8 +811,8 @@ begin
     LSN := 0;
     for I := 1 to 200 do
       LSN := J.SubmitNoWait(OneRecord(9, StringOfChar('z', 64)));
-    TAssert.AssertEquals('os 200 foram aceitos', Int64(200), Int64(LSN));
-    TAssert.AssertTrue('e todos ficam duraveis', J.WaitDurable(LSN, 20000));
+    TAssert.AssertEquals('all 200 were accepted', Int64(200), Int64(LSN));
+    TAssert.AssertTrue('and all become durable', J.WaitDurable(LSN, 20000));
   finally
     J.Free;
   end;
@@ -827,7 +827,7 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(OneRecord(1, 'antes'));
+    LSN := J.Submit(OneRecord(1, 'before'));
     J.WaitDurable(LSN, 5000);
   finally
     J.Free;
@@ -836,10 +836,10 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    TAssert.AssertEquals('proximo LSN continua', Int64(LSN + 1),
+    TAssert.AssertEquals('next LSN continues', Int64(LSN + 1),
       Int64(J.Stats.NextLsn));
-    TAssert.AssertTrue('e grava depois do restart',
-      J.WaitDurable(J.Submit(OneRecord(1, 'depois')), 5000));
+    TAssert.AssertTrue('and writes after the restart',
+      J.WaitDurable(J.Submit(OneRecord(1, 'after')), 5000));
   finally
     J.Free;
   end;
@@ -853,7 +853,7 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    LSN := J.Submit(OneRecord(1, 'antes'));
+    LSN := J.Submit(OneRecord(1, 'before'));
     J.WaitDurable(LSN, 5000);
   finally
     J.Free;
@@ -864,7 +864,7 @@ begin
     J.Start;
     // What was already in the file is on disk by definition: the watermark
     // cannot start BEHIND it.
-    TAssert.AssertEquals('marca d agua nasce no que ja estava', Int64(LSN),
+    TAssert.AssertEquals('watermark starts at what was already there', Int64(LSN),
       Int64(J.DurableLsn));
   finally
     J.Free;
@@ -896,9 +896,9 @@ begin
     IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(1), False);
   LSeg := TAMQPWalSegment.OpenExisting(LWalFile, False);
   try
-    TAssert.AssertEquals('os 300 aceitos foram ao disco', 300,
+    TAssert.AssertEquals('the 300 accepted went to disk', 300,
       LSeg.ReadPrefix(LWalRecords, LStop));
-    TAssert.AssertTrue('integro', LStop = awsEnd);
+    TAssert.AssertTrue('intact', LStop = awsEnd);
   finally
     LSeg.Free;
     LWalFile := nil;
@@ -913,8 +913,8 @@ begin
   try
     J.Start;
     J.Start; // must neither steal its own lock nor start two threads
-    TAssert.AssertTrue('continua rodando', J.Running);
-    TAssert.AssertTrue('e grava', J.WaitDurable(J.Submit(OneRecord(1, 'x')), 5000));
+    TAssert.AssertTrue('keeps running', J.Running);
+    TAssert.AssertTrue('and writes', J.WaitDurable(J.Submit(OneRecord(1, 'x')), 5000));
   finally
     J.Free;
   end;
@@ -938,7 +938,7 @@ begin
       on E: Exception do
         LRaised := True;
     end;
-    TAssert.AssertTrue('o segundo journal tem de ser recusado', LRaised);
+    TAssert.AssertTrue('the second journal must be refused', LRaised);
   finally
     J2.Free;
     J1.Free;

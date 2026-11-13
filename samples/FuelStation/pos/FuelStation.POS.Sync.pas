@@ -10,8 +10,8 @@
   live, with version-gap detection -> re-snapshot (heals an event lost for any
   reason).
 
-  The event type comes from the ROUTING KEY (abastecida.nova/lancando/lancado/
-  disponivel/descartada), not from the body format.
+  The event type comes from the ROUTING KEY (fueling.new/posting/posted/
+  available/discarded), not from the body format.
 
   Everything that mutates FMap/FLastVersion goes through FLock. The event
   callbacks and the sync run on pool threads; the UI only reads (Pending,
@@ -168,13 +168,13 @@ begin
 
   LPending := TStringList.Create;
   try
-    LVersion := LResp.Json.AsInt('versao');
+    LVersion := LResp.Json.AsInt('version');
 
     FLock.Enter;
     try
       FMap.Clear;
 
-      LArr := LResp.Json.Get('disponiveis');
+      LArr := LResp.Json.Get('available');
       if (LArr <> nil) and (LArr.Kind = jkArray) then
         for I := 0 to LArr.Count - 1 do
         begin
@@ -185,17 +185,17 @@ begin
           FMap.AddOrSetValue(LE.Data.Id, LE);
         end;
 
-      LArr := LResp.Json.Get('bloqueadas');
+      LArr := LResp.Json.Get('locked');
       if (LArr <> nil) and (LArr.Kind = jkArray) then
         for I := 0 to LArr.Count - 1 do
         begin
           LItem := LArr.Item(I);
           LE := Default(TTrackedFueling);
           LE.Data.Id := LItem.AsStr('id');
-          LE.State := StrToState(LItem.AsStr('estado'));
-          LE.PosName := LItem.AsStr('pdv');
-          LE.Sale := LItem.AsStr('venda');
-          LE.SinceMs := LItem.AsInt('desde');
+          LE.State := StrToState(LItem.AsStr('state'));
+          LE.PosName := LItem.AsStr('pos');
+          LE.Sale := LItem.AsStr('sale');
+          LE.SinceMs := LItem.AsInt('since');
           FMap.AddOrSetValue(LE.Data.Id, LE);
         end;
 
@@ -242,7 +242,7 @@ begin
 
   LGap := False;
   try
-    LVersion := J.AsInt('versao');
+    LVersion := J.AsInt('version');
     LId := J.AsStr('id');
 
     FLock.Enter;
@@ -253,7 +253,7 @@ begin
         Exit;
       end;
       if LVersion <= FLastVersion then
-        Exit;   // ja' visto
+        Exit;   // already seen
       LGap := LVersion > FLastVersion + 1;
       FLastVersion := LVersion;
 
@@ -261,7 +261,7 @@ begin
 
       if ARoute = EVT_NEW then
       begin
-        LFuelingJson := J.Get('abastecida');
+        LFuelingJson := J.Get('fueling');
         if LFuelingJson <> nil then
         begin
           LE := Default(TTrackedFueling);
@@ -287,9 +287,9 @@ begin
           LE := Default(TTrackedFueling);
           LE.Data.Id := LId;
         end;
-        LPosName := J.AsStr('pdv');
+        LPosName := J.AsStr('pos');
         LE.PosName := LPosName;
-        LE.Sale := J.AsStr('venda');
+        LE.Sale := J.AsStr('sale');
         if ARoute = EVT_POSTING then
           LE.State := fsPosting
         else

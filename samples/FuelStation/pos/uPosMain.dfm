@@ -1,7 +1,7 @@
 object frmPos: TfrmPos
   Left = 0
   Top = 0
-  Caption = 'Posto - PDV'
+  Caption = 'Fuel Station - POS'
   ClientHeight = 640
   ClientWidth = 900
   Color = clBtnFace

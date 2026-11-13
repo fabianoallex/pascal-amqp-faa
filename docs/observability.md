@@ -10,25 +10,25 @@ The architecture decisions are locked in `CLAUDE.md` as **D29–D36**; this docu
 uses AMQP.Server.Events, AMQP.Server.Broker;
 
 type
-  TMeuLog = class
+  TMyLog = class
   public
-    procedure AoEvento(const AEvento: TAMQPServerEvent);
+    procedure OnEvent(const AEvent: TAMQPServerEvent);
   end;
 
-procedure TMeuLog.AoEvento(const AEvento: TAMQPServerEvent);
+procedure TMyLog.OnEvent(const AEvent: TAMQPServerEvent);
 begin
   // Runs on the broker's notifier thread. Only one, always the same.
-  Writeln(AmqpEventTypeName(AEvento.EventType), ' conn=', AEvento.ConnectionId);
+  Writeln(AmqpEventTypeName(AEvent.EventType), ' conn=', AEvent.ConnectionId);
 end;
 
 // ...
 Broker := TAMQPServer.Create;
-Log := TMeuLog.Create;
-Broker.Subscribe(Log.AoEvento);   // before Start: you want the 1st event
+Log := TMyLog.Create;
+Broker.Subscribe(Log.OnEvent);   // before Start: you want the 1st event
 Broker.Start;
 // ...
 Broker.Stop;
-Broker.Unsubscribe(Log.AoEvento); // BEFORE freeing Log — see "Pitfalls"
+Broker.Unsubscribe(Log.OnEvent); // BEFORE freeing Log — see "Pitfalls"
 ```
 
 Without any `Subscribe`, the broker is byte for byte the usual one: the hot path tests a mask and does not even build the event record. Nobody pays for not observing.
@@ -36,7 +36,7 @@ Without any `Subscribe`, the broker is byte for byte the usual one: the hot path
 To filter by type — which avoids building records you are going to throw away:
 
 ```pascal
-Broker.Subscribe(Log.AoEvento,
+Broker.Subscribe(Log.OnEvent,
   [seConnectionAuthenticated, seMessagePublished, seMessageAcked]);
 ```
 
@@ -160,7 +160,7 @@ Two constraints that hold for all of them:
 **Unsubscribe before destroying.** The handler is an object method — a (code, instance) pair. If you free the instance without `Unsubscribe`, the notifier calls a dead pointer: it becomes an `EAccessViolation`, which is caught and counted, but the event is lost and the symptom shows up far from the cause.
 
 ```pascal
-Broker.Unsubscribe(Log.AoEvento);
+Broker.Unsubscribe(Log.OnEvent);
 Log.Free;
 ```
 
@@ -170,7 +170,7 @@ Log.Free;
 
 ```pascal
 if Broker.EventsFailed > 0 then
-  Writeln('handler falhou: ', Broker.LastEventFailure);
+  Writeln('handler failed: ', Broker.LastEventFailure);
 ```
 
 **No lock is needed inside the handler** for state only it touches: the notifier is a single thread, so the handler never runs concurrently with itself. State shared with *other* threads of your app, that, yes, is your responsibility.

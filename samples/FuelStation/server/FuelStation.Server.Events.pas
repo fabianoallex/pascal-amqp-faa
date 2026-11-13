@@ -2,7 +2,7 @@
 
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
-{ Publishing of the fueling events to the posto.eventos exchange
+{ Publishing of the fueling events to the station.events exchange
   (ARCHITECTURE.md §6.3). One dedicated channel; an internal lock because the
   pump thread and the command consumer thread both publish. }
 

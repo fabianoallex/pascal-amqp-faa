@@ -56,24 +56,24 @@ import os
 import re
 import sys
 
-RAIZ = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SUITES = ['tests/Unit', 'tests/Integration', 'tests/Server', 'tests/Outbox']
-IGNORAR = ('/lib/', '\\lib\\', '/backup/', '\\backup\\', '__recovery')
+IGNORE = ('/lib/', '\\lib\\', '/backup/', '\\backup\\', '__recovery')
 
 
-def le(caminho):
-    with io.open(caminho, encoding='utf-8-sig', errors='replace') as f:
+def read_text(path_):
+    with io.open(path_, encoding='utf-8-sig', errors='replace') as f:
         return f.read()
 
 
 def rel(p):
-    return os.path.relpath(p, RAIZ).replace('\\', '/')
+    return os.path.relpath(p, ROOT).replace('\\', '/')
 
 
-def mestres():
+def masters():
     """The DUnitX masters: tests/<Suite>/*Tests.pas (what the generator reads)."""
     for s in SUITES:
-        base = os.path.join(RAIZ, s)
+        base = os.path.join(ROOT, s)
         if not os.path.isdir(base):
             continue
         for n in sorted(os.listdir(base)):
@@ -81,105 +81,105 @@ def mestres():
                 yield os.path.join(base, n)
 
 
-def arquivos_pascal(dirs):
+def pascal_files(dirs):
     for d in dirs:
-        base = os.path.join(RAIZ, d)
+        base = os.path.join(ROOT, d)
         if not os.path.isdir(base):
             continue
-        for pasta, _, nomes in os.walk(base):
-            for n in nomes:
+        for folder, _, names in os.walk(base):
+            for n in names:
                 if not n.lower().endswith(('.pas', '.dpr', '.lpr')):
                     continue
-                p = os.path.join(pasta, n)
-                if any(x in p for x in IGNORAR):
+                p = os.path.join(folder, n)
+                if any(x in p for x in IGNORE):
                     continue
                 yield p
 
 
-def sem_comentarios(texto):
+def without_comments(text_):
     """Replaces comments and literals with spaces, preserving the \\n.
 
     Without this the checks flag the PROSE (a comment explaining why a name
     from the other dialect does not work). Preserving the line breaks keeps
     the report's line numbers pointing at the real file.
     """
-    saida = []
-    i, n = 0, len(texto)
+    output = []
+    i, n = 0, len(text_)
     while i < n:
-        c = texto[i]
+        c = text_[i]
         if c == "'":
             j = i + 1
-            while j < n and texto[j] != "'":
+            while j < n and text_[j] != "'":
                 j += 1
-            saida.append(' ' * (min(j, n - 1) - i + 1))
+            output.append(' ' * (min(j, n - 1) - i + 1))
             i = j + 1
-        elif c == '/' and texto[i:i + 2] == '//':
-            j = texto.find('\n', i)
+        elif c == '/' and text_[i:i + 2] == '//':
+            j = text_.find('\n', i)
             if j < 0:
                 j = n
-            saida.append(' ' * (j - i))
+            output.append(' ' * (j - i))
             i = j
         elif c == '{':
-            j = texto.find('}', i)
+            j = text_.find('}', i)
             if j < 0:
                 j = n - 1
-            saida.append(''.join(ch if ch == '\n' else ' '
-                                 for ch in texto[i:j + 1]))
+            output.append(''.join(ch if ch == '\n' else ' '
+                                 for ch in text_[i:j + 1]))
             i = j + 1
-        elif texto[i:i + 2] == '(*':
-            j = texto.find('*)', i)
+        elif text_[i:i + 2] == '(*':
+            j = text_.find('*)', i)
             j = n - 2 if j < 0 else j
-            saida.append(''.join(ch if ch == '\n' else ' '
-                                 for ch in texto[i:j + 2]))
+            output.append(''.join(ch if ch == '\n' else ' '
+                                 for ch in text_[i:j + 2]))
             i = j + 2
         else:
-            saida.append(c)
+            output.append(c)
             i += 1
-    return ''.join(saida)
+    return ''.join(output)
 
 
-def linha_de(texto, pos):
-    return texto.count('\n', 0, pos) + 1
+def line_of(text_, pos):
+    return text_.count('\n', 0, pos) + 1
 
 
 # [1] -------------------------------------------------------------------------
 
-def verifica_registro():
+def check_registration():
     """Fixture with [Test] and without registration.
 
     "Fixture with tests" is the right unit: a helper class without [Test] does
     not need registration. The FORM of the call matters: `RegisterTestFixture(X)`
     without `TDUnitX.` does not compile in Delphi.
     """
-    problemas = []
-    for p in mestres():
-        s = le(p)
+    problems = []
+    for p in masters():
+        s = read_text(p)
         decl = s[:s.find('implementation')]
-        com_testes = set()
+        with_tests = set()
         for m in re.finditer(r'\[TestFixture\]\s*(T\w+)\s*=\s*class\b(.*?)^\s*end;',
                              decl, re.S | re.M):
             if re.search(r'\[Test\]', m.group(2)):
-                com_testes.add(m.group(1))
+                with_tests.add(m.group(1))
         reg = set(re.findall(r'TDUnitX\s*\.\s*RegisterTestFixture\s*\(\s*(\w+)\s*\)', s))
-        faltando = com_testes - reg
-        if faltando:
-            problemas.append((rel(p), 'fixture NAO REGISTRADA: ' + ', '.join(sorted(faltando))))
-    return problemas
+        missing = with_tests - reg
+        if missing:
+            problems.append((rel(p), 'fixture NOT REGISTERED: ' + ', '.join(sorted(missing))))
+    return problems
 
 
 # [2] -------------------------------------------------------------------------
 
-def projetos_delphi_com_server():
+def delphi_projects_with_server():
     """.dpr files that compile src/server (they list the units one by one)."""
-    for p in arquivos_pascal(['tests', 'samples']):
+    for p in pascal_files(['tests', 'samples']):
         if not p.lower().endswith('.dpr'):
             continue
-        s = le(p)
+        s = read_text(p)
         if ('src' + os.sep + 'server') in s or 'src/server/' in s:
             yield p, s
 
 
-def verifica_units_do_server():
+def check_server_units():
     r"""Every unit of src/server must be in EVERY .dpr that uses the sub-module
     AND in the pascal_amqp_faa_server.lpk package.
 
@@ -193,31 +193,31 @@ def verifica_units_do_server():
     dies of an access violation at runtime, with everything compiling cleanly
     (AMQP.Server.Events, Inc. 2 of Phase 4.1).
     """
-    problemas = []
-    srv = os.path.join(RAIZ, 'src', 'server')
+    problems = []
+    srv = os.path.join(ROOT, 'src', 'server')
     if not os.path.isdir(srv):
-        return problemas
+        return problems
     units = sorted(n[:-4] for n in os.listdir(srv) if n.lower().endswith('.pas'))
-    for caminho, texto in projetos_delphi_com_server():
-        faltando = [u for u in units if u not in texto]
-        if faltando:
-            problemas.append((rel(caminho),
-                              'unit de src/server nao listada: ' + ', '.join(faltando)))
-        dproj = caminho[:-4] + '.dproj'
+    for path_, text_ in delphi_projects_with_server():
+        missing = [u for u in units if u not in text_]
+        if missing:
+            problems.append((rel(path_),
+                              'src/server unit not listed: ' + ', '.join(missing)))
+        dproj = path_[:-4] + '.dproj'
         if os.path.exists(dproj):
-            td = le(dproj)
-            faltam2 = [u for u in units if u in texto and u not in td]
-            if faltam2:
-                problemas.append((rel(dproj),
-                                  'unit no .dpr mas nao no .dproj: ' + ', '.join(faltam2)))
-    lpk = os.path.join(RAIZ, 'packages', 'pascal_amqp_faa_server.lpk')
+            td = read_text(dproj)
+            missing2 = [u for u in units if u in text_ and u not in td]
+            if missing2:
+                problems.append((rel(dproj),
+                                  'unit in the .dpr but not in the .dproj: ' + ', '.join(missing2)))
+    lpk = os.path.join(ROOT, 'packages', 'pascal_amqp_faa_server.lpk')
     if os.path.exists(lpk):
-        tl = le(lpk)
-        faltam3 = [u for u in units if ('<UnitName Value="%s"/>' % u) not in tl]
-        if faltam3:
-            problemas.append((rel(lpk),
-                              'unit de src/server nao listada no pacote: ' + ', '.join(faltam3)))
-    return problemas
+        tl = read_text(lpk)
+        missing3 = [u for u in units if ('<UnitName Value="%s"/>' % u) not in tl]
+        if missing3:
+            problems.append((rel(lpk),
+                              'src/server unit not listed in the package: ' + ', '.join(missing3)))
+    return problems
 
 
 # [3] -------------------------------------------------------------------------
@@ -225,102 +225,102 @@ def verifica_units_do_server():
 # FPCUnit's TAssert/TTestCase methods. In the master they are only valid when
 # qualified (`TAssert.AssertTrue(...)`); unqualified, they only compile in the
 # generated mirror.
-SO_NO_TTESTCASE = (
+TTESTCASE_ONLY = (
     'AssertEquals', 'AssertTrue', 'AssertFalse', 'AssertNull', 'AssertNotNull',
     'AssertSame', 'AssertNotSame', 'AssertException', 'Fail', 'Ignore',
 )
 
 
-def verifica_assercoes_qualificadas():
-    problemas = []
-    for p in mestres():
-        corpo = sem_comentarios(le(p))
-        for nome in SO_NO_TTESTCASE:
-            for m in re.finditer(r'(?<![\w.])' + nome + r'\s*\(', corpo, re.IGNORECASE):
-                problemas.append((rel(p), 'linha %d: %s sem o TAssert. na frente -- '
-                                  'no mestre so o dcc32 recusa' % (linha_de(corpo, m.start()), nome)))
-    return problemas
+def check_qualified_assertions():
+    problems = []
+    for p in masters():
+        body = without_comments(read_text(p))
+        for name_ in TTESTCASE_ONLY:
+            for m in re.finditer(r'(?<![\w.])' + name_ + r'\s*\(', body, re.IGNORECASE):
+                problems.append((rel(p), 'line %d: %s without TAssert. in front -- '
+                                  'in the master only dcc32 rejects it' % (line_of(body, m.start()), name_)))
+    return problems
 
 
 # [4] -------------------------------------------------------------------------
 
-VIS_SEM_RTTI = ('private', 'protected', 'strict private', 'strict protected')
-RE_SECAO = re.compile(r'^\s*(strict\s+private|strict\s+protected|private|'
+VIS_WITHOUT_RTTI = ('private', 'protected', 'strict private', 'strict protected')
+RE_SECTION = re.compile(r'^\s*(strict\s+private|strict\s+protected|private|'
                       r'protected|public|published)\s*$', re.IGNORECASE)
-RE_ATRIBUTO_DUNITX = re.compile(
+RE_DUNITX_ATTRIBUTE = re.compile(
     r'\[\s*(Setup|TearDown|SetupFixture|TearDownFixture|Test|TestCase)\b', re.IGNORECASE)
 
 
-def verifica_visibilidade_dos_atributos():
+def check_attribute_visibility():
     """Scans line by line keeping the last section seen; starts at `public`,
     the default of a Delphi class without a specifier."""
-    problemas = []
-    for p in mestres():
-        corpo = sem_comentarios(le(p))
+    problems = []
+    for p in masters():
+        body = without_comments(read_text(p))
         vis = 'public'
-        for n, linha in enumerate(corpo.splitlines(), 1):
-            m = RE_SECAO.match(linha)
+        for n, line in enumerate(body.splitlines(), 1):
+            m = RE_SECTION.match(line)
             if m:
                 vis = ' '.join(m.group(1).lower().split())
                 continue
-            if RE_ATRIBUTO_DUNITX.search(linha) and vis in VIS_SEM_RTTI:
-                problemas.append((rel(p), 'linha %d: atributo do DUnitX em secao %s -- o RTTI '
-                                  'padrao nao o enxerga, e ele nunca sera executado' % (n, vis)))
-    return problemas
+            if RE_DUNITX_ATTRIBUTE.search(line) and vis in VIS_WITHOUT_RTTI:
+                problems.append((rel(p), 'line %d: DUnitX attribute in a %s section -- the default '
+                                  'RTTI does not see it, and it will never run' % (n, vis)))
+    return problems
 
 
 # [5] -------------------------------------------------------------------------
 
 # Deliberately SHORT list: each entry cost a round-trip through the IDE.
-SO_NO_FPC = (
+FPC_ONLY = (
     'GetTempDir',        # use TempDir (AMQP.TestSupport)
     'GetLastOSError',    # use AmqpLastOsError (Delphi's RaiseLastOSError RAISES)
 )
 # In Delphi the unit is System.SysUtils: qualifying as `SysUtils.Xxx` does not
 # compile (E2003); `System.SysUtils.Xxx` does not compile in FPC.
-RE_QUALIF = re.compile(r'(?<![\w.])(?:System\s*\.\s*)?SysUtils\s*\.\s*[A-Za-z]')
+RE_QUALIFIED = re.compile(r'(?<![\w.])(?:System\s*\.\s*)?SysUtils\s*\.\s*[A-Za-z]')
 
 
-def verifica_rtl():
-    problemas = []
-    for p in mestres():
-        corpo = sem_comentarios(le(p))
-        impl = corpo.find('implementation')
-        for nome in SO_NO_FPC:
-            for m in re.finditer(r'(?<![\w.])' + nome + r'(?![\w])', corpo, re.IGNORECASE):
-                problemas.append((rel(p), 'linha %d: %s so existe no FPC'
-                                  % (linha_de(corpo, m.start()), nome)))
-        for m in RE_QUALIF.finditer(corpo, impl if impl > 0 else 0):
-            problemas.append((rel(p), 'linha %d: unit qualificada (SysUtils.) -- o nome '
-                              'difere entre os compiladores; mova para AMQP.TestSupport'
-                              % linha_de(corpo, m.start())))
-    return problemas
+def check_rtl():
+    problems = []
+    for p in masters():
+        body = without_comments(read_text(p))
+        impl = body.find('implementation')
+        for name_ in FPC_ONLY:
+            for m in re.finditer(r'(?<![\w.])' + name_ + r'(?![\w])', body, re.IGNORECASE):
+                problems.append((rel(p), 'line %d: %s only exists in FPC'
+                                  % (line_of(body, m.start()), name_)))
+        for m in RE_QUALIFIED.finditer(body, impl if impl > 0 else 0):
+            problems.append((rel(p), 'line %d: qualified unit (SysUtils.) -- the name '
+                              'differs between the compilers; move it to AMQP.TestSupport'
+                              % line_of(body, m.start())))
+    return problems
 
 
-CHECAGENS = [
-    ('[1] fixture com testes registrada no DUnitX', verifica_registro),
-    ('[2] units de src/server listadas em todo projeto Delphi e no .lpk', verifica_units_do_server),
-    ('[3] assercoes qualificadas com TAssert. nos mestres', verifica_assercoes_qualificadas),
-    ('[4] atributos do DUnitX em secao visivel ao RTTI', verifica_visibilidade_dos_atributos),
-    ('[5] RTL que so existe no FPC fora dos mestres', verifica_rtl),
+CHECKS = [
+    ('[1] fixture with tests registered in DUnitX', check_registration),
+    ('[2] src/server units listed in every Delphi project and in the .lpk', check_server_units),
+    ('[3] assertions qualified with TAssert. in the masters', check_qualified_assertions),
+    ('[4] DUnitX attributes in a section visible to RTTI', check_attribute_visibility),
+    ('[5] FPC-only RTL kept out of the masters', check_rtl),
 ]
 
 
 def main():
-    falhou = False
-    for titulo, fn in CHECAGENS:
-        print(titulo)
+    failed = False
+    for title, fn in CHECKS:
+        print(title)
         probs = fn()
         if probs:
-            falhou = True
-            for arq, msg in probs:
-                print('    FALHA  %s: %s' % (arq, msg))
+            failed = True
+            for file_, msg in probs:
+                print('    FAIL  %s: %s' % (file_, msg))
         else:
             print('    ok')
-    if falhou:
-        print('\nPROBLEMAS ENCONTRADOS')
+    if failed:
+        print('\nPROBLEMS FOUND')
         return 1
-    print('\nlimpo')
+    print('\nclean')
     return 0
 
 

@@ -79,7 +79,7 @@ comment.
   log: `-Fu...\external\pascal-common-faa\packages\lib\x86_64-win64`).
 - Version check after the `uses` that brings in `PascalCommon.Version` (in `AMQP.Threading`, which
   `AMQP.Connection` and `AMQP.Server.Engine` keep in their `uses` for that reason): raising the
-  minimum stops FPC 3.2.2 with `Fatal: User defined: pascal-amqp-faa precisa da
-  pascal-common-faa 1.0.0 ou mais nova`.
+  minimum stops FPC 3.2.2 with `Fatal: User defined: pascal-amqp-faa needs
+  pascal-common-faa 1.0.0 or newer`.
 - 64-bit counters: all 21 `PcAtomicRead64`/`PcAtomicWrite64` call sites target `UInt64` fields
   (ticks, LSN, journal bytes); the `var` parameter binds only the `UInt64` overload.

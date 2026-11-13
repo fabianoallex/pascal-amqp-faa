@@ -136,7 +136,7 @@ var
 begin
   Inc(Calls);
   if (FailAfterCalls > 0) and (Calls > FailAfterCalls) then
-    raise EAMQPTransport.Create('stream morto (teste)');
+    raise EAMQPTransport.Create('dead stream (test)');
   if LogLen + Count > Length(Log) then
     SetLength(Log, (LogLen + Count) * 2 + 64);
   P := @Buffer;
@@ -251,8 +251,8 @@ var
 begin
   R := TAMQPVirtualHostRegistry.Create;
   try
-    TAssert.AssertTrue('raiz presente por default', R.Contains('/'));
-    TAssert.AssertFalse(R.Contains('/inexistente'));
+    TAssert.AssertTrue('root present by default', R.Contains('/'));
+    TAssert.AssertFalse(R.Contains('/missing'));
   finally
     R.Free;
   end;
@@ -270,7 +270,7 @@ begin
     TAssert.AssertEquals(2, Length(R.ToArray));
     R.Remove('/app');
     TAssert.AssertFalse(R.Contains('/app'));
-    TAssert.AssertTrue('raiz intacta', R.Contains('/'));
+    TAssert.AssertTrue('root intact', R.Contains('/'));
   finally
     R.Free;
   end;
@@ -301,7 +301,7 @@ begin
     while Pos + 9 <= S.LogLen do
     begin
       Inc(Seen);
-      TAssert.AssertEquals('ordem no frame ' + IntToStr(Seen), Seen, Integer(S.Log[Pos + 7]));
+      TAssert.AssertEquals('order at frame ' + IntToStr(Seen), Seen, Integer(S.Log[Pos + 7]));
       Inc(Pos, 9);
     end;
     TAssert.AssertEquals(20, Seen);
@@ -332,11 +332,11 @@ begin
     Pos := 0;
     while Pos + 27 <= S.LogLen do
     begin
-      TAssert.AssertEquals('trinca coesa (h)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 16]));
-      TAssert.AssertEquals('trinca coesa (b)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 25]));
+      TAssert.AssertEquals('cohesive triple (h)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 16]));
+      TAssert.AssertEquals('cohesive triple (b)', Integer(S.Log[Pos + 7]), Integer(S.Log[Pos + 25]));
       Inc(Pos, 27);
     end;
-    TAssert.AssertEquals('todos os 80 lotes sairam', 80 * 27, S.LogLen);
+    TAssert.AssertEquals('all 80 batches went out', 80 * 27, S.LogLen);
   finally
     S.Free;
   end;
@@ -366,9 +366,9 @@ begin
       on EAMQPTransport do
         LRaised := True;
     end;
-    TAssert.AssertTrue('Post* deve levantar apos a falha', LRaised or W.Failed);
+    TAssert.AssertTrue('Post* must raise after the failure', LRaised or W.Failed);
     TAssert.AssertTrue('Failed=True', W.Failed);
-    TAssert.AssertTrue('LastError preenchido', W.LastError <> '');
+    TAssert.AssertTrue('LastError filled in', W.LastError <> '');
     W.Stop;
     W.Free;
   finally
@@ -390,10 +390,10 @@ begin
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    TAssert.AssertTrue('porta efetiva > 0', B.Port > 0);
+    TAssert.AssertTrue('effective port > 0', B.Port > 0);
     C := RawConnect(B.Port, True);
     try
-      TAssert.AssertTrue('cliente chegou pela porta informada',
+      TAssert.AssertTrue('client arrived through the given port',
         WaitConnCount(B, 1, 2000));
     finally
       C.Free;
@@ -421,7 +421,7 @@ begin
       Conns := B.Connections;
       TAssert.AssertEquals(1, Length(Conns));
       // The authenticator receives it (APeerAddress), so it can't go empty.
-      TAssert.AssertTrue('peer preenchido: ' + Conns[0].Peer,
+      TAssert.AssertTrue('peer filled in: ' + Conns[0].Peer,
         Pos('127.0.0.1:', Conns[0].Peer) = 1);
     finally
       C.Free;
@@ -453,8 +453,8 @@ begin
         LRaised := E.ClassName;
     end;
     // T6: the library's class, never the common's EPcTransport.
-    TAssert.AssertEquals('classe da excecao', 'EAMQPTransport', LRaised);
-    TAssert.AssertFalse('broker que nao escutou fica parado', B.Running);
+    TAssert.AssertEquals('exception class', 'EAMQPTransport', LRaised);
+    TAssert.AssertFalse('a broker that did not listen stays stopped', B.Running);
     // ...and a later Start on a free port works (the failed one undid itself).
     B.Port := 0;
     B.Start;
@@ -475,12 +475,12 @@ begin
   // options. Nagle on costs ~40 ms per round trip on Linux: the server suite
   // went from 50 s to 13 min without TCP_NODELAY (CLAUDE.md, gotchas).
   O := AmqpTcpOptions;
-  TAssert.AssertFalse('TCP_NODELAY (Nagle desligado)', O.Nagle);
-  TAssert.AssertEquals('sem keep-alive: o AMQP tem heartbeat', 0,
+  TAssert.AssertFalse('TCP_NODELAY (Nagle off)', O.Nagle);
+  TAssert.AssertEquals('no keep-alive: AMQP has heartbeat', 0,
     Integer(O.KeepAliveSeconds));
-  TAssert.AssertEquals('connect: o padrao da common', 0,
+  TAssert.AssertEquals('connect: the common default', 0,
     Integer(O.ConnectTimeoutMs));
-  TAssert.AssertEquals('connect: o valor pedido', 1234,
+  TAssert.AssertEquals('connect: the requested value', 1234,
     Integer(AmqpTcpOptions(1234).ConnectTimeoutMs));
 end;
 
@@ -523,14 +523,14 @@ begin
         C.Free;
       end;
       Echo.WaitFor;
-      TAssert.AssertEquals('eco sem erro', '', Echo.Error);
+      TAssert.AssertEquals('echo without error', '', Echo.Error);
     finally
       Echo.Free;
     end;
   finally
     L.Free;
   end;
-  TAssert.AssertTrue(Format('%d rodadas em %d ms (Nagle ligado: ~40 ms cada)',
+  TAssert.AssertTrue(Format('%d rounds in %d ms (Nagle on: ~40 ms each)',
     [ROUNDS, Integer(LElapsed)]), LElapsed < 400);
 end;
 
@@ -545,8 +545,8 @@ begin
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    TAssert.AssertTrue('rodando', B.Running);
-    TAssert.AssertTrue('porta efetiva', B.Port > 0);
+    TAssert.AssertTrue('running', B.Running);
+    TAssert.AssertTrue('effective port', B.Port > 0);
     B.Start; // no-op
     B.Stop;
     TAssert.AssertFalse(B.Running);
@@ -568,11 +568,11 @@ begin
     B.Start;
 
     C := RawConnect(B.Port, True);
-    TAssert.AssertTrue('conexao registrada', WaitConnCount(B, 1, 2000));
+    TAssert.AssertTrue('connection registered', WaitConnCount(B, 1, 2000));
     TAssert.AssertEquals(1, B.TotalAccepted);
 
     C.Free; // desconecta
-    TAssert.AssertTrue('conexao reapada apos desconexao', WaitConnCount(B, 0, 2000));
+    TAssert.AssertTrue('connection reaped after disconnect', WaitConnCount(B, 0, 2000));
 
     B.Stop;
   finally
@@ -593,9 +593,9 @@ begin
 
     C := RawConnect(B.Port, True, True); // wrong header
     try
-      TAssert.AssertTrue('conexao foi aceita', WaitAccepted(B, 1, 2000));
+      TAssert.AssertTrue('connection was accepted', WaitAccepted(B, 1, 2000));
       // the server closes on its own -> the connection leaves the registry
-      TAssert.AssertTrue('conexao fechada pelo servidor', WaitConnCount(B, 0, 2000));
+      TAssert.AssertTrue('connection closed by the server', WaitConnCount(B, 0, 2000));
     finally
       C.Free;
     end;
@@ -620,11 +620,11 @@ begin
 
     for I := 0 to High(Conns) do
       Conns[I] := RawConnect(B.Port, True);
-    TAssert.AssertTrue('10 conexoes vivas', WaitConnCount(B, 10, 3000));
+    TAssert.AssertTrue('10 live connections', WaitConnCount(B, 10, 3000));
 
     for I := 0 to High(Conns) do
       Conns[I].Free;
-    TAssert.AssertTrue('todas reapadas', WaitConnCount(B, 0, 3000));
+    TAssert.AssertTrue('all reaped', WaitConnCount(B, 0, 3000));
     TAssert.AssertEquals(10, B.TotalAccepted);
 
     B.Stop;
@@ -651,7 +651,7 @@ begin
 
     LStart := PcTickMs;
     B.Stop; // must drop all 5 and return quickly
-    TAssert.AssertTrue('Stop nao travou', PcTickMs - LStart < 5000);
+    TAssert.AssertTrue('Stop did not hang', PcTickMs - LStart < 5000);
     TAssert.AssertFalse(B.Running);
 
     for I := 0 to High(Conns) do
@@ -689,7 +689,7 @@ begin
         // Since WS4 the broker sends Connection.Start as soon as the
         // protocol header is accepted: drain that frame first.
         Reply := TAMQPFrame.ReadFrom(Strm, 131072);
-        TAssert.AssertTrue('primeiro frame e Connection.Start', Reply.IsMethod);
+        TAssert.AssertTrue('first frame is Connection.Start', Reply.IsMethod);
 
         HB := TAMQPFrame.Heartbeat;
         HB.WriteTo(Strm);
@@ -703,8 +703,8 @@ begin
           Sleep(10);
           Conns := B.Connections;
         end;
-        TAssert.AssertEquals('conexao viva', 1, Length(Conns));
-        TAssert.AssertTrue('heartbeat contabilizado', Conns[0].FramesRead >= 1);
+        TAssert.AssertEquals('connection alive', 1, Length(Conns));
+        TAssert.AssertTrue('heartbeat counted', Conns[0].FramesRead >= 1);
       finally
         Strm.Free;
       end;

@@ -106,7 +106,7 @@ procedure TfrmPos.BuildUI;
   end;
 
 begin
-  Caption := 'Posto - PDV';
+  Caption := 'Fuel Station - POS';
   Width := 900;
   Height := 640;
   Position := poScreenCenter;
@@ -129,7 +129,7 @@ begin
   lblPort := TLabel.Create(Self);
   lblPort.Parent := pnlTop;
   lblPort.SetBounds(190, 12, 40, 20);
-  lblPort.Caption := 'Porta:';
+  lblPort.Caption := 'Port:';
   edtPort := TEdit.Create(Self);
   edtPort.Parent := pnlTop;
   edtPort.SetBounds(234, 8, 66, 26);
@@ -138,31 +138,31 @@ begin
   lblPosName := TLabel.Create(Self);
   lblPosName.Parent := pnlTop;
   lblPosName.SetBounds(312, 12, 34, 20);
-  lblPosName.Caption := 'PDV:';
+  lblPosName.Caption := 'POS:';
   edtPosName := TEdit.Create(Self);
   edtPosName.Parent := pnlTop;
   edtPosName.SetBounds(348, 8, 90, 26);
-  edtPosName.Text := 'pdv-01';
+  edtPosName.Text := 'pos-01';
 
   lblPassword := TLabel.Create(Self);
   lblPassword.Parent := pnlTop;
   lblPassword.SetBounds(450, 12, 46, 20);
-  lblPassword.Caption := 'Senha:';
+  lblPassword.Caption := 'Password:';
   edtPassword := TEdit.Create(Self);
   edtPassword.Parent := pnlTop;
   edtPassword.SetBounds(500, 8, 90, 26);
-  edtPassword.Text := 'pdv';
+  edtPassword.Text := 'pos';
 
   btnConnect := TButton.Create(Self);
   btnConnect.Parent := pnlTop;
   btnConnect.SetBounds(604, 6, 120, 30);
-  btnConnect.Caption := 'Conectar';
+  btnConnect.Caption := 'Connect';
   btnConnect.OnClick := btnConnectClick;
 
   lblStatus := TLabel.Create(Self);
   lblStatus.Parent := pnlTop;
   lblStatus.SetBounds(12, 46, 850, 20);
-  lblStatus.Caption := 'Desconectado.';
+  lblStatus.Caption := 'Disconnected.';
   lblStatus.Font.Style := [fsBold];
 
   mmoLog := TMemo.Create(Self);
@@ -182,7 +182,7 @@ begin
   btnAdd.Parent := pnlLeft;
   btnAdd.Align := alBottom;
   btnAdd.Height := 34;
-  btnAdd.Caption := 'Adicionar a venda >>';
+  btnAdd.Caption := 'Add to sale >>';
   btnAdd.OnClick := btnAddClick;
 
   lvPending := TListView.Create(Self);
@@ -192,10 +192,10 @@ begin
   lvPending.ReadOnly := True;
   lvPending.RowSelect := True;
   NewColumn(lvPending, 'ID', 180);
-  NewColumn(lvPending, 'B/B', 50);
+  NewColumn(lvPending, 'P/N', 50);
   NewColumn(lvPending, 'Prod', 55);
-  NewColumn(lvPending, 'Litros', 70);
-  NewColumn(lvPending, 'Valor', 80);
+  NewColumn(lvPending, 'Liters', 70);
+  NewColumn(lvPending, 'Amount', 80);
 
   pnlRight := TPanel.Create(Self);
   pnlRight.Parent := Self;
@@ -206,7 +206,7 @@ begin
   lblSale := TLabel.Create(Self);
   lblSale.Parent := pnlRight;
   lblSale.Align := alTop;
-  lblSale.Caption := 'Sem venda aberta';
+  lblSale.Caption := 'No open sale';
   lblSale.Font.Style := [fsBold];
 
   pnlSaleButtons := TPanel.Create(Self);
@@ -218,25 +218,25 @@ begin
   btnRemove := TButton.Create(Self);
   btnRemove.Parent := pnlSaleButtons;
   btnRemove.SetBounds(4, 6, 130, 30);
-  btnRemove.Caption := 'Remover item';
+  btnRemove.Caption := 'Remove item';
   btnRemove.OnClick := btnRemoveClick;
 
   btnNew := TButton.Create(Self);
   btnNew.Parent := pnlSaleButtons;
   btnNew.SetBounds(142, 6, 130, 30);
-  btnNew.Caption := 'Nova venda';
+  btnNew.Caption := 'New sale';
   btnNew.OnClick := btnNewClick;
 
   btnFinish := TButton.Create(Self);
   btnFinish.Parent := pnlSaleButtons;
   btnFinish.SetBounds(4, 40, 130, 30);
-  btnFinish.Caption := 'Finalizar venda';
+  btnFinish.Caption := 'Finish sale';
   btnFinish.OnClick := btnFinishClick;
 
   btnCancel := TButton.Create(Self);
   btnCancel.Parent := pnlSaleButtons;
   btnCancel.SetBounds(142, 40, 130, 30);
-  btnCancel.Caption := 'Cancelar venda';
+  btnCancel.Caption := 'Cancel sale';
   btnCancel.OnClick := btnCancelClick;
 
   lvItems := TListView.Create(Self);
@@ -246,8 +246,8 @@ begin
   lvItems.ReadOnly := True;
   lvItems.RowSelect := True;
   NewColumn(lvItems, 'ID', 170);
-  NewColumn(lvItems, 'Valor', 70);
-  NewColumn(lvItems, 'Situacao', 170);
+  NewColumn(lvItems, 'Amount', 70);
+  NewColumn(lvItems, 'Status', 170);
 
   tmrUi := TTimer.Create(Self);
   tmrUi.Interval := 400;
@@ -261,7 +261,7 @@ begin
   FLogPend := TStringList.Create;
   BuildUI;
   SetConnected(False);
-  QLog('Informe host/porta/PDV e clique Conectar.');
+  QLog('Enter host/port/POS and click Connect.');
 end;
 
 procedure TfrmPos.FormClose(Sender: TObject; var Action: TCloseAction);
@@ -372,13 +372,13 @@ begin
       LIt.Caption := LItem.Id;
       LIt.SubItems.Add(FormatFloat('0.00', LItem.Fueling.TotalAmount));
       if LItem.Conflict then
-        LSituation := 'CONFLITO: ' + LItem.Obs
+        LSituation := 'CONFLICT: ' + LItem.Obs
       else if LItem.Confirmed then
         LSituation := 'ok'
       else if LItem.Obs <> '' then
         LSituation := LItem.Obs
       else
-        LSituation := 'pendente';
+        LSituation := 'pending';
       LIt.SubItems.Add(LSituation);
       if LItem.Id = LSelItem then
         LIt.Selected := True;
@@ -389,9 +389,9 @@ begin
 
   LSale := FModel.CurrentSale;
   if LSale = '' then
-    lblSale.Caption := 'Sem venda aberta'
+    lblSale.Caption := 'No open sale'
   else
-    lblSale.Caption := Format('Venda %s  |  %d itens  |  outbox: %d',
+    lblSale.Caption := Format('Sale %s  |  %d items  |  outbox: %d',
       [LSale, Length(LItems), FModel.ItemsInOutbox]);
 end;
 
@@ -418,14 +418,14 @@ begin
   FConnected := AValue;
   if AValue then
   begin
-    btnConnect.Caption := 'Desconectar';
-    lblStatus.Caption := 'Conectado como ' + edtPosName.Text;
+    btnConnect.Caption := 'Disconnect';
+    lblStatus.Caption := 'Connected as ' + edtPosName.Text;
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado.';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected.';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AValue;
@@ -447,7 +447,7 @@ begin
     FreeAndNil(FSync);
     FreeAndNil(FClient);
     SetConnected(False);
-    QLog('Desconectado.');
+    QLog('Disconnected.');
     Exit;
   end;
 
@@ -468,11 +468,11 @@ begin
 
     SetConnected(True);
     MarkDirty;
-    QLog('Conectado. Sincronizando abastecidas pendentes...');
+    QLog('Connected. Syncing pending fuelings...');
   except
     on E: Exception do
     begin
-      QLog('Falha ao conectar: ' + E.Message);
+      QLog('Failed to connect: ' + E.Message);
       FreeAndNil(FModel);
       FreeAndNil(FSync);
       FreeAndNil(FClient);
@@ -485,12 +485,12 @@ end;
 
 procedure TfrmPos.OnConnDisconnected(AConn: TAMQPConnection);
 begin
-  QLog('Conexao caiu -- reconectando. Operando em modo local ate voltar.');
+  QLog('Connection lost -- reconnecting. Running in local mode until it is back.');
 end;
 
 procedure TfrmPos.OnConnReconnected(AConn: TAMQPConnection);
 begin
-  QLog('Reconectado. Re-sincronizando e reconciliando a venda...');
+  QLog('Reconnected. Re-syncing and reconciling the sale...');
   if FSync <> nil then
     FSync.Resync;
   if FModel <> nil then
@@ -500,7 +500,7 @@ end;
 
 procedure TfrmPos.OnConnReconnectFailed(AConn: TAMQPConnection);
 begin
-  QLog('Reconexao esgotada.');
+  QLog('Reconnection attempts exhausted.');
 end;
 
 { ------------------------------------------------------------- actions --- }
@@ -512,7 +512,7 @@ begin
   LId := SelectedPendingId;
   if LId = '' then
   begin
-    QLog('Selecione uma abastecida na lista da esquerda.');
+    QLog('Select a fueling in the left-hand list.');
     Exit;
   end;
   FModel.AddItem(LId);

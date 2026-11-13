@@ -3,7 +3,7 @@ object frmBackOffice: TfrmBackOffice
   Height = 925
   Top = 0
   Width = 700
-  Caption = 'Retaguarda (VCL)'
+  Caption = 'BackOffice (VCL)'
   ClientHeight = 925
   ClientWidth = 700
   Color = clBtnFace
@@ -22,14 +22,14 @@ object frmBackOffice: TfrmBackOffice
     Top = 800
     Width = 175
     Anchors = [akLeft, akBottom]
-    Caption = 'Recebidas: 0   |   Prontas: 0'
+    Caption = 'Received: 0   |   Ready: 0'
   end
   object gbConnection: TGroupBox
     Left = 10
     Height = 212
     Top = 10
     Width = 675
-    Caption = ' Conexão '
+    Caption = ' Connection '
     ClientHeight = 187
     ClientWidth = 671
     ParentBackground = False
@@ -46,7 +46,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 20
       Top = 14
       Width = 37
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 20
@@ -60,21 +60,21 @@ object frmBackOffice: TfrmBackOffice
       Height = 20
       Top = 50
       Width = 53
-      Caption = 'Usuário:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 20
       Height = 20
       Top = 87
       Width = 43
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 182
       Height = 20
       Top = 142
       Width = 98
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Color = clRed
       Font.Height = -15
       Font.Name = 'Segoe UI'
@@ -128,7 +128,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 24
       Top = 85
       Width = 136
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -137,7 +137,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 24
       Top = 114
       Width = 212
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       TabOrder = 6
     end
     object btnConnect: TButton
@@ -145,7 +145,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 31
       Top = 136
       Width = 138
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -155,7 +155,7 @@ object frmBackOffice: TfrmBackOffice
     Height = 117
     Top = 232
     Width = 675
-    Caption = ' Consumo '
+    Caption = ' Consuming '
     ClientHeight = 92
     ClientWidth = 671
     ParentBackground = False
@@ -165,7 +165,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 20
       Top = 16
       Width = 26
-      Caption = 'Fila:'
+      Caption = 'Queue:'
     end
     object lblPrefetch: TLabel
       Left = 388
@@ -180,7 +180,7 @@ object frmBackOffice: TfrmBackOffice
       Top = 12
       Width = 250
       TabOrder = 0
-      Text = 'sefaz-respostas'
+      Text = 'authorizer-replies'
     end
     object edtPrefetch: TEdit
       Left = 488
@@ -195,7 +195,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 24
       Top = 54
       Width = 341
-      Caption = 'Confirmação manual (aceitar/rejeitar cada nota)'
+      Caption = 'Manual confirmation (accept/reject each invoice)'
       TabOrder = 2
     end
     object chkDedicated: TCheckBox
@@ -203,7 +203,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 24
       Top = 54
       Width = 250
-      Caption = 'Thread dedicada (ordem garantida)'
+      Caption = 'Dedicated thread (guaranteed order)'
       TabOrder = 3
     end
   end
@@ -212,7 +212,7 @@ object frmBackOffice: TfrmBackOffice
     Height = 75
     Top = 357
     Width = 675
-    Caption = ' Aprovação manual '
+    Caption = ' Manual approval '
     ClientHeight = 50
     ClientWidth = 671
     ParentBackground = False
@@ -222,7 +222,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 31
       Top = 6
       Width = 138
-      Caption = 'Aceitar (ACK)'
+      Caption = 'Accept (ACK)'
       Enabled = False
       TabOrder = 0
       OnClick = btnAcceptClick
@@ -232,7 +232,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 31
       Top = 6
       Width = 138
-      Caption = 'Rejeitar (NACK)'
+      Caption = 'Reject (NACK)'
       Enabled = False
       TabOrder = 1
       OnClick = btnRejectClick
@@ -242,7 +242,7 @@ object frmBackOffice: TfrmBackOffice
       Height = 24
       Top = 12
       Width = 183
-      Caption = 'Reencaminhar (requeue)'
+      Caption = 'Requeue'
       TabOrder = 2
     end
   end
@@ -254,7 +254,7 @@ object frmBackOffice: TfrmBackOffice
     Anchors = [akTop, akLeft, akRight, akBottom]
     Columns = <    
       item
-        Caption = 'Chave'
+        Caption = 'Key'
         Width = 238
       end    
       item
@@ -266,11 +266,11 @@ object frmBackOffice: TfrmBackOffice
         Width = 88
       end    
       item
-        Caption = 'Recebida'
+        Caption = 'Received'
         Width = 100
       end    
       item
-        Caption = 'Pronta'
+        Caption = 'Ready'
         Width = 100
       end>
     GridLines = True
@@ -285,7 +285,7 @@ object frmBackOffice: TfrmBackOffice
     Top = 795
     Width = 120
     Anchors = [akRight, akBottom]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 4
     OnClick = btnClearLogClick
   end
@@ -305,7 +305,7 @@ object frmBackOffice: TfrmBackOffice
     Top = 795
     Width = 120
     Anchors = [akRight, akBottom]
-    Caption = 'Limpar Lista'
+    Caption = 'Clear List'
     TabOrder = 6
     OnClick = Button1Click
   end

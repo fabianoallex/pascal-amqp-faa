@@ -3,7 +3,7 @@ object frmEvents: TfrmEvents
   Height = 800
   Top = 0
   Width = 875
-  Caption = 'Eventos (exchange topic)'
+  Caption = 'Events (topic exchange)'
   ClientHeight = 800
   ClientWidth = 875
   Color = clBtnFace
@@ -21,7 +21,7 @@ object frmEvents: TfrmEvents
     Height = 212
     Top = 10
     Width = 855
-    Caption = ' Conexão '
+    Caption = ' Connection '
     ClientHeight = 187
     ClientWidth = 851
     ParentBackground = False
@@ -38,7 +38,7 @@ object frmEvents: TfrmEvents
       Height = 20
       Top = 18
       Width = 37
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 20
@@ -52,21 +52,21 @@ object frmEvents: TfrmEvents
       Height = 20
       Top = 54
       Width = 53
-      Caption = 'Usuário:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 20
       Height = 20
       Top = 91
       Width = 43
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 175
       Height = 20
       Top = 156
       Width = 98
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Color = clRed
       Font.Height = -15
       Font.Name = 'Segoe UI'
@@ -120,7 +120,7 @@ object frmEvents: TfrmEvents
       Height = 24
       Top = 89
       Width = 136
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -129,7 +129,7 @@ object frmEvents: TfrmEvents
       Height = 24
       Top = 118
       Width = 212
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -139,7 +139,7 @@ object frmEvents: TfrmEvents
       Height = 31
       Top = 150
       Width = 138
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -149,7 +149,7 @@ object frmEvents: TfrmEvents
     Height = 150
     Top = 232
     Width = 500
-    Caption = ' Publicar evento '
+    Caption = ' Publish event '
     ClientHeight = 125
     ClientWidth = 496
     ParentBackground = False
@@ -173,7 +173,7 @@ object frmEvents: TfrmEvents
       Height = 20
       Top = 91
       Width = 75
-      Caption = 'Mensagem:'
+      Caption = 'Message:'
     end
     object edtExchange: TEdit
       Left = 150
@@ -181,7 +181,7 @@ object frmEvents: TfrmEvents
       Top = 13
       Width = 200
       TabOrder = 0
-      Text = 'notas-eventos'
+      Text = 'invoice-events'
     end
     object edtRoutingKey: TEdit
       Left = 150
@@ -189,7 +189,7 @@ object frmEvents: TfrmEvents
       Top = 49
       Width = 200
       TabOrder = 1
-      Text = 'nota.aprovada'
+      Text = 'invoice.approved'
     end
     object edtMessage: TEdit
       Left = 150
@@ -203,7 +203,7 @@ object frmEvents: TfrmEvents
       Height = 31
       Top = 83
       Width = 119
-      Caption = 'Publicar'
+      Caption = 'Publish'
       Enabled = False
       TabOrder = 3
       OnClick = btnPublishClick
@@ -214,7 +214,7 @@ object frmEvents: TfrmEvents
     Height = 150
     Top = 232
     Width = 345
-    Caption = ' Assinantes '
+    Caption = ' Subscribers '
     ClientHeight = 125
     ClientWidth = 341
     ParentBackground = False
@@ -232,14 +232,14 @@ object frmEvents: TfrmEvents
       Top = 13
       Width = 212
       TabOrder = 0
-      Text = 'nota.#'
+      Text = 'invoice.#'
     end
     object btnSubscribe: TButton
       Left = 15
       Height = 31
       Top = 53
       Width = 125
-      Caption = 'Assinar'
+      Caption = 'Subscribe'
       Enabled = False
       TabOrder = 1
       OnClick = btnSubscribeClick
@@ -249,7 +249,7 @@ object frmEvents: TfrmEvents
       Height = 31
       Top = 53
       Width = 175
-      Caption = 'Remover selecionado'
+      Caption = 'Remove selected'
       Enabled = False
       TabOrder = 2
       OnClick = btnRemoveClick
@@ -263,7 +263,7 @@ object frmEvents: TfrmEvents
     Anchors = [akTop, akLeft, akRight]
     Columns = <
       item
-        Caption = 'Nº'
+        Caption = 'No.'
         Width = 50
       end
       item
@@ -271,11 +271,11 @@ object frmEvents: TfrmEvents
         Width = 188
       end
       item
-        Caption = 'Fila'
+        Caption = 'Queue'
         Width = 312
       end
       item
-        Caption = 'Recebidas'
+        Caption = 'Received'
         Width = 100
       end>
     GridLines = True
@@ -292,11 +292,11 @@ object frmEvents: TfrmEvents
     Anchors = [akTop, akLeft, akRight]
     Columns = <
       item
-        Caption = 'Hora'
+        Caption = 'Time'
         Width = 112
       end
       item
-        Caption = 'Assinante'
+        Caption = 'Subscriber'
         Width = 188
       end
       item
@@ -304,7 +304,7 @@ object frmEvents: TfrmEvents
         Width = 175
       end
       item
-        Caption = 'Mensagem'
+        Caption = 'Message'
         Width = 275
       end>
     GridLines = True
@@ -319,7 +319,7 @@ object frmEvents: TfrmEvents
     Top = 670
     Width = 125
     Anchors = [akTop, akRight]
-    Caption = 'Limpar eventos'
+    Caption = 'Clear events'
     TabOrder = 5
     OnClick = btnClearListClick
   end
@@ -329,7 +329,7 @@ object frmEvents: TfrmEvents
     Top = 670
     Width = 125
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 6
     OnClick = btnClearLogClick
   end

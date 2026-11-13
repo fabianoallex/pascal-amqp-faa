@@ -173,9 +173,9 @@ procedure TConfirmTrackerTests.NoLsnAndNoPending_DoesNotDefer;
 begin
   // Phase 3's fast path still exists: a transient publish on a
   // channel with nothing pending confirms RIGHT AWAY, without going through the tracker.
-  CheckNot('nao adia', FTracker.TryDefer(1, 0, False));
-  CheckInt('nada ficou pendente', 0, FTracker.PendingCount);
-  CheckInt('e nada foi escrito por nossa conta', 0, Length(Confirms));
+  CheckNot('does not defer', FTracker.TryDefer(1, 0, False));
+  CheckInt('nothing left pending', 0, FTracker.PendingCount);
+  CheckInt('and nothing was written on our behalf', 0, Length(Confirms));
 end;
 
 procedure TConfirmTrackerTests.WithLsn_Defers_AndOnlyLeavesAfterTheMark;
@@ -184,15 +184,15 @@ var
 begin
   // The reason WS5 exists: with an LSN to wait for, the frame does NOT go out until the
   // disk answers.
-  CheckOk('adiou', FTracker.TryDefer(1, 10, False));
+  CheckOk('deferred', FTracker.TryDefer(1, 10, False));
   FTracker.Release(9); // the watermark has not reached it yet
-  CheckInt('segue pendente com a marca em 9', 1, FTracker.PendingCount);
+  CheckInt('still pending with the watermark at 9', 1, FTracker.PendingCount);
   FTracker.Release(10);
-  CheckInt('liberou com a marca em 10', 0, FTracker.PendingCount);
+  CheckInt('released with the watermark at 10', 0, FTracker.PendingCount);
   LC := Confirms;
-  CheckInt('um confirm', 1, Length(LC));
-  CheckInt('do seq 1', 1, Integer(LC[0].Seq));
-  CheckNot('e nao e nack', LC[0].Nack);
+  CheckInt('one confirm', 1, Length(LC));
+  CheckInt('for seq 1', 1, Integer(LC[0].Seq));
+  CheckNot('and it is not a nack', LC[0].Nack);
 end;
 
 procedure TConfirmTrackerTests.TransientBehindPersistent_Waits;
@@ -202,16 +202,16 @@ begin
   // Corollary (a) of D24. Seq 2 wrote nothing to disk and could go out
   // now -- but going out now would break the channel's confirm order, and the client
   // would see the ack for 2 before the one for 1. It waits, and goes out COLLAPSED with 1.
-  CheckOk('o persistente adia', FTracker.TryDefer(1, 10, False));
-  CheckOk('e o transiente atras dele TAMBEM adia', FTracker.TryDefer(2, 0, False));
+  CheckOk('the persistent one defers', FTracker.TryDefer(1, 10, False));
+  CheckOk('and the transient one behind it ALSO defers', FTracker.TryDefer(2, 0, False));
   FTracker.Release(9);
-  CheckInt('nenhum dos dois saiu', 2, FTracker.PendingCount);
+  CheckInt('neither went out', 2, FTracker.PendingCount);
   FTracker.Release(10);
-  CheckInt('os dois sairam juntos', 0, FTracker.PendingCount);
+  CheckInt('both went out together', 0, FTracker.PendingCount);
   LC := Confirms;
-  CheckInt('num frame so', 1, Length(LC));
-  CheckInt('com o MAIOR seq', 2, Integer(LC[0].Seq));
-  CheckOk('e multiple=true, que e o que resolve o seq 1', LC[0].Multiple);
+  CheckInt('in a single frame', 1, Length(LC));
+  CheckInt('with the HIGHEST seq', 2, Integer(LC[0].Seq));
+  CheckOk('and multiple=true, which is what settles seq 1', LC[0].Multiple);
 end;
 
 procedure TConfirmTrackerTests.SeveralPersistent_LeaveInOneAckWithMultiple;
@@ -221,11 +221,11 @@ var
 begin
   // The letter of D9: the whole prefix becomes ONE frame.
   for I := 1 to 5 do
-    CheckOk('adiou ' + IntToStr(I), FTracker.TryDefer(I, 100 + I, False));
+    CheckOk('deferred ' + IntToStr(I), FTracker.TryDefer(I, 100 + I, False));
   FTracker.Release(105);
   LC := Confirms;
-  CheckInt('cinco confirms num frame so', 1, Length(LC));
-  CheckInt('seq do ultimo', 5, Integer(LC[0].Seq));
+  CheckInt('five confirms in a single frame', 1, Length(LC));
+  CheckInt('seq of the last one', 5, Integer(LC[0].Seq));
   CheckOk('multiple', LC[0].Multiple);
 end;
 
@@ -239,10 +239,10 @@ begin
   FTracker.TryDefer(2, 20, False);
   FTracker.TryDefer(3, 30, False);
   FTracker.Release(20);
-  CheckInt('sobrou o seq 3', 1, FTracker.PendingCount);
+  CheckInt('seq 3 is left', 1, FTracker.PendingCount);
   LC := Confirms;
-  CheckInt('um frame', 1, Length(LC));
-  CheckInt('ate o seq 2', 2, Integer(LC[0].Seq));
+  CheckInt('one frame', 1, Length(LC));
+  CheckInt('up to seq 2', 2, Integer(LC[0].Seq));
   CheckOk('multiple', LC[0].Multiple);
 end;
 
@@ -256,16 +256,16 @@ begin
   FTracker.TryDefer(2, 0, True);  // reject-publish: nack, and does not wait for disk
   FTracker.TryDefer(3, 0, False);
   FTracker.Release(10);
-  CheckInt('tudo saiu', 0, FTracker.PendingCount);
+  CheckInt('everything went out', 0, FTracker.PendingCount);
   LC := Confirms;
-  CheckInt('tres frames e nao um', 3, Length(LC));
-  CheckInt('1o: ack ate o seq 1', 1, Integer(LC[0].Seq));
-  CheckNot('1o nao e nack', LC[0].Nack);
-  CheckInt('2o: o nack do seq 2', 2, Integer(LC[1].Seq));
-  CheckOk('2o e nack', LC[1].Nack);
-  CheckNot('e nack nunca vai com multiple', LC[1].Multiple);
-  CheckInt('3o: ack do seq 3', 3, Integer(LC[2].Seq));
-  CheckNot('3o nao e nack', LC[2].Nack);
+  CheckInt('three frames, not one', 3, Length(LC));
+  CheckInt('1st: ack up to seq 1', 1, Integer(LC[0].Seq));
+  CheckNot('1st is not a nack', LC[0].Nack);
+  CheckInt('2nd: the nack for seq 2', 2, Integer(LC[1].Seq));
+  CheckOk('2nd is a nack', LC[1].Nack);
+  CheckNot('and a nack never goes with multiple', LC[1].Multiple);
+  CheckInt('3rd: ack for seq 3', 3, Integer(LC[2].Seq));
+  CheckNot('3rd is not a nack', LC[2].Nack);
 end;
 
 procedure TConfirmTrackerTests.FailedJournal_AllPendingBecomesNack;
@@ -277,11 +277,11 @@ begin
   FTracker.TryDefer(1, 10, False);
   FTracker.TryDefer(2, 20, False);
   FTracker.FailAll;
-  CheckInt('nada ficou preso', 0, FTracker.PendingCount);
+  CheckInt('nothing got stuck', 0, FTracker.PendingCount);
   LC := Confirms;
-  CheckInt('um nack por seq', 2, Length(LC));
-  CheckOk('o 1o e nack', LC[0].Nack);
-  CheckOk('o 2o e nack', LC[1].Nack);
+  CheckInt('one nack per seq', 2, Length(LC));
+  CheckOk('the 1st is a nack', LC[0].Nack);
+  CheckOk('the 2nd is a nack', LC[1].Nack);
   CheckInt('seq 1', 1, Integer(LC[0].Seq));
   CheckInt('seq 2', 2, Integer(LC[1].Seq));
 end;
@@ -293,10 +293,10 @@ begin
   // to confirm to.
   FTracker.TryDefer(1, 10, False);
   FTracker.Detach;
-  CheckInt('o pendente foi descartado', 0, FTracker.PendingCount);
+  CheckInt('the pending one was discarded', 0, FTracker.PendingCount);
   FTracker.Release(10);
-  CheckNot('e nem adia mais', FTracker.TryDefer(2, 10, False));
-  CheckInt('nenhum frame', 0, Length(Confirms));
+  CheckNot('and it no longer defers', FTracker.TryDefer(2, 10, False));
+  CheckInt('no frame', 0, Length(Confirms));
 end;
 
 procedure TConfirmTrackerTests.FullOutput_DoesNotBlockTheReleaser;
@@ -312,13 +312,13 @@ begin
   try
     FTracker.TryDefer(1, 10, False);
     FTracker.Release(10);
-    CheckInt('a liberacao voltou sem esperar o stream', 0,
+    CheckInt('the release returned without waiting for the stream', 0,
       FTracker.PendingCount);
   finally
     FStream.Unblock;
   end;
   LC := Confirms;
-  CheckInt('e o frame saiu quando o stream destravou', 1, Length(LC));
+  CheckInt('and the frame went out once the stream unblocked', 1, Length(LC));
   CheckInt('seq 1', 1, Integer(LC[0].Seq));
 end;
 
@@ -346,10 +346,10 @@ begin
     // ONE fsync unblocks BOTH channels: that is what "watermark of the whole
     // broker" means.
     LSink.Durable(10);
-    CheckInt('canal A liberou', 0, LA.PendingCount);
-    CheckInt('canal B liberou', 0, LB.PendingCount);
-    CheckInt('um confirm em A', 1, Length(ReadConfirms(WrittenFrames(LWriterA, LStreamA))));
-    CheckInt('um confirm em B', 1, Length(ReadConfirms(WrittenFrames(LWriterB, LStreamB))));
+    CheckInt('channel A released', 0, LA.PendingCount);
+    CheckInt('channel B released', 0, LB.PendingCount);
+    CheckInt('one confirm on A', 1, Length(ReadConfirms(WrittenFrames(LWriterA, LStreamA))));
+    CheckInt('one confirm on B', 1, Length(ReadConfirms(WrittenFrames(LWriterB, LStreamB))));
     LA := nil;
     LB := nil;
     LSink := nil;
@@ -381,7 +381,7 @@ begin
     LSink.Durable(10);
     // Without Unregister, the journal thread would walk trackers of dead
     // channels on every fsync, forever.
-    CheckInt('o desregistrado nao foi avisado', 1, LT.PendingCount);
+    CheckInt('the unregistered one was not notified', 1, LT.PendingCount);
     LT.Detach; // otherwise the writer's TearDown would find it alive
     LT := nil;
     LSink := nil;
@@ -399,12 +399,12 @@ var
 begin
   LRec := TAMQPConfirmRegistry.Create;
   LSink := LRec as IAMQPDurabilitySink;
-  CheckInt('comeca em zero', 0, Integer(LRec.Watermark));
+  CheckInt('starts at zero', 0, Integer(LRec.Watermark));
   LSink.Durable(42);
-  CheckInt('anda com o fsync', 42, Integer(LRec.Watermark));
+  CheckInt('advances with the fsync', 42, Integer(LRec.Watermark));
   // RetryPending recovers what got stuck without INVENTING durability.
   LRec.RetryPending;
-  CheckInt('o retry nao mexe na marca', 42, Integer(LRec.Watermark));
+  CheckInt('the retry does not touch the watermark', 42, Integer(LRec.Watermark));
   LSink := nil;
   LRec := nil;
 end;

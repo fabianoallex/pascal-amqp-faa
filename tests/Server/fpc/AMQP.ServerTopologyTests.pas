@@ -254,13 +254,13 @@ begin
   end;
   try
     TAssert.AssertEquals('vhost', '/', R2.VHost);
-    TAssert.AssertEquals('nome', 'ex.um', R2.Name);
-    TAssert.AssertEquals('tipo', 'topic', R2.ExchangeType);
+    TAssert.AssertEquals('name', 'ex.um', R2.Name);
+    TAssert.AssertEquals('type', 'topic', R2.ExchangeType);
     TAssert.AssertTrue('durable', R2.Durable);
     TAssert.AssertFalse('auto-delete', R2.AutoDelete);
     TAssert.AssertTrue('internal', R2.Internal);
-    TAssert.AssertTrue('argumentos vieram', R2.Arguments <> nil);
-    TAssert.AssertEquals('uma chave', 1, R2.Arguments.Count);
+    TAssert.AssertTrue('arguments came through', R2.Arguments <> nil);
+    TAssert.AssertEquals('one key', 1, R2.Arguments.Count);
   finally
     R2.Arguments.Free;
   end;
@@ -283,10 +283,10 @@ begin
   end;
   try
     TAssert.AssertEquals('vhost', '/vh', R2.VHost);
-    TAssert.AssertEquals('nome', 'q.um', R2.Name);
+    TAssert.AssertEquals('name', 'q.um', R2.Name);
     TAssert.AssertTrue('durable', R2.Durable);
     TAssert.AssertTrue('auto-delete', R2.AutoDelete);
-    TAssert.AssertTrue('argumentos vieram', R2.Arguments <> nil);
+    TAssert.AssertTrue('arguments came through', R2.Arguments <> nil);
   finally
     R2.Arguments.Free;
   end;
@@ -315,11 +315,11 @@ procedure TTopoRecordTests.Name_RoundTrip;
 var
   R, R2: TAMQPRecName;
 begin
-  R.VHost := '/outro';
-  R.Name := 'q.apagada';
+  R.VHost := '/other';
+  R.Name := 'q.deleted';
   R2 := AmqpDecodeRecName(AmqpEncodeRecName(R));
-  TAssert.AssertEquals('vhost', '/outro', R2.VHost);
-  TAssert.AssertEquals('nome', 'q.apagada', R2.Name);
+  TAssert.AssertEquals('vhost', '/other', R2.VHost);
+  TAssert.AssertEquals('name', 'q.deleted', R2.Name);
 end;
 
 procedure TTopoRecordTests.EmptyArguments_ReturnAsNil;
@@ -339,7 +339,7 @@ begin
   finally
     R.Arguments.Free;
   end;
-  TAssert.AssertTrue('tabela vazia volta como nil', R2.Arguments = nil);
+  TAssert.AssertTrue('an empty table comes back as nil', R2.Arguments = nil);
 end;
 
 procedure TTopoRecordTests.NilArguments_EncodeLikeAnEmptyTable;
@@ -368,17 +368,17 @@ begin
     for I := 0 to High(LWithNil) do
       if LWithNil[I] <> LWithEmpty[I] then
         LEqual := False;
-  TAssert.AssertTrue('nil e tabela vazia dao o MESMO byte', LEqual);
+  TAssert.AssertTrue('nil and an empty table give the SAME byte', LEqual);
 end;
 
 procedure TTopoRecordTests.TopologyKinds_AreRecognized;
 begin
-  TAssert.AssertTrue('declare de exchange', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_DECLARE));
-  TAssert.AssertTrue('unbind de exchange', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_UNBIND));
+  TAssert.AssertTrue('exchange declare', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_DECLARE));
+  TAssert.AssertTrue('exchange unbind', AmqpIsTopoRecord(AMQP_REC_EXCHANGE_UNBIND));
   // The 20-29 range is content/placement (D22) and is NOT topology -- it is
   // what recovery uses to separate the two passes.
-  TAssert.AssertFalse('20 ja e conteudo', AmqpIsTopoRecord(20));
-  TAssert.AssertFalse('0 nao e nada', AmqpIsTopoRecord(0));
+  TAssert.AssertFalse('20 is already content', AmqpIsTopoRecord(20));
+  TAssert.AssertFalse('0 is nothing', AmqpIsTopoRecord(0));
 end;
 
 { TTopoPersistTests: helpers and SetUp/TearDown }
@@ -487,7 +487,7 @@ begin
   MakeExchange('ex.dur', 'topic', True, False);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('um registro do exchange', 1,
+    TAssert.AssertEquals('one exchange record', 1,
       CountWithPrefix(L, 'exchange.declare:ex.dur'));
   finally
     L.Free;
@@ -501,7 +501,7 @@ begin
   MakeExchange('ex.tra', 'direct', False, False);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('exchange transiente nao vai para o disco', 0,
+    TAssert.AssertEquals('a transient exchange does not go to disk', 0,
       CountWithPrefix(L, 'exchange.declare:ex.tra'));
   finally
     L.Free;
@@ -515,7 +515,7 @@ begin
   MakeQueue('q.dur', True, False, False);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('um registro da fila', 1, CountWithPrefix(L, 'queue.declare:q.dur'));
+    TAssert.AssertEquals('one queue record', 1, CountWithPrefix(L, 'queue.declare:q.dur'));
   finally
     L.Free;
   end;
@@ -528,7 +528,7 @@ begin
   MakeQueue('q.tra', False, False, False);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('fila transiente nao vai para o disco', 0,
+    TAssert.AssertEquals('a transient queue does not go to disk', 0,
       CountWithPrefix(L, 'queue.declare:q.tra'));
   finally
     L.Free;
@@ -545,7 +545,7 @@ begin
   MakeQueue('q.exc', True, True, False);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('exclusiva nao vai, mesmo declarada duravel', 0,
+    TAssert.AssertEquals('an exclusive one does not go, even if declared durable', 0,
       CountWithPrefix(L, 'queue.declare:q.exc'));
   finally
     L.Free;
@@ -563,7 +563,7 @@ begin
   MakeQueue('q.dur', True, False, False);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('tres declares, UM registro', 1,
+    TAssert.AssertEquals('three declares, ONE record', 1,
       CountWithPrefix(L, 'queue.declare:q.dur'));
   finally
     L.Free;
@@ -584,9 +584,9 @@ begin
   MakeBinding('q.dur', 'ex.tra', 'k');  // transient exchange -> not written
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('duravel x duravel', 1, CountWithPrefix(L, 'queue.bind:ex.dur->q.dur'));
-    TAssert.AssertEquals('fila transiente', 0, CountWithPrefix(L, 'queue.bind:ex.dur->q.tra'));
-    TAssert.AssertEquals('exchange transiente', 0, CountWithPrefix(L, 'queue.bind:ex.tra->q.dur'));
+    TAssert.AssertEquals('durable x durable', 1, CountWithPrefix(L, 'queue.bind:ex.dur->q.dur'));
+    TAssert.AssertEquals('transient queue', 0, CountWithPrefix(L, 'queue.bind:ex.dur->q.tra'));
+    TAssert.AssertEquals('transient exchange', 0, CountWithPrefix(L, 'queue.bind:ex.tra->q.dur'));
   finally
     L.Free;
   end;
@@ -609,7 +609,7 @@ begin
   end;
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('registro com argumentos', 1,
+    TAssert.AssertEquals('record with arguments', 1,
       CountWithPrefix(L, 'queue.declare:q.args:dur=True:ad=False:args=1'));
   finally
     L.Free;
@@ -629,7 +629,7 @@ begin
   FChan.DeleteQueue(LDel);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('o sumico foi registrado', 1, CountWithPrefix(L, 'queue.delete:q.dur'));
+    TAssert.AssertEquals('the removal was recorded', 1, CountWithPrefix(L, 'queue.delete:q.dur'));
   finally
     L.Free;
   end;
@@ -649,7 +649,7 @@ begin
   Sleep(400);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('auto-delete de fila duravel registrado', 1,
+    TAssert.AssertEquals('auto-delete of a durable queue recorded', 1,
       CountWithPrefix(L, 'queue.delete:q.ad'));
   finally
     L.Free;
@@ -673,7 +673,7 @@ begin
   Sleep(400);
   L := CloseAndReadWal;
   try
-    TAssert.AssertEquals('auto-delete de exchange duravel registrado', 1,
+    TAssert.AssertEquals('auto-delete of a durable exchange recorded', 1,
       CountWithPrefix(L, 'exchange.delete:ex.ad'));
   finally
     L.Free;
@@ -691,7 +691,7 @@ begin
     B.BindAddress := '127.0.0.1';
     B.Port := 0;
     B.Start;
-    TAssert.AssertTrue('DataDir vazio nao cria journal', B.Journal = nil);
+    TAssert.AssertTrue('an empty DataDir creates no journal', B.Journal = nil);
     B.Stop;
   finally
     B.Free;
@@ -709,7 +709,7 @@ var
 begin
   // D19: with an empty DataDir the broker is EXACTLY Phase 3's. Declaring
   // durable topology still works and writes nothing.
-  LDir := NewDir('amqpsemdd');
+  LDir := NewDir('amqpnodd');
   ForceDirectories(LDir);
   ClearDir(LDir);
   B := TAMQPServer.Create;
@@ -734,7 +734,7 @@ begin
   finally
     B.Free;
   end;
-  TAssert.AssertEquals('nenhum arquivo no diretorio', 0, CountFiles(LDir));
+  TAssert.AssertEquals('no file in the directory', 0, CountFiles(LDir));
 end;
 
 procedure TTopoNoDataDirTests.DataDir_DoesNotChangeWhileBrokerRuns;
@@ -749,12 +749,12 @@ begin
     B.Start;
     LRaised := False;
     try
-      B.DataDir := NewDir('amqpnaomuda');
+      B.DataDir := NewDir('amqpnochange');
     except
       on E: Exception do
         LRaised := True;
     end;
-    TAssert.AssertTrue('trocar DataDir com o broker no ar tem de levantar', LRaised);
+    TAssert.AssertTrue('changing DataDir with the broker running must raise', LRaised);
     B.Stop;
   finally
     B.Free;
@@ -773,14 +773,14 @@ begin
   // A journal that no longer accepts submits is the same situation as a failed journal
   // from the declarer's point of view: there is no way to record, and answering
   // Declare-Ok would be lying about durability.
-  LDir := NewDir('amqpfalha');
+  LDir := NewDir('amqpfail');
   LEngine := TAMQPEngine.Create;
   LJournal := TAMQPJournal.Create(LDir);
   try
     LJournal.Start;
     LEngine.Journal := LJournal;
     LJournal.Stop;
-    TAssert.AssertTrue('declare duravel avisa que nao da',
+    TAssert.AssertTrue('a durable declare reports that it cannot',
       LEngine.DeclareQueue('/', 'q.dur', False, True, False, False, nil, 0,
         LMsg, LCons) = amqerNoDurability);
   finally
@@ -798,14 +798,14 @@ var
   LMsg, LCons: Integer;
 begin
   // Whoever did not ask for durability must not be punished for it being broken.
-  LDir := NewDir('amqpfalha');
+  LDir := NewDir('amqpfail');
   LEngine := TAMQPEngine.Create;
   LJournal := TAMQPJournal.Create(LDir);
   try
     LJournal.Start;
     LEngine.Journal := LJournal;
     LJournal.Stop;
-    TAssert.AssertTrue('declare transiente segue normal',
+    TAssert.AssertTrue('a transient declare goes on as normal',
       LEngine.DeclareQueue('/', 'q.tra', False, False, False, False, nil, 0,
         LMsg, LCons) = amqerOk);
   finally

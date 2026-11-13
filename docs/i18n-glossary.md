@@ -2,11 +2,11 @@
 
 Reference for the effort of translating the lib into English. **As of 2026-11-12 the
 author decided the library is English only** for code comments, descriptions and
-documentation. Identifiers stay as they were (the client's public API was never
-renamed; the server's were renamed by this effort, see below), and the string literals
-in tests and samples (assertion messages, sample UI text) stay in Portuguese, with no
-code changes. Until that date comments stayed in Portuguese; what this effort changed
-first were identifiers (server) and the text of exception/error messages (client and server).
+documentation; on 2026-11-13 the rest followed: test, helper and sample identifiers,
+sample units/forms/folders, string literals in tests and samples, and tool interfaces.
+The client's public API needed no rename (it was already English). Before that,
+comments stayed in Portuguese; what this effort changed first were identifiers (server)
+and the text of exception/error messages (client and server).
 
 Not loaded automatically — consult it when renaming or reviewing the effort.
 
@@ -15,9 +15,10 @@ Not loaded automatically — consult it when renaming or reviewing the effort.
 | Layer | What is translated | What is NOT translated |
 |---|---|---|
 | Client (`src/AMQP.*.pas`) | exception message text; comments (since 2026-11-12) | **public identifiers** — the API's type/method/property names stay as they are (it is a distributed lib; renaming is a breaking change and would diverge from the sibling `delphi-amqp-faa`) |
-| Server (`src/server/AMQP.Server.*.pas`) | identifiers (not stable public API) **and** message text; comments (since 2026-11-12) | test names (`Route_ExchangeToExchange_Delivers` etc. — they are descriptions, not symbols) |
-| Tests | follow the rename of server identifiers; comments (since 2026-11-12) | assertion messages and test names stay in Portuguese |
-| Samples | comments (since 2026-11-12) | identifiers and UI text (string literals) stay in Portuguese |
+| Server (`src/server/AMQP.Server.*.pas`) | identifiers (not stable public API) **and** message text; comments (since 2026-11-12); `TAMQPWal.BytesDescartados` → `DiscardedBytes` (2026-11-13) | — |
+| Tests | comments (2026-11-12); test names, fixtures, helpers, assertion messages and test data (2026-11-13) | — |
+| Samples | comments (2026-11-12); identifiers, units, forms, folders and programs, UI text, logs and the FuelStation JSON contract (2026-11-13) | — |
+| Tools | script names (`crash_matrix.py`, `check_mirrors.py`), `AMQP_ACCEPTANCE_DURABLE`, CLI options and output markers (2026-11-13) | `tools/gen_fpc_mirror.py` (verbatim copy of the skill's) |
 | Documentation (`docs/`, README) | everything, prose included (since 2026-11-12; before that the prose stayed in Portuguese and only references to renamed identifiers were updated) | Portuguese identifiers quoted in backticks stay verbatim |
 
 ## Exception message convention

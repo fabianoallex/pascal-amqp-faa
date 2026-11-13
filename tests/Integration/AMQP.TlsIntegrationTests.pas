@@ -9,7 +9,7 @@
   themselves as IGNORED (IgnoreTest, from AMQP.TestSupport: in FPCUnit they
   show up in the report's "Number of ignored tests"; in DUnitX, which has no
   runtime ignore, they come out as Passed with the message
-  'IGNORADO: ...'), so as not to break the suite when only the plain broker
+  'IGNORED: ...'), so as not to break the suite when only the plain broker
   (5672) is up. The same path covers builds without a TLS backend
   (outside Windows without -dAMQP_OPENSSL): Open raises EAMQPConnection and the
   tests ignore themselves. To really run them outside Windows, compile the
@@ -92,7 +92,7 @@ function TAMQPTlsIntegrationTests.TlsUnavailable: Boolean;
 begin
   Result := not FAvailable;
   if Result then
-    IgnoreTest('broker TLS (5671) indisponível ou build sem backend TLS');
+    IgnoreTest('TLS broker (5671) unavailable or build without a TLS backend');
 end;
 
 function TAMQPTlsIntegrationTests.DeclareTempQueue: string;
@@ -181,11 +181,11 @@ begin
     Exit;
 
   LQueue := DeclareTempQueue;
-  FChan.PublishText('', LQueue, 'olá sobre TLS');
+  FChan.PublishText('', LQueue, 'héllo over TLS');
 
   LResult := GetWithRetry(LQueue);
-  TAssert.AssertTrue('mensagem deveria ter sido entregue sobre TLS', LResult.Found);
-  TAssert.AssertEquals('olá sobre TLS', LResult.BodyAsText);
+  TAssert.AssertTrue('message should have been delivered over TLS', LResult.Found);
+  TAssert.AssertEquals('héllo over TLS', LResult.BodyAsText);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_LargePayload_Intact;
@@ -206,10 +206,10 @@ begin
   FChan.PublishText('', LQueue, LBody);
 
   LResult := GetWithRetry(LQueue);
-  TAssert.AssertTrue('mensagem grande deveria ter sido entregue sobre TLS', LResult.Found);
-  TAssert.AssertEquals('tamanho do corpo', BODY_SIZE, Length(LResult.BodyAsText));
+  TAssert.AssertTrue('large message should have been delivered over TLS', LResult.Found);
+  TAssert.AssertEquals('body size', BODY_SIZE, Length(LResult.BodyAsText));
   // Direct equality (no AssertEquals) so as not to print 300KB in the report on failure.
-  TAssert.AssertTrue('corpo deveria voltar íntegro, byte a byte', LResult.BodyAsText = LBody);
+  TAssert.AssertTrue('body should come back intact, byte for byte', LResult.BodyAsText = LBody);
 end;
 
 procedure TAMQPTlsIntegrationTests.Tls_ConcurrentConsume_WithAck;
@@ -236,9 +236,9 @@ begin
   // the end and fails on the peak assertion (the right message), not on the count.
   WaitCount(N, 30000);
 
-  TAssert.AssertEquals('todas as mensagens deveriam ter sido processadas sobre TLS',
+  TAssert.AssertEquals('every message should have been processed over TLS',
     N, PcAtomicGet(FCount));
-  TAssert.AssertTrue('processamento deveria ser concorrente (pico > 1), não serializado',
+  TAssert.AssertTrue('processing should be concurrent (peak > 1), not serialized',
     PcAtomicGet(FPeak) > 1);
 end;
 
@@ -264,7 +264,7 @@ begin
   FPlainPortParams := IntegrationTlsParams;
   FPlainPortParams.Port := 5672;
 
-  CheckRaises('handshake TLS contra a porta plain deveria falhar com EAMQPTls',
+  CheckRaises('TLS handshake against the plain port should fail with EAMQPTls',
     EAMQPTls, DoOpenAgainstPlainPort);
 end;
 
@@ -290,7 +290,7 @@ begin
   FVerifyPeerParams := IntegrationTlsParams;
   FVerifyPeerParams.TlsVerifyPeer := True;
 
-  CheckRaises('validar o cert self-signed deveria recusar a conexão',
+  CheckRaises('verifying the self-signed cert should refuse the connection',
     EAMQPTls, DoOpenWithVerifyPeer);
 end;
 

@@ -90,7 +90,7 @@ procedure TfrmPanel.BuildUI;
   end;
 
 begin
-  Caption := 'Posto - Painel da Automacao';
+  Caption := 'Fuel Station - Automation Panel';
   Width := 960;
   Height := 660;
   Position := poScreenCenter;
@@ -104,7 +104,7 @@ begin
   lblPort := TLabel.Create(Self);
   lblPort.Parent := pnlTop;
   lblPort.SetBounds(12, 12, 40, 20);
-  lblPort.Caption := 'Porta:';
+  lblPort.Caption := 'Port:';
 
   edtPort := TEdit.Create(Self);
   edtPort.Parent := pnlTop;
@@ -114,37 +114,37 @@ begin
   lblPosPassword := TLabel.Create(Self);
   lblPosPassword.Parent := pnlTop;
   lblPosPassword.SetBounds(140, 12, 90, 20);
-  lblPosPassword.Caption := 'Senha PDV:';
+  lblPosPassword.Caption := 'POS password:';
 
   edtPosPassword := TEdit.Create(Self);
   edtPosPassword.Parent := pnlTop;
   edtPosPassword.SetBounds(232, 8, 90, 26);
-  edtPosPassword.Text := 'pdv';
+  edtPosPassword.Text := 'pos';
 
   btnStart := TButton.Create(Self);
   btnStart.Parent := pnlTop;
   btnStart.SetBounds(340, 6, 110, 30);
-  btnStart.Caption := 'Iniciar';
+  btnStart.Caption := 'Start';
   btnStart.OnClick := btnStartClick;
 
   btnStop := TButton.Create(Self);
   btnStop.Parent := pnlTop;
   btnStop.SetBounds(458, 6, 110, 30);
-  btnStop.Caption := 'Parar';
+  btnStop.Caption := 'Stop';
   btnStop.Enabled := False;
   btnStop.OnClick := btnStopClick;
 
   chkPumps := TCheckBox.Create(Self);
   chkPumps.Parent := pnlTop;
   chkPumps.SetBounds(584, 10, 180, 24);
-  chkPumps.Caption := 'Gerar abastecidas';
+  chkPumps.Caption := 'Generate fuelings';
   chkPumps.Checked := True;
   chkPumps.OnClick := chkPumpsClick;
 
   lblStatus := TLabel.Create(Self);
   lblStatus.Parent := pnlTop;
   lblStatus.SetBounds(12, 46, 900, 20);
-  lblStatus.Caption := 'Parado.';
+  lblStatus.Caption := 'Stopped.';
   lblStatus.Font.Style := [fsBold];
 
   pnlMiddle := TPanel.Create(Self);
@@ -164,9 +164,9 @@ begin
   lvPosTerminals.ViewStyle := vsReport;
   lvPosTerminals.ReadOnly := True;
   lvPosTerminals.RowSelect := True;
-  NewColumn(lvPosTerminals, 'PDV', 90);
-  NewColumn(lvPosTerminals, 'Estado', 100);
-  NewColumn(lvPosTerminals, 'Desde', 80);
+  NewColumn(lvPosTerminals, 'POS', 90);
+  NewColumn(lvPosTerminals, 'State', 100);
+  NewColumn(lvPosTerminals, 'Since', 80);
 
   pnlButtons := TPanel.Create(Self);
   pnlButtons.Parent := pnlMiddle;
@@ -177,13 +177,13 @@ begin
   btnRelease := TButton.Create(Self);
   btnRelease.Parent := pnlButtons;
   btnRelease.SetBounds(6, 6, 200, 30);
-  btnRelease.Caption := 'Liberar forcado (selecionada)';
+  btnRelease.Caption := 'Force release (selected)';
   btnRelease.OnClick := btnReleaseClick;
 
   btnDiscard := TButton.Create(Self);
   btnDiscard.Parent := pnlButtons;
   btnDiscard.SetBounds(214, 6, 200, 30);
-  btnDiscard.Caption := 'Descartar (selecionada)';
+  btnDiscard.Caption := 'Discard (selected)';
   btnDiscard.OnClick := btnDiscardClick;
 
   lvFuelings := TListView.Create(Self);
@@ -193,13 +193,13 @@ begin
   lvFuelings.ReadOnly := True;
   lvFuelings.RowSelect := True;
   NewColumn(lvFuelings, 'ID', 170);
-  NewColumn(lvFuelings, 'Bomba/Bico', 90);
-  NewColumn(lvFuelings, 'Produto', 70);
-  NewColumn(lvFuelings, 'Litros', 70);
-  NewColumn(lvFuelings, 'Valor', 80);
-  NewColumn(lvFuelings, 'Estado', 90);
-  NewColumn(lvFuelings, 'PDV', 80);
-  NewColumn(lvFuelings, 'Venda', 120);
+  NewColumn(lvFuelings, 'Pump/Nozzle', 90);
+  NewColumn(lvFuelings, 'Product', 70);
+  NewColumn(lvFuelings, 'Liters', 70);
+  NewColumn(lvFuelings, 'Amount', 80);
+  NewColumn(lvFuelings, 'State', 90);
+  NewColumn(lvFuelings, 'POS', 80);
+  NewColumn(lvFuelings, 'Sale', 120);
 
   mmoLog := TMemo.Create(Self);
   mmoLog.Parent := Self;
@@ -223,7 +223,7 @@ begin
   FApp.OnLog := QLog;
   FApp.OnChanged := MarkDirty;
   BuildUI;
-  QLog('Pronto. Ajuste a porta e clique Iniciar.');
+  QLog('Ready. Set the port and click Start.');
 end;
 
 procedure TfrmPanel.FormClose(Sender: TObject; var Action: TCloseAction);
@@ -335,9 +335,9 @@ begin
       LIt := lvPosTerminals.Items.Add;
       LIt.Caption := LP.LoginUser;
       if LP.Connected then
-        LIt.SubItems.Add('conectado')
+        LIt.SubItems.Add('connected')
       else
-        LIt.SubItems.Add('DESCONECTADO');
+        LIt.SubItems.Add('DISCONNECTED');
       LSeg := (AmqpWallMs - LP.SinceMs) div 1000;
       LIt.SubItems.Add(Format('%d:%.2d', [LSeg div 60, LSeg mod 60]));
     end;
@@ -365,13 +365,13 @@ begin
   // chkPumps stays always enabled: turns generation on/off with the server up
   if AValue then
   begin
-    lblStatus.Caption := Format('No ar em 0.0.0.0:%d  (automacao ; PDVs pdv-* / %s)',
+    lblStatus.Caption := Format('Up on 0.0.0.0:%d  (automation ; POS pos-* / %s)',
       [FApp.EffectivePort, edtPosPassword.Text]);
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    lblStatus.Caption := 'Parado.';
+    lblStatus.Caption := 'Stopped.';
     lblStatus.Font.Color := clMaroon;
   end;
 end;
@@ -386,7 +386,7 @@ begin
   except
     on E: Exception do
     begin
-      QLog('FALHA ao iniciar: ' + E.Message);
+      QLog('FAILED to start: ' + E.Message);
       try FApp.Shutdown; except end;
       SetRunning(False);
     end;
@@ -408,9 +408,9 @@ begin
   begin
     FApp.Pumps.SetPaused(not chkPumps.Checked);
     if chkPumps.Checked then
-      QLog('Geracao de abastecidas retomada.')
+      QLog('Fueling generation resumed.')
     else
-      QLog('Geracao de abastecidas pausada.');
+      QLog('Fueling generation paused.');
   end;
 end;
 
@@ -428,12 +428,12 @@ begin
   if LR.Ok and LR.Changed then
   begin
     FApp.Events.Available(LId, RSN_MANUAL_RELEASE, LR.Version);
-    QLog(Format('LIBERACAO MANUAL: %s (era %s de %s), versao %d',
+    QLog(Format('MANUAL RELEASE: %s (was %s of %s), version %d',
       [LId, StateToStr(LR.PreviousState), LR.PreviousPos, LR.Version]));
     MarkDirty;
   end
   else
-    QLog('Liberar forcado: nada a fazer para ' + LId);
+    QLog('Force release: nothing to do for ' + LId);
 end;
 
 procedure TfrmPanel.btnDiscardClick(Sender: TObject);
@@ -448,11 +448,11 @@ begin
   if LR.Ok and LR.Changed then
   begin
     FApp.Events.Discarded(LId, LR.Version);
-    QLog('DESCARTE: ' + LId + ' (versao ' + IntToStr(LR.Version) + ')');
+    QLog('DISCARD: ' + LId + ' (version ' + IntToStr(LR.Version) + ')');
     MarkDirty;
   end
   else if not LR.Ok then
-    QLog('Descartar recusado (' + LR.Reason + '): ' + LId);
+    QLog('Discard refused (' + LR.Reason + '): ' + LId);
 end;
 
 end.

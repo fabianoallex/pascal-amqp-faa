@@ -24,11 +24,11 @@
   request queue until the TTL (Expiration) runs out, and the client reports a
   timeout.
 
-  The "Usar Direct Reply-to" checkbox switches the client's reply mechanism
+  The "Use Direct Reply-to" checkbox switches the client's reply mechanism
   between the two classic RPC patterns, side by side:
 
   - Unchecked (named queue): declares an exclusive + auto-delete reply queue
-    with a FIXED name per instance ('consulta-resp-' + GUID), instead of a
+    with a FIXED name per instance ('status-reply-' + GUID), instead of a
     broker-generated name (declare with name ''). The reconnection topology
     replay resends the recorded declare; with name '' the broker would generate
     a NEW name and the recorded consumer would point at the old one, breaking
@@ -179,7 +179,7 @@ const
 {$ENDIF}
 
 const
-  cStatusWaiting = 'Aguardando resposta';
+  cStatusWaiting = 'Awaiting reply';
   cStatusTimeout    = 'Timeout';
 
 function NewGuidStr: string;
@@ -400,26 +400,26 @@ begin
   Result.AutoReconnect := True;
   Result.ReconnectDelayMs := 2000;
   Result.MaxReconnectAttempts := 0;
-  Result.ConnectionName := 'ConsultaStatusVcl';
+  Result.ConnectionName := 'StatusQueryVcl';
 end;
 
 procedure TfrmQuery.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -438,15 +438,15 @@ end;
 procedure TfrmQuery.SetServerRunning(ARunning: Boolean);
 begin
   if ARunning then
-    btnServer.Caption := 'Parar servidor'
+    btnServer.Caption := 'Stop server'
   else
-    btnServer.Caption := 'Iniciar servidor';
+    btnServer.Caption := 'Start server';
   edtDelay.Enabled := not ARunning;
 end;
 
 procedure TfrmQuery.RefreshServed;
 begin
-  lblServed.Caption := Format('Atendidas: %d', [FServed]);
+  lblServed.Caption := Format('Answered: %d', [FServed]);
 end;
 
 { --- server ---------------------------------------------------------------- }
@@ -466,10 +466,10 @@ begin
   Sleep(100 + Random(FDelayMaxMs)); // simulated query to the "database"
 
   case Random(10) of
-    0..6: LStatus := 'Autorizada';
-    7..8: LStatus := 'Rejeitada';
+    0..6: LStatus := 'Authorized';
+    7..8: LStatus := 'Rejected';
   else
-    LStatus := 'Em processamento';
+    LStatus := 'In progress';
   end;
 
   // Without ReplyTo there is nowhere to reply: serve it and drop it (a real
@@ -494,7 +494,7 @@ procedure TfrmQuery.RequestServed(const AKey, AStatus: string);
 begin
   Inc(FServed);
   RefreshServed;
-  Log(Format('Servidor: consulta da nota %s respondida: %s.', [AKey, AStatus]));
+  Log(Format('Server: query for invoice %s answered: %s.', [AKey, AStatus]));
 end;
 
 procedure TfrmQuery.btnServerClick(Sender: TObject);
@@ -506,10 +506,10 @@ begin
   begin
     try
       FServerChannel.Cancel(FServerTag);
-      Log('Servidor parado.');
+      Log('Server stopped.');
     except
       on E: Exception do
-        Log('Erro ao parar o servidor: ' + E.Message);
+        Log('Error stopping the server: ' + E.Message);
     end;
     FServerTag := '';
     SetServerRunning(False);
@@ -521,12 +521,12 @@ begin
     FDelayMaxMs := 1;
   try
     FServerTag := FServerChannel.Consume(FRequestQueue, OnRequest);
-    Log(Format('Servidor iniciado: consumindo "%s" (demora simulada até %d ms).',
+    Log(Format('Server started: consuming "%s" (simulated delay up to %d ms).',
       [FRequestQueue, FDelayMaxMs]));
     SetServerRunning(True);
   except
     on E: Exception do
-      Log('Erro ao iniciar o servidor: ' + E.Message);
+      Log('Error starting the server: ' + E.Message);
   end;
 end;
 
@@ -546,7 +546,7 @@ begin
   LKey := Trim(edtKey.Text);
   if LKey = '' then
   begin
-    Log('Informe a chave da nota.');
+    Log('Enter the invoice key.');
     Exit;
   end;
   LCount := StrToIntDef(Trim(edtQueryCount.Text), 1);
@@ -589,8 +589,8 @@ begin
     except
       on E: Exception do
       begin
-        Log('Erro ao publicar a consulta: ' + E.Message);
-        LItem.SubItems[1] := 'Erro no envio';
+        Log('Error publishing the query: ' + E.Message);
+        LItem.SubItems[1] := 'Send error';
         FPending.Remove(LCorr);
         LPendingQuery.Free;
         Break;
@@ -620,7 +620,7 @@ begin
   begin
     // Already expired (timeout) or unknown correlation: the RPC pattern's rule
     // is to drop it; whoever was waiting is gone.
-    Log(Format('Resposta tardia descartada (correlação %s): %s.',
+    Log(Format('Late reply discarded (correlation %s): %s.',
       [Copy(ACorrelationId, 2, 8), AStatus]));
     Exit;
   end;
@@ -631,7 +631,7 @@ begin
     LPendingQuery.Item.SubItems[1] := AStatus;
     LPendingQuery.Item.SubItems[3] := Format('%d ms', [Int64(LElapsedMs)]);
   end;
-  Log(Format('Resposta da nota %s: %s (%d ms).',
+  Log(Format('Reply for invoice %s: %s (%d ms).',
     [LPendingQuery.InvoiceKey, AStatus, Int64(LElapsedMs)]));
   LPendingQuery.Free;
 end;
@@ -660,7 +660,7 @@ begin
         LPendingQuery.Item.SubItems[1] := cStatusTimeout;
         LPendingQuery.Item.SubItems[3] := '—';
       end;
-      Log(Format('Timeout na consulta da nota %s (correlação %s).',
+      Log(Format('Timeout querying invoice %s (correlation %s).',
         [LPendingQuery.InvoiceKey, Copy(LCorr, 2, 8)]));
       LPendingQuery.Free;
     end;
@@ -689,23 +689,23 @@ end;
 
 procedure TfrmQuery.ConnectionDropped;
 begin
-  lblStatus.Caption := 'Conexão caiu — reconectando...';
+  lblStatus.Caption := 'Connection lost — reconnecting...';
   lblStatus.Font.Color := clMaroon;
-  Log('Conexão caiu. Reconexão automática em andamento; consultas em voo ' +
-    'vão expirar por timeout (a fila de respostas morre com a conexão).');
+  Log('Connection lost. Automatic reconnection in progress; in-flight queries ' +
+    'will time out (the reply queue dies with the connection).');
 end;
 
 procedure TfrmQuery.ConnectionRestored;
 begin
   SetConnected(True);
-  Log('Reconectado: filas e consumers restaurados (o servidor, se ativo, volta a atender).');
+  Log('Reconnected: queues and consumers restored (the server, if running, answers again).');
 end;
 
 procedure TfrmQuery.ConnectionFailed;
 begin
-  lblStatus.Caption := 'Reconexão esgotada';
+  lblStatus.Caption := 'Reconnection exhausted';
   lblStatus.Font.Color := clRed;
-  Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
+  Log('Reconnection gave up (MaxReconnectAttempts reached).');
 end;
 
 // The three connection events hop through PcPool instead of posting directly:
@@ -742,12 +742,12 @@ begin
       FreeAndNil(FServerChannel);
       FreeAndNil(FClientChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
-    CancelPending('Cancelada (desconexão)');
+    CancelPending('Cancelled (disconnected)');
     SetServerRunning(False);
     SetConnected(False);
     Exit;
@@ -796,7 +796,7 @@ begin
       // redeclare would generate a new name and the recorded consumer would point
       // at the old one). Exclusive + auto-delete: the broker removes it when the
       // connection dies.
-      FRepliesQueue := 'consulta-resp-' + Copy(NewGuidStr, 2, 8);
+      FRepliesQueue := 'status-reply-' + Copy(NewGuidStr, 2, 8);
       LDeclare := TAMQPQueueDeclare.Create(FRepliesQueue, False);
       LDeclare.Exclusive := True;
       LDeclare.AutoDelete := True;
@@ -804,17 +804,17 @@ begin
       FClientChannel.Consume(FRepliesQueue, OnReply, True); // NoAck=True
     end;
 
-    Log(Format('Conectado a %s:%d%s. Pedidos em "%s"; respostas via %s ("%s").',
+    Log(Format('Connected to %s:%d%s. Requests on "%s"; replies via %s ("%s").',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FRequestQueue,
-       IfThen(FDirectMode, 'Direct Reply-to', 'fila nomeada'), FRepliesQueue]));
-    Log('Dica: rode duas instâncias — servidor numa, cliente na outra. ' +
-      'Consultar sem servidor ativo termina em timeout (e o pedido expira ' +
-      'na fila junto).');
+       IfThen(FDirectMode, 'Direct Reply-to', 'named queue'), FRepliesQueue]));
+    Log('Tip: run two instances — the server in one, the client in the other. ' +
+      'Querying with no server running ends in a timeout (and the request expires ' +
+      'in the queue as well).');
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FServerChannel);
       FreeAndNil(FClientChannel);
       FreeAndNil(FConn);

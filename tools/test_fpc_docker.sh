@@ -37,7 +37,7 @@ cd "$ROOT"
 python tools/gen_fpc_mirror.py --check --suite tests/Unit --suite tests/Integration --suite tests/Server --suite tests/Outbox
 python tests/tools/check_mirrors.py > /dev/null || { python tests/tools/check_mirrors.py; exit 1; }
 [ -f external/pascal-common-faa/src/PascalCommon.Threading.pas ] \
-  || { echo "external/pascal-common-faa vazio: git submodule update --init"; exit 1; }
+  || { echo "external/pascal-common-faa empty: git submodule update --init"; exit 1; }
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   docker build -q -t "$IMAGE" - <<'EOF' >/dev/null

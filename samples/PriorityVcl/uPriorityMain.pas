@@ -310,26 +310,26 @@ begin
   Result.AutoReconnect := True;
   Result.ReconnectDelayMs := 2000;
   Result.MaxReconnectAttempts := 0;
-  Result.ConnectionName := 'PrioridadeVcl';
+  Result.ConnectionName := 'PriorityVcl';
 end;
 
 procedure TfrmPriority.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -349,9 +349,9 @@ end;
 procedure TfrmPriority.SetConsuming(AConsuming: Boolean);
 begin
   if AConsuming then
-    btnConsumer.Caption := 'Parar consumidor'
+    btnConsumer.Caption := 'Stop consumer'
   else
-    btnConsumer.Caption := 'Iniciar consumidor';
+    btnConsumer.Caption := 'Start consumer';
   edtDelay.Enabled := not AConsuming;
   edtPrefetch.Enabled := not AConsuming;
 end;
@@ -386,10 +386,10 @@ begin
     LMsgBody := 'msg-' + FormatDateTime('hhnnsszzz', Now);
   try
     PublishOne(LPrio, LMsgBody);
-    Log(Format('Publicada "%s" com prioridade %d.', [LMsgBody, LPrio]));
+    Log(Format('Published "%s" with priority %d.', [LMsgBody, LPrio]));
   except
     on E: Exception do
-      Log('Erro ao publicar: ' + E.Message);
+      Log('Error publishing: ' + E.Message);
   end;
 end;
 
@@ -415,13 +415,13 @@ begin
         LMap := LMap + ' ';
       LMap := LMap + Format('%s=p%d', [LMsgBody, LPrio]);
     end;
-    Log(Format('Lote publicado (%d msgs, pub#N=prioridade): %s',
+    Log(Format('Batch published (%d msgs, pub#N=priority): %s',
       [Length(cBatchPriorities), LMap]));
-    Log('Inicie o consumidor lento e observe a saída em ordem decrescente de ' +
-      'prioridade.');
+    Log('Start the slow consumer and watch the output in descending order of ' +
+      'priority.');
   except
     on E: Exception do
-      Log('Erro ao publicar o lote: ' + E.Message);
+      Log('Error publishing the batch: ' + E.Message);
   end;
 end;
 
@@ -450,7 +450,7 @@ var
   LAtBottom: Boolean;
 begin
   Inc(FConsumed);
-  lblConsumed.Caption := Format('Consumidas: %d', [FConsumed]);
+  lblConsumed.Caption := Format('Consumed: %d', [FConsumed]);
   Inc(FOutputSeq);
   LAtBottom := ScrollAtBottom(lvMessages.Handle);
   LItem := lvMessages.Items.Add;
@@ -462,7 +462,7 @@ begin
     LItem.MakeVisible(False);
   // Log of the OUTPUT order: this way the log text already shows the drain by
   // priority (output #N: priority P, body), without depending on the list.
-  Log(Format('Consumida (saída #%d): prioridade %d — %s',
+  Log(Format('Consumed (out #%d): priority %d — %s',
     [FOutputSeq, APriority, ABody]));
 end;
 
@@ -477,10 +477,10 @@ begin
   begin
     try
       FConsumeChannel.Cancel(FConsumerTag);
-      Log('Consumidor parado.');
+      Log('Consumer stopped.');
     except
       on E: Exception do
-        Log('Erro ao parar o consumidor: ' + E.Message);
+        Log('Error stopping the consumer: ' + E.Message);
     end;
     FConsumerTag := '';
     SetConsuming(False);
@@ -496,15 +496,15 @@ begin
   try
     FConsumeChannel.Qos(Word(LPrefetch));
     FConsumerTag := FConsumeChannel.Consume(FQueue, OnMessage); // manual ack
-    Log(Format('Consumidor iniciado: prefetch=%d, delay=%d ms por mensagem.',
+    Log(Format('Consumer started: prefetch=%d, delay=%d ms per message.',
       [LPrefetch, FDelayMs]));
     if LPrefetch > 1 then
-      Log('Aviso: prefetch > 1 despeja um lote no cliente de uma vez — a saída ' +
-        'deixa de respeitar estritamente a prioridade. Use 1 para ver o efeito.');
+      Log('Warning: prefetch > 1 dumps a batch on the client at once — the output ' +
+        'no longer strictly follows priority. Use 1 to see the effect.');
     SetConsuming(True);
   except
     on E: Exception do
-      Log('Erro ao iniciar o consumidor: ' + E.Message);
+      Log('Error starting the consumer: ' + E.Message);
   end;
 end;
 
@@ -512,10 +512,10 @@ end;
 
 procedure TfrmPriority.ConnectionDropped;
 begin
-  lblStatus.Caption := 'Conexão caiu — reconectando...';
+  lblStatus.Caption := 'Connection lost — reconnecting...';
   lblStatus.Font.Color := clMaroon;
-  Log('Conexão caiu. Reconexão automática em andamento; a fila e o consumidor ' +
-    'serão restaurados no recovery.');
+  Log('Connection lost. Automatic reconnection in progress; the queue and the consumer ' +
+    'will be restored by the recovery.');
 end;
 
 procedure TfrmPriority.ConnectionRestored;
@@ -523,14 +523,14 @@ begin
   SetConnected(True);
   if FConsumerTag <> '' then
     SetConsuming(True);
-  Log('Reconectado: fila, argumentos e consumidor restaurados.');
+  Log('Reconnected: queue, arguments and consumer restored.');
 end;
 
 procedure TfrmPriority.ConnectionFailed;
 begin
-  lblStatus.Caption := 'Reconexão esgotada';
+  lblStatus.Caption := 'Reconnection exhausted';
   lblStatus.Font.Color := clRed;
-  Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
+  Log('Reconnection gave up (MaxReconnectAttempts reached).');
 end;
 
 // The three connection events hop through PcPool instead of posting directly
@@ -568,10 +568,10 @@ begin
       FreeAndNil(FConsumeChannel);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConsuming(False);
     SetConnected(False);
@@ -615,18 +615,18 @@ begin
     // producer channel.
     FConsumeChannel := FConn.CreateChannel;
     FConsumed := 0;
-    lblConsumed.Caption := 'Consumidas: 0';
+    lblConsumed.Caption := 'Consumed: 0';
 
-    Log(Format('Conectado a %s:%d%s. Fila "%s" recriada com x-max-priority=%d.',
+    Log(Format('Connected to %s:%d%s. Queue "%s" recreated with x-max-priority=%d.',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FQueue, FMaxPrio]));
-    Log('Roteiro: com o consumidor PARADO, clique "Publicar lote" (prioridades ' +
-      'misturadas). Depois inicie o consumidor lento e veja a saída em ordem ' +
-      'decrescente de prioridade.');
+    Log('Walkthrough: with the consumer STOPPED, click "Publish batch" (mixed ' +
+      'priorities). Then start the slow consumer and watch the output in descending ' +
+      'order of priority.');
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FConsumeChannel);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);

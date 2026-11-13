@@ -23,7 +23,7 @@ object frmRetry: TfrmRetry
     Top = 8
     Width = 684
     Height = 170
-    Caption = ' Conex'#227'o '
+    Caption = ' Connection '
     TabOrder = 0
     object lblHost: TLabel
       Left = 16
@@ -37,7 +37,7 @@ object frmRetry: TfrmRetry
       Top = 28
       Width = 31
       Height = 15
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 16
@@ -51,21 +51,21 @@ object frmRetry: TfrmRetry
       Top = 57
       Width = 43
       Height = 15
-      Caption = 'Usu'#225'rio:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 16
       Top = 86
       Width = 35
       Height = 15
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 140
       Top = 145
       Width = 79
       Height = 15
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clRed
       Font.Height = -12
@@ -119,7 +119,7 @@ object frmRetry: TfrmRetry
       Top = 85
       Width = 190
       Height = 17
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -128,7 +128,7 @@ object frmRetry: TfrmRetry
       Top = 108
       Width = 190
       Height = 17
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -138,7 +138,7 @@ object frmRetry: TfrmRetry
       Top = 140
       Width = 110
       Height = 25
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -148,14 +148,14 @@ object frmRetry: TfrmRetry
     Top = 186
     Width = 335
     Height = 120
-    Caption = ' Topologia (recriada ao conectar) '
+    Caption = ' Topology (recreated on connect) '
     TabOrder = 1
     object lblQueue: TLabel
       Left = 16
       Top = 28
       Width = 51
       Height = 15
-      Caption = 'Fila base:'
+      Caption = 'Base queue:'
     end
     object lblBackoff: TLabel
       Left = 16
@@ -169,7 +169,7 @@ object frmRetry: TfrmRetry
       Top = 57
       Width = 80
       Height = 15
-      Caption = 'M'#225'x tentativas:'
+      Caption = 'Max attempts:'
     end
     object edtQueue: TEdit
       Left = 90
@@ -177,7 +177,7 @@ object frmRetry: TfrmRetry
       Width = 160
       Height = 23
       TabOrder = 0
-      Text = 'notas-processo'
+      Text = 'invoice-processing'
     end
     object edtBackoff: TEdit
       Left = 96
@@ -201,28 +201,28 @@ object frmRetry: TfrmRetry
     Top = 186
     Width = 341
     Height = 120
-    Caption = ' Processamento simulado '
+    Caption = ' Simulated processing '
     TabOrder = 2
     object lblFailFirst: TLabel
       Left = 12
       Top = 28
       Width = 88
       Height = 15
-      Caption = 'Falhar primeiras:'
+      Caption = 'Fail the first:'
     end
     object lblCount: TLabel
       Left = 190
       Top = 28
       Width = 24
       Height = 15
-      Caption = 'Qtd:'
+      Caption = 'Count:'
     end
     object lblCounters: TLabel
       Left = 12
       Top = 92
       Width = 150
       Height = 15
-      Caption = 'Publicadas: 0'
+      Caption = 'Published: 0'
     end
     object edtFailFirst: TEdit
       Left = 110
@@ -245,7 +245,7 @@ object frmRetry: TfrmRetry
       Top = 56
       Width = 120
       Height = 25
-      Caption = 'Publicar notas'
+      Caption = 'Publish invoices'
       Enabled = False
       TabOrder = 2
       OnClick = btnPublishClick
@@ -255,7 +255,7 @@ object frmRetry: TfrmRetry
       Top = 56
       Width = 130
       Height = 25
-      Caption = 'Iniciar consumo'
+      Caption = 'Start consuming'
       Enabled = False
       TabOrder = 3
       OnClick = btnConsumeClick
@@ -269,11 +269,11 @@ object frmRetry: TfrmRetry
     Anchors = [akLeft, akTop, akRight]
     Columns = <
       item
-        Caption = 'Chave'
+        Caption = 'Key'
         Width = 170
       end
       item
-        Caption = 'Tentativa'
+        Caption = 'Attempt'
         Width = 70
       end
       item
@@ -281,7 +281,7 @@ object frmRetry: TfrmRetry
         Width = 270
       end
       item
-        Caption = 'Atualizada'
+        Caption = 'Updated'
         Width = 90
       end>
     GridLines = True
@@ -296,7 +296,7 @@ object frmRetry: TfrmRetry
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar lista'
+    Caption = 'Clear list'
     TabOrder = 4
     OnClick = btnClearListClick
   end
@@ -306,7 +306,7 @@ object frmRetry: TfrmRetry
     Width = 100
     Height = 23
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 5
     OnClick = btnClearLogClick
   end

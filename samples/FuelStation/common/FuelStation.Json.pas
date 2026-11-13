@@ -213,7 +213,7 @@ type
 
 procedure TJsonParser.Fail(const AMsg: string);
 begin
-  raise EFuelStationJson.CreateFmt('JSON invalido na posicao %d: %s', [Pos, AMsg]);
+  raise EFuelStationJson.CreateFmt('invalid JSON at position %d: %s', [Pos, AMsg]);
 end;
 
 procedure TJsonParser.SkipWs;
@@ -243,10 +243,10 @@ var
   LCp, LLow: Cardinal;
 begin
   Result := '';
-  if Next <> '"' then Fail('esperava "');
+  if Next <> '"' then Fail('expected "');
   while True do
   begin
-    if Pos > Length(Txt) then Fail('string sem fechamento');
+    if Pos > Length(Txt) then Fail('unterminated string');
     C := Next;
     if C = '"' then
       Break
@@ -265,7 +265,7 @@ begin
         'u':
           begin
             LHex := Copy(Txt, Pos, 4);
-            if Length(LHex) < 4 then Fail('\u incompleto');
+            if Length(LHex) < 4 then Fail('incomplete \u');
             Inc(Pos, 4);
             LCp := StrToInt('$' + LHex);
             if (LCp >= $D800) and (LCp <= $DBFF) and
@@ -281,7 +281,7 @@ begin
             AppendCp(Result, LCp);
           end;
       else
-        Fail('escape desconhecido \' + C);
+        Fail('unknown escape \' + C);
       end;
     end
     else
@@ -314,7 +314,7 @@ begin
     Result.NumVal := StrToFloat(LTok, JsonFormatSettings);
   except
     Result.Free;
-    Fail('numero invalido "' + LTok + '"');
+    Fail('invalid number "' + LTok + '"');
   end;
 end;
 
@@ -322,7 +322,7 @@ function TJsonParser.ParseKeyword(const AWord: string; AKind: TJsonKind;
   ABool: Boolean): TJsonValue;
 begin
   if Copy(Txt, Pos, Length(AWord)) <> AWord then
-    Fail('esperava ' + AWord);
+    Fail('expected ' + AWord);
   Inc(Pos, Length(AWord));
   Result := TJsonValue.Create(AKind);
   Result.BoolVal := ABool;
@@ -344,7 +344,7 @@ begin
       ']': Break;
     else
       Result.Free;
-      Fail('esperava , ou ]');
+      Fail('expected , or ]');
     end;
   end;
 end;
@@ -361,10 +361,10 @@ begin
   while True do
   begin
     SkipWs;
-    if Peek <> '"' then begin Result.Free; Fail('esperava chave'); end;
+    if Peek <> '"' then begin Result.Free; Fail('expected key'); end;
     LKey := ParseString;
     SkipWs;
-    if Next <> ':' then begin Result.Free; Fail('esperava :'); end;
+    if Next <> ':' then begin Result.Free; Fail('expected :'); end;
     SkipWs;
     LChild := ParseValue;
     LChild.Name := LKey;
@@ -375,7 +375,7 @@ begin
       '}': Break;
     else
       Result.Free;
-      Fail('esperava , ou }');
+      Fail('expected , or }');
     end;
   end;
 end;
@@ -396,7 +396,7 @@ begin
     'n': Result := ParseKeyword('null', jkNull, False);
     '-', '0'..'9': Result := ParseNumber;
   else
-    Fail('valor inesperado');
+    Fail('unexpected value');
     Result := nil;
   end;
 end;
@@ -443,7 +443,7 @@ begin
   if LP.Pos <= Length(AText) then
   begin
     Result.Free;
-    raise EFuelStationJson.CreateFmt('JSON com lixo apos a posicao %d', [LP.Pos]);
+    raise EFuelStationJson.CreateFmt('trailing garbage in JSON after position %d', [LP.Pos]);
   end;
 end;
 

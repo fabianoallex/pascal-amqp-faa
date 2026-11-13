@@ -9,9 +9,9 @@ unit uHeadersMain;
 
   It is the counterpart of TopicEventsVcl (routing by hierarchical routing key):
   here the subscriber filters by independent attributes of the event; in the
-  example, `tipo` (nfe/nfce/cte) and `regiao` (sul/sudeste/...). A subscriber "all,
-  tipo=nfe, regiao=sul" only receives invoices from the south; an "any, tipo=nfe,
-  regiao=sul" receives any nfe OR any event from the south.
+  example, `type` (nfe/nfce/cte) and `region` (south/southeast/...). A subscriber "all,
+  type=nfe, region=south" only receives invoices from the south; an "any, type=nfe,
+  region=south" receives any nfe OR any event from the south.
 
   The only sample that exercises:
     - *binding arguments*: the `TAMQPFieldTable` in BindQueue (x-match + criteria),
@@ -54,7 +54,7 @@ type
     on unbind. Created/destroyed ONLY on the UI thread. }
   TSubscriber = class
     Number: Integer;
-    Match: string;      // 'all' ou 'any'
+    Match: string;      // 'all' or 'any'
     CritType: string;    // '' = not part of the criterion
     CritRegion: string;  // '' = not part of the criterion
     SubscriberQueue: string;
@@ -165,20 +165,20 @@ begin
   Result := Copy(GUIDToString(LGuid), 2, 8);
 end;
 
-// Readable text of a binding's criteria (e.g. 'tipo=nfe, regiao=sul').
+// Readable text of a binding's criteria (e.g. 'type=nfe, region=south').
 function DescribeCriteria(const AType, ARegion: string): string;
 begin
   Result := '';
   if AType <> '' then
-    Result := 'tipo=' + AType;
+    Result := 'type=' + AType;
   if ARegion <> '' then
   begin
     if Result <> '' then
       Result := Result + ', ';
-    Result := Result + 'regiao=' + ARegion;
+    Result := Result + 'region=' + ARegion;
   end;
   if Result = '' then
-    Result := '(sem critério)';
+    Result := '(no criteria)';
 end;
 
 // Builds the binding's argument table: x-match + the non-empty criteria.
@@ -190,9 +190,9 @@ begin
   Result := TAMQPFieldTable.Create;
   Result.Put('x-match', TValue.From<string>(AMatch));
   if AType <> '' then
-    Result.Put('tipo', TValue.From<string>(AType));
+    Result.Put('type', TValue.From<string>(AType));
   if ARegion <> '' then
-    Result.Put('regiao', TValue.From<string>(ARegion));
+    Result.Put('region', TValue.From<string>(ARegion));
 end;
 
 // Reads a string header from the delivery's table. The value is assigned to a
@@ -392,26 +392,26 @@ begin
   Result.AutoReconnect := True;
   Result.ReconnectDelayMs := 2000;
   Result.MaxReconnectAttempts := 0;
-  Result.ConnectionName := 'EventosHeadersVcl';
+  Result.ConnectionName := 'HeadersEventsVcl';
 end;
 
 procedure TfrmHeaders.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -443,7 +443,7 @@ begin
   try
     Inc(FNextNumber);
     LSubscriber.Number := FNextNumber;
-    LSubscriber.Match := cmbMatch.Text;               // 'all' ou 'any'
+    LSubscriber.Match := cmbMatch.Text;               // 'all' or 'any'
     LSubscriber.CritType := Trim(edtCritType.Text);
     LSubscriber.CritRegion := Trim(edtCritRegion.Text);
     LSubscriber.SubscriberQueue := Format('headers-sub%d-%s', [LSubscriber.Number, NewSuffix]);
@@ -473,7 +473,7 @@ begin
   except
     on E: Exception do
     begin
-      Log('Erro ao assinar (' + LSubscriber.Match + ', ' +
+      Log('Error subscribing (' + LSubscriber.Match + ', ' +
         DescribeCriteria(LSubscriber.CritType, LSubscriber.CritRegion) + '): ' + E.Message);
       LSubscriber.Free;
       Exit;
@@ -488,11 +488,11 @@ begin
   LSubscriber.Item.SubItems.Add('0');
   LSubscriber.Item.Data := LSubscriber;
   FSubscribers.Add(LSubscriber.Tag, LSubscriber);
-  Log(Format('Assinante %d criado: x-match=%s, %s (fila "%s").',
+  Log(Format('Subscriber %d created: x-match=%s, %s (queue "%s").',
     [LSubscriber.Number, LSubscriber.Match,
      DescribeCriteria(LSubscriber.CritType, LSubscriber.CritRegion), LSubscriber.SubscriberQueue]));
   if (LSubscriber.Match = 'any') and (LSubscriber.CritType = '') and (LSubscriber.CritRegion = '') then
-    Log('Aviso: x-match=any sem nenhum critério não casa com nada — nenhum evento chegará.');
+    Log('Warning: x-match=any with no criteria matches nothing — no event will arrive.');
 end;
 
 // Undoes in the reverse order of creation, and reconciles the recovery topology:
@@ -524,12 +524,12 @@ begin
     FChannel.DeleteQueue(LDelete);   // deletes the queue (and removes the declare from recovery)
   except
     on E: Exception do
-      Log('Erro ao remover assinante ' + IntToStr(ASubscriber.Number) + ': ' + E.Message);
+      Log('Error removing subscriber ' + IntToStr(ASubscriber.Number) + ': ' + E.Message);
   end;
   FSubscribers.Remove(ASubscriber.Tag);
   if ASubscriber.Item <> nil then
     ASubscriber.Item.Delete;
-  Log(Format('Assinante %d removido (x-match=%s, %s).',
+  Log(Format('Subscriber %d removed (x-match=%s, %s).',
     [ASubscriber.Number, ASubscriber.Match,
      DescribeCriteria(ASubscriber.CritType, ASubscriber.CritRegion)]));
   ASubscriber.Free;
@@ -541,7 +541,7 @@ begin
     Exit;
   if (lvSubscribers.Selected = nil) or (lvSubscribers.Selected.Data = nil) then
   begin
-    Log('Selecione um assinante na lista para remover.');
+    Log('Select a subscriber in the list to remove.');
     Exit;
   end;
   RemoveSubscriber(TSubscriber(lvSubscribers.Selected.Data));
@@ -579,8 +579,8 @@ begin
   LMarshal := TEventMarshal.Create;
   LMarshal.Form := Self;
   LMarshal.Tag := ADelivery.ConsumerTag; // identifies the subscriber
-  LMarshal.Kind := ReadHeader(ADelivery.Properties.Headers, 'tipo');
-  LMarshal.Region := ReadHeader(ADelivery.Properties.Headers, 'regiao');
+  LMarshal.Kind := ReadHeader(ADelivery.Properties.Headers, 'type');
+  LMarshal.Region := ReadHeader(ADelivery.Properties.Headers, 'region');
   LMarshal.BodyText := ADelivery.BodyAsText;
   TThread.Queue(nil, LMarshal.Execute);
 end;
@@ -618,16 +618,16 @@ var
 begin
   LMarshal := TReturnedEventMarshal.Create;
   LMarshal.Form := Self;
-  LMarshal.Kind := ReadHeader(AReturned.Properties.Headers, 'tipo');
-  LMarshal.Region := ReadHeader(AReturned.Properties.Headers, 'regiao');
+  LMarshal.Kind := ReadHeader(AReturned.Properties.Headers, 'type');
+  LMarshal.Region := ReadHeader(AReturned.Properties.Headers, 'region');
   LMarshal.BodyText := AReturned.BodyAsText;
   TThread.Queue(nil, LMarshal.Execute);
 end;
 
 procedure TfrmHeaders.EventReturned(const AType, ARegion, ABody: string);
 begin
-  Log(Format('Evento "%s" (tipo=%s, regiao=%s) DEVOLVIDO: nenhum binding casou ' +
-    '— pub/sub sem assinante perde o evento.',
+  Log(Format('Event "%s" (type=%s, region=%s) RETURNED: no binding matched ' +
+    '— pub/sub without a subscriber loses the event.',
     [ABody, AType, ARegion]));
 end;
 
@@ -653,9 +653,9 @@ begin
   LHeaders := TAMQPFieldTable.Create;
   try
     if LType <> '' then
-      LHeaders.Put('tipo', TValue.From<string>(LType));
+      LHeaders.Put('type', TValue.From<string>(LType));
     if LRegion <> '' then
-      LHeaders.Put('regiao', TValue.From<string>(LRegion));
+      LHeaders.Put('region', TValue.From<string>(LRegion));
 
     LProps := TAMQPBasicProperties.Empty;
     LProps.SetContentType('text/plain');
@@ -665,11 +665,11 @@ begin
       // NO matching binding, the broker returns the event (Basic.Return) instead
       // of dropping it silently, so it is visible in the log.
       FChannel.Publish(FExchange, '', AmqpUtf8Encode(LMsgBody), LProps, True);
-      Log(Format('Publicado "%s" com headers tipo=%s, regiao=%s.',
+      Log(Format('Published "%s" with headers type=%s, region=%s.',
         [LMsgBody, LType, LRegion]));
     except
       on E: Exception do
-        Log('Erro ao publicar: ' + E.Message);
+        Log('Error publishing: ' + E.Message);
     end;
   finally
     LHeaders.Free;
@@ -680,23 +680,23 @@ end;
 
 procedure TfrmHeaders.ConnectionDropped;
 begin
-  lblStatus.Caption := 'Conexão caiu — reconectando...';
+  lblStatus.Caption := 'Connection lost — reconnecting...';
   lblStatus.Font.Color := clMaroon;
-  Log('Conexão caiu. Reconexão automática em andamento; filas exclusivas e ' +
-    'bindings serão recriados no recovery.');
+  Log('Connection lost. Automatic reconnection in progress; exclusive queues and ' +
+    'bindings will be recreated by the recovery.');
 end;
 
 procedure TfrmHeaders.ConnectionRestored;
 begin
   SetConnected(True);
-  Log('Reconectado: exchange, filas, bindings e consumers restaurados.');
+  Log('Reconnected: exchange, queues, bindings and consumers restored.');
 end;
 
 procedure TfrmHeaders.ConnectionFailed;
 begin
-  lblStatus.Caption := 'Reconexão esgotada';
+  lblStatus.Caption := 'Reconnection exhausted';
   lblStatus.Font.Color := clRed;
-  Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
+  Log('Reconnection gave up (MaxReconnectAttempts reached).');
 end;
 
 // The three connection events hop through PcPool instead of posting directly
@@ -728,10 +728,10 @@ begin
       RemoveAllSubscribers;
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConnected(False);
     Exit;
@@ -751,16 +751,16 @@ begin
     FChannel.DeclareExchange(TAMQPExchangeDeclare.Create(FExchange,
       AMQP_EXCHANGE_TYPE_HEADERS));
 
-    Log(Format('Conectado a %s:%d%s. Exchange headers "%s" declarado.',
+    Log(Format('Connected to %s:%d%s. Headers exchange "%s" declared.',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FExchange]));
-    Log('Dica: crie assinantes com x-match all/any e critérios variados ' +
-      '(tipo, regiao) e publique eventos com headers diferentes — o mesmo ' +
-      'evento chega a todo assinante cujo critério casar.');
+    Log('Tip: create subscribers with x-match all/any and varied criteria ' +
+      '(type, region) and publish events with different headers — the same ' +
+      'event reaches every subscriber whose criteria match.');
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       SetConnected(False);

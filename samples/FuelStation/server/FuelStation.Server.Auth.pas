@@ -3,7 +3,7 @@
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
 { The station's authenticator (ARCHITECTURE.md §6.1): SASL PLAIN, accepts
-  'automacao' (the server's own connection) and any 'pdv-*' with the
+  'automation' (the server's own connection) and any 'pos-*' with the
   configured password. No register pre-enrollment -- a new POS joins the network
   and connects. The authenticated UserId is the POS name, and that is how Watcher
   maps connection -> POS.
@@ -53,25 +53,25 @@ var
   LUser, LPass: string;
 begin
   if not SameText(AMechanism, 'PLAIN') then
-    Exit(TAMQPAuthResult.Deny('mecanismo nao suportado'));
+    Exit(TAMQPAuthResult.Deny('unsupported mechanism'));
   if not AmqpParsePlainResponse(AResponse, LUser, LPass) then
-    Exit(TAMQPAuthResult.Deny('resposta PLAIN malformada'));
+    Exit(TAMQPAuthResult.Deny('malformed PLAIN response'));
 
   if LUser = AUTOMATION_USER then
   begin
     if LPass = FAutomationPassword then
       Exit(TAMQPAuthResult.Allow(LUser));
-    Exit(TAMQPAuthResult.Deny('senha invalida'));
+    Exit(TAMQPAuthResult.Deny('invalid password'));
   end;
 
   if Copy(LUser, 1, Length(POS_USER_PREFIX)) = POS_USER_PREFIX then
   begin
     if LPass = FPosPassword then
       Exit(TAMQPAuthResult.Allow(LUser));
-    Exit(TAMQPAuthResult.Deny('senha invalida'));
+    Exit(TAMQPAuthResult.Deny('invalid password'));
   end;
 
-  Result := TAMQPAuthResult.Deny('usuario nao reconhecido');
+  Result := TAMQPAuthResult.Deny('unknown user');
 end;
 
 end.

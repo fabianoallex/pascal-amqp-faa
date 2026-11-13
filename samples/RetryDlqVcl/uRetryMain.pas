@@ -418,19 +418,19 @@ procedure TfrmRetry.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   edtHost.Enabled := not AConnected;
@@ -450,15 +450,15 @@ end;
 procedure TfrmRetry.SetConsuming(AConsuming: Boolean);
 begin
   if AConsuming then
-    btnConsume.Caption := 'Parar consumo'
+    btnConsume.Caption := 'Stop consuming'
   else
-    btnConsume.Caption := 'Iniciar consumo';
+    btnConsume.Caption := 'Start consuming';
   edtFailFirst.Enabled := not AConsuming;
 end;
 
 procedure TfrmRetry.RefreshCounters;
 begin
-  lblCounters.Caption := Format('Publicadas: %d | Prontas: %d | Na DLQ: %d',
+  lblCounters.Caption := Format('Published: %d | Ready: %d | In DLQ: %d',
     [FPublished, FReady, FInDlq]);
 end;
 
@@ -527,7 +527,7 @@ begin
   LKey := ADelivery.BodyAsText;
   LAttempt := CountRejections(ADelivery.Properties, FWorkQueue) + 1;
 
-  QueueStatus(LKey, LAttempt, Format('Processando (tentativa %d)', [LAttempt]));
+  QueueStatus(LKey, LAttempt, Format('Processing (attempt %d)', [LAttempt]));
   Sleep(200 + Random(300)); // simulated processing
 
   if LAttempt > FFailFirst then
@@ -535,7 +535,7 @@ begin
     // Success: ack and end the cycle.
     AChannel.Ack(ADelivery.DeliveryTag);
     QueueStatus(LKey, LAttempt,
-      Format('Pronta (tentativa %d)', [LAttempt]), True);
+      Format('Ready (attempt %d)', [LAttempt]), True);
     Exit;
   end;
 
@@ -548,9 +548,9 @@ begin
     LProps.SetPersistent;
     AChannel.Publish('', FDlqQueue, AmqpUtf8Encode(LKey), LProps);
     AChannel.Ack(ADelivery.DeliveryTag);
-    LDlqStatus := Format('Falhou (tentativa %d) — enviada à DLQ', [LAttempt]);
+    LDlqStatus := Format('Failed (attempt %d) — sent to DLQ', [LAttempt]);
     QueueStatus(LKey, LAttempt, LDlqStatus);
-    QueueLog(Format('Nota %s esgotou as %d tentativas; movida para "%s".',
+    QueueLog(Format('Invoice %s used up its %d attempts; moved to "%s".',
       [LKey, FMaxAttempts, FDlqQueue]));
     Exit;
   end;
@@ -559,13 +559,13 @@ begin
   // sends it to the retry queue, which hands it back after the backoff.
   AChannel.Nack(ADelivery.DeliveryTag, False);
   QueueStatus(LKey, LAttempt,
-    Format('Falhou (tentativa %d) — retry em %d ms', [LAttempt, FBackoffMs]));
+    Format('Failed (attempt %d) — retry in %d ms', [LAttempt, FBackoffMs]));
 end;
 
 // DLQ watcher (automatic ack), only to mark the arrival on screen.
 procedure TfrmRetry.OnDlqInvoice(AChannel: TAMQPChannel; const ADelivery: TAMQPDelivery);
 begin
-  QueueStatus(ADelivery.BodyAsText, 0, 'Na DLQ', False, True);
+  QueueStatus(ADelivery.BodyAsText, 0, 'In DLQ', False, True);
 end;
 
 procedure TfrmRetry.btnConsumeClick(Sender: TObject);
@@ -579,10 +579,10 @@ begin
       FChannel.Cancel(FConsumeTag);
       if FDlqTag <> '' then
         FChannel.Cancel(FDlqTag);
-      Log('Consumo parado.');
+      Log('Consuming stopped.');
     except
       on E: Exception do
-        Log('Erro ao parar o consumo: ' + E.Message);
+        Log('Error stopping consumption: ' + E.Message);
     end;
     FConsumeTag := '';
     FDlqTag := '';
@@ -596,13 +596,13 @@ begin
   try
     FConsumeTag := FChannel.Consume(FWorkQueue, OnInvoice);
     FDlqTag := FChannel.Consume(FDlqQueue, OnDlqInvoice, True); // NoAck: only watches
-    Log(Format('Consumindo "%s" (falha simulada nas %d primeiras tentativas; ' +
-      'máx %d; backoff %d ms).',
+    Log(Format('Consuming "%s" (simulated failure on the first %d attempts; ' +
+      'max %d; backoff %d ms).',
       [FWorkQueue, FFailFirst, FMaxAttempts, FBackoffMs]));
     SetConsuming(True);
   except
     on E: Exception do
-      Log('Erro ao iniciar o consumo: ' + E.Message);
+      Log('Error starting consumption: ' + E.Message);
   end;
 end;
 
@@ -629,7 +629,7 @@ begin
     except
       on E: Exception do
       begin
-        Log('Erro ao publicar ' + LKey + ': ' + E.Message);
+        Log('Error publishing ' + LKey + ': ' + E.Message);
         Break;
       end;
     end;
@@ -637,7 +637,7 @@ begin
     LItem := lvInvoices.Items.Add;
     LItem.Caption := LKey;
     LItem.SubItems.Add('—');
-    LItem.SubItems.Add('Publicada');
+    LItem.SubItems.Add('Published');
     LItem.SubItems.Add(FormatDateTime('hh:nn:ss', Now));
     FItems.AddOrSetValue(LKey, LItem);
     Inc(FPublished);
@@ -645,7 +645,7 @@ begin
       LItem.MakeVisible(False);
   end;
   RefreshCounters;
-  Log(Format('%d nota(s) publicada(s) em "%s".', [LCount, FWorkQueue]));
+  Log(Format('%d invoice(s) published to "%s".', [LCount, FWorkQueue]));
 end;
 
 { --- UI updates ------------------------------------------------------------- }
@@ -665,12 +665,12 @@ begin
   if AReady then
   begin
     Inc(FReady);
-    Log(Format('Nota %s pronta (tentativa %d).', [AKey, AAttempt]));
+    Log(Format('Invoice %s ready (attempt %d).', [AKey, AAttempt]));
   end;
   if ADlq then
   begin
     Inc(FInDlq);
-    Log(Format('Nota %s confirmada na DLQ.', [AKey]));
+    Log(Format('Invoice %s acknowledged in the DLQ.', [AKey]));
   end;
   if AReady or ADlq then
     RefreshCounters;
@@ -678,22 +678,22 @@ end;
 
 procedure TfrmRetry.ConnectionDropped;
 begin
-  lblStatus.Caption := 'Conexão caiu — reconectando...';
+  lblStatus.Caption := 'Connection lost — reconnecting...';
   lblStatus.Font.Color := clMaroon;
-  Log('Conexão caiu. Reconexão automática em andamento (filas duráveis: nada se perde).');
+  Log('Connection lost. Automatic reconnection in progress (durable queues: nothing is lost).');
 end;
 
 procedure TfrmRetry.ConnectionRestored;
 begin
   SetConnected(True);
-  Log('Reconectado: topologia e consumers restaurados.');
+  Log('Reconnected: topology and consumers restored.');
 end;
 
 procedure TfrmRetry.ConnectionFailed;
 begin
-  lblStatus.Caption := 'Reconexão esgotada';
+  lblStatus.Caption := 'Reconnection exhausted';
   lblStatus.Font.Color := clRed;
-  Log('Reconexão desistiu (MaxReconnectAttempts atingido).');
+  Log('Reconnection gave up (MaxReconnectAttempts reached).');
 end;
 
 // The three connection events hop through PcPool instead of posting directly
@@ -730,10 +730,10 @@ begin
       FDlqTag := '';
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConsuming(False);
     SetConnected(False);
@@ -761,16 +761,16 @@ begin
     FChannel.Qos(8);
     CreateTopology;
 
-    Log(Format('Conectado a %s:%d%s. Topologia recriada: "%s" (trabalho, DLX' +
-      '->retry), "%s" (espera, TTL %d ms, DLX->trabalho), "%s" (DLQ). Máx %d ' +
-      'tentativas.',
+    Log(Format('Connected to %s:%d%s. Topology recreated: "%s" (work, DLX' +
+      '->retry), "%s" (wait, TTL %d ms, DLX->work), "%s" (DLQ). Max %d ' +
+      'attempts.',
       [LParams.Host, LParams.Port, LParams.VirtualHost, FWorkQueue,
        FRetryQueue, FBackoffMs, FDlqQueue, FMaxAttempts]));
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       SetConnected(False);

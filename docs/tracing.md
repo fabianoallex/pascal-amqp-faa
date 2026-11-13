@@ -14,7 +14,7 @@ The application turns the tracer on once, with whatever exporter it wants (pasca
 ```pascal
 uses PascalCommon.Tracing;
 
-TPcTracing.Start(TPcTracingOptions.FromEnvironment('pedidos', '1.0.0'), MeuExportador);
+TPcTracing.Start(TPcTracingOptions.FromEnvironment('orders', '1.0.0'), MyExporter);
 ...
 TPcTracing.Shutdown; // before the program ends, to export the last spans
 ```
@@ -29,19 +29,19 @@ The publish span's `traceparent` (and `tracestate`, when there is one) goes in t
 headers**, as a longstr. On the other side, the consumer callback runs with the `process` span
 as the current span, so whatever it does (a query, a Redis command, another publish) joins
 the same trace. An HTTP request that publishes and a worker that consumes show up as **a single
-trace**: `GET /pedidos` → `publish amq.default` → `process pedidos` → ...
+trace**: `GET /orders` → `publish amq.default` → `process orders` → ...
 
 Whoever processes the result of a `BasicGet` in the producer's trace opens the span with the
 message properties:
 
 ```pascal
-R := Ch.BasicGet('pedidos', False);
+R := Ch.BasicGet('orders', False);
 if R.Found then
 begin
-  S := AmqpStartProcessSpan('pedidos', R.Properties, R.RoutingKey, Length(R.Body),
+  S := AmqpStartProcessSpan('orders', R.Properties, R.RoutingKey, Length(R.Body),
     R.DeliveryTag, R.Redelivered);
   try
-    Processa(R);
+    Process(R);
     AmqpFinishSpan(S, nil);
   except
     on E: Exception do

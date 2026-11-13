@@ -58,9 +58,9 @@ begin
   LConn := TAMQPConnection.Create(IntegrationParams);
   try
     LConn.Open;
-    TAssert.AssertTrue('deveria estar aberta após o handshake', LConn.IsOpen);
+    TAssert.AssertTrue('should be open after the handshake', LConn.IsOpen);
     LConn.Close;
-    TAssert.AssertFalse('deveria estar fechada após Close', LConn.IsOpen);
+    TAssert.AssertFalse('should be closed after Close', LConn.IsOpen);
   finally
     LConn.Free;
   end;
@@ -77,10 +77,10 @@ begin
     LTune := LConn.NegotiatedTune;
     // The negotiated channel-max must never exceed the client's proposal
     // (2047) nor be 0 (RabbitMQ 3.13 proposes 2047 by default).
-    TAssert.AssertTrue('channel-max deveria ser > 0', LTune.ChannelMax > 0);
-    TAssert.AssertTrue('channel-max não deveria exceder 2047', LTune.ChannelMax <= 2047);
+    TAssert.AssertTrue('channel-max should be > 0', LTune.ChannelMax > 0);
+    TAssert.AssertTrue('channel-max should not exceed 2047', LTune.ChannelMax <= 2047);
     // frame-max must respect the protocol minimum (4096).
-    TAssert.AssertTrue('frame-max deveria ser >= 4096', LTune.FrameMax >= 4096);
+    TAssert.AssertTrue('frame-max should be >= 4096', LTune.FrameMax >= 4096);
     LConn.Close;
   finally
     LConn.Free;
@@ -92,7 +92,7 @@ var
   LRaised: Boolean;
 begin
   FParams := IntegrationParams;
-  FParams.Password := 'senha-obviamente-errada';
+  FParams.Password := 'obviously-wrong-password';
   // With the authentication_failure_close capability, the server replies
   // Connection.Close (403) — but we accept any exception (in old versions the
   // broker may just drop the socket). CheckRaises requires the EXACT class,
@@ -106,13 +106,13 @@ begin
     on E: Exception do
       LRaised := True;
   end;
-  TAssert.AssertTrue('deveria ter levantado uma exceção para credenciais inválidas', LRaised);
+  TAssert.AssertTrue('should have raised an exception for invalid credentials', LRaised);
 end;
 
 procedure TAMQPHandshakeIntegrationTests.NonexistentVirtualHost_Raises;
 begin
   FParams := IntegrationParams;
-  FParams.VirtualHost := '/vhost-que-nao-existe';
+  FParams.VirtualHost := '/vhost-that-does-not-exist';
   CheckRaises(EAMQPConnection, DoOpenWithParams);
 end;
 
@@ -128,14 +128,14 @@ begin
   LConn := TAMQPConnection.Create(LParams);
   try
     LConn.Open;
-    TAssert.AssertTrue('heartbeat deveria ser > 0', LConn.NegotiatedTune.Heartbeat > 0);
-    TAssert.AssertTrue('heartbeat negociado <= 2s', LConn.NegotiatedTune.Heartbeat <= 2);
+    TAssert.AssertTrue('heartbeat should be > 0', LConn.NegotiatedTune.Heartbeat > 0);
+    TAssert.AssertTrue('negotiated heartbeat <= 2s', LConn.NegotiatedTune.Heartbeat <= 2);
 
     // Stays idle for more than 2x the interval. Without heartbeat, the broker
     // would drop the connection; with heartbeat, it stays alive.
     TThread.Sleep(5000);
 
-    TAssert.AssertTrue('conexão deveria continuar aberta após ociosidade', LConn.IsOpen);
+    TAssert.AssertTrue('connection should stay open after idling', LConn.IsOpen);
 
     // And it is still usable:
     LChan := LConn.CreateChannel;
@@ -143,7 +143,7 @@ begin
       LDecl := Default(TAMQPQueueDeclare);
       LDecl.Exclusive := True;
       LDecl.AutoDelete := True;
-      TAssert.AssertTrue('canal deveria funcionar após o período ocioso',
+      TAssert.AssertTrue('channel should work after the idle period',
         LChan.DeclareQueue(LDecl).QueueName <> '');
     finally
       LChan.Free;

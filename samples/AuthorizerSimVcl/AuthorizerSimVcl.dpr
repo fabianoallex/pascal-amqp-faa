@@ -1,7 +1,7 @@
 ﻿program AuthorizerSimVcl;
 
 { VCL version of the AuthorizerSim sample: same simulation (publishes N invoice
-  replies to the "sefaz-respostas" queue), now with the connection parameters
+  replies to the "authorizer-replies" queue), now with the connection parameters
   editable on screen and a visual log, for a livelier way to test it
   together with BackOfficeVcl: just open both executables side by side.
   Companion of the BackOfficeVcl sample (flow POS -> authorizer -> back office).

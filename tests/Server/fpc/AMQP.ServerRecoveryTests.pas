@@ -384,10 +384,10 @@ var
 begin
   E := ReplayLog;
   try
-    CheckInt('sem exchange', 0, E.Exchanges.Count);
-    CheckInt('sem fila', 0, E.Queues.Count);
-    CheckInt('sem colocacao', 0, E.Entries.Count);
-    CheckInt('maior id', 0, Integer(E.MaxId));
+    CheckInt('no exchange', 0, E.Exchanges.Count);
+    CheckInt('no queue', 0, E.Queues.Count);
+    CheckInt('no placement', 0, E.Entries.Count);
+    CheckInt('highest id', 0, Integer(E.MaxId));
   finally
     E.Free;
   end;
@@ -402,14 +402,14 @@ begin
   MakeBinding('ex.a', 'q.a', 'rk');
   E := ReplayLog;
   try
-    CheckInt('um exchange', 1, E.Exchanges.Count);
-    CheckStr('nome do exchange', 'ex.a', E.Exchanges[0].Name);
-    CheckStr('tipo do exchange', 'direct', E.Exchanges[0].ExchangeType);
-    CheckInt('uma fila', 1, E.Queues.Count);
-    CheckStr('nome da fila', 'q.a', E.Queues[0].Name);
-    CheckInt('um binding', 1, E.Bindings.Count);
+    CheckInt('one exchange', 1, E.Exchanges.Count);
+    CheckStr('exchange name', 'ex.a', E.Exchanges[0].Name);
+    CheckStr('exchange type', 'direct', E.Exchanges[0].ExchangeType);
+    CheckInt('one queue', 1, E.Queues.Count);
+    CheckStr('queue name', 'q.a', E.Queues[0].Name);
+    CheckInt('one binding', 1, E.Bindings.Count);
     CheckStr('routing key', 'rk', E.Bindings[0].Binding.RoutingKey);
-    CheckNot('e o destino e uma FILA', E.Bindings[0].DestinationIsExchange);
+    CheckNot('and the destination is a QUEUE', E.Bindings[0].DestinationIsExchange);
   finally
     E.Free;
   end;
@@ -424,8 +424,8 @@ begin
   MakeQueue('q.a', True);
   E := ReplayLog;
   try
-    CheckInt('uma fila, nao duas', 1, E.Queues.Count);
-    CheckOk('e com o auto-delete do ULTIMO declare', E.Queues[0].AutoDelete);
+    CheckInt('one queue, not two', 1, E.Queues.Count);
+    CheckOk('and with the auto-delete of the LAST declare', E.Queues[0].AutoDelete);
   finally
     E.Free;
   end;
@@ -441,9 +441,9 @@ begin
   RemoveBinding('ex.a', 'q.a', 'rk');
   E := ReplayLog;
   try
-    CheckInt('nenhum binding', 0, E.Bindings.Count);
-    CheckInt('mas a fila fica', 1, E.Queues.Count);
-    CheckInt('e o exchange tambem', 1, E.Exchanges.Count);
+    CheckInt('no binding', 0, E.Bindings.Count);
+    CheckInt('but the queue stays', 1, E.Queues.Count);
+    CheckInt('and the exchange too', 1, E.Exchanges.Count);
   finally
     E.Free;
   end;
@@ -460,19 +460,19 @@ begin
   MakeQueue('q.b');
   MakeBinding('ex.a', 'q.a', 'rk');
   MakeBinding('ex.a', 'q.b', 'rk');
-  AddContent(1, 'corpo');
+  AddContent(1, 'body');
   AddPlacement(2, 1, 'q.a');
   AddPlacement(3, 1, 'q.b');
   RemoveQueue('q.a');
   E := ReplayLog;
   try
-    CheckInt('sobrou uma fila', 1, E.Queues.Count);
-    CheckStr('a que nao foi apagada', 'q.b', E.Queues[0].Name);
-    CheckInt('sobrou um binding', 1, E.Bindings.Count);
-    CheckStr('o da fila viva', 'q.b', E.Bindings[0].Binding.Destination);
-    CheckInt('e uma colocacao so', 1, E.Entries.Count);
-    CheckStr('a da fila viva', 'q.b', E.Entries[0].Queue);
-    CheckInt('a outra contou como orfa de fila', 1, E.Stats.OrphanedFromQueue);
+    CheckInt('one queue left', 1, E.Queues.Count);
+    CheckStr('the one that was not deleted', 'q.b', E.Queues[0].Name);
+    CheckInt('one binding left', 1, E.Bindings.Count);
+    CheckStr('the one of the live queue', 'q.b', E.Bindings[0].Binding.Destination);
+    CheckInt('and a single placement', 1, E.Entries.Count);
+    CheckStr('the one of the live queue', 'q.b', E.Entries[0].Queue);
+    CheckInt('the other counted as queue-orphaned', 1, E.Stats.OrphanedFromQueue);
   finally
     E.Free;
   end;
@@ -485,18 +485,18 @@ begin
   // The middle exchange is the DESTINATION of one binding and the SOURCE of another (D5).
   // Looking only at Source would leave the first one orphaned, pointing at what vanished.
   MakeExchange('ex.orig', 'fanout');
-  MakeExchange('ex.meio', 'fanout');
+  MakeExchange('ex.middle', 'fanout');
   MakeQueue('q.a');
-  MakeExchangeBinding('ex.orig', 'ex.meio', '');
-  MakeBinding('ex.meio', 'q.a', '');
-  RemoveExchange('ex.meio');
+  MakeExchangeBinding('ex.orig', 'ex.middle', '');
+  MakeBinding('ex.middle', 'q.a', '');
+  RemoveExchange('ex.middle');
   E := ReplayLog;
   try
-    CheckInt('sobrou um exchange', 1, E.Exchanges.Count);
-    CheckStr('o de origem', 'ex.orig', E.Exchanges[0].Name);
-    CheckInt('e NENHUM binding: os dois tocavam o que sumiu', 0,
+    CheckInt('one exchange left', 1, E.Exchanges.Count);
+    CheckStr('the source one', 'ex.orig', E.Exchanges[0].Name);
+    CheckInt('and NO binding: both touched the one that vanished', 0,
       E.Bindings.Count);
-    CheckInt('a fila continua de pe', 1, E.Queues.Count);
+    CheckInt('the queue is still standing', 1, E.Queues.Count);
   finally
     E.Free;
   end;
@@ -509,14 +509,14 @@ begin
   // D27 in one line: the DELIVERY is not journaled, so a message
   // delivered and not acked is still a live ENQ and comes back ready.
   MakeQueue('q.a');
-  AddContent(1, 'corpo');
+  AddContent(1, 'body');
   AddPlacement(2, 1, 'q.a');
   E := ReplayLog;
   try
-    CheckInt('uma colocacao viva', 1, E.Entries.Count);
-    CheckInt('nas contagens tambem', 1, E.Stats.Live);
-    CheckInt('nada aposentado', 0, E.Stats.Retired);
-    CheckStr('o corpo veio junto', 'corpo',
+    CheckInt('one live placement', 1, E.Entries.Count);
+    CheckInt('in the counters too', 1, E.Stats.Live);
+    CheckInt('nothing retired', 0, E.Stats.Retired);
+    CheckStr('the body came along', 'body',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
   finally
     E.Free;
@@ -528,13 +528,13 @@ var
   E: TAMQPRecoveredState;
 begin
   MakeQueue('q.a');
-  AddContent(1, 'corpo');
+  AddContent(1, 'body');
   AddPlacement(2, 1, 'q.a');
   RetirePlacement(2, 'q.a');
   E := ReplayLog;
   try
-    CheckInt('nada vivo', 0, E.Entries.Count);
-    CheckInt('uma aposentadoria', 1, E.Stats.Retired);
+    CheckInt('nothing live', 0, E.Entries.Count);
+    CheckInt('one retirement', 1, E.Stats.Retired);
   finally
     E.Free;
   end;
@@ -556,10 +556,10 @@ begin
   RetirePlacement(4, 'q.a'); // the middle one goes
   E := ReplayLog;
   try
-    CheckInt('duas vivas', 2, E.Entries.Count);
-    CheckStr('1a: a mais antiga', 'a',
+    CheckInt('two live ones', 2, E.Entries.Count);
+    CheckStr('1st: the oldest', 'a',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    CheckStr('2a: a mais nova', 'c',
+    CheckStr('2nd: the newest', 'c',
       AmqpUtf8Decode(E.Contents[E.Entries[1].ContentId].Body));
   finally
     E.Free;
@@ -574,14 +574,14 @@ begin
   // body in the file and N placements pointing at it.
   MakeQueue('q.a');
   MakeQueue('q.b');
-  AddContent(1, 'corpo');
+  AddContent(1, 'body');
   AddPlacement(2, 1, 'q.a');
   AddPlacement(3, 1, 'q.b');
   E := ReplayLog;
   try
-    CheckInt('duas colocacoes', 2, E.Entries.Count);
-    CheckInt('um conteudo so', 1, E.Contents.Count);
-    CheckOk('e as duas apontam para ele',
+    CheckInt('two placements', 2, E.Entries.Count);
+    CheckInt('a single content', 1, E.Contents.Count);
+    CheckOk('and both point to it',
       (E.Entries[0].ContentId = 1) and (E.Entries[1].ContentId = 1));
   finally
     E.Free;
@@ -595,17 +595,17 @@ begin
   // Without this, recovery would load into memory the body of EVERY message
   // the broker has ever seen -- the log is append-only, the bodies stay there.
   MakeQueue('q.a');
-  AddContent(1, 'consumida');
+  AddContent(1, 'consumed');
   AddPlacement(2, 1, 'q.a');
   RetirePlacement(2, 'q.a');
-  AddContent(3, 'viva');
+  AddContent(3, 'live');
   AddPlacement(4, 3, 'q.a');
   E := ReplayLog;
   try
-    CheckInt('uma colocacao viva', 1, E.Entries.Count);
-    CheckInt('e UM conteudo, nao dois', 1, E.Contents.Count);
-    CheckOk('o que ficou e o da viva', E.Contents.ContainsKey(3));
-    CheckNot('o da consumida foi solto', E.Contents.ContainsKey(1));
+    CheckInt('one live placement', 1, E.Entries.Count);
+    CheckInt('and ONE content, not two', 1, E.Contents.Count);
+    CheckOk('the one left belongs to the live one', E.Contents.ContainsKey(3));
+    CheckNot('the consumed one was released', E.Contents.ContainsKey(1));
   finally
     E.Free;
   end;
@@ -627,8 +627,8 @@ begin
   AddPlacement(12, 20, 'q.a');
   E := ReplayLog;
   try
-    CheckInt('uma viva', 1, E.Entries.Count);
-    CheckInt('e o maior id e o do CONTENT, nao o da colocacao', 20,
+    CheckInt('one live', 1, E.Entries.Count);
+    CheckInt('and the highest id is the CONTENT id, not the placement id', 20,
       Integer(E.MaxId));
   finally
     E.Free;
@@ -646,8 +646,8 @@ begin
   AddPlacement(2, 1, 'q.a', 5);
   E := ReplayLog;
   try
-    CheckInt('a prioridade veio', 5, Integer(E.Entries[0].Priority));
-    CheckOk('e o instante de parede tambem',
+    CheckInt('the priority came', 5, Integer(E.Entries[0].Priority));
+    CheckOk('and the wall-clock instant too',
       E.Entries[0].EnqueuedAtWall = 1700000000000);
   finally
     E.Free;
@@ -675,7 +675,7 @@ begin
   // NUMBER comes from the listing, not from a literal: the journal starts at 1, and
   // guessing the name would make the test fail for the wrong reason.
   LSegs := AmqpWalListSegments(FDir);
-  CheckInt('um segmento', 1, Length(LSegs));
+  CheckInt('one segment', 1, Length(LSegs));
   LWalFile := IncludeTrailingPathDelimiter(FDir) + AmqpWalSegmentName(LSegs[0]);
   LStream := TFileStream.Create(LWalFile, fmOpenReadWrite or fmShareDenyNone);
   try
@@ -686,11 +686,11 @@ begin
 
   E := AmqpReplayWal(FDir);
   try
-    CheckNot('a leitura NAO chegou ao fim inteira', E.Stats.StopReason = awsEnd);
-    CheckInt('a fila do prefixo sobreviveu', 1, E.Queues.Count);
+    CheckNot('the read did NOT reach the end intact', E.Stats.StopReason = awsEnd);
+    CheckInt('the queue from the prefix survived', 1, E.Queues.Count);
     // The last placement fell with the tail; the first one is still there.
-    CheckInt('uma colocacao viva', 1, E.Entries.Count);
-    CheckStr('a do prefixo', 'a',
+    CheckInt('one live placement', 1, E.Entries.Count);
+    CheckStr('the one from the prefix', 'a',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
   finally
     E.Free;
@@ -710,11 +710,11 @@ begin
   MakeQueue('q.a');
   for I := 1 to 40 do
     LLast := WriteRecord(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ContentRecord(I, 'corpo-' + IntToStr(I))));
+      AmqpEncodeRecContent(ContentRecord(I, 'value-' + IntToStr(I))));
   // BARRIER: Submit only ENQUEUES -- whoever writes (and whoever rotates) is the
   // journal thread. Without waiting for the watermark, the test would look at the segment
   // before the first byte had gone out.
-  CheckOk('o lote ficou duravel', FJournal.WaitDurable(LLast, 5000));
+  CheckOk('the batch became durable', FJournal.WaitDurable(LLast, 5000));
   // Rotation runs AFTER the watermark advances (batch boundary, after the
   // fsync -- D24), and Rotate opens the new segment before counting the rotation.
   // So WaitDurable is not a barrier for either of the two reads: it waits
@@ -727,9 +727,9 @@ begin
     Sleep(10);
     Inc(I);
   end;
-  CheckOk('o segmento ativo passou do primeiro',
+  CheckOk('the active segment moved past the first',
     FJournal.ActiveSegment > 1);
-  CheckOk('e as rotacoes foram contadas',
+  CheckOk('and the rotations were counted',
     FJournal.Stats.Rotations >= 1);
 end;
 
@@ -767,14 +767,14 @@ begin
       ContentRecord(I * 2 - 1, StringOfChar('a', 400)));
     LRecs[1].Kind := AMQP_REC_CONTENT;
     LRecs[1].Payload := AmqpEncodeRecContent(ContentRecord(I * 2, 'b'));
-    CheckOk('o lote ficou duravel',
+    CheckOk('the batch became durable',
       FJournal.WaitDurable(FJournal.Submit(LRecs), 5000));
   end;
   FJournal.Stop;
   FreeAndNil(FJournal);
 
   LSegs := AmqpWalListSegments(FDir);
-  CheckOk('rotacionou mesmo', Length(LSegs) > 1);
+  CheckOk('it did rotate', Length(LSegs) > 1);
   LFound := 0;
   for I := 0 to High(LSegs) do
   begin
@@ -784,14 +784,14 @@ begin
     try
       LN := LSeg.ReadPrefix(LWalRecords, LStop);
       Inc(LFound, LN);
-      CheckInt('nenhum segmento termina com meio lote (segmento '
+      CheckInt('no segment ends with half a batch (segment '
         + IntToStr(LSegs[I]) + ')', 0, LN mod 2);
     finally
       LSeg.Free;
       LWalFile := nil;
     end;
   end;
-  CheckInt('e nenhum registro se perdeu na troca', 16, LFound);
+  CheckInt('and no record was lost in the switch', 16, LFound);
 end;
 
 procedure TRecoveryReplayTests.Rotate_LsnContinuesAcrossSegments;
@@ -814,13 +814,13 @@ begin
   for I := 1 to 40 do
     LLast := WriteRecord(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ContentRecord(I, 'x')));
-  CheckOk('o lote ficou duravel', FJournal.WaitDurable(LLast, 5000));
-  CheckOk('rotacionou', FJournal.ActiveSegment > 1);
+  CheckOk('the batch became durable', FJournal.WaitDurable(LLast, 5000));
+  CheckOk('rotated', FJournal.ActiveSegment > 1);
 
   LAfter := WriteRecord(AMQP_REC_CONTENT, AmqpEncodeRecContent(ContentRecord(99, 'y')));
-  CheckOk('o registro de depois da rotacao ficou duravel',
+  CheckOk('the record after the rotation became durable',
     FJournal.WaitDurable(LAfter, 5000));
-  CheckOk('o LSN CONTINUOU do outro lado da rotacao, em vez de reiniciar',
+  CheckOk('the LSN CONTINUED across the rotation instead of restarting',
     LAfter > LLast);
 end;
 
@@ -836,17 +836,17 @@ begin
   MakeQueue('q.a');
   for I := 1 to 20 do
   begin
-    AddContent(I * 2 - 1, 'corpo-' + IntToStr(I));
+    AddContent(I * 2 - 1, 'value-' + IntToStr(I));
     AddPlacement(I * 2, I * 2 - 1, 'q.a');
   end;
   E := ReplayLog;
   try
-    CheckOk('leu mais de um segmento', E.Stats.Segments > 1);
-    CheckInt('a fila veio', 1, E.Queues.Count);
-    CheckInt('e as 20 colocacoes tambem', 20, E.Entries.Count);
-    CheckStr('na ordem do log, da primeira', 'corpo-1',
+    CheckOk('read more than one segment', E.Stats.Segments > 1);
+    CheckInt('the queue came', 1, E.Queues.Count);
+    CheckInt('and the 20 placements too', 20, E.Entries.Count);
+    CheckStr('in log order, from the first', 'value-1',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    CheckStr('a' + ' ultima', 'corpo-20',
+    CheckStr('the' + ' last', 'value-20',
       AmqpUtf8Decode(E.Contents[E.Entries[19].ContentId].Body));
   finally
     E.Free;
@@ -865,15 +865,15 @@ begin
   for I := 1 to 40 do
     LLast := WriteRecord(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ContentRecord(I, 'x')));
-  CheckOk('o lote ficou duravel', FJournal.WaitDurable(LLast, 5000));
+  CheckOk('the batch became durable', FJournal.WaitDurable(LLast, 5000));
   LSegAfter := FJournal.ActiveSegment;
-  CheckOk('rotacionou antes de fechar', LSegAfter > 1);
+  CheckOk('rotated before closing', LSegAfter > 1);
   FJournal.Stop;
   FreeAndNil(FJournal);
 
   FJournal := TAMQPJournal.Create(FDir);
   FJournal.Start;
-  CheckInt('reabriu no ultimo segmento, nao no primeiro',
+  CheckInt('reopened on the last segment, not the first',
     Integer(LSegAfter), Integer(FJournal.ActiveSegment));
 end;
 
@@ -891,26 +891,26 @@ begin
   MakeQueue('q.a');
   for I := 1 to 30 do
   begin
-    AddContent(I * 2 - 1, 'corpo-' + IntToStr(I));
+    AddContent(I * 2 - 1, 'value-' + IntToStr(I));
     AddPlacement(I * 2, I * 2 - 1, 'q.a');
   end;
   for I := 1 to 28 do
     RetirePlacement(I * 2, 'q.a');
-  CheckOk('tudo duravel',
+  CheckOk('everything durable',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
   LBefore := FJournal.TotalSize;
 
-  CheckOk('compactou', FJournal.Compact);
+  CheckOk('compacted', FJournal.Compact);
   LAfter := FJournal.TotalSize;
-  CheckOk('o log encolheu', LAfter < LBefore);
+  CheckOk('the log shrank', LAfter < LBefore);
 
   E := ReplayLog;
   try
-    CheckInt('a fila continua la', 1, E.Queues.Count);
-    CheckInt('e as duas vivas tambem', 2, E.Entries.Count);
-    CheckStr('a primeira viva e a de numero 29', 'corpo-29',
+    CheckInt('the queue is still there', 1, E.Queues.Count);
+    CheckInt('and the two live ones too', 2, E.Entries.Count);
+    CheckStr('the first live one is number 29', 'value-29',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    CheckInt('e o conteudo das aposentadas foi embora', 2, E.Contents.Count);
+    CheckInt('and the content of the retired ones is gone', 2, E.Contents.Count);
   finally
     E.Free;
   end;
@@ -934,20 +934,20 @@ begin
   for I := 1 to 30 do
   begin
     LLsn := WriteRecord(AMQP_REC_CONTENT,
-      AmqpEncodeRecContent(ContentRecord(I, 'corpo-' + IntToStr(I))));
-    CheckOk('registro duravel', FJournal.WaitDurable(LLsn, 5000));
+      AmqpEncodeRecContent(ContentRecord(I, 'value-' + IntToStr(I))));
+    CheckOk('durable record', FJournal.WaitDurable(LLsn, 5000));
   end;
   LSegsBefore := AmqpWalListSegments(FDir);
-  CheckOk('havia varios segmentos', Length(LSegsBefore) > 2);
+  CheckOk('there were several segments', Length(LSegsBefore) > 2);
 
-  CheckOk('compactou', FJournal.Compact);
+  CheckOk('compacted', FJournal.Compact);
   LSegsAfter := AmqpWalListSegments(FDir);
   // No live placement (only loose content, which nobody references): what is left is
   // the new segment with the topology and nothing else.
-  CheckInt('sobrou UM segmento', 1, Length(LSegsAfter));
-  CheckOk('e ele e mais novo que todos os apagados',
+  CheckInt('ONE segment left', 1, Length(LSegsAfter));
+  CheckOk('and it is newer than all the deleted ones',
     LSegsAfter[0] > LSegsBefore[High(LSegsBefore)]);
-  CheckOk('os apagados foram contados',
+  CheckOk('the deleted ones were counted',
     FJournal.Stats.DeletedSegments >= Length(LSegsBefore));
 end;
 
@@ -961,14 +961,14 @@ begin
   MakeQueue('q.a');
   AddContent(7, 'x');
   AddPlacement(9, 7, 'q.a');
-  CheckOk('tudo duravel',
+  CheckOk('everything durable',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  CheckOk('compactou', FJournal.Compact);
+  CheckOk('compacted', FJournal.Compact);
   E := ReplayLog;
   try
-    CheckInt('uma colocacao', 1, E.Entries.Count);
-    CheckInt('com o MESMO EntryId de antes', 9, Integer(E.Entries[0].EntryId));
-    CheckInt('e o MESMO ContentId', 7, Integer(E.Entries[0].ContentId));
+    CheckInt('one placement', 1, E.Entries.Count);
+    CheckInt('with the SAME EntryId as before', 9, Integer(E.Entries[0].EntryId));
+    CheckInt('and the SAME ContentId', 7, Integer(E.Entries[0].ContentId));
   finally
     E.Free;
   end;
@@ -990,11 +990,11 @@ begin
   // situation by hand: I write the SAME placement twice, which is exactly the
   // file an interrupted compaction would leave behind.
   MakeQueue('q.a');
-  AddContent(5, 'unica');
+  AddContent(5, 'single');
   AddPlacement(6, 5, 'q.a');
   LContentRec.ContentId := 5;
   LContentRec.UserId := 'guest';
-  LContentRec.Body := AmqpUtf8Encode('unica');
+  LContentRec.Body := AmqpUtf8Encode('single');
   LEnq.VHost := '/';
   LEnq.Queue := 'q.a';
   LEnq.EntryId := 6;      // The SAME id
@@ -1007,12 +1007,12 @@ begin
   LEnq.HeaderPayload := nil;
   WriteRecord(AMQP_REC_CONTENT, AmqpEncodeRecContent(LContentRec));
   LLsn := WriteRecord(AMQP_REC_ENQUEUE, AmqpEncodeRecEnqueue(LEnq));
-  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  CheckOk('everything durable', FJournal.WaitDurable(LLsn, 5000));
 
   E := ReplayLog;
   try
-    CheckInt('UMA colocacao, nao duas', 1, E.Entries.Count);
-    CheckInt('e a repetida foi contada', 1, E.Stats.Duplicates);
+    CheckInt('ONE placement, not two', 1, E.Entries.Count);
+    CheckInt('and the repeated one was counted', 1, E.Stats.Duplicates);
   finally
     E.Free;
   end;
@@ -1027,21 +1027,21 @@ begin
   // with a renewed deadline (D21) or at the wrong priority (D12) -- and no
   // "the message survived" test would notice.
   MakeQueue('q.a');
-  AddContent(1, 'primeira');
+  AddContent(1, 'first');
   AddPlacement(2, 1, 'q.a', 3);
-  AddContent(3, 'segunda');
+  AddContent(3, 'second');
   AddPlacement(4, 3, 'q.a', 7);
-  CheckOk('tudo duravel',
+  CheckOk('everything durable',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  CheckOk('compactou', FJournal.Compact);
+  CheckOk('compacted', FJournal.Compact);
   E := ReplayLog;
   try
-    CheckInt('as duas', 2, E.Entries.Count);
-    CheckStr('na ordem do log original', 'primeira',
+    CheckInt('both', 2, E.Entries.Count);
+    CheckStr('in the original log order', 'first',
       AmqpUtf8Decode(E.Contents[E.Entries[0].ContentId].Body));
-    CheckInt('com a prioridade da primeira', 3, Integer(E.Entries[0].Priority));
-    CheckInt('e a da segunda', 7, Integer(E.Entries[1].Priority));
-    CheckOk('e o instante de parede intacto',
+    CheckInt('with the priority of the first', 3, Integer(E.Entries[0].Priority));
+    CheckInt('and that of the second', 7, Integer(E.Entries[1].Priority));
+    CheckOk('and the wall-clock instant intact',
       E.Entries[0].EnqueuedAtWall = 1700000000000);
   finally
     E.Free;
@@ -1060,14 +1060,14 @@ begin
     AddPlacement(I * 2, I * 2 - 1, 'q.a');
     RetirePlacement(I * 2, 'q.a');
   end;
-  CheckOk('tudo duravel',
+  CheckOk('everything durable',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  CheckOk('compactou', FJournal.Compact);
+  CheckOk('compacted', FJournal.Compact);
   E := ReplayLog;
   try
-    CheckInt('nenhuma colocacao', 0, E.Entries.Count);
-    CheckInt('nenhum conteudo', 0, E.Contents.Count);
-    CheckInt('mas a TOPOLOGIA fica -- ela nao morre com as mensagens', 1,
+    CheckInt('no placement', 0, E.Entries.Count);
+    CheckInt('no content', 0, E.Contents.Count);
+    CheckInt('but the TOPOLOGY stays -- it does not die with the messages', 1,
       E.Queues.Count);
   finally
     E.Free;
@@ -1093,12 +1093,12 @@ begin
   MakeQueue('q.a');
   for I := 1 to 30 do
   begin
-    AddContent(I * 2 - 1, 'corpo-' + IntToStr(I));
+    AddContent(I * 2 - 1, 'value-' + IntToStr(I));
     AddPlacement(I * 2, I * 2 - 1, 'q.a');
     LLsn := WriteRecord(AMQP_REC_DEQUEUE,
       AmqpEncodeRecDequeue(DequeueRecord(I * 2, 'q.a')));
   end;
-  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
+  CheckOk('everything durable', FJournal.WaitDurable(LLsn, 5000));
   LBefore := FJournal.TotalSize;
   FJournal.Stop;
   FreeAndNil(FJournal);
@@ -1106,11 +1106,11 @@ begin
   J := TAMQPJournal.Create(FDir);
   try
     J.Start;
-    CheckOk('o log esta acima do limiar', J.TotalSize >= 1500);
-    CheckOk('compactou', J.Compact);
+    CheckOk('the log is above the threshold', J.TotalSize >= 1500);
+    CheckOk('compacted', J.Compact);
     LAfter := J.TotalSize;
-    CheckOk('e encolheu', LAfter < LBefore);
-    CheckOk('apagando segmento', J.Stats.DeletedSegments >= 1);
+    CheckOk('and it shrank', LAfter < LBefore);
+    CheckOk('deleting a segment', J.Stats.DeletedSegments >= 1);
   finally
     J.Stop;
     J.Free;
@@ -1145,14 +1145,14 @@ begin
       LRecs[0].Payload := AmqpEncodeRecContent(ContentRecord(I, 'x'));
       J.Submit(LRecs);
     end;
-    CheckOk('tudo duravel', J.WaitDurable(J.Stats.NextLsn - 1, 5000));
+    CheckOk('everything durable', J.WaitDurable(J.Stats.NextLsn - 1, 5000));
     LSegsBefore := AmqpWalListSegments(FDir);
-    CheckOk('havia varios segmentos', Length(LSegsBefore) > 1);
+    CheckOk('there were several segments', Length(LSegsBefore) > 1);
 
     J.FailTheSync;
-    CheckNot('a compactacao se recusa a concluir', J.Compact);
+    CheckNot('compaction refuses to complete', J.Compact);
     LSegsAfter := AmqpWalListSegments(FDir);
-    CheckOk('e NENHUM segmento velho foi apagado',
+    CheckOk('and NO old segment was deleted',
       Length(LSegsAfter) >= Length(LSegsBefore));
   finally
     try
@@ -1181,13 +1181,13 @@ begin
   MakeQueue('q.a');
   MakeQueue('q.b');
   MakeQueue('q.c');
-  AddContent(1, 'compartilhado');
+  AddContent(1, 'shared');
   AddPlacement(2, 1, 'q.a');
   AddPlacement(3, 1, 'q.b');
   AddPlacement(4, 1, 'q.c');
-  CheckOk('tudo duravel',
+  CheckOk('everything durable',
     FJournal.WaitDurable(FJournal.Stats.NextLsn - 1, 5000));
-  CheckOk('compactou', FJournal.Compact);
+  CheckOk('compacted', FJournal.Compact);
   FJournal.Stop;
   FreeAndNil(FJournal);
 
@@ -1211,8 +1211,8 @@ begin
       LWalFile := nil;
     end;
   end;
-  CheckInt('UM registro de conteudo no log compactado', 1, LContents);
-  CheckInt('e tres colocacoes', 3, LPlacements);
+  CheckInt('ONE content record in the compacted log', 1, LContents);
+  CheckInt('and three placements', 3, LPlacements);
 end;
 
 { --- hard cap on the log (WS7 of Phase 4, D26) --- }
@@ -1224,12 +1224,12 @@ var
 begin
   // 0 = unlimited, the shape of D7's MaxQueueLength. It is the DEFAULT: nobody
   // gets a disk cap for having turned durability on.
-  CheckInt('o default e zero', 0, Integer(FJournal.MaxJournalBytes));
+  CheckInt('the default is zero', 0, Integer(FJournal.MaxJournalBytes));
   for I := 1 to 40 do
     LLsn := WriteRecord(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ContentRecord(I, StringOfChar('x', 200))));
-  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  CheckNot('e o journal nunca se declara cheio', FJournal.IsFull);
+  CheckOk('everything durable', FJournal.WaitDurable(LLsn, 5000));
+  CheckNot('and the journal never declares itself full', FJournal.IsFull);
 end;
 
 procedure TRecoveryReplayTests.Cap_Exceeded_SetsFull;
@@ -1238,13 +1238,13 @@ var
   LLsn: UInt64;
 begin
   FJournal.MaxJournalBytes := 2000;
-  CheckNot('comeca vazio', FJournal.IsFull);
+  CheckNot('starts empty', FJournal.IsFull);
   for I := 1 to 40 do
     LLsn := WriteRecord(AMQP_REC_CONTENT,
       AmqpEncodeRecContent(ContentRecord(I, StringOfChar('x', 200))));
-  CheckOk('tudo duravel', FJournal.WaitDurable(LLsn, 5000));
-  CheckOk('passou do teto e se declara cheio', FJournal.IsFull);
-  CheckOk('e o tamanho relatado bate com o teto',
+  CheckOk('everything durable', FJournal.WaitDurable(LLsn, 5000));
+  CheckOk('went over the cap and declares itself full', FJournal.IsFull);
+  CheckOk('and the reported size matches the cap',
     FJournal.Stats.Bytes >= 2000);
 end;
 
@@ -1263,14 +1263,14 @@ begin
   AddContent(1, 'x');
   AddPlacement(2, 1, 'q.a');
   FJournal.MaxJournalBytes := 1; // full from the start
-  CheckOk('cheio', FJournal.IsFull);
+  CheckOk('full', FJournal.IsFull);
   LLsn := FJournal.SubmitNoWait(JournalRecordsOf(AMQP_REC_DEQUEUE,
     AmqpEncodeRecDequeue(DequeueRecord(2, 'q.a'))));
-  CheckOk('o DEQ foi aceito mesmo com o log cheio', LLsn > 0);
-  CheckOk('e ficou duravel', FJournal.WaitDurable(LLsn, 5000));
+  CheckOk('the DEQ was accepted even with the log full', LLsn > 0);
+  CheckOk('and became durable', FJournal.WaitDurable(LLsn, 5000));
   E := ReplayLog;
   try
-    CheckInt('a colocacao foi mesmo aposentada', 0, E.Entries.Count);
+    CheckInt('the placement was indeed retired', 0, E.Entries.Count);
   finally
     E.Free;
   end;

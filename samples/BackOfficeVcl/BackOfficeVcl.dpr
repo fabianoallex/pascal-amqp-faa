@@ -1,7 +1,7 @@
 ﻿program BackOfficeVcl;
 
-{ VCL version of the BackOffice sample: consumes the "sefaz-respostas" queue and
-  shows each invoice's status (Recebida -> Processando -> Ready) in a live
+{ VCL version of the BackOffice sample: consumes the "authorizer-replies" queue and
+  shows each invoice's status (Received -> Processing -> Ready) in a live
   list, instead of the console's scrolling log: you can see at a glance how many
   invoices arrived and how many were already processed, with several thread
   pool workers running in parallel (the same native dispatch of Channel.Consume,

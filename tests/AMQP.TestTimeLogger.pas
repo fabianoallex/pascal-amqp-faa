@@ -8,12 +8,12 @@
   the constructor) and never prints duration. That matters in this codebase for a
   concrete reason, discovered in WS9 of Phase 2: DUnitX **has no "ignored"
   bucket** — the auto-ignore used here (TLS tests without a broker, tests that
-  depend on a Phase 3 feature) is `Assert.Pass('IGNORADO: ...')`, which the
+  depend on a Phase 3 feature) is `Assert.Pass('IGNORED: ...')`, which the
   report counts as **Passed**. A "28 Passed / 0 Ignored" summary can
   hide 5 tests that never touched the target.
 
   What tells the two apart is the **message**: the auto-ignore here always passes
-  `Assert.Pass` a text starting with `IGNORADO:`, and that is what this logger
+  `Assert.Pass` a text starting with `IGNORED:`, and that is what this logger
   marks with `~`. (Time *almost* worked — auto-ignored finishes in ~0.000s — but it
   is a heuristic: against the embedded broker there are real tests under 0.5 ms, and the
   first version of this logger produced 3 false positives out of 28. The XML's
@@ -62,7 +62,7 @@ type
     /// embedded broker, tests that really run finish in less than that —
     /// measured, 3 false positives in a run of 28. Time is a heuristic; the
     /// message is fact.
-    const IGNORED_MARK = 'IGNORADO';
+    const IGNORED_MARK = 'IGNORED:';
   private
     FLines: TList<TAMQPTestTiming>;
     procedure AddLine(const AOutcome: string; const ATest: ITestResult);
@@ -146,7 +146,7 @@ begin
     Exit;
 
   System.Writeln;
-  System.Writeln('tempo por teste');
+  System.Writeln('time per test');
   System.Writeln('---------------');
 
   LTotal := 0;
@@ -172,14 +172,14 @@ begin
       [LMark, LLine.Seconds, LLine.Outcome, LLine.TestName, LMsg]));
   end;
 
-  System.Writeln(Format('---------------  %d testes, %.3fs somados',
+  System.Writeln(Format('---------------  %d tests, %.3fs in total',
     [FLines.Count, LTotal]));
   if LSuspects = 1 then
-    System.Writeln('1 auto-ignorado (~): NAO exercitou o alvo, apesar de contar '
-      + 'como Passed no rodape -- ver a mensagem ao lado')
+    System.Writeln('1 self-ignored (~): did NOT exercise the target, although it counts '
+      + 'as Passed in the footer -- see the message beside it')
   else if LSuspects > 1 then
-    System.Writeln(Format('%d auto-ignorados (~): NAO exercitaram o alvo, apesar '
-      + 'de contarem como Passed no rodape -- ver a mensagem de cada um',
+    System.Writeln(Format('%d self-ignored (~): did NOT exercise the target, although they '
+      + 'count as Passed in the footer -- see each one''s message',
       [LSuspects]));
   FLines.Clear;
 end;
@@ -193,13 +193,13 @@ end;
 procedure TAMQPTestTimeLogger.OnTestFailure(const threadId: TThreadID;
   const Failure: ITestError);
 begin
-  AddLine('FALHA', Failure);
+  AddLine('FAIL', Failure);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestError(const threadId: TThreadID;
   const Error: ITestError);
 begin
-  AddLine('ERRO', Error);
+  AddLine('ERROR', Error);
 end;
 
 procedure TAMQPTestTimeLogger.OnTestIgnored(const threadId: TThreadID;
@@ -220,7 +220,7 @@ begin
   // "Done testing / Tests Found: ..." footer -- which is exactly where the table
   // is useful: right above the summary it qualifies.
   Dump;
-  System.Writeln(Format('tempo total da execucao: %.3fs',
+  System.Writeln(Format('total run time: %.3fs',
     [RunResults.Duration.TotalSeconds]));
 end;
 

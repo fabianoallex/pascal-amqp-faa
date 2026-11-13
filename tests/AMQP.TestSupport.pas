@@ -11,7 +11,7 @@
     it, and unlike DUnitX's Assert.WillRaise, which accepts a subclass).
   - IgnoreTest: FPCUnit's Ignore (marks IGNORED). This version's DUnitX
     has no run-time ignore: the test leaves through Assert.Pass with
-    the message 'IGNORADO: ...' and counts as Passed. The caller exits with Exit
+    the message 'IGNORED: ...' and counts as Passed. The caller exits with Exit
     right after, in case neither of the two interrupts.
   - TempDir: Delphi has no GetTempDir; FPC has no System.IOUtils.
   - Pki: the TLS test PKI, pascal-common-faa's tests/pki through the
@@ -69,9 +69,9 @@ begin
       LClassName := E.ClassName;
     end;
   end;
-  TAssert.AssertTrue(Trim(AMessage + ' esperava ' + AClass.ClassName +
-    ', e nada foi levantado'), LRaised);
-  TAssert.AssertEquals(Trim(AMessage + ' classe da exceção'), AClass.ClassName,
+  TAssert.AssertTrue(Trim(AMessage + ' expected ' + AClass.ClassName +
+    ', and nothing was raised'), LRaised);
+  TAssert.AssertEquals(Trim(AMessage + ' exception class'), AClass.ClassName,
     LClassName);
 end;
 
@@ -85,7 +85,7 @@ begin
 {$IFDEF FPC}
   raise EIgnoredTest.Create(AReason);
 {$ELSE}
-  Assert.Pass('IGNORADO: ' + AReason);
+  Assert.Pass('IGNORED: ' + AReason);
 {$ENDIF}
 end;
 

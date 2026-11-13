@@ -341,10 +341,10 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ack'));
     LCh.Consume('q.ack', OnDelivery, False);
-    LCh.PublishText('', 'q.ack', 'ola');
+    LCh.PublishText('', 'q.ack', 'hello');
 
-    TAssert.AssertTrue('a mensagem chegou ao consumidor', WaitDeliveries(1, 5000));
-    TAssert.AssertEquals('corpo integro', 'ola', Bodies);
+    TAssert.AssertTrue('the message reached the consumer', WaitDeliveries(1, 5000));
+    TAssert.AssertEquals('body intact', 'hello', Bodies);
   finally
     LConn.Free;
   end;
@@ -361,17 +361,17 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.get'));
-    LCh.PublishText('', 'q.get', 'primeira');
-    LCh.PublishText('', 'q.get', 'segunda');
+    LCh.PublishText('', 'q.get', 'first');
+    LCh.PublishText('', 'q.get', 'second');
 
     LGet := LCh.BasicGet('q.get', True);
-    TAssert.AssertTrue('achou a primeira', LGet.Found);
-    TAssert.AssertEquals('corpo', 'primeira', LGet.BodyAsText);
-    TAssert.AssertEquals('message-count do Get-Ok: quantas sobraram', 1, Integer(LGet.MessageCount));
+    TAssert.AssertTrue('found the first', LGet.Found);
+    TAssert.AssertEquals('body', 'first', LGet.BodyAsText);
+    TAssert.AssertEquals('Get-Ok message-count: how many are left', 1, Integer(LGet.MessageCount));
 
     LGet := LCh.BasicGet('q.get', True);
-    TAssert.AssertTrue('achou a segunda', LGet.Found);
-    TAssert.AssertEquals('corpo', 'segunda', LGet.BodyAsText);
+    TAssert.AssertTrue('found the second', LGet.Found);
+    TAssert.AssertEquals('body', 'second', LGet.BodyAsText);
   finally
     LConn.Free;
   end;
@@ -387,9 +387,9 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.vazia'));
-    LGet := LCh.BasicGet('q.vazia', True);
-    TAssert.AssertFalse('fila vazia devolve Get-Empty', LGet.Found);
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.empty'));
+    LGet := LCh.BasicGet('q.empty', True);
+    TAssert.AssertFalse('empty queue returns Get-Empty', LGet.Found);
   finally
     LConn.Free;
   end;
@@ -407,26 +407,26 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.topic',
       AMQP_EXCHANGE_TYPE_TOPIC));
-    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.aprovada'));
-    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.todas'));
-    LCh.BindQueue(NewBind('q.aprovada', 'ex.topic', 'nota.aprovada'));
-    LCh.BindQueue(NewBind('q.todas', 'ex.topic', 'nota.#'));
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.approved'));
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.all'));
+    LCh.BindQueue(NewBind('q.approved', 'ex.topic', 'invoice.approved'));
+    LCh.BindQueue(NewBind('q.all', 'ex.topic', 'invoice.#'));
 
-    LCh.PublishText('ex.topic', 'nota.aprovada', 'A');
-    LCh.PublishText('ex.topic', 'nota.cancelada', 'C');
+    LCh.PublishText('ex.topic', 'invoice.approved', 'A');
+    LCh.PublishText('ex.topic', 'invoice.canceled', 'C');
 
     // The specific queue only receives what matches; the wildcard one receives both.
-    LGet := LCh.BasicGet('q.aprovada', True);
-    TAssert.AssertTrue('q.aprovada recebeu', LGet.Found);
-    TAssert.AssertEquals('so a que casa', 'A', LGet.BodyAsText);
-    TAssert.AssertFalse('e nada alem dela', LCh.BasicGet('q.aprovada', True).Found);
+    LGet := LCh.BasicGet('q.approved', True);
+    TAssert.AssertTrue('q.approved received', LGet.Found);
+    TAssert.AssertEquals('only the matching one', 'A', LGet.BodyAsText);
+    TAssert.AssertFalse('and nothing else', LCh.BasicGet('q.approved', True).Found);
 
-    LGet := LCh.BasicGet('q.todas', True);
-    TAssert.AssertTrue('q.todas recebeu a primeira', LGet.Found);
-    TAssert.AssertEquals('ordem preservada', 'A', LGet.BodyAsText);
-    LGet := LCh.BasicGet('q.todas', True);
-    TAssert.AssertTrue('q.todas recebeu a segunda', LGet.Found);
-    TAssert.AssertEquals('ordem preservada', 'C', LGet.BodyAsText);
+    LGet := LCh.BasicGet('q.all', True);
+    TAssert.AssertTrue('q.all received the first', LGet.Found);
+    TAssert.AssertEquals('order preserved', 'A', LGet.BodyAsText);
+    LGet := LCh.BasicGet('q.all', True);
+    TAssert.AssertTrue('q.all received the second', LGet.Found);
+    TAssert.AssertEquals('order preserved', 'C', LGet.BodyAsText);
   finally
     LConn.Free;
   end;
@@ -448,11 +448,11 @@ begin
     LCh.BindQueue(NewBind('q.f1', 'ex.fan', ''));
     LCh.BindQueue(NewBind('q.f2', 'ex.fan', ''));
 
-    LCh.PublishText('ex.fan', 'qualquer', 'broadcast');
+    LCh.PublishText('ex.fan', 'anything', 'broadcast');
 
     // ONE message, TWO queues -- body shared without a copy.
-    TAssert.AssertEquals('chegou na primeira', 'broadcast', LCh.BasicGet('q.f1', True).BodyAsText);
-    TAssert.AssertEquals('e na segunda', 'broadcast', LCh.BasicGet('q.f2', True).BodyAsText);
+    TAssert.AssertEquals('reached the first', 'broadcast', LCh.BasicGet('q.f1', True).BodyAsText);
+    TAssert.AssertEquals('and the second', 'broadcast', LCh.BasicGet('q.f2', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -475,9 +475,9 @@ begin
     for I := 1 to 5 do
       LCh.PublishText('', 'q.qos', 'm' + IntToStr(I));
 
-    TAssert.AssertTrue('entregou a primeira', WaitDeliveries(1, 5000));
+    TAssert.AssertTrue('delivered the first', WaitDeliveries(1, 5000));
     Sleep(300); // plenty of time to deliver more, if the prefetch failed
-    TAssert.AssertEquals('com prefetch=1 e nenhum ack, so uma entrega fica em voo', 1, ReceivedCount);
+    TAssert.AssertEquals('with prefetch=1 and no ack, only one delivery is in flight', 1, ReceivedCount);
   finally
     LConn.Free;
   end;
@@ -494,17 +494,17 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.nack'));
-    LCh.PublishText('', 'q.nack', 'volta');
+    LCh.PublishText('', 'q.nack', 'comes back');
 
     LGet := LCh.BasicGet('q.nack', False); // with ack
-    TAssert.AssertTrue('buscou', LGet.Found);
-    TAssert.AssertFalse('primeira vez', LGet.Redelivered);
+    TAssert.AssertTrue('fetched', LGet.Found);
+    TAssert.AssertFalse('first time', LGet.Redelivered);
     LCh.Nack(LGet.DeliveryTag, True); // requeue
 
     LGet := LCh.BasicGet('q.nack', True);
-    TAssert.AssertTrue('voltou para a fila', LGet.Found);
-    TAssert.AssertEquals('mesma mensagem', 'volta', LGet.BodyAsText);
-    TAssert.AssertTrue('marcada como reentrega', LGet.Redelivered);
+    TAssert.AssertTrue('went back to the queue', LGet.Found);
+    TAssert.AssertEquals('same message', 'comes back', LGet.BodyAsText);
+    TAssert.AssertTrue('marked as redelivered', LGet.Redelivered);
   finally
     LConn.Free;
   end;
@@ -522,15 +522,15 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.cancel'));
     LTag := LCh.Consume('q.cancel', OnDelivery, True);
-    LCh.PublishText('', 'q.cancel', 'antes');
-    TAssert.AssertTrue('entregou antes do cancel', WaitDeliveries(1, 5000));
+    LCh.PublishText('', 'q.cancel', 'before');
+    TAssert.AssertTrue('delivered before the cancel', WaitDeliveries(1, 5000));
 
     LCh.Cancel(LTag);
-    LCh.PublishText('', 'q.cancel', 'depois');
+    LCh.PublishText('', 'q.cancel', 'after');
     Sleep(300);
-    TAssert.AssertEquals('nada foi entregue apos o cancel', 1, ReceivedCount);
+    TAssert.AssertEquals('nothing delivered after the cancel', 1, ReceivedCount);
     // And the message stays in the queue, waiting for another consumer.
-    TAssert.AssertEquals('a mensagem ficou na fila', 'depois', LCh.BasicGet('q.cancel', True).BodyAsText);
+    TAssert.AssertEquals('the message stayed in the queue', 'after', LCh.BasicGet('q.cancel', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -552,7 +552,7 @@ begin
 
     // An equivalent redeclare returns the real counts.
     LOk := LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.cont'));
-    TAssert.AssertEquals('nome', 'q.cont', LOk.QueueName);
+    TAssert.AssertEquals('name', 'q.cont', LOk.QueueName);
     TAssert.AssertEquals('message-count', 2, Integer(LOk.MessageCount));
     TAssert.AssertEquals('consumer-count', 0, Integer(LOk.ConsumerCount));
   finally
@@ -572,7 +572,7 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.del'));
     LCh.PublishText('', 'q.del', 'a');
-    TAssert.AssertEquals('delete devolve quantas mensagens foram junto', 1, Integer(LCh.DeleteQueue(NewDelete('q.del', False, False))));
+    TAssert.AssertEquals('delete returns how many messages went with it', 1, Integer(LCh.DeleteQueue(NewDelete('q.del', False, False))));
 
     // Really deleted: a consume on it now is 404.
     LCode := 0;
@@ -582,7 +582,7 @@ begin
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('a fila sumiu mesmo', 404, LCode);
+    TAssert.AssertEquals('the queue is really gone', 404, LCode);
   finally
     LConn.Free;
   end;
@@ -599,10 +599,10 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.orfa'));
-    LCh.PublishText('', 'q.orfa', 'pendente');
-    LGet := LCh.BasicGet('q.orfa', False); // with ack, and we will NOT ack
-    TAssert.AssertTrue('buscou', LGet.Found);
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.orphan'));
+    LCh.PublishText('', 'q.orphan', 'pending');
+    LGet := LCh.BasicGet('q.orphan', False); // with ack, and we will NOT ack
+    TAssert.AssertTrue('fetched', LGet.Found);
   finally
     LConn.Free; // connection drops with the delivery open
   end;
@@ -613,12 +613,12 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.orfa'));
-    LGet := LCh.BasicGet('q.orfa', True);
-    TAssert.AssertTrue('a nao-confirmada voltou para a fila', LGet.Found);
-    TAssert.AssertEquals('mesma mensagem', 'pendente', LGet.BodyAsText);
-    TAssert.AssertTrue('marcada como reentrega', LGet.Redelivered);
-    TAssert.AssertFalse('e voltou UMA vez, nao duas', LCh.BasicGet('q.orfa', True).Found);
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.orphan'));
+    LGet := LCh.BasicGet('q.orphan', True);
+    TAssert.AssertTrue('the unacked one went back to the queue', LGet.Found);
+    TAssert.AssertEquals('same message', 'pending', LGet.BodyAsText);
+    TAssert.AssertTrue('marked as redelivered', LGet.Redelivered);
+    TAssert.AssertFalse('and came back ONCE, not twice', LCh.BasicGet('q.orphan', True).Found);
   finally
     LConn.Free;
   end;
@@ -637,12 +637,12 @@ begin
     LCh := LConn.CreateChannel;
     LDecl := TAMQPQueueDeclare.Create('');
     LOk := LCh.DeclareQueue(LDecl);
-    TAssert.AssertTrue('o broker gerou um nome', LOk.QueueName <> '');
-    TAssert.AssertTrue('com o prefixo reservado do servidor', Pos('amq.gen-', LOk.QueueName) = 1);
+    TAssert.AssertTrue('the broker generated a name', LOk.QueueName <> '');
+    TAssert.AssertTrue('with the server reserved prefix', Pos('amq.gen-', LOk.QueueName) = 1);
 
     // And the generated queue works.
     LCh.PublishText('', LOk.QueueName, 'anon');
-    TAssert.AssertEquals('entregou', 'anon', LCh.BasicGet(LOk.QueueName, True).BodyAsText);
+    TAssert.AssertEquals('delivered', 'anon', LCh.BasicGet(LOk.QueueName, True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -678,7 +678,7 @@ begin
           LDecl := TAMQPQueueDeclare.Create('');
           LDecl.Exclusive := True;
           LName := LConns[K].CreateChannel.DeclareQueue(LDecl).QueueName;
-          TAssert.AssertTrue('nome gerado repetido entre conexoes: ' + LName, LNames.IndexOf(LName) < 0);
+          TAssert.AssertTrue('generated name repeated across connections: ' + LName, LNames.IndexOf(LName) < 0);
           LNames.Add(LName);
         end;
       finally
@@ -686,7 +686,7 @@ begin
         LConns[0].Free;
       end;
     end;
-    TAssert.AssertEquals('quarenta nomes distintos', 40, LNames.Count);
+    TAssert.AssertEquals('forty distinct names', 40, LNames.Count);
   finally
     LNames.Free;
   end;
@@ -701,14 +701,14 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.sem.bind',
+    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.no.bind',
       AMQP_EXCHANGE_TYPE_DIRECT));
     // The exchange exists, but no binding matches: the message is dropped
     // silently (without mandatory there is no Basic.Return -- that is WS6).
-    LCh.PublishText('ex.sem.bind', 'nada', 'perdida');
+    LCh.PublishText('ex.no.bind', 'nothing', 'lost');
     Sleep(100);
-    TAssert.AssertTrue('publish sem rota nao fecha o canal', LCh.IsOpen);
-    TAssert.AssertTrue('e o broker contabiliza a publicacao sem rota', FBroker.Engine.UnroutedCount >= 1);
+    TAssert.AssertTrue('unroutable publish does not close the channel', LCh.IsOpen);
+    TAssert.AssertTrue('and the broker counts the unroutable publish', FBroker.Engine.UnroutedCount >= 1);
   finally
     LConn.Free;
   end;
@@ -749,12 +749,12 @@ begin
     LCh := LConn.CreateChannel;
     LCode := 0;
     try
-      LCh.Consume('nao.existe', OnDelivery, True);
+      LCh.Consume('does.not.exist', OnDelivery, True);
     except
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('consume de fila inexistente e 404', 404, LCode);
+    TAssert.AssertEquals('consume on a missing queue is 404', 404, LCode);
   finally
     LConn.Free;
   end;
@@ -772,12 +772,12 @@ begin
     LCh := LConn.CreateChannel;
     LCode := 0;
     try
-      LCh.BasicGet('nao.existe', True);
+      LCh.BasicGet('does.not.exist', True);
     except
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('get de fila inexistente e 404', 404, LCode);
+    TAssert.AssertEquals('get on a missing queue is 404', 404, LCode);
   finally
     LConn.Free;
   end;
@@ -795,12 +795,12 @@ begin
     LCh := LConn.CreateChannel;
     LCode := 0;
     try
-      LCh.BindQueue(NewBind('nao.existe', 'amq.direct', 'k'));
+      LCh.BindQueue(NewBind('does.not.exist', 'amq.direct', 'k'));
     except
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('bind com fila inexistente e 404', 404, LCode);
+    TAssert.AssertEquals('bind with a missing queue is 404', 404, LCode);
   finally
     LConn.Free;
   end;
@@ -819,19 +819,19 @@ begin
     LCh := LConn.CreateChannel;
     // Publish is not an RPC: the error arrives as an asynchronous Channel.Close, so
     // we wait for the channel to drop instead of waiting for an exception in the publish.
-    LCh.PublishText('ex.que.nao.existe', 'k', 'x');
+    LCh.PublishText('ex.that.does.not.exist', 'k', 'x');
     LDeadline := PcTickMs + 3000;
     while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
-    TAssert.AssertFalse('publish em exchange inexistente fecha o canal', LCh.IsOpen);
+    TAssert.AssertFalse('publish to a missing exchange closes the channel', LCh.IsOpen);
     LCode := 0;
     try
-      LCh.BasicGet('qualquer', True); // dead channel: the lib raises
+      LCh.BasicGet('anything', True); // dead channel: the lib raises
     except
       on E: EAMQPChannel do
         LCode := 1;
     end;
-    TAssert.AssertEquals('e o canal fica inutilizavel', 1, LCode);
+    TAssert.AssertEquals('and the channel becomes unusable', 1, LCode);
   finally
     LConn.Free;
   end;
@@ -857,7 +857,7 @@ begin
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('redeclare divergente e 406', 406, LCode);
+    TAssert.AssertEquals('diverging redeclare is 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -882,7 +882,7 @@ begin
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('if-empty com mensagem e 406', 406, LCode);
+    TAssert.AssertEquals('if-empty with a message is 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -907,7 +907,7 @@ begin
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('if-unused com consumidor e 406', 406, LCode);
+    TAssert.AssertEquals('if-unused with a consumer is 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -925,14 +925,14 @@ begin
     LCh := LConn.CreateChannel;
     LCode := 0;
     try
-      LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.bad', 'nao-existe'));
+      LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.bad', 'no-such-type'));
     except
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
     // Deliberate deviation from RabbitMQ (which uses 503 and brings down the CONNECTION):
     // here it is a channel error. See CLAUDE.md.
-    TAssert.AssertEquals('tipo de exchange invalido e 406 de canal', 406, LCode);
+    TAssert.AssertEquals('invalid exchange type is a channel 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -950,12 +950,12 @@ begin
     LCh := LConn.CreateChannel;
     LCode := 0;
     try
-      LCh.DeclareQueue(TAMQPQueueDeclare.Create('amq.minha'));
+      LCh.DeclareQueue(TAMQPQueueDeclare.Create('amq.mine'));
     except
       on E: EAMQPChannel do
         LCode := ErrorCodeOf(E.Message);
     end;
-    TAssert.AssertEquals('nome reservado e 403', 403, LCode);
+    TAssert.AssertEquals('reserved name is 403', 403, LCode);
   finally
     LConn.Free;
   end;
@@ -974,14 +974,14 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.uid'));
     LProps := TAMQPBasicProperties.Empty;
-    LProps.SetUserId('outro'); // authenticated as 'guest'
+    LProps.SetUserId('other'); // authenticated as 'guest'
     LCh.Publish('', 'q.uid', AmqpUtf8Encode('x'), LProps);
 
     // Since publish is not an RPC, the 403 arrives as an asynchronous Channel.Close.
     LDeadline := PcTickMs + 3000;
     while LCh.IsOpen and (PcTickMs < LDeadline) do
       Sleep(10);
-    TAssert.AssertFalse('user-id diferente do usuario autenticado fecha o canal (403)', LCh.IsOpen);
+    TAssert.AssertFalse('user-id other than the authenticated user closes the channel (403)', LCh.IsOpen);
   finally
     LConn.Free;
   end;
@@ -1013,7 +1013,7 @@ begin
         on E: EAMQPChannel do
           LCode := ErrorCodeOf(E.Message);
       end;
-      TAssert.AssertEquals('fila exclusiva de outra conexao e 405 RESOURCE_LOCKED', 405, LCode);
+      TAssert.AssertEquals('exclusive queue of another connection is 405 RESOURCE_LOCKED', 405, LCode);
     finally
       LConn2.Free;
     end;
@@ -1032,19 +1032,19 @@ begin
     LConn.Open;
     LCh1 := LConn.CreateChannel;
     try
-      LCh1.BasicGet('nao.existe', True);
+      LCh1.BasicGet('does.not.exist', True);
     except
       on E: EAMQPChannel do
         ; // expected: 404
     end;
-    TAssert.AssertFalse('o canal ofensor morreu', LCh1.IsOpen);
-    TAssert.AssertTrue('mas a conexao continua viva', LConn.IsOpen);
+    TAssert.AssertFalse('the offending channel died', LCh1.IsOpen);
+    TAssert.AssertTrue('but the connection stays alive', LConn.IsOpen);
 
     // And another channel on the same connection works normally.
     LCh2 := LConn.CreateChannel;
-    LCh2.DeclareQueue(TAMQPQueueDeclare.Create('q.depois'));
-    LCh2.PublishText('', 'q.depois', 'ok');
-    TAssert.AssertEquals('canal novo opera normalmente', 'ok', LCh2.BasicGet('q.depois', True).BodyAsText);
+    LCh2.DeclareQueue(TAMQPQueueDeclare.Create('q.after'));
+    LCh2.PublishText('', 'q.after', 'ok');
+    TAssert.AssertEquals('new channel works normally', 'ok', LCh2.BasicGet('q.after', True).BodyAsText);
   finally
     LConn.Free;
   end;
@@ -1066,7 +1066,7 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.acked'));
     LCh.Consume('q.acked', OnDelivery, False); // the callback acks
     LCh.PublishText('', 'q.acked', 'x');
-    TAssert.AssertTrue('entregou', WaitDeliveries(1, 5000));
+    TAssert.AssertTrue('delivered', WaitDeliveries(1, 5000));
     Sleep(300); // the ack up to the queue is asynchronous
   finally
     LConn.Free; // connection drops AFTER the ack
@@ -1077,7 +1077,7 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.acked'));
-    TAssert.AssertFalse('mensagem confirmada nao volta para a fila quando a conexao cai',
+    TAssert.AssertFalse('an acked message does not return to the queue when the connection drops',
       LCh.BasicGet('q.acked', True).Found);
   finally
     LConn.Free;
@@ -1147,8 +1147,8 @@ begin
     LCh := LConn.CreateChannel;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.conf'));
     LCh.ConfirmSelect;
-    LCh.PublishText('', 'q.conf', 'confirmada');
-    TAssert.AssertTrue('o broker confirmou o publish -- ate a WS5 isto expirava',
+    LCh.PublishText('', 'q.conf', 'confirmed');
+    TAssert.AssertTrue('the broker confirmed the publish -- until WS5 this timed out',
       LCh.WaitForConfirms(5000));
   finally
     LConn.Free;
@@ -1168,11 +1168,11 @@ begin
     LCh.ConfirmSelect;
     // The seq-no is the CLIENT's; the test ensures the broker confirms each one
     // of them individually (the broker's sequence has to match the client's).
-    TAssert.AssertEquals('primeiro', 1, Integer(LCh.PublishText('', 'q.seq', 'a')));
-    TAssert.AssertEquals('segundo', 2, Integer(LCh.PublishText('', 'q.seq', 'b')));
-    TAssert.AssertEquals('terceiro', 3, Integer(LCh.PublishText('', 'q.seq', 'c')));
-    TAssert.AssertTrue('o seq-no 2 foi confirmado', LCh.WaitForConfirm(2, 5000));
-    TAssert.AssertTrue('e o lote todo tambem', LCh.WaitForConfirms(5000));
+    TAssert.AssertEquals('first', 1, Integer(LCh.PublishText('', 'q.seq', 'a')));
+    TAssert.AssertEquals('second', 2, Integer(LCh.PublishText('', 'q.seq', 'b')));
+    TAssert.AssertEquals('third', 3, Integer(LCh.PublishText('', 'q.seq', 'c')));
+    TAssert.AssertTrue('seq-no 2 was confirmed', LCh.WaitForConfirm(2, 5000));
+    TAssert.AssertTrue('and the whole batch too', LCh.WaitForConfirms(5000));
   finally
     LConn.Free;
   end;
@@ -1187,13 +1187,13 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.vazio',
+    LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.empty',
       AMQP_EXCHANGE_TYPE_DIRECT));
     LCh.ConfirmSelect;
-    LCh.PublishText('ex.vazio', 'sem.bind', 'ninguem quer');
+    LCh.PublishText('ex.empty', 'no.bind', 'nobody wants it');
     // No route is NOT a failure: the message was handled, so it gets an ack (nack is
     // reserved for an internal broker failure).
-    TAssert.AssertTrue('publish sem rota tambem e confirmado',
+    TAssert.AssertTrue('unroutable publish is confirmed too',
       LCh.WaitForConfirms(5000));
   finally
     LConn.Free;
@@ -1210,13 +1210,13 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.lote'));
+    LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.batch'));
     LCh.ConfirmSelect;
     for I := 1 to 50 do
-      LCh.PublishText('', 'q.lote', 'm' + IntToStr(I));
-    TAssert.AssertTrue('as 50 confirmadas', LCh.WaitForConfirms(10000));
-    TAssert.AssertEquals('e as 50 chegaram na fila', 50,
-      Integer(LCh.DeleteQueue(NewDelete('q.lote', False, False))));
+      LCh.PublishText('', 'q.batch', 'm' + IntToStr(I));
+    TAssert.AssertTrue('the 50 confirmed', LCh.WaitForConfirms(10000));
+    TAssert.AssertEquals('and the 50 reached the queue', 50,
+      Integer(LCh.DeleteQueue(NewDelete('q.batch', False, False))));
   finally
     LConn.Free;
   end;
@@ -1234,13 +1234,13 @@ begin
     LCh.OnBasicReturn := OnReturn;
     LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.mand',
       AMQP_EXCHANGE_TYPE_DIRECT));
-    LCh.Publish('ex.mand', 'sem.bind', AmqpUtf8Encode('devolve'),
+    LCh.Publish('ex.mand', 'no.bind', AmqpUtf8Encode('returned'),
       TAMQPBasicProperties.Empty, True); // mandatory
 
-    TAssert.AssertTrue('o broker devolveu a mensagem', WaitReturns(1, 5000));
+    TAssert.AssertTrue('the broker returned the message', WaitReturns(1, 5000));
     FLock.Enter;
     try
-      TAssert.AssertEquals('com NO_ROUTE e o corpo intacto', '312:devolve',
+      TAssert.AssertEquals('with NO_ROUTE and the body intact', '312:returned',
         FReturned[0]);
     finally
       FLock.Leave;
@@ -1261,11 +1261,11 @@ begin
     LCh := LConn.CreateChannel;
     LCh.OnBasicReturn := OnReturn;
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.mand'));
-    LCh.Publish('', 'q.mand', AmqpUtf8Encode('tem rota'),
+    LCh.Publish('', 'q.mand', AmqpUtf8Encode('has a route'),
       TAMQPBasicProperties.Empty, True); // mandatory, but WITH a route
     Sleep(300);
-    TAssert.AssertEquals('nada devolvido', 0, ReturnedCount);
-    TAssert.AssertEquals('a mensagem foi para a fila', 'tem rota',
+    TAssert.AssertEquals('nothing returned', 0, ReturnedCount);
+    TAssert.AssertEquals('the message went to the queue', 'has a route',
       LCh.BasicGet('q.mand', True).BodyAsText);
   finally
     LConn.Free;
@@ -1286,9 +1286,9 @@ begin
     LCh.OnBasicReturn := OnReturn;
     LCh.DeclareExchange(TAMQPExchangeDeclare.Create('ex.mand2',
       AMQP_EXCHANGE_TYPE_DIRECT));
-    LCh.Publish('ex.mand2', 'nada', AmqpUtf8Encode('x'),
+    LCh.Publish('ex.mand2', 'nothing', AmqpUtf8Encode('x'),
       TAMQPBasicProperties.Empty, True);
-    TAssert.AssertTrue('Basic.Return nao depende de confirm mode',
+    TAssert.AssertTrue('Basic.Return does not depend on confirm mode',
       WaitReturns(1, 5000));
   finally
     LConn.Free;
@@ -1381,17 +1381,17 @@ begin
     try
       LOwnerConn.Open;
       LCh := LOwnerConn.CreateChannel;
-      LDecl := TAMQPQueueDeclare.Create('q.excl.vida');
+      LDecl := TAMQPQueueDeclare.Create('q.excl.life');
       LDecl.Exclusive := True;
       LCh.DeclareQueue(LDecl);
-      TAssert.AssertTrue('a fila existe enquanto a dona vive',
-        QueueExists(LOwnerConn, 'q.excl.vida'));
+      TAssert.AssertTrue('the queue exists while the owner lives',
+        QueueExists(LOwnerConn, 'q.excl.life'));
     finally
       LOwnerConn.Free; // the owner drops
     end;
 
-    TAssert.AssertTrue('fila exclusiva morre com a conexao dona',
-      WaitQueueGone(LOtherConn, 'q.excl.vida', 5000));
+    TAssert.AssertTrue('exclusive queue dies with the owning connection',
+      WaitQueueGone(LOtherConn, 'q.excl.life', 5000));
   finally
     LOtherConn.Free;
   end;
@@ -1407,7 +1407,7 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LDecl := TAMQPQueueDeclare.Create('q.excl.viva');
+    LDecl := TAMQPQueueDeclare.Create('q.excl.alive');
     LDecl.Exclusive := True;
     LCh.DeclareQueue(LDecl);
 
@@ -1419,8 +1419,8 @@ begin
         Free;
       end;
     Sleep(200);
-    TAssert.AssertTrue('so a conexao DONA leva a fila exclusiva embora',
-      QueueExists(LConn, 'q.excl.viva'));
+    TAssert.AssertTrue('only the OWNING connection takes the exclusive queue away',
+      QueueExists(LConn, 'q.excl.alive'));
   finally
     LConn.Free;
   end;
@@ -1441,10 +1441,10 @@ begin
     LDecl.AutoDelete := True;
     LCh.DeclareQueue(LDecl);
     LTag := LCh.Consume('q.ad', OnDelivery, True);
-    TAssert.AssertTrue('existe com consumidor', QueueExists(LConn, 'q.ad'));
+    TAssert.AssertTrue('exists with a consumer', QueueExists(LConn, 'q.ad'));
 
     LCh.Cancel(LTag); // the Cancel-Ok only comes back after the broker processes it
-    TAssert.AssertFalse('auto-delete some quando o ultimo consumidor sai',
+    TAssert.AssertFalse('auto-delete vanishes when the last consumer leaves',
       QueueExists(LConn, 'q.ad'));
   finally
     LConn.Free;
@@ -1461,17 +1461,17 @@ begin
   try
     LConn.Open;
     LCh := LConn.CreateChannel;
-    LDecl := TAMQPQueueDeclare.Create('q.ad.virgem');
+    LDecl := TAMQPQueueDeclare.Create('q.ad.pristine');
     LDecl.AutoDelete := True;
     LCh.DeclareQueue(LDecl);
-    LCh.PublishText('', 'q.ad.virgem', 'x');
+    LCh.PublishText('', 'q.ad.pristine', 'x');
 
     // The Basic.Get in ack mode leaves a delivery open, and that is what puts
     // the queue on the list of "queues this channel touched" -- so closing the
     // channel DOES make the teardown call auto-delete on it. Without this step the
     // test would pass without ever exercising the guard (measured by mutation:
     // removing EverHadConsumer did not break the previous version of this test).
-    LCh.BasicGet('q.ad.virgem', False);
+    LCh.BasicGet('q.ad.pristine', False);
     LCh.Close;
     // Close REMOVES the channel from the connection's dictionary (UnregisterChannel),
     // and the connection's destructor only frees the ones still there -- so whoever
@@ -1480,8 +1480,8 @@ begin
 
     // The queue never had a CONSUMER, only a Get: it must not go away, otherwise it
     // would vanish between the declare and the first consume.
-    TAssert.AssertTrue('auto-delete que NUNCA teve consumidor nao some',
-      QueueExists(LConn, 'q.ad.virgem'));
+    TAssert.AssertTrue('auto-delete that NEVER had a consumer does not vanish',
+      QueueExists(LConn, 'q.ad.pristine'));
   finally
     LConn.Free;
   end;
@@ -1505,7 +1505,7 @@ begin
     LCh.Consume('q.ad2', OnDelivery, True); // second consumer
 
     LCh.Cancel(LTag1);
-    TAssert.AssertTrue('ainda ha consumidor: a fila fica',
+    TAssert.AssertTrue('there is still a consumer: the queue stays',
       QueueExists(LConn, 'q.ad2'));
   finally
     LConn.Free;
@@ -1525,21 +1525,21 @@ begin
     // consumer comes from a connection that is going to drop -- it is the CONSUMER's
     // drop that fires the auto-delete, not the declarer's.
     LCh := LOtherConn.CreateChannel;
-    LDecl := TAMQPQueueDeclare.Create('q.ad.queda');
+    LDecl := TAMQPQueueDeclare.Create('q.ad.drop');
     LDecl.AutoDelete := True;
     LCh.DeclareQueue(LDecl);
 
     LOwner := TAMQPConnection.Create(Params);
     try
       LOwner.Open;
-      LOwner.CreateChannel.Consume('q.ad.queda', OnDelivery, True);
-      TAssert.AssertTrue('existe com consumidor', QueueExists(LOtherConn, 'q.ad.queda'));
+      LOwner.CreateChannel.Consume('q.ad.drop', OnDelivery, True);
+      TAssert.AssertTrue('exists with a consumer', QueueExists(LOtherConn, 'q.ad.drop'));
     finally
       LOwner.Free; // the consumer drops together with the connection
     end;
 
-    TAssert.AssertTrue('auto-delete some quando o ultimo consumidor CAI, nao so no cancel',
-      WaitQueueGone(LOtherConn, 'q.ad.queda', 5000));
+    TAssert.AssertTrue('auto-delete vanishes when the last consumer DROPS, not only on cancel',
+      WaitQueueGone(LOtherConn, 'q.ad.drop', 5000));
   finally
     LOtherConn.Free;
   end;
@@ -1558,7 +1558,7 @@ begin
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.normal')); // without auto-delete
     LTag := LCh.Consume('q.normal', OnDelivery, True);
     LCh.Cancel(LTag);
-    TAssert.AssertTrue('fila comum nao some quando o consumidor sai',
+    TAssert.AssertTrue('a plain queue does not vanish when the consumer leaves',
       QueueExists(LConn, 'q.normal'));
   finally
     LConn.Free;
@@ -1581,7 +1581,7 @@ begin
     LCh.DeclareExchange(LDecl);
     LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.ex.ad'));
     LCh.BindQueue(NewBind('q.ex.ad', 'ex.ad', 'k'));
-    TAssert.AssertTrue('existe com binding', ExchangeExists(LConn, 'ex.ad'));
+    TAssert.AssertTrue('exists with a binding', ExchangeExists(LConn, 'ex.ad'));
 
     LUnbind.QueueName := 'q.ex.ad';
     LUnbind.ExchangeName := 'ex.ad';
@@ -1589,7 +1589,7 @@ begin
     LUnbind.Arguments := nil;
     LCh.UnbindQueue(LUnbind);
 
-    TAssert.AssertFalse('exchange auto-delete some ao perder o ultimo binding',
+    TAssert.AssertFalse('auto-delete exchange vanishes when it loses the last binding',
       ExchangeExists(LConn, 'ex.ad'));
   finally
     LConn.Free;
@@ -1615,7 +1615,7 @@ begin
     // Deleting the QUEUE takes its bindings with it -- and the exchange is left orphaned.
     LCh.DeleteQueue(NewDelete('q.ex.ad2', False, False));
 
-    TAssert.AssertFalse('o binding que sumiu com a fila tambem conta',
+    TAssert.AssertFalse('the binding that vanished with the queue counts too',
       ExchangeExists(LConn, 'ex.ad2'));
   finally
     LConn.Free;
@@ -1647,7 +1647,7 @@ begin
     LUnbind.Arguments := nil;
     LCh.UnbindQueue(LUnbind);
 
-    TAssert.AssertTrue('ainda ha um binding: o exchange fica',
+    TAssert.AssertTrue('there is still a binding: the exchange stays',
       ExchangeExists(LConn, 'ex.ad3'));
   finally
     LConn.Free;
@@ -1676,7 +1676,7 @@ begin
       // and the refusal is explicit, not a silent clamp.
       LVal := TValue.From<Int64>(10);
       LArgs.Put('x-max-priority', LVal);
-      LDecl := TAMQPQueueDeclare.Create('q.prio.ruim', False);
+      LDecl := TAMQPQueueDeclare.Create('q.prio.bad', False);
       LDecl.Arguments := LArgs;
       try
         LCh.DeclareQueue(LDecl);
@@ -1689,9 +1689,9 @@ begin
       // convention as SetHeaders in the publish).
       LArgs.Free;
     end;
-    TAssert.AssertEquals('x-max-priority fora da faixa e 406', 406, LCode);
+    TAssert.AssertEquals('x-max-priority out of range is 406', 406, LCode);
     // The connection has to stay usable: it is a channel error, not a connection error.
-    TAssert.AssertTrue('conexao sobrevive ao 406', LConn.IsOpen);
+    TAssert.AssertTrue('connection survives the 406', LConn.IsOpen);
   finally
     LConn.Free;
   end;
@@ -1717,7 +1717,7 @@ begin
       // the table by hand.
       LVal := TValue.From<string>('60000');
       LArgs.Put('x-message-ttl', LVal);
-      LDecl := TAMQPQueueDeclare.Create('q.ttl.ruim', False);
+      LDecl := TAMQPQueueDeclare.Create('q.ttl.bad', False);
       LDecl.Arguments := LArgs;
       try
         LCh.DeclareQueue(LDecl);
@@ -1728,7 +1728,7 @@ begin
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('x-message-ttl como string e 406', 406, LCode);
+    TAssert.AssertEquals('x-message-ttl as a string is 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -1752,7 +1752,7 @@ begin
     try
       LVal := TValue.From<string>('reject-publish-dlx');
       LArgs.Put('x-overflow', LVal);
-      LDecl := TAMQPQueueDeclare.Create('q.overflow.ruim', False);
+      LDecl := TAMQPQueueDeclare.Create('q.overflow.bad', False);
       LDecl.Arguments := LArgs;
       try
         LCh.DeclareQueue(LDecl);
@@ -1763,7 +1763,7 @@ begin
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('x-overflow desconhecido e 406', 406, LCode);
+    TAssert.AssertEquals('unknown x-overflow is 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -1790,7 +1790,7 @@ begin
     try
       LVal := TValue.From<Int64>(60000);
       LArgs.Put('x-message-ttl', LVal);
-      LVal := TValue.From<string>('dlx.teste');
+      LVal := TValue.From<string>('dlx.test');
       LArgs.Put('x-dead-letter-exchange', LVal);
       LVal := TValue.From<Int64>(5);
       LArgs.Put('x-max-priority', LVal);
@@ -1802,8 +1802,8 @@ begin
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('fila declarada', 'q.args.ok', LOk.QueueName);
-    TAssert.AssertTrue('conexao aberta', LConn.IsOpen);
+    TAssert.AssertEquals('queue declared', 'q.args.ok', LOk.QueueName);
+    TAssert.AssertTrue('connection open', LConn.IsOpen);
   finally
     LConn.Free;
   end;
@@ -1827,7 +1827,7 @@ begin
     try
       LVal := TValue.From<Int64>(42); // a number where a name is expected
       LArgs.Put('alternate-exchange', LVal);
-      LDecl := TAMQPExchangeDeclare.Create('ex.ae.ruim', 'direct');
+      LDecl := TAMQPExchangeDeclare.Create('ex.ae.bad', 'direct');
       LDecl.Arguments := LArgs;
       try
         LCh.DeclareExchange(LDecl);
@@ -1838,7 +1838,7 @@ begin
     finally
       LArgs.Free;
     end;
-    TAssert.AssertEquals('alternate-exchange com tipo errado e 406', 406, LCode);
+    TAssert.AssertEquals('alternate-exchange with the wrong type is 406', 406, LCode);
   finally
     LConn.Free;
   end;
@@ -1869,10 +1869,10 @@ begin
     LConn.Open;
     LCh := LConn.CreateChannel;
     LDel := Default(TAMQPQueueDelete);
-    LDel.QueueName := 'q.que.nunca.existiu';
-    TAssert.AssertEquals('delete de fila inexistente devolve 0, sem erro', 0,
+    LDel.QueueName := 'q.that.never.existed';
+    TAssert.AssertEquals('delete of a missing queue returns 0, no error', 0,
       Integer(LCh.DeleteQueue(LDel)));
-    TAssert.AssertTrue('e o canal continua vivo', LConn.IsOpen);
+    TAssert.AssertTrue('and the channel stays alive', LConn.IsOpen);
     LCh.Close;
     LCh.Free;
   finally
@@ -1991,7 +1991,7 @@ begin
   end;
   PcPool.Queue(TBlockPoolWork.Create(FGate, @FStarted, @FExited));
   Inc(FEnqueuedBlockers);
-  TAssert.AssertTrue(Format('todo worker do PcPool roda um item nosso e sobra um na fila (partiram %d de %d, fila %d)',
+  TAssert.AssertTrue(Format('every PcPool worker runs one of our items and one is left queued (%d of %d started, queue %d)',
     [PcAtomicGet(FStarted), PcPool.MaxWorkers, PcPool.QueueDepth]), (PcAtomicGet(FStarted) = PcPool.MaxWorkers) and (PcPool.QueueDepth > 0));
 end;
 
@@ -2028,19 +2028,19 @@ begin
       // Declare-Ok and Get-Ok come out of the queue's ACTOR (synchronous command): if it
       // depended on the PcPool, it would wait up to the actor's 15 s timeout.
       LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.pool'));
-      LCh.PublishText('', 'q.pool', 'passou');
+      LCh.PublishText('', 'q.pool', 'passed');
       LGet := LCh.BasicGet('q.pool', True);
       LElapsed := PcTickMs - LStart;
-      TAssert.AssertTrue('o Get achou a mensagem', LGet.Found);
-      TAssert.AssertEquals('corpo', 'passou', LGet.BodyAsText);
-      TAssert.AssertTrue('sem esperar pelo PcPool (' + IntToStr(LElapsed) + ' ms)', LElapsed < 5000);
+      TAssert.AssertTrue('the Get found the message', LGet.Found);
+      TAssert.AssertEquals('body', 'passed', LGet.BodyAsText);
+      TAssert.AssertTrue('without waiting for the PcPool (' + IntToStr(LElapsed) + ' ms)', LElapsed < 5000);
     finally
       LConn.Free;
     end;
   finally
     ReleasePcPool;
   end;
-  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
+  TAssert.AssertEquals('every blocking item left the PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
 end;
 
 procedure TPoolIsolationTests.PcPoolSaturated_ChannelFreeWaitsForTheQueuedCallback;
@@ -2073,8 +2073,8 @@ begin
         LDeadline := PcTickMs + 5000;
         while (PcPool.QueueDepth <= LQueue) and (PcTickMs < LDeadline) do
           Sleep(5);
-        TAssert.AssertTrue('a entrega ficou na fila do PcPool', PcPool.QueueDepth > LQueue);
-        TAssert.AssertEquals('o callback ainda nao rodou (PcPool saturado)', 0, PcAtomicGet(FDelivered));
+        TAssert.AssertTrue('the delivery stayed in the PcPool queue', PcPool.QueueDepth > LQueue);
+        TAssert.AssertEquals('the callback has not run yet (PcPool saturated)', 0, PcAtomicGet(FDelivered));
         LOpener := TOpenGateLater.Create(FGate, 1500);
         try
           LStart := PcTickMs;
@@ -2084,8 +2084,8 @@ begin
           LOpener.WaitFor;
           LOpener.Free;
         end;
-        TAssert.AssertEquals('o Free so voltou depois de o callback enfileirado rodar', 1, PcAtomicGet(FDelivered));
-        TAssert.AssertTrue('o Free esperou o PcPool andar (' + IntToStr(LElapsed) + ' ms)', LElapsed >= 1000);
+        TAssert.AssertEquals('Free only returned after the queued callback ran', 1, PcAtomicGet(FDelivered));
+        TAssert.AssertTrue('Free waited for the PcPool to move (' + IntToStr(LElapsed) + ' ms)', LElapsed >= 1000);
       finally
         LCh.Free;
       end;
@@ -2095,7 +2095,7 @@ begin
   finally
     ReleasePcPool;
   end;
-  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
+  TAssert.AssertEquals('every blocking item left the PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
 end;
 
 procedure TPoolIsolationTests.PcPoolSaturated_ChannelWithOwnThread_DoesNotDependOnPcPool;
@@ -2116,17 +2116,17 @@ begin
       LConn.Open;
       LCh := LConn.CreateChannel(True);
       try
-        LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.propria'));
-        LCh.Consume('q.propria', HandleDelivery, True);
-        LCh.PublishText('', 'q.propria', 'x');
+        LCh.DeclareQueue(TAMQPQueueDeclare.Create('q.own'));
+        LCh.Consume('q.own', HandleDelivery, True);
+        LCh.PublishText('', 'q.own', 'x');
         LDeadline := PcTickMs + 5000;
         while (PcAtomicGet(FDelivered) = 0) and (PcTickMs < LDeadline) do
           Sleep(5);
-        TAssert.AssertEquals('a entrega rodou na thread do canal, com o PcPool saturado', 1, PcAtomicGet(FDelivered));
+        TAssert.AssertEquals('the delivery ran on the channel thread, with the PcPool saturated', 1, PcAtomicGet(FDelivered));
         LStart := PcTickMs;
         FreeAndNil(LCh);
         LElapsed := PcTickMs - LStart;
-        TAssert.AssertTrue('e o Free nao esperou o PcPool (' + IntToStr(LElapsed) + ' ms)', LElapsed < 1000);
+        TAssert.AssertTrue('and Free did not wait for the PcPool (' + IntToStr(LElapsed) + ' ms)', LElapsed < 1000);
       finally
         LCh.Free;
       end;
@@ -2136,7 +2136,7 @@ begin
   finally
     ReleasePcPool;
   end;
-  TAssert.AssertEquals('todo item bloqueador saiu do PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
+  TAssert.AssertEquals('every blocking item left the PcPool', FEnqueuedBlockers, PcAtomicGet(FExited));
 end;
 
 initialization

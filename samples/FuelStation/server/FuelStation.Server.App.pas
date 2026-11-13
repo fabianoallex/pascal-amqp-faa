@@ -3,7 +3,7 @@
 {$IFDEF FPC}{$MODE DELPHI}{$H+}{$ENDIF}
 
 { The assembly of the automation server WITHOUT UI: embedded broker + loopback
-  'automacao' connection + registry + events + command consumer +
+  'automation' connection + registry + events + command consumer +
   Watcher + (optional) pump simulator.
 
   The GUI panel and the smoke test use this class -- the UI only wires callbacks
@@ -65,7 +65,7 @@ type
 implementation
 
 const
-  DEFAULT_AUTOMATION_PASSWORD = 'automacao';
+  DEFAULT_AUTOMATION_PASSWORD = 'automation';
 
 constructor TFuelStationServerApp.Create;
 begin
@@ -105,7 +105,7 @@ begin
   if FRegistry.RegisterFueling(A, LVersion) then
   begin
     FEvents.NewFueling(A, LVersion);
-    Log(Format('BOMBA %d/%d %s  %.3f L  R$ %.2f  (%s)  versao %d',
+    Log(Format('PUMP %d/%d %s  %.3f L  R$ %.2f  (%s)  version %d',
       [A.Pump, A.Nozzle, A.Product, A.Liters, A.TotalAmount,
        FuelingTypeToStr(A.Kind), LVersion]));
     if Assigned(FOnChanged) then
@@ -130,7 +130,7 @@ begin
   FBroker.Port := APort;
   FBroker.Authenticator := TFuelStationAuthenticator.Create(LAutomationPassword, APosPassword);
   FBroker.Start;
-  Log(Format('Broker no ar em 0.0.0.0:%d.', [FBroker.Port]));
+  Log(Format('Broker up on 0.0.0.0:%d.', [FBroker.Port]));
 
   FRegistry := TFuelStationRegistry.Create;
 
@@ -139,7 +139,7 @@ begin
   LParams.Port := FBroker.Port;
   LParams.User := AUTOMATION_USER;
   LParams.Password := LAutomationPassword;
-  LParams.ConnectionName := 'automacao';
+  LParams.ConnectionName := 'automation';
   LParams.AutoReconnect := False;
   FConn := TAMQPConnection.Create(LParams);
   FConn.Open;
@@ -167,7 +167,7 @@ begin
   FPumps.Start;
 
   FRunning := True;
-  Log('Automacao pronta.');
+  Log('Automation ready.');
 end;
 
 procedure TFuelStationServerApp.Shutdown;
@@ -198,7 +198,7 @@ begin
     FreeAndNil(FBroker);
   end;
   if FRunning then
-    Log('Automacao parada.');
+    Log('Automation stopped.');
   FRunning := False;
 end;
 

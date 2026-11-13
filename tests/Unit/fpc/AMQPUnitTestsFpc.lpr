@@ -54,7 +54,7 @@ begin
     ConsoleApp := TTestRunner.Create(nil);
     try
       ConsoleApp.Initialize;
-      ConsoleApp.Title := 'pascal-amqp-faa - testes unitarios (FPCUnit)';
+      ConsoleApp.Title := 'pascal-amqp-faa - unit tests (FPCUnit)';
       ConsoleApp.Run;
     finally
       ConsoleApp.Free;

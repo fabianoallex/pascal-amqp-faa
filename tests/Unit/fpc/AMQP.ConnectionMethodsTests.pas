@@ -84,7 +84,7 @@ begin
     R := TAMQPReader.Create(LPayload);
     try
       LId := ReadMethodHeader(R);
-      TAssert.AssertTrue('class/method de Start-Ok',
+      TAssert.AssertTrue('Start-Ok class/method',
         LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START_OK));
 
       LDecoded := R.ReadFieldTable;
@@ -315,8 +315,8 @@ begin
   // #0 guest #0 guest -> 1 + 5 + 1 + 5 = 12 characters
   S := PlainAuthResponse('guest', 'guest');
   TAssert.AssertEquals(12, Length(S));
-  TAssert.AssertTrue('separador inicial', S[1] = #0);
-  TAssert.AssertTrue('separador entre usuario e senha', S[7] = #0);
+  TAssert.AssertTrue('leading separator', S[1] = #0);
+  TAssert.AssertTrue('separator between user and password', S[7] = #0);
 end;
 
 procedure TConnectionMethodsTests.DefaultClientProperties_HasProduct;
@@ -346,7 +346,7 @@ begin
     LCapsVal := P['capabilities'];
     // TValue.AsType<T> does not exist in FPC (see CLAUDE.md) -> AsObject + cast.
     LCaps := TAMQPFieldTable(LCapsVal.AsObject);
-    TAssert.AssertTrue('capability presente', LCaps.ContainsKey('connection.blocked'));
+    TAssert.AssertTrue('capability present', LCaps.ContainsKey('connection.blocked'));
     LBlockedVal := LCaps['connection.blocked'];
     TAssert.AssertTrue('capability = True', LBlockedVal.AsBoolean);
   finally
@@ -375,7 +375,7 @@ begin
   R := TAMQPReader.Create(LPayload);
   try
     LId := ReadMethodHeader(R);
-    TAssert.AssertTrue('class/method de Start',
+    TAssert.AssertTrue('Start class/method',
       LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_START));
     // Decodes with the same DecodeStart the client uses.
     LStart := DecodeStart(R);
@@ -455,12 +455,12 @@ begin
     try
       // The SASL response (#0 guest #0 secret) must survive byte for byte:
       // no going through AmqpUtf8Decode and losing the #0s.
-      TAssert.AssertEquals('tamanho da resposta', Length(LExpected), Length(LStartOk.Response));
+      TAssert.AssertEquals('response length', Length(LExpected), Length(LStartOk.Response));
       for I := 0 to High(LExpected) do
         TAssert.AssertEquals('byte ' + IntToStr(I),
           Integer(LExpected[I]), Integer(LStartOk.Response[I]));
-      TAssert.AssertEquals('separador inicial', 0, Integer(LStartOk.Response[0]));
-      TAssert.AssertEquals('separador do meio', 0, Integer(LStartOk.Response[6]));
+      TAssert.AssertEquals('leading separator', 0, Integer(LStartOk.Response[0]));
+      TAssert.AssertEquals('middle separator', 0, Integer(LStartOk.Response[6]));
     finally
       LStartOk.ClientProperties.Free;
     end;
@@ -522,7 +522,7 @@ begin
     TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_OPEN));
     LOpen := DecodeOpen(R);
     TAssert.AssertEquals('virtual-host', '/app', LOpen.VirtualHost);
-    TAssert.AssertTrue('reservados consumidos', R.EndOfData);
+    TAssert.AssertTrue('reserved fields consumed', R.EndOfData);
   finally
     R.Free;
   end;
@@ -575,7 +575,7 @@ begin
   try
     LId := ReadMethodHeader(R);
     TAssert.AssertTrue(LId.Matches(AMQP_CLASS_CONNECTION, AMQP_CONNECTION_UNBLOCKED));
-    TAssert.AssertTrue('sem argumentos', R.EndOfData);
+    TAssert.AssertTrue('no arguments', R.EndOfData);
   finally
     R.Free;
   end;
@@ -706,9 +706,9 @@ begin
   LServer.Heartbeat := 60;
   // Client: channel-max 0 (no limit), frame-max 0, heartbeat 30.
   LResult := NegotiateTune(LServer, 0, 0, 30);
-  TAssert.AssertEquals('channel-max adota servidor', 2047, Integer(LResult.ChannelMax));
-  TAssert.AssertEquals('frame-max adota servidor', Int64(131072), Int64(LResult.FrameMax));
-  TAssert.AssertEquals('heartbeat menor vence', 30, Integer(LResult.Heartbeat));
+  TAssert.AssertEquals('channel-max takes the server''s', 2047, Integer(LResult.ChannelMax));
+  TAssert.AssertEquals('frame-max takes the server''s', Int64(131072), Int64(LResult.FrameMax));
+  TAssert.AssertEquals('smaller heartbeat wins', 30, Integer(LResult.Heartbeat));
 end;
 
 initialization

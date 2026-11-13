@@ -237,7 +237,7 @@ begin
     AValue := 1;
   if FThread <> nil then
     raise EAMQPServerAbort.Create(
-      'EventQueueCapacity so pode mudar antes do Start');
+      'EventQueueCapacity can only change before Start');
   FCapacity := AValue;
   SetLength(FRing, FCapacity);
   FHead := 0;

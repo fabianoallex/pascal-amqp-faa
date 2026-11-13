@@ -151,19 +151,19 @@ procedure TfrmAuthorizer.SetConnected(AConnected: Boolean);
 begin
   if AConnected then
   begin
-    btnConnect.Caption := 'Desconectar';
+    btnConnect.Caption := 'Disconnect';
     // With TLS, shows the engine that actually LOADED (OpenSSL publishes version
     // and DLL/soname on the 1st connection; see AmqpTlsBackendInfo).
     if chkUseTls.Checked then
-      lblStatus.Caption := 'Conectado — TLS: ' + AmqpTlsBackendInfo
+      lblStatus.Caption := 'Connected — TLS: ' + AmqpTlsBackendInfo
     else
-      lblStatus.Caption := 'Conectado (sem TLS)';
+      lblStatus.Caption := 'Connected (no TLS)';
     lblStatus.Font.Color := clGreen;
   end
   else
   begin
-    btnConnect.Caption := 'Conectar';
-    lblStatus.Caption := 'Desconectado';
+    btnConnect.Caption := 'Connect';
+    lblStatus.Caption := 'Disconnected';
     lblStatus.Font.Color := clRed;
   end;
   btnPublish.Enabled := AConnected;
@@ -185,10 +185,10 @@ begin
     try
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
-      Log('Desconectado.');
+      Log('Disconnected.');
     except
       on E: Exception do
-        Log('Erro ao desconectar: ' + E.Message);
+        Log('Error while disconnecting: ' + E.Message);
     end;
     SetConnected(False);
     Exit;
@@ -200,12 +200,12 @@ begin
     FConn.Open;
     FChannel := FConn.CreateChannel;
     FChannel.DeclareQueue(TAMQPQueueDeclare.Create(Trim(edtQueue.Text), True));
-    Log(Format('Conectado a %s:%d%s.', [LParams.Host, LParams.Port, LParams.VirtualHost]));
+    Log(Format('Connected to %s:%d%s.', [LParams.Host, LParams.Port, LParams.VirtualHost]));
     SetConnected(True);
   except
     on E: Exception do
     begin
-      Log('Falha ao conectar: ' + E.Message);
+      Log('Failed to connect: ' + E.Message);
       FreeAndNil(FChannel);
       FreeAndNil(FConn);
       SetConnected(False);
@@ -220,13 +220,13 @@ var
 begin
   if not Assigned(FChannel) then
   begin
-    Log('Conecte antes de publicar.');
+    Log('Connect before publishing.');
     Exit;
   end;
   Count := StrToIntDef(Trim(edtCount.Text), 0);
   if Count <= 0 then
   begin
-    Log('Quantidade inválida.');
+    Log('Invalid count.');
     Exit;
   end;
   RunId := FormatDateTime('hhnnsszzz', Now);
@@ -237,11 +237,11 @@ begin
       InvoiceKey := Format('NFE-%s-%.4d', [RunId, I]);
       try
         FChannel.PublishText('', Trim(edtQueue.Text), InvoiceKey);
-        Log('Publicado retorno da nota ' + InvoiceKey);
+        Log('Published reply for invoice ' + InvoiceKey);
       except
         on E: Exception do
         begin
-          Log('Erro ao publicar ' + InvoiceKey + ': ' + E.Message);
+          Log('Error publishing ' + InvoiceKey + ': ' + E.Message);
           Break;
         end;
       end;

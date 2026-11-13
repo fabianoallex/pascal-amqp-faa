@@ -21,7 +21,7 @@
     Delphi: dcc32 -NSSystem;Winapi -U..\..\src -I..\..\src BackOffice.dpr
 
   Callbacks are `of object` (not anonymous; see CLAUDE.md): the state
-  (NotasProntas/Lock) lives in TBackOfficeState, not in unit globals. }
+  (ReadyInvoices/Lock) lives in TBackOfficeState, not in unit globals. }
 
 {$IFDEF FPC}
   {$MODE DELPHI}
@@ -44,7 +44,7 @@ uses
   AMQP.Queue.Methods;
 
 const
-  QUEUE_NAME = 'sefaz-respostas';
+  QUEUE_NAME = 'authorizer-replies';
 
 type
   TBackOfficeState = class
@@ -94,11 +94,11 @@ var
   DelayMs: Integer;
 begin
   DelayMs := 300 + Random(1200);
-  Log(Format('[worker %d] iniciando busca do XML da nota %s (~%dms)',
+  Log(Format('[worker %d] fetching the XML of invoice %s (~%dms)',
     [TThread.CurrentThread.ThreadID, InvoiceKey, DelayMs]));
   Sleep(DelayMs);
 
-  Xml := Format('<xml da nota %s>', [InvoiceKey]);
+  Xml := Format('<xml of invoice %s>', [InvoiceKey]);
 
   FLock.Enter;
   try
@@ -107,7 +107,7 @@ begin
     FLock.Leave;
   end;
 
-  Log(Format('[worker %d] nota %s pronta', [TThread.CurrentThread.ThreadID, InvoiceKey]));
+  Log(Format('[worker %d] invoice %s ready', [TThread.CurrentThread.ThreadID, InvoiceKey]));
 end;
 
 // ANoAck=False (the Consume default): we only ack after processing - an
@@ -117,7 +117,7 @@ var
   InvoiceKey: string;
 begin
   InvoiceKey := ADelivery.BodyAsText;
-  Log('[Retaguarda] retorno recebido da fila: ' + InvoiceKey);
+  Log('[BackOffice] reply received from the queue: ' + InvoiceKey);
   try
     ProcessKey(InvoiceKey);
     AChannel.Ack(ADelivery.DeliveryTag);
@@ -132,9 +132,9 @@ var
 begin
   FLock.Enter;
   try
-    Writeln('--- status atual ---');
+    Writeln('--- current status ---');
     if FReadyInvoices.Count = 0 then
-      Writeln('(nenhuma nota pronta ainda)')
+      Writeln('(no invoice ready yet)')
     else
       for Par in FReadyInvoices do
         Writeln('  ', Par.Key, ' -> ', Par.Value);
@@ -167,14 +167,14 @@ begin
 
         LConsumerTag := LChannel.Consume(QUEUE_NAME, LState.OnDelivery);
 
-        Writeln('[*] Aguardando retornos na fila "', QUEUE_NAME, '".');
+        Writeln('[*] Waiting for replies on queue "', QUEUE_NAME, '".');
         if LDedicated then
-          Writeln('[*] Thread dedicada ativa: entregas processadas em ordem, sem concorrencia.');
-        Writeln('[*] Pressione ENTER a qualquer momento pra ver o status (ou digite "sair" + ENTER pra fechar).');
+          Writeln('[*] Dedicated thread on: deliveries processed in order, no concurrency.');
+        Writeln('[*] Press ENTER at any time to see the status (or type "quit" + ENTER to close).');
 
         repeat
           Readln(Line);
-          if SameText(Trim(Line), 'sair') then
+          if SameText(Trim(Line), 'quit') then
             Break;
           LState.PrintStatus;
         until False;
@@ -197,6 +197,6 @@ begin
     Main;
   except
     on E: Exception do
-      Writeln('Erro: ', E.Message);
+      Writeln('Error: ', E.Message);
   end;
 end.

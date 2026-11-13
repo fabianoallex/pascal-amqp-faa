@@ -322,10 +322,10 @@ var
 begin
   W := TAMQPWriter.Create;
   try
-    W.WriteShortStr('emissão-NFe');
+    W.WriteShortStr('naïve-café');
     R := TAMQPReader.Create(W.ToBytes);
     try
-      TAssert.AssertEquals('emissão-NFe', R.ReadShortStr);
+      TAssert.AssertEquals('naïve-café', R.ReadShortStr);
     finally
       R.Free;
     end;
@@ -418,10 +418,10 @@ begin
     // trigger FPC 3.2.2 internal errors in this specific unit
     // (Internal error 2015071704 / 200510032) — see notes below.
     LIn.Put('flag', True);
-    LIn.Put('numero', Integer(42));
-    LIn.Put('grande', Int64(9876543210));
-    LIn.Put('texto', 'olá');
-    LIn.Put('preco', TValue.From<Double>(19.9));
+    LIn.Put('number', Integer(42));
+    LIn.Put('big', Int64(9876543210));
+    LIn.Put('text', 'café');
+    LIn.Put('price', TValue.From<Double>(19.9));
     W.WriteFieldTable(LIn);
 
     R := TAMQPReader.Create(W.ToBytes);
@@ -429,17 +429,17 @@ begin
       LOut := R.ReadFieldTable;
       try
         TAssert.AssertTrue('flag', LOut['flag'].AsBoolean);
-        TAssert.AssertEquals('numero', 42, LOut['numero'].AsInteger);
-        TAssert.AssertEquals('grande', Int64(9876543210), LOut['grande'].AsInt64);
+        TAssert.AssertEquals('number', 42, LOut['number'].AsInteger);
+        TAssert.AssertEquals('big', Int64(9876543210), LOut['big'].AsInt64);
         // .AsString/.AsExtended chained directly on the indexer (Tabela['x'].AsY)
         // trigger an FPC 3.2.2 internal error (see note above) — that is why the
         // indexer's value goes into a local TValue before the accessor.
-        LTextVal := LOut['texto'];
+        LTextVal := LOut['text'];
         LText := LTextVal.AsString;
-        TAssert.AssertEquals('texto', 'olá', LText);
-        LPriceVal := LOut['preco'];
+        TAssert.AssertEquals('text', 'café', LText);
+        LPriceVal := LOut['price'];
         LPrice := LPriceVal.AsExtended;
-        TAssert.AssertEquals('preco', Double(19.9), LPrice, 0.0001);
+        TAssert.AssertEquals('price', Double(19.9), LPrice, 0.0001);
       finally
         LOut.Free;
       end;
@@ -573,7 +573,7 @@ begin
   LInner := TAMQPFieldTable.Create;
   W := TAMQPWriter.Create;
   try
-    LInner.Put('queue', 'fila-trab');
+    LInner.Put('queue', 'work-queue');
     LInner.Put('reason', 'rejected');
     LInner.Put('count', Int64(2));
     W.WriteFieldTable(LInner);
@@ -616,23 +616,23 @@ begin
   try
     LOut := R.ReadFieldTable;
     try
-      TAssert.AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
-      TAssert.AssertTrue('valor deve ser array', LVal.IsArray);
-      TAssert.AssertEquals('um elemento', 1, LVal.GetArrayLength);
+      TAssert.AssertTrue('must have x-death', LOut.TryGetValue('x-death', LVal));
+      TAssert.AssertTrue('value must be an array', LVal.IsArray);
+      TAssert.AssertEquals('one element', 1, LVal.GetArrayLength);
       // AmqpUnwrapValue is mandatory: GetArrayElement returns the element
       // re-wrapped in a tkRecord TValue — without the unwrap, IsObject would give
       // False. It holds on Delphi too: neither of the two collapses in Make.
       LEntry := AmqpUnwrapValue(LVal.GetArrayElement(0));
-      TAssert.AssertTrue('elemento deve ser objeto', LEntry.IsObject);
-      TAssert.AssertTrue('elemento deve ser tabela', LEntry.AsObject is TAMQPFieldTable);
+      TAssert.AssertTrue('element must be an object', LEntry.IsObject);
+      TAssert.AssertTrue('element must be a table', LEntry.AsObject is TAMQPFieldTable);
       LTab := TAMQPFieldTable(LEntry.AsObject);
-      TAssert.AssertTrue('tabela deve ter queue', LTab.TryGetValue('queue', LField));
+      TAssert.AssertTrue('table must have queue', LTab.TryGetValue('queue', LField));
       LText := LField.AsString;
-      TAssert.AssertEquals('queue', 'fila-trab', LText);
-      TAssert.AssertTrue('tabela deve ter reason', LTab.TryGetValue('reason', LField));
+      TAssert.AssertEquals('queue', 'work-queue', LText);
+      TAssert.AssertTrue('table must have reason', LTab.TryGetValue('reason', LField));
       LText := LField.AsString;
       TAssert.AssertEquals('reason', 'rejected', LText);
-      TAssert.AssertTrue('tabela deve ter count', LTab.TryGetValue('count', LField));
+      TAssert.AssertTrue('table must have count', LTab.TryGetValue('count', LField));
       TAssert.AssertEquals('count', 2, Integer(LField.AsInt64));
     finally
       // Also exercises the destructor: the nested table INSIDE the array must
@@ -661,7 +661,7 @@ var
   LText: string;
 begin
   LEntry := TAMQPFieldTable.Create;
-  LEntry.Put('queue', 'fila-trab');
+  LEntry.Put('queue', 'work-queue');
   LEntry.Put('reason', 'expired');
   LEntry.Put('count', Int64(3));
 
@@ -686,27 +686,27 @@ begin
     LOut.Free; // owner of the nested input inside the array
   end;
 
-  TAssert.AssertTrue('deve ter escrito bytes', Length(LBytes) > 0);
+  TAssert.AssertTrue('must have written bytes', Length(LBytes) > 0);
 
   R := TAMQPReader.Create(LBytes);
   try
     LOut := R.ReadFieldTable;
     try
-      TAssert.AssertTrue('deve ter x-death', LOut.TryGetValue('x-death', LVal));
+      TAssert.AssertTrue('must have x-death', LOut.TryGetValue('x-death', LVal));
       LVal := AmqpUnwrapValue(LVal);
-      TAssert.AssertTrue('valor deve ser array', LVal.IsArray);
-      TAssert.AssertEquals('um elemento', 1, LVal.GetArrayLength);
+      TAssert.AssertTrue('value must be an array', LVal.IsArray);
+      TAssert.AssertEquals('one element', 1, LVal.GetArrayLength);
       LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
-      TAssert.AssertTrue('elemento deve ser objeto', LElem.IsObject);
-      TAssert.AssertTrue('elemento deve ser tabela', LElem.AsObject is TAMQPFieldTable);
+      TAssert.AssertTrue('element must be an object', LElem.IsObject);
+      TAssert.AssertTrue('element must be a table', LElem.AsObject is TAMQPFieldTable);
       LTab := TAMQPFieldTable(LElem.AsObject);
-      TAssert.AssertTrue('deve ter queue', LTab.TryGetValue('queue', LField));
+      TAssert.AssertTrue('must have queue', LTab.TryGetValue('queue', LField));
       LText := LField.AsString;
-      TAssert.AssertEquals('queue', 'fila-trab', LText);
-      TAssert.AssertTrue('deve ter reason', LTab.TryGetValue('reason', LField));
+      TAssert.AssertEquals('queue', 'work-queue', LText);
+      TAssert.AssertTrue('must have reason', LTab.TryGetValue('reason', LField));
       LText := LField.AsString;
       TAssert.AssertEquals('reason', 'expired', LText);
-      TAssert.AssertTrue('deve ter count', LTab.TryGetValue('count', LField));
+      TAssert.AssertTrue('must have count', LTab.TryGetValue('count', LField));
       TAssert.AssertEquals('count', 3, Integer(LField.AsInt64));
     finally
       LOut.Free;
@@ -737,7 +737,7 @@ begin
   LT1 := TAMQPFieldTable.Create;
   try
     LVal := TValue.From<TAMQPValueArray>(LArr);
-    LT1.Put('lista', LVal);
+    LT1.Put('list', LVal);
     W := TAMQPWriter.Create;
     try
       W.WriteFieldTable(LT1);
@@ -756,16 +756,16 @@ begin
     R.Free;
   end;
   try
-    TAssert.AssertTrue('deve ter lista', LT2.TryGetValue('lista', LVal));
+    TAssert.AssertTrue('must have list', LT2.TryGetValue('list', LVal));
     LVal := AmqpUnwrapValue(LVal);
-    TAssert.AssertEquals('tres elementos', 3, LVal.GetArrayLength);
+    TAssert.AssertEquals('three elements', 3, LVal.GetArrayLength);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(0));
     LText := LElem.AsString;
-    TAssert.AssertEquals('elemento 0', 'um', LText);
+    TAssert.AssertEquals('element 0', 'um', LText);
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(1));
-    TAssert.AssertEquals('elemento 1', 42, Integer(LElem.AsInt64));
+    TAssert.AssertEquals('element 1', 42, Integer(LElem.AsInt64));
     LElem := AmqpUnwrapValue(LVal.GetArrayElement(2));
-    TAssert.AssertTrue('elemento 2', LElem.AsBoolean);
+    TAssert.AssertTrue('element 2', LElem.AsBoolean);
 
     W := TAMQPWriter.Create;
     try
@@ -778,7 +778,7 @@ begin
     LT2.Free;
   end;
 
-  TAssert.AssertEquals('os bytes tem de ser estaveis na segunda passada',
+  TAssert.AssertEquals('the bytes must be stable on the second pass',
     BytesHex(B1), BytesHex(B2));
 end;
 
@@ -795,7 +795,7 @@ begin
   LT1 := TAMQPFieldTable.Create;
   try
     LVal := TValue.From<TAMQPValueArray>(LArr);
-    LT1.Put('nada', LVal);
+    LT1.Put('nothing', LVal);
     W := TAMQPWriter.Create;
     try
       W.WriteFieldTable(LT1);
@@ -811,10 +811,10 @@ begin
   try
     LT2 := R.ReadFieldTable;
     try
-      TAssert.AssertTrue('deve ter a chave', LT2.TryGetValue('nada', LVal));
+      TAssert.AssertTrue('must have the key', LT2.TryGetValue('nothing', LVal));
       LVal := AmqpUnwrapValue(LVal);
-      TAssert.AssertTrue('deve ser array', LVal.IsArray);
-      TAssert.AssertEquals('sem elementos', 0, LVal.GetArrayLength);
+      TAssert.AssertTrue('must be an array', LVal.IsArray);
+      TAssert.AssertEquals('no elements', 0, LVal.GetArrayLength);
     finally
       LT2.Free;
     end;
@@ -855,21 +855,21 @@ begin
   end;
 
   // 4 (table size) + 1 (name size) + 4 ('blob') = offset of the tag.
-  TAssert.AssertEquals('tag do valor tem de ser x (FV_BYTES), nao A',
+  TAssert.AssertEquals('the value tag must be x (FV_BYTES), not A',
     Ord('x'), Integer(LBytes[9]));
 
   R := TAMQPReader.Create(LBytes);
   try
     LT2 := R.ReadFieldTable;
     try
-      TAssert.AssertTrue('deve ter blob', LT2.TryGetValue('blob', LVal));
+      TAssert.AssertTrue('must have blob', LT2.TryGetValue('blob', LVal));
       // AsType<T> does not exist in FPC 3.2 -- extracts element by element, which
       // works on both compilers.
       SetLength(LRoundTripped, LVal.GetArrayLength);
       for I := 0 to High(LRoundTripped) do
         LRoundTripped[I] := Byte(LVal.GetArrayElement(I).AsInteger);
-      TAssert.AssertEquals('quatro bytes de volta', 4, Length(LRoundTripped));
-      TAssert.AssertEquals('conteudo intacto', BytesHex(LOrig), BytesHex(LRoundTripped));
+      TAssert.AssertEquals('four bytes back', 4, Length(LRoundTripped));
+      TAssert.AssertEquals('content intact', BytesHex(LOrig), BytesHex(LRoundTripped));
     finally
       LT2.Free;
     end;

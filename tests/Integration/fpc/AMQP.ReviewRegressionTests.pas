@@ -132,7 +132,7 @@ begin
     // (FFinished=0); the fixed one waits until the end (FFinished=1).
     LChan.Consume(LQueue, HandleSlowDelivery, True {no-ack});
 
-    LChan.PublishText('', LQueue, 'processa-devagar');
+    LChan.PublishText('', LQueue, 'process-slowly');
 
     // Waits for the callback to start (but still sleeping).
     LWaited := 0;
@@ -141,14 +141,14 @@ begin
       TThread.Sleep(20);
       Inc(LWaited, 20);
     end;
-    TAssert.AssertEquals('o callback deveria ter começado', 1, PcAtomicGet(FStarted));
-    TAssert.AssertEquals('o callback ainda deveria estar em voo (dormindo)',
+    TAssert.AssertEquals('the callback should have started', 1, PcAtomicGet(FStarted));
+    TAssert.AssertEquals('the callback should still be in flight (sleeping)',
       0, PcAtomicGet(FFinished));
 
     // Closes the channel WITH the callback in flight: DrainInFlight must wait for it to finish.
     LChan.Close;
 
-    TAssert.AssertEquals('Close deveria ter drenado (esperado) o callback em voo antes de retornar',
+    TAssert.AssertEquals('Close should have drained (waited for) the in-flight callback before returning',
       1, PcAtomicGet(FFinished));
   finally
     LChan.Free;
@@ -185,20 +185,20 @@ begin
     TThread.Sleep(20);
     Inc(LWaited, 20);
   end;
-  TAssert.AssertEquals('todos os N itens deveriam terminar', N, PcAtomicGet(LDone));
+  TAssert.AssertEquals('all N items should finish', N, PcAtomicGet(LDone));
 
   LSeen := TDictionary<Word, Boolean>.Create;
   try
     for I := 0 to N - 1 do
     begin
-      TAssert.AssertEquals(Format('thread %d falhou ao criar canal: %s', [I, LErrors[I]]),
+      TAssert.AssertEquals(Format('thread %d failed to create a channel: %s', [I, LErrors[I]]),
         '', LErrors[I]);
-      TAssert.AssertTrue(Format('canal %d não foi criado', [I]), Assigned(LChannels[I]));
+      TAssert.AssertTrue(Format('channel %d was not created', [I]), Assigned(LChannels[I]));
       LId := LChannels[I].ChannelId;
-      TAssert.AssertFalse(Format('channel-id duplicado: %d', [LId]), LSeen.ContainsKey(LId));
+      TAssert.AssertFalse(Format('duplicate channel-id: %d', [LId]), LSeen.ContainsKey(LId));
       LSeen.Add(LId, True);
     end;
-    TAssert.AssertEquals('deveria haver N canais com IDs distintos', N, LSeen.Count);
+    TAssert.AssertEquals('there should be N channels with distinct IDs', N, LSeen.Count);
   finally
     LSeen.Free;
     for I := 0 to N - 1 do

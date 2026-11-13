@@ -138,8 +138,8 @@ const
     (Binding: '';          Routing: '';                       Expected: True),  // 31
     (Binding: '';          Routing: 'a';                      Expected: False), // 32
     (Binding: 'a.b';       Routing: 'a.b.';                   Expected: False), // 33
-    (Binding: 'nota.*';    Routing: 'nota.aprovada';          Expected: True),  // 34
-    (Binding: 'nota.#';    Routing: 'nota.aprovada.fiscal';   Expected: True)   // 35
+    (Binding: 'invoice.*';    Routing: 'invoice.approved';          Expected: True),  // 34
+    (Binding: 'invoice.#';    Routing: 'invoice.approved.tax';   Expected: True)   // 35
   );
 
 procedure TTopicMatchTests.Vectors;
@@ -150,7 +150,7 @@ begin
   for I := Low(TopicVectors) to High(TopicVectors) do
   begin
     LGot := AmqpTopicMatches(TopicVectors[I].Binding, TopicVectors[I].Routing);
-    TAssert.AssertEquals(Format('vetor #%d: binding=%s routing=%s',
+    TAssert.AssertEquals(Format('vector #%d: binding=%s routing=%s',
       [I, TopicVectors[I].Binding, TopicVectors[I].Routing]),
       TopicVectors[I].Expected, LGot);
   end;
@@ -165,8 +165,8 @@ begin
   for I := 1 to 10000 do
     AmqpTopicMatches('a.#.c.*.e', 'a.b.c.d.e');
   LElapsedMs := PcTickMs - LStart;
-  TAssert.AssertTrue(Format('10000 casamentos em %d ms (esperado < 2000ms -- guarda ' +
-    'barata contra uma implementacao que aloque por chamada)', [LElapsedMs]),
+  TAssert.AssertTrue(Format('10000 matches in %d ms (expected < 2000ms -- a cheap ' +
+    'guard against an implementation that allocates per call)', [LElapsedMs]),
     LElapsedMs < 2000);
 end;
 
@@ -192,9 +192,9 @@ begin
     LRoute := LRoute + '.a';
 
   LStart := PcTickMs;
-  TAssert.AssertFalse('8 hashes contra 24 palavras nao casa', AmqpTopicMatches(LBind, LRoute));
+  TAssert.AssertFalse('8 hashes against 24 words does not match', AmqpTopicMatches(LBind, LRoute));
   LElapsedMs := PcTickMs - LStart;
-  TAssert.AssertTrue(Format('casamento patologico levou %d ms (esperado < 1000ms -- ' + 'guarda contra a volta do matcher exponencial)', [LElapsedMs]),
+  TAssert.AssertTrue(Format('pathological match took %d ms (expected < 1000ms -- ' + 'guard against the exponential matcher coming back)', [LElapsedMs]),
     LElapsedMs < 1000);
 end;
 
@@ -207,11 +207,11 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LBind.Put('regiao', 'sul');
-    LMsg.Put('tipo', 'nfe');
-    LMsg.Put('regiao', 'sul');
-    TAssert.AssertTrue('x-match ausente -> default all, todos os criterios batem',
+    LBind.Put('type', 'invoice');
+    LBind.Put('region', 'south');
+    LMsg.Put('type', 'invoice');
+    LMsg.Put('region', 'south');
+    TAssert.AssertTrue('x-match absent -> default all, every criterion matches',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -226,12 +226,12 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LBind.Put('regiao', 'sul');
-    LMsg.Put('tipo', 'nfe');
-    LMsg.Put('regiao', 'sul');
-    LMsg.Put('lote', 7);
-    TAssert.AssertTrue('mensagem com campo extra ainda casa em all',
+    LBind.Put('type', 'invoice');
+    LBind.Put('region', 'south');
+    LMsg.Put('type', 'invoice');
+    LMsg.Put('region', 'south');
+    LMsg.Put('batch', 7);
+    TAssert.AssertTrue('a message with an extra field still matches under all',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -246,10 +246,10 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LBind.Put('regiao', 'sul');
-    LMsg.Put('tipo', 'nfe');
-    TAssert.AssertFalse('falta o criterio regiao na mensagem',
+    LBind.Put('type', 'invoice');
+    LBind.Put('region', 'south');
+    LMsg.Put('type', 'invoice');
+    TAssert.AssertFalse('the message lacks the region criterion',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -264,9 +264,9 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LMsg.Put('tipo', 'NFE');
-    TAssert.AssertFalse('comparacao de string e case-sensitive',
+    LBind.Put('type', 'invoice');
+    LMsg.Put('type', 'INVOICE');
+    TAssert.AssertFalse('string comparison is case-sensitive',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -281,9 +281,9 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('lote', 7);   // integer
-    LMsg.Put('lote', '7');  // string
-    TAssert.AssertFalse('inteiro e string com o mesmo texto NAO sao iguais',
+    LBind.Put('batch', 7);   // integer
+    LMsg.Put('batch', '7');  // string
+    TAssert.AssertFalse('integer and string with the same text are NOT equal',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -298,10 +298,10 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LBind.Put('regiao', 'sul');
-    LMsg.Put('regiao', 'sul');
-    TAssert.AssertTrue('any -- um criterio ja basta',
+    LBind.Put('type', 'invoice');
+    LBind.Put('region', 'south');
+    LMsg.Put('region', 'south');
+    TAssert.AssertTrue('any -- one criterion is enough',
       AmqpHeadersMatch(LBind, LMsg, amqhmAny));
   finally
     LBind.Free;
@@ -316,11 +316,11 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LBind.Put('regiao', 'sul');
-    LMsg.Put('tipo', 'cte');
-    LMsg.Put('regiao', 'norte');
-    TAssert.AssertFalse('any -- nenhum criterio bate',
+    LBind.Put('type', 'invoice');
+    LBind.Put('region', 'south');
+    LMsg.Put('type', 'waybill');
+    LMsg.Put('region', 'north');
+    TAssert.AssertFalse('any -- no criterion matches',
       AmqpHeadersMatch(LBind, LMsg, amqhmAny));
   finally
     LBind.Free;
@@ -330,7 +330,7 @@ end;
 
 procedure THeadersMatchTests.V8_All_NoCriteria_VacuouslyTrue;
 begin
-  TAssert.AssertTrue('all sem nenhum criterio -- verdade vacua',
+  TAssert.AssertTrue('all with no criteria -- vacuously true',
     AmqpHeadersMatch(nil, nil, amqhmAll));
 end;
 
@@ -340,8 +340,8 @@ var
 begin
   LMsg := TAMQPFieldTable.Create;
   try
-    LMsg.Put('tipo', 'nfe');
-    TAssert.AssertFalse('any sem nenhum criterio -- falso vacuo',
+    LMsg.Put('type', 'invoice');
+    TAssert.AssertFalse('any with no criteria -- vacuously false',
       AmqpHeadersMatch(nil, LMsg, amqhmAny));
   finally
     LMsg.Free;
@@ -355,10 +355,10 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    LBind.Put('x-lixo', 1);
-    LMsg.Put('tipo', 'nfe');
-    TAssert.AssertTrue('chave x- do binding e ignorada no casamento',
+    LBind.Put('type', 'invoice');
+    LBind.Put('x-junk', 1);
+    LMsg.Put('type', 'invoice');
+    TAssert.AssertTrue('the binding x- key is ignored when matching',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -372,8 +372,8 @@ var
 begin
   LBind := TAMQPFieldTable.Create;
   try
-    LBind.Put('tipo', 'nfe');
-    TAssert.AssertFalse('any com mensagem sem headers nenhum',
+    LBind.Put('type', 'invoice');
+    TAssert.AssertFalse('any with a message with no headers at all',
       AmqpHeadersMatch(LBind, nil, amqhmAny));
   finally
     LBind.Free;
@@ -387,9 +387,9 @@ begin
   LBind := TAMQPFieldTable.Create;
   LMsg := TAMQPFieldTable.Create;
   try
-    LBind.Put('ativo', True);
-    LMsg.Put('ativo', True);
-    TAssert.AssertTrue('booleano (tkBool no FPC) compara certo',
+    LBind.Put('active', True);
+    LMsg.Put('active', True);
+    TAssert.AssertTrue('boolean (tkBool on FPC) compares correctly',
       AmqpHeadersMatch(LBind, LMsg, amqhmAll));
   finally
     LBind.Free;
@@ -402,15 +402,15 @@ var
   LArgs: TAMQPFieldTable;
   LMode: TAMQPHeadersMatch;
 begin
-  TAssert.AssertTrue('x-match ausente -> valido, default all',
+  TAssert.AssertTrue('x-match absent -> valid, default all',
     AmqpParseHeadersMatch(nil, LMode));
-  TAssert.AssertTrue('default e amqhmAll', LMode = amqhmAll);
+  TAssert.AssertTrue('default is amqhmAll', LMode = amqhmAll);
 
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-match', 'all');
-    TAssert.AssertTrue('x-match=all -> valido', AmqpParseHeadersMatch(LArgs, LMode));
-    TAssert.AssertTrue('modo amqhmAll', LMode = amqhmAll);
+    TAssert.AssertTrue('x-match=all -> valid', AmqpParseHeadersMatch(LArgs, LMode));
+    TAssert.AssertTrue('amqhmAll mode', LMode = amqhmAll);
   finally
     LArgs.Free;
   end;
@@ -418,8 +418,8 @@ begin
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-match', 'any');
-    TAssert.AssertTrue('x-match=any -> valido', AmqpParseHeadersMatch(LArgs, LMode));
-    TAssert.AssertTrue('modo amqhmAny', LMode = amqhmAny);
+    TAssert.AssertTrue('x-match=any -> valid', AmqpParseHeadersMatch(LArgs, LMode));
+    TAssert.AssertTrue('amqhmAny mode', LMode = amqhmAny);
   finally
     LArgs.Free;
   end;
@@ -427,7 +427,7 @@ begin
   LArgs := TAMQPFieldTable.Create;
   try
     LArgs.Put('x-match', 'xyz');
-    TAssert.AssertFalse('x-match invalido -> False (bind e 406 na WS5)',
+    TAssert.AssertFalse('invalid x-match -> False (bind is 406 in WS5)',
       AmqpParseHeadersMatch(LArgs, LMode));
   finally
     LArgs.Free;
@@ -443,18 +443,18 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    TAssert.AssertTrue('exchange default existe', LVHost.ExchangeExists(''));
-    TAssert.AssertTrue('amq.direct existe', LVHost.ExchangeExists('amq.direct'));
-    TAssert.AssertTrue('amq.fanout existe', LVHost.ExchangeExists('amq.fanout'));
-    TAssert.AssertTrue('amq.topic existe', LVHost.ExchangeExists('amq.topic'));
-    TAssert.AssertTrue('amq.headers existe', LVHost.ExchangeExists('amq.headers'));
-    TAssert.AssertTrue('amq.match existe', LVHost.ExchangeExists('amq.match'));
+    TAssert.AssertTrue('default exchange exists', LVHost.ExchangeExists(''));
+    TAssert.AssertTrue('amq.direct exists', LVHost.ExchangeExists('amq.direct'));
+    TAssert.AssertTrue('amq.fanout exists', LVHost.ExchangeExists('amq.fanout'));
+    TAssert.AssertTrue('amq.topic exists', LVHost.ExchangeExists('amq.topic'));
+    TAssert.AssertTrue('amq.headers exists', LVHost.ExchangeExists('amq.headers'));
+    TAssert.AssertTrue('amq.match exists', LVHost.ExchangeExists('amq.match'));
 
     LDef := LVHost.ExchangeDef('');
-    TAssert.AssertEquals('exchange default e direct', AMQP_EXCHANGE_TYPE_DIRECT,
+    TAssert.AssertEquals('default exchange is direct', AMQP_EXCHANGE_TYPE_DIRECT,
       LDef.ExchangeType);
     LDef := LVHost.ExchangeDef('amq.match');
-    TAssert.AssertEquals('amq.match e um alias de headers', AMQP_EXCHANGE_TYPE_HEADERS,
+    TAssert.AssertEquals('amq.match is an alias of headers', AMQP_EXCHANGE_TYPE_HEADERS,
       LDef.ExchangeType);
   finally
     LVHost.Free;
@@ -467,9 +467,9 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    TAssert.AssertTrue('primeira declaracao', LVHost.DeclareExchange('ex1',
+    TAssert.AssertTrue('first declaration', LVHost.DeclareExchange('ex1',
       AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrOk);
-    TAssert.AssertTrue('redeclare identico -> equivalente', LVHost.DeclareExchange('ex1',
+    TAssert.AssertTrue('identical redeclare -> equivalent', LVHost.DeclareExchange('ex1',
       AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrEquivalent);
   finally
     LVHost.Free;
@@ -482,12 +482,12 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    TAssert.AssertTrue('primeira declaracao', LVHost.DeclareExchange('ex1',
+    TAssert.AssertTrue('first declaration', LVHost.DeclareExchange('ex1',
       AMQP_EXCHANGE_TYPE_TOPIC, True, False, False, nil) = amqtrOk);
-    TAssert.AssertTrue('redeclare com durable diferente -> divergente',
+    TAssert.AssertTrue('redeclare with different durable -> divergent',
       LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_TOPIC, False, False,
       False, nil) = amqtrPreconditionFailed);
-    TAssert.AssertTrue('redeclare com tipo diferente -> divergente',
+    TAssert.AssertTrue('redeclare with different type -> divergent',
       LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, nil) = amqtrPreconditionFailed);
   finally
@@ -501,10 +501,10 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    TAssert.AssertTrue('tipo desconhecido -> amqtrCommandInvalid',
+    TAssert.AssertTrue('unknown type -> amqtrCommandInvalid',
       LVHost.DeclareExchange('ex1', 'custom', True, False, False, nil) =
       amqtrCommandInvalid);
-    TAssert.AssertFalse('nao ficou registrado', LVHost.ExchangeExists('ex1'));
+    TAssert.AssertFalse('was not registered', LVHost.ExchangeExists('ex1'));
   finally
     LVHost.Free;
   end;
@@ -516,9 +516,9 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    TAssert.AssertTrue('primeira declaracao',
+    TAssert.AssertTrue('first declaration',
       LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrOk);
-    TAssert.AssertTrue('redeclare identica -> equivalente',
+    TAssert.AssertTrue('identical redeclare -> equivalent',
       LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrEquivalent);
   finally
     LVHost.Free;
@@ -531,9 +531,9 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    TAssert.AssertTrue('primeira declaracao',
+    TAssert.AssertTrue('first declaration',
       LVHost.DeclareQueue('q1', True, False, False, nil) = amqtrOk);
-    TAssert.AssertTrue('redeclare com exclusive diferente -> divergente',
+    TAssert.AssertTrue('redeclare with different exclusive -> divergent',
       LVHost.DeclareQueue('q1', True, True, False, nil) = amqtrPreconditionFailed);
   finally
     LVHost.Free;
@@ -547,8 +547,8 @@ begin
   LVHost := TAMQPVHost.Create;
   try
     LVHost.DeclareQueue('q1', True, False, False, nil);
-    TAssert.AssertTrue('exchange nao existe -> naoEncontrado',
-      LVHost.BindQueue('nao-existe', 'q1', 'rk', nil) = amqtrNotFound);
+    TAssert.AssertTrue('exchange does not exist -> not found',
+      LVHost.BindQueue('does-not-exist', 'q1', 'rk', nil) = amqtrNotFound);
   finally
     LVHost.Free;
   end;
@@ -562,8 +562,8 @@ begin
   try
     LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, nil);
-    TAssert.AssertTrue('fila nao existe -> naoEncontrado',
-      LVHost.BindQueue('ex1', 'nao-existe', 'rk', nil) = amqtrNotFound);
+    TAssert.AssertTrue('queue does not exist -> not found',
+      LVHost.BindQueue('ex1', 'does-not-exist', 'rk', nil) = amqtrNotFound);
   finally
     LVHost.Free;
   end;
@@ -581,7 +581,7 @@ begin
     LVHost.DeclareQueue('q1', True, False, False, nil);
     LArgs := TAMQPFieldTable.Create;
     LArgs.Put('x-match', 'xyz');
-    TAssert.AssertTrue('x-match invalido -> amqtrCommandInvalid',
+    TAssert.AssertTrue('invalid x-match -> amqtrCommandInvalid',
       LVHost.BindQueue('exh', 'q1', '', LArgs) = amqtrCommandInvalid);
   finally
     LVHost.Free;
@@ -598,12 +598,12 @@ begin
     LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, nil);
     LVHost.DeclareQueue('q1', True, False, False, nil);
-    TAssert.AssertTrue('primeiro bind', LVHost.BindQueue('ex1', 'q1', 'rk', nil) = amqtrOk);
-    TAssert.AssertTrue('bind identico de novo -> ok (idempotente, nao duplica)',
+    TAssert.AssertTrue('first bind', LVHost.BindQueue('ex1', 'q1', 'rk', nil) = amqtrOk);
+    TAssert.AssertTrue('identical bind again -> ok (idempotent, no duplicate)',
       LVHost.BindQueue('ex1', 'q1', 'rk', nil) = amqtrOk);
 
     LResult := LVHost.Route('ex1', 'rk', nil);
-    TAssert.AssertEquals('bind repetido nao duplica a entrega', 1, Length(LResult));
+    TAssert.AssertEquals('a repeated bind does not duplicate the delivery', 1, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -622,7 +622,7 @@ begin
     LVHost.BindQueue('ex1', 'q1', 'rk', nil);
     TAssert.AssertTrue('unbind', LVHost.UnbindQueue('ex1', 'q1', 'rk', nil) = amqtrOk);
     LResult := LVHost.Route('ex1', 'rk', nil);
-    TAssert.AssertEquals('nao entrega mais depois do unbind', 0, Length(LResult));
+    TAssert.AssertEquals('no more delivery after unbind', 0, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -637,8 +637,8 @@ begin
     LVHost.DeclareExchange('ex1', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, nil);
     LVHost.DeclareQueue('q1', True, False, False, nil);
-    TAssert.AssertTrue('unbind de algo que nunca foi ligado -> naoEncontrado',
-      LVHost.UnbindQueue('ex1', 'q1', 'rk-nunca-ligada', nil) = amqtrNotFound);
+    TAssert.AssertTrue('unbind of something never bound -> not found',
+      LVHost.UnbindQueue('ex1', 'q1', 'rk-never-bound', nil) = amqtrNotFound);
   finally
     LVHost.Free;
   end;
@@ -657,11 +657,11 @@ begin
     LVHost.BindQueue('exd', 'q1', 'rk', nil);
 
     LResult := LVHost.Route('exd', 'rk', nil);
-    TAssert.AssertEquals('routing key igual -> entrega', 1, Length(LResult));
+    TAssert.AssertEquals('same routing key -> delivers', 1, Length(LResult));
     TAssert.AssertEquals('q1', LResult[0]);
 
-    LResult := LVHost.Route('exd', 'rk-diferente', nil);
-    TAssert.AssertEquals('routing key diferente -> sem entrega', 0, Length(LResult));
+    LResult := LVHost.Route('exd', 'rk-different', nil);
+    TAssert.AssertEquals('different routing key -> no delivery', 0, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -679,10 +679,10 @@ begin
     LVHost.DeclareQueue('q1', True, False, False, nil);
     LVHost.DeclareQueue('q2', True, False, False, nil);
     LVHost.BindQueue('exf', 'q1', '', nil);
-    LVHost.BindQueue('exf', 'q2', 'ignorada-mesmo-assim', nil);
+    LVHost.BindQueue('exf', 'q2', 'ignored-anyway', nil);
 
-    LResult := LVHost.Route('exf', 'qualquer-coisa', nil);
-    TAssert.AssertEquals('fanout entrega pras duas filas, binding key ignorada',
+    LResult := LVHost.Route('exf', 'anything-at-all', nil);
+    TAssert.AssertEquals('fanout delivers to both queues, binding key ignored',
       2, Length(LResult));
   finally
     LVHost.Free;
@@ -698,17 +698,17 @@ begin
   try
     LVHost.DeclareExchange('ext', AMQP_EXCHANGE_TYPE_TOPIC, True, False,
       False, nil);
-    LVHost.DeclareQueue('qAprovada', True, False, False, nil);
-    LVHost.DeclareQueue('qTodas', True, False, False, nil);
-    LVHost.BindQueue('ext', 'qAprovada', 'nota.aprovada', nil);
-    LVHost.BindQueue('ext', 'qTodas', 'nota.#', nil);
+    LVHost.DeclareQueue('qApproved', True, False, False, nil);
+    LVHost.DeclareQueue('qEverything', True, False, False, nil);
+    LVHost.BindQueue('ext', 'qApproved', 'invoice.approved', nil);
+    LVHost.BindQueue('ext', 'qEverything', 'invoice.#', nil);
 
-    LResult := LVHost.Route('ext', 'nota.aprovada', nil);
-    TAssert.AssertEquals('as duas filas casam em nota.aprovada', 2, Length(LResult));
+    LResult := LVHost.Route('ext', 'invoice.approved', nil);
+    TAssert.AssertEquals('both queues match invoice.approved', 2, Length(LResult));
 
-    LResult := LVHost.Route('ext', 'nota.rejeitada', nil);
-    TAssert.AssertEquals('so a fila # casa em nota.rejeitada', 1, Length(LResult));
-    TAssert.AssertEquals('qTodas', LResult[0]);
+    LResult := LVHost.Route('ext', 'invoice.rejected', nil);
+    TAssert.AssertEquals('only the # queue matches invoice.rejected', 1, Length(LResult));
+    TAssert.AssertEquals('qEverything', LResult[0]);
   finally
     LVHost.Free;
   end;
@@ -728,23 +728,23 @@ begin
 
     LArgs := TAMQPFieldTable.Create;
     LArgs.Put('x-match', 'all');
-    LArgs.Put('tipo', 'nfe');
+    LArgs.Put('type', 'invoice');
     LVHost.BindQueue('exh', 'qAll', '', LArgs); // the vhost becomes the owner of LArgs
 
     LHeaders := TAMQPFieldTable.Create;
     try
-      LHeaders.Put('tipo', 'nfe');
+      LHeaders.Put('type', 'invoice');
       LResult := LVHost.Route('exh', '', LHeaders);
-      TAssert.AssertEquals('headers casam -> entrega', 1, Length(LResult));
+      TAssert.AssertEquals('headers match -> delivers', 1, Length(LResult));
     finally
       LHeaders.Free;
     end;
 
     LHeaders := TAMQPFieldTable.Create;
     try
-      LHeaders.Put('tipo', 'cte');
+      LHeaders.Put('type', 'waybill');
       LResult := LVHost.Route('exh', '', LHeaders);
-      TAssert.AssertEquals('headers nao casam -> sem entrega', 0, Length(LResult));
+      TAssert.AssertEquals('headers do not match -> no delivery', 0, Length(LResult));
     finally
       LHeaders.Free;
     end;
@@ -760,14 +760,14 @@ var
 begin
   LVHost := TAMQPVHost.Create;
   try
-    LVHost.DeclareQueue('minhaFila', True, False, False, nil);
-    LResult := LVHost.Route('', 'minhaFila', nil);
-    TAssert.AssertEquals('publish direto na fila via exchange default', 1,
+    LVHost.DeclareQueue('myQueue', True, False, False, nil);
+    LResult := LVHost.Route('', 'myQueue', nil);
+    TAssert.AssertEquals('publish straight to the queue via the default exchange', 1,
       Length(LResult));
-    TAssert.AssertEquals('minhaFila', LResult[0]);
+    TAssert.AssertEquals('myQueue', LResult[0]);
 
-    LResult := LVHost.Route('', 'fila-que-nao-existe', nil);
-    TAssert.AssertEquals('fila inexistente -> sem rota', 0, Length(LResult));
+    LResult := LVHost.Route('', 'queue-that-does-not-exist', nil);
+    TAssert.AssertEquals('missing queue -> no route', 0, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -789,7 +789,7 @@ begin
 
     // 'a.b' matches all THREE bindings above -- it may deliver only once.
     LResult := LVHost.Route('ext', 'a.b', nil);
-    TAssert.AssertEquals('fila casada por 3 bindings entrega uma unica vez', 1,
+    TAssert.AssertEquals('a queue matched by 3 bindings is delivered once', 1,
       Length(LResult));
   finally
     LVHost.Free;
@@ -805,11 +805,11 @@ begin
   try
     LVHost.DeclareExchange('ext', AMQP_EXCHANGE_TYPE_TOPIC, True, False,
       False, nil);
-    LResult := LVHost.Route('ext', 'nada.casa', nil);
-    TAssert.AssertEquals('sem binding nenhum -> array vazio', 0, Length(LResult));
+    LResult := LVHost.Route('ext', 'nothing.matches', nil);
+    TAssert.AssertEquals('no binding at all -> empty array', 0, Length(LResult));
 
-    LResult := LVHost.Route('exchange-inexistente', 'rk', nil);
-    TAssert.AssertEquals('exchange inexistente -> array vazio (nao erro)', 0,
+    LResult := LVHost.Route('missing-exchange', 'rk', nil);
+    TAssert.AssertEquals('missing exchange -> empty array (not an error)', 0,
       Length(LResult));
   finally
     LVHost.Free;
@@ -830,10 +830,10 @@ begin
     LVHost.DeclareQueue('q1', True, False, False, nil);
     LVHost.BindQueue('exB', 'q1', 'rk', nil);
     // exA -> exB (Exchange.Bind: destination=exB, source=exA)
-    LVHost.BindExchange('exB', 'exA', 'ignorada-no-fanout', nil);
+    LVHost.BindExchange('exB', 'exA', 'ignored-by-fanout', nil);
 
     LResult := LVHost.Route('exA', 'rk', nil);
-    TAssert.AssertEquals('publish em exA chega em q1 via exB', 1, Length(LResult));
+    TAssert.AssertEquals('publish on exA reaches q1 via exB', 1, Length(LResult));
     TAssert.AssertEquals('q1', LResult[0]);
   finally
     LVHost.Free;
@@ -859,8 +859,8 @@ begin
 
     // If it does not finish, the test runner hangs/overflows -- the test itself
     // running to the end is already part of the assertion.
-    LResult := LVHost.Route('exA', 'qualquer', nil);
-    TAssert.AssertEquals('ciclo nao duplica a entrega em q1', 1, Length(LResult));
+    LResult := LVHost.Route('exA', 'whatever', nil);
+    TAssert.AssertEquals('a cycle does not duplicate the delivery to q1', 1, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -879,16 +879,16 @@ begin
     LVHost.BindQueue('ext', 'q1', 'a.#', nil);
 
     TAssert.AssertTrue('delete', LVHost.DeleteQueue('q1') = amqtrOk);
-    TAssert.AssertFalse('fila sumiu', LVHost.QueueExists('q1'));
+    TAssert.AssertFalse('queue gone', LVHost.QueueExists('q1'));
 
     LResult := LVHost.Route('ext', 'a.b', nil);
-    TAssert.AssertEquals('binding no topic sumiu junto', 0, Length(LResult));
+    TAssert.AssertEquals('the topic binding went with it', 0, Length(LResult));
 
     LResult := LVHost.Route('', 'q1', nil);
-    TAssert.AssertEquals('auto-bind no exchange default tambem sumiu', 0,
+    TAssert.AssertEquals('the auto-bind on the default exchange is gone too', 0,
       Length(LResult));
 
-    TAssert.AssertTrue('delete de novo -> naoEncontrado',
+    TAssert.AssertTrue('delete again -> not found',
       LVHost.DeleteQueue('q1') = amqtrNotFound);
   finally
     LVHost.Free;
@@ -915,7 +915,7 @@ begin
     // The exA->exB binding must not be left pointing at nothing: publishing
     // to exA must neither error nor "find" q1 any more.
     LResult := LVHost.Route('exA', 'rk', nil);
-    TAssert.AssertEquals('binding pendurado para exB sumiu', 0, Length(LResult));
+    TAssert.AssertEquals('the dangling binding to exB is gone', 0, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -946,15 +946,15 @@ begin
       False, AeArgs('ae'));
     LVHost.DeclareQueue('q.normal', True, False, False, nil);
     LVHost.DeclareQueue('q.ae', True, False, False, nil);
-    LVHost.BindQueue('ex', 'q.normal', 'certa', nil);
+    LVHost.BindQueue('ex', 'q.normal', 'right', nil);
     LVHost.BindQueue('ae', 'q.ae', '', nil);
 
-    LResult := LVHost.Route('ex', 'certa', nil);
-    TAssert.AssertEquals('casou: vai pela rota normal', 1, Length(LResult));
+    LResult := LVHost.Route('ex', 'right', nil);
+    TAssert.AssertEquals('matched: goes the normal route', 1, Length(LResult));
     TAssert.AssertEquals('q.normal', LResult[0]);
 
-    LResult := LVHost.Route('ex', 'nao-casa-nada', nil);
-    TAssert.AssertEquals('nao casou: vai para o AE', 1, Length(LResult));
+    LResult := LVHost.Route('ex', 'matches-nothing', nil);
+    TAssert.AssertEquals('no match: goes to the AE', 1, Length(LResult));
     TAssert.AssertEquals('q.ae', LResult[0]);
   finally
     LVHost.Free;
@@ -974,17 +974,17 @@ begin
   try
     LVHost.DeclareExchange('ae', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, nil);
-    LVHost.DeclareExchange('meio', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
+    LVHost.DeclareExchange('middle', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, nil);
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_FANOUT, True, False,
       False, AeArgs('ae'));
     LVHost.DeclareQueue('q.ae', True, False, False, nil);
     LVHost.BindQueue('ae', 'q.ae', '', nil);
     // Exchange.Bind is (DESTINATION, SOURCE): messages from 'ex' go to 'meio'.
-    LVHost.BindExchange('meio', 'ex', '', nil);
+    LVHost.BindExchange('middle', 'ex', '', nil);
 
-    LResult := LVHost.Route('ex', 'qualquer', nil);
-    TAssert.AssertEquals('binding casou, entao o AE de ex nao entra', 0,
+    LResult := LVHost.Route('ex', 'whatever', nil);
+    TAssert.AssertEquals('a binding matched, so the AE of ex stays out', 0,
       Length(LResult));
   finally
     LVHost.Free;
@@ -1005,12 +1005,12 @@ begin
       False, AeArgs('ae2'));
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, AeArgs('ae1'));
-    LVHost.DeclareQueue('q.fim', True, False, False, nil);
-    LVHost.BindQueue('ae2', 'q.fim', '', nil);
+    LVHost.DeclareQueue('q.end', True, False, False, nil);
+    LVHost.BindQueue('ae2', 'q.end', '', nil);
 
-    LResult := LVHost.Route('ex', 'nada-casa', nil);
-    TAssert.AssertEquals('desceu dois niveis de AE', 1, Length(LResult));
-    TAssert.AssertEquals('q.fim', LResult[0]);
+    LResult := LVHost.Route('ex', 'nothing-matches', nil);
+    TAssert.AssertEquals('went down two AE levels', 1, Length(LResult));
+    TAssert.AssertEquals('q.end', LResult[0]);
   finally
     LVHost.Free;
   end;
@@ -1030,8 +1030,8 @@ begin
     LVHost.DeclareExchange('b', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
       False, AeArgs('a'));
 
-    LResult := LVHost.Route('a', 'nada', nil);
-    TAssert.AssertEquals('ciclo de AE termina, sem rota', 0, Length(LResult));
+    LResult := LVHost.Route('a', 'nothing', nil);
+    TAssert.AssertEquals('an AE cycle ends, with no route', 0, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -1047,9 +1047,9 @@ begin
   LVHost := TAMQPVHost.Create;
   try
     LVHost.DeclareExchange('ex', AMQP_EXCHANGE_TYPE_DIRECT, True, False,
-      False, AeArgs('nao-existe'));
-    LResult := LVHost.Route('ex', 'nada', nil);
-    TAssert.AssertEquals('sem rota, e sem travar', 0, Length(LResult));
+      False, AeArgs('does-not-exist'));
+    LResult := LVHost.Route('ex', 'nothing', nil);
+    TAssert.AssertEquals('no route, and no hang', 0, Length(LResult));
   finally
     LVHost.Free;
   end;
@@ -1071,16 +1071,16 @@ begin
       False, AeArgs('ae'));
     LVHost.DeclareQueue('q.ae', True, False, False, nil);
     LArgs := TAMQPFieldTable.Create;
-    LVal := TValue.From<string>('sul');
-    LArgs.Put('regiao', LVal);
+    LVal := TValue.From<string>('south');
+    LArgs.Put('region', LVal);
     LVHost.BindQueue('ae', 'q.ae', '', LArgs); // the vhost takes ownership
 
     LHeaders := TAMQPFieldTable.Create;
     try
-      LVal := TValue.From<string>('sul');
-      LHeaders.Put('regiao', LVal);
-      LResult := LVHost.Route('ex', 'nada-casa', LHeaders);
-      TAssert.AssertEquals('o AE headers casou', 1, Length(LResult));
+      LVal := TValue.From<string>('south');
+      LHeaders.Put('region', LVal);
+      LResult := LVHost.Route('ex', 'nothing-matches', LHeaders);
+      TAssert.AssertEquals('the headers AE matched', 1, Length(LResult));
       TAssert.AssertEquals('q.ae', LResult[0]);
     finally
       LHeaders.Free;
@@ -1120,13 +1120,13 @@ begin
       LVHost.BindExchange('e' + IntToStr(I + 1), 'e' + IntToStr(I), 'b', nil);
       LVHost.BindExchange('e' + IntToStr(I + 1), 'e' + IntToStr(I), 'c', nil);
     end;
-    LVHost.DeclareQueue('q.fim', True, False, False, nil);
-    LVHost.BindQueue('e15', 'q.fim', '', nil);
+    LVHost.DeclareQueue('q.end', True, False, False, nil);
+    LVHost.BindQueue('e15', 'q.end', '', nil);
 
     LStart := PcTickMs;
-    LResult := LVHost.Route('e0', 'qualquer', nil);
-    TAssert.AssertEquals('chegou ao fim', 1, Length(LResult));
-    TAssert.AssertTrue('travessia tem de ser linear, nao exponencial (levou '
+    LResult := LVHost.Route('e0', 'whatever', nil);
+    TAssert.AssertEquals('reached the end', 1, Length(LResult));
+    TAssert.AssertTrue('traversal must be linear, not exponential (took '
       + IntToStr(PcTickMs - LStart) + ' ms)', (PcTickMs - LStart) < 500);
   finally
     LVHost.Free;

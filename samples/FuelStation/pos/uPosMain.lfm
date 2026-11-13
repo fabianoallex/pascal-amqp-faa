@@ -3,7 +3,7 @@ object frmPos: TfrmPos
   Height = 640
   Top = 0
   Width = 900
-  Caption = 'Posto - PDV'
+  Caption = 'Fuel Station - POS'
   ClientHeight = 640
   ClientWidth = 900
   DesignTimePPI = 96

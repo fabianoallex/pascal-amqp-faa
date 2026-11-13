@@ -3,7 +3,7 @@ object frmPriority: TfrmPriority
   Height = 800
   Top = 0
   Width = 875
-  Caption = 'Fila com prioridade'
+  Caption = 'Priority queue'
   ClientHeight = 800
   ClientWidth = 875
   Color = clBtnFace
@@ -20,7 +20,7 @@ object frmPriority: TfrmPriority
     Height = 212
     Top = 10
     Width = 855
-    Caption = ' Conexão '
+    Caption = ' Connection '
     ClientHeight = 187
     ClientWidth = 851
     ParentBackground = False
@@ -37,7 +37,7 @@ object frmPriority: TfrmPriority
       Height = 20
       Top = 18
       Width = 37
-      Caption = 'Porta:'
+      Caption = 'Port:'
     end
     object lblVHost: TLabel
       Left = 20
@@ -51,21 +51,21 @@ object frmPriority: TfrmPriority
       Height = 20
       Top = 54
       Width = 53
-      Caption = 'Usuário:'
+      Caption = 'User:'
     end
     object lblPassword: TLabel
       Left = 20
       Height = 20
       Top = 91
       Width = 43
-      Caption = 'Senha:'
+      Caption = 'Password:'
     end
     object lblStatus: TLabel
       Left = 175
       Height = 20
       Top = 156
       Width = 98
-      Caption = 'Desconectado'
+      Caption = 'Disconnected'
       Font.Color = clRed
       Font.Height = -15
       Font.Name = 'Segoe UI'
@@ -119,7 +119,7 @@ object frmPriority: TfrmPriority
       Height = 24
       Top = 89
       Width = 136
-      Caption = 'Usar TLS (amqps)'
+      Caption = 'Use TLS (amqps)'
       TabOrder = 5
       OnClick = chkUseTlsClick
     end
@@ -128,7 +128,7 @@ object frmPriority: TfrmPriority
       Height = 24
       Top = 118
       Width = 212
-      Caption = 'Validar certificado do broker'
+      Caption = 'Verify broker certificate'
       Checked = True
       State = cbChecked
       TabOrder = 6
@@ -138,7 +138,7 @@ object frmPriority: TfrmPriority
       Height = 31
       Top = 150
       Width = 138
-      Caption = 'Conectar'
+      Caption = 'Connect'
       TabOrder = 7
       OnClick = btnConnectClick
     end
@@ -148,7 +148,7 @@ object frmPriority: TfrmPriority
     Height = 200
     Top = 232
     Width = 500
-    Caption = ' Publicar '
+    Caption = ' Publish '
     ClientHeight = 175
     ClientWidth = 496
     ParentBackground = False
@@ -158,28 +158,28 @@ object frmPriority: TfrmPriority
       Height = 20
       Top = 18
       Width = 28
-      Caption = 'Fila:'
+      Caption = 'Queue:'
     end
     object lblMaxPrio: TLabel
       Left = 20
       Height = 20
       Top = 54
       Width = 105
-      Caption = 'Máx prioridade:'
+      Caption = 'Max priority:'
     end
     object lblPrio: TLabel
       Left = 258
       Height = 20
       Top = 54
       Width = 72
-      Caption = 'Prioridade:'
+      Caption = 'Priority:'
     end
     object lblMessage: TLabel
       Left = 20
       Height = 20
       Top = 91
       Width = 75
-      Caption = 'Mensagem:'
+      Caption = 'Message:'
     end
     object edtQueue: TEdit
       Left = 137
@@ -187,7 +187,7 @@ object frmPriority: TfrmPriority
       Top = 13
       Width = 200
       TabOrder = 0
-      Text = 'fila-prioridade'
+      Text = 'priority-queue'
     end
     object edtMaxPrio: TEdit
       Left = 137
@@ -217,7 +217,7 @@ object frmPriority: TfrmPriority
       Height = 31
       Top = 133
       Width = 150
-      Caption = 'Publicar 1'
+      Caption = 'Publish 1'
       Enabled = False
       TabOrder = 4
       OnClick = btnPublishClick
@@ -227,7 +227,7 @@ object frmPriority: TfrmPriority
       Height = 31
       Top = 133
       Width = 250
-      Caption = 'Publicar lote (prio. mistas)'
+      Caption = 'Publish batch (mixed prio.)'
       Enabled = False
       TabOrder = 5
       OnClick = btnBurstClick
@@ -238,7 +238,7 @@ object frmPriority: TfrmPriority
     Height = 200
     Top = 232
     Width = 345
-    Caption = ' Consumidor (lento) '
+    Caption = ' Consumer (slow) '
     ClientHeight = 175
     ClientWidth = 341
     ParentBackground = False
@@ -262,7 +262,7 @@ object frmPriority: TfrmPriority
       Height = 20
       Top = 95
       Width = 104
-      Caption = 'Consumidas: 0'
+      Caption = 'Consumed: 0'
     end
     object edtDelay: TEdit
       Left = 150
@@ -285,7 +285,7 @@ object frmPriority: TfrmPriority
       Height = 31
       Top = 133
       Width = 250
-      Caption = 'Iniciar consumidor'
+      Caption = 'Start consumer'
       Enabled = False
       TabOrder = 2
       OnClick = btnConsumerClick
@@ -299,19 +299,19 @@ object frmPriority: TfrmPriority
     Anchors = [akTop, akLeft, akRight]
     Columns = <
       item
-        Caption = '# saída'
+        Caption = '# out'
         Width = 75
       end
       item
-        Caption = 'Prioridade'
+        Caption = 'Priority'
         Width = 100
       end
       item
-        Caption = 'Mensagem'
+        Caption = 'Message'
         Width = 540
       end
       item
-        Caption = 'Hora'
+        Caption = 'Time'
         Width = 135
       end>
     GridLines = True
@@ -326,7 +326,7 @@ object frmPriority: TfrmPriority
     Top = 670
     Width = 125
     Anchors = [akTop, akRight]
-    Caption = 'Limpar lista'
+    Caption = 'Clear list'
     TabOrder = 4
     OnClick = btnClearListClick
   end
@@ -336,7 +336,7 @@ object frmPriority: TfrmPriority
     Top = 670
     Width = 125
     Anchors = [akTop, akRight]
-    Caption = 'Limpar log'
+    Caption = 'Clear log'
     TabOrder = 5
     OnClick = btnClearLogClick
   end

@@ -29,7 +29,7 @@ type
   TSaleItem = record
     Id: string;
     Fueling: TFueling;
-    Confirmed: Boolean;   // the server accepted the lancar
+    Confirmed: Boolean;   // the server accepted the post
     Conflict: Boolean;     // the server refused (in use at another register)
     Obs: string;
   end;
@@ -220,7 +220,7 @@ begin
     if FSale = '' then
     begin
       Inc(FSeq);
-      FSale := Format('V-%s-%.4d', [FormatDateTime('yyyymmdd-hhnnss', Now), FSeq]);
+      FSale := Format('S-%s-%.4d', [FormatDateTime('yyyymmdd-hhnnss', Now), FSeq]);
     end;
     Result := FSale;
   finally
@@ -254,7 +254,7 @@ begin
   finally
     FLock.Leave;
   end;
-  Log('Nova venda.');
+  Log('New sale.');
   Notify;
 end;
 
@@ -271,7 +271,7 @@ begin
   if FSync.TryState(AId, LE) then
     LItem.Fueling := LE.Data;
   LItem.Confirmed := False;
-  LItem.Obs := 'enviando...';
+  LItem.Obs := 'sending...';
   PutItem(LItem);
   Notify;
   PcPool.Queue(TModelWork.Create(Self, moAdd, AId));
@@ -287,7 +287,7 @@ begin
     LIdx := IndexOfId(AId);
     if LIdx < 0 then
       Exit;
-    LSent := FItems[LIdx].Confirmed or (FItems[LIdx].Obs = 'enviando...');
+    LSent := FItems[LIdx].Confirmed or (FItems[LIdx].Obs = 'sending...');
     FItems.Delete(LIdx);
   finally
     FLock.Leave;
@@ -325,23 +325,23 @@ begin
   J := CallJson(LReq);
   if J = nil then
   begin
-    MarkItem(AId, False, False, 'pendente (sem conexao)');
+    MarkItem(AId, False, False, 'pending (no connection)');
     EnqueueOutbox(LReq);
-    Log(Format('lancar %s: sem resposta -> outbox', [AId]));
+    Log(Format('post %s: no reply -> outbox', [AId]));
   end
   else
     try
       if J.AsBool('ok') then
       begin
         MarkItem(AId, True, False, '');
-        Log(Format('lancar %s: OK', [AId]));
+        Log(Format('post %s: OK', [AId]));
       end
       else
       begin
         MarkItem(AId, False, True,
-          Format('em uso no caixa %s', [J.AsStr('pdvAtual', '?')]));
-        Log(Format('lancar %s RECUSADO: %s (caixa %s)',
-          [AId, J.AsStr('motivo'), J.AsStr('pdvAtual')]));
+          Format('in use at POS %s', [J.AsStr('currentPos', '?')]));
+        Log(Format('post %s REFUSED: %s (POS %s)',
+          [AId, J.AsStr('reason'), J.AsStr('currentPos')]));
       end;
     finally
       J.Free;
@@ -359,12 +359,12 @@ begin
   if J = nil then
   begin
     EnqueueOutbox(LReq);
-    Log(Format('estornar %s: sem resposta -> outbox', [AId]));
+    Log(Format('unpost %s: no reply -> outbox', [AId]));
   end
   else
   begin
     J.Free;
-    Log(Format('estornar %s: OK', [AId]));
+    Log(Format('unpost %s: OK', [AId]));
   end;
   Notify;
 end;
@@ -395,10 +395,10 @@ begin
   for I := 0 to High(LIds) do
   begin
     LReq := EncReqUnpost(LIds[I], FPosName, LSale);
-    // CANCEL_VENDA reason in the body
+    // CANCEL_SALE reason in the body
     J := TJsonValue.Parse(BytesToText(LReq));
     try
-      J.Put('motivo', RSN_CANCEL_SALE);
+      J.Put('reason', RSN_CANCEL_SALE);
       LReq := JsonToBytes(J);
     finally
       J.Free;
@@ -409,7 +409,7 @@ begin
     else
       J.Free;
   end;
-  Log(Format('Venda %s cancelada (%d itens).', [LSale, Length(LIds)]));
+  Log(Format('Sale %s cancelled (%d items).', [LSale, Length(LIds)]));
   Notify;
 end;
 
@@ -433,7 +433,7 @@ begin
   end;
   if (LSale = '') or (Length(LIds) = 0) then
   begin
-    Log('Finalizar: venda vazia.');
+    Log('Finish: empty sale.');
     Exit;
   end;
 
@@ -442,15 +442,15 @@ begin
   if J = nil then
   begin
     EnqueueOutbox(LReq);
-    Log(Format('finalizar %s: sem resposta -> outbox ' +
-      '(a venda fica aberta ate a reconciliacao)', [LSale]));
+    Log(Format('finish %s: no reply -> outbox ' +
+      '(the sale stays open until reconciliation)', [LSale]));
     Notify;
     Exit;
   end;
 
   try
     LAllOk := True;
-    LItems := J.Get('itens');
+    LItems := J.Get('items');
     if (LItems <> nil) and (LItems.Kind = jkArray) then
       for I := 0 to LItems.Count - 1 do
       begin
@@ -459,9 +459,9 @@ begin
         begin
           LAllOk := False;
           MarkItem(LIt.AsStr('id'), False, True,
-            'conflito ao finalizar: ' + LIt.AsStr('motivo'));
-          Log(Format('finalizar item %s: CONFLITO (%s)',
-            [LIt.AsStr('id'), LIt.AsStr('motivo')]));
+            'conflict on finish: ' + LIt.AsStr('reason'));
+          Log(Format('finish item %s: CONFLICT (%s)',
+            [LIt.AsStr('id'), LIt.AsStr('reason')]));
         end;
       end;
   finally
@@ -480,10 +480,10 @@ begin
     finally
       FLock.Leave;
     end;
-    Log(Format('Venda %s finalizada.', [LSale]));
+    Log(Format('Sale %s finished.', [LSale]));
   end
   else
-    Log(Format('Venda %s finalizada com conflitos -- revise com o supervisor.',
+    Log(Format('Sale %s finished with conflicts -- review with the supervisor.',
       [LSale]));
   Notify;
 end;
@@ -526,7 +526,7 @@ begin
         finally
           FLock.Leave;
         end;
-        Log('Reconciliacao: servidor indisponivel, outbox preservado.');
+        Log('Reconciliation: server unavailable, outbox kept.');
         Notify;
         Exit;
       end;
@@ -535,7 +535,7 @@ begin
       Inc(I);
     end;
     if LResent > 0 then
-      Log(Format('Reconciliacao: %d comandos do outbox reenviados.', [LResent]));
+      Log(Format('Reconciliation: %d outbox commands resent.', [LResent]));
   finally
     LQueue.Free;
   end;
@@ -569,20 +569,20 @@ begin
       if J <> nil then
       try
         if J.AsBool('ok') then
-          MarkItem(LOpenItems[I], True, False, 're-reservada')
+          MarkItem(LOpenItems[I], True, False, 're-reserved')
         else
           MarkItem(LOpenItems[I], False, True,
-            'perdida na queda (caixa ' + J.AsStr('pdvAtual', '?') + ')');
+            'lost in the outage (POS ' + J.AsStr('currentPos', '?') + ')');
       finally
         J.Free;
       end;
     end
     else
       MarkItem(LOpenItems[I], False, True,
-        Format('agora em %s no caixa %s',
+        Format('now %s at POS %s',
         [StateToStr(LE.State), LE.PosName]));
   end;
-  Log('Reconciliacao da venda concluida.');
+  Log('Sale reconciliation done.');
   Notify;
 end;
 
